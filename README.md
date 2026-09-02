@@ -4,6 +4,13 @@ Release 1.0.0. Use with [synap-pwa](https://divyankavdia.github.io/synap-pwa/).
 Audio remains protocol 2. OTA is now **protocol 3**, with public device-ID targeting.
 No OTAKEY, signing secret, owner enrollment or physical unlock is needed by this firmware.
 
+## Cleanup test build
+
+Build 1006 removes duplicate sketch introduction text and routine serial logs, including periodic
+audio statistics. One short boot line identifies the build/device; error diagnostics remain.
+Audio, device identity, OTA transfer/resume, LED behavior and partition layout are unchanged.
+Connect a pendant on build 1005, install the update, and confirm build 1006 after reconnecting.
+
 ## Customer flow
 
 Connect the pendant in the PWA. Its permanent ID is read and retained in the browser's device association.
@@ -31,7 +38,7 @@ Legacy NVS owner-key data is neither read nor erased.
   and the default two-slot OTA partition layout (0x140000 bytes per application).
 - The standalone sketch embeds all project headers. Put only synap_esp32s3.ino in a matching sketch folder.
 - Public version remains 1.0.0; releases use 1000 + github.run_number (maximum 65535).
-  Local source defaults to build 506. Use an appropriately increasing build for manual releases.
+  Local source defaults to build 1006. Use an appropriately increasing build for manual releases.
   Do not reset the workflow counter without choosing a higher build base.
 
 ## Initial factory install and prototype migration

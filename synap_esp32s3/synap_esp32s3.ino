@@ -1,21 +1,5 @@
-/* ArduinoDroid single-file edition of Synap firmware 1.0.0 / automated OTA builds.
- * All project headers are embedded below; no separate .h files are needed.
- * Requires Arduino-ESP32 3.3.5 and Adafruit NeoPixel.
- * Select your actual ESP32-S3 board and an OTA-capable partition scheme.
- * Default is simulated audio (USE_REAL_I2S_MIC=0).
- * OTA protocol 3 uses the public device ID as the update target, with no owner key.
- * Device IDs and SHA-256 are not authentication; nearby BLE clients can update.
- * Source/protocol checked; not compiled or tested on physical ESP32-S3 here.
- */
-
-/*
- * Synap Pendant 1.0.0 — ESP32-S3FH4R2 / Arduino-ESP32 3.3.5
- * Binary BLE Protocol v2; 16 kHz mono PCM16, 50 ms frames.
- * Default: generated 440 Hz tone. No microphone is needed.
- * INMP441: 3V3, GND, BCLK=4, WS=5, SD=6, L/R=GND.
- * GPIO48 RGB: red offline, blue idle, green recording, purple error.
- * BLE callbacks only queue events. The control task owns all state and LED writes.
- */
+// Synap 1.0.0 | ESP32-S3FH4R2 | Arduino-ESP32 3.3.5 + Adafruit NeoPixel.
+// Standalone sketch; default 440 Hz test audio. Board/protocol details: README.md.
 #include <Arduino.h>
 #include <BLEDevice.h>
 #include <esp_mac.h>
@@ -248,7 +232,7 @@ class OtaSession {
 #define OTA_WRITE_UUID "4fa12348-0000-1000-8000-00805f9b34fb"
 #define OTA_STATUS_UUID "4fa12349-0000-1000-8000-00805f9b34fb"
 #ifndef SYNAP_BUILD
-#define SYNAP_BUILD 506
+#define SYNAP_BUILD 1006
 #endif
 static_assert(SYNAP_BUILD > 503 && SYNAP_BUILD <= 65535, "OTA build must fit the protocol counter");
 constexpr uint16_t SYNAP_FIRMWARE_BUILD = SYNAP_BUILD;
@@ -356,8 +340,6 @@ void otaInitialize(BLEService* service) {
   otaStatusCharacteristic->addDescriptor(new BLE2902());
 #endif
   otaPublish(false);
-  Serial.printf("[OTA] %s build=%u; target=%s; no update key required.\n",
-    SYNAP_PRODUCT,SYNAP_FIRMWARE_BUILD,synapDeviceId);
 }
 void otaTick() {
   if (!otaQueue || !otaStatusCharacteristic) return;
@@ -471,8 +453,6 @@ void startStreaming(uint8_t version) {
   setDeviceState(DeviceState::STREAMING, ErrorCode::NONE);
   streamingEnabled.store(true);
   updateStatusCharacteristic(true);
-  Serial.printf("[START] generation=%lu MTU=%u chunks=%u payload=%u\n",
-    static_cast<unsigned long>(streamGeneration.load()), peerMtu.load(), chunksPerFrame.load(), audioPayloadBytes.load());
 }
 void queueEvent(EventType type, uint8_t command, uint8_t version, uint32_t stream) {
   const ControlMessage message = {type, command, version, connectionGeneration.load(), stream};
@@ -523,7 +503,6 @@ void processCommand(uint8_t command, uint8_t version) {
     case CMD_START: startStreaming(version); break;
     case CMD_STOP:
       stopStreaming();
-      Serial.println("[STOP] acknowledged; LED=blue; state=idle");
       break;
     case CMD_GET_STATUS:
       if (!streamingEnabled.load()) {
@@ -546,12 +525,10 @@ void controlTask(void* parameter) {
           restartAdvertising=false;
           peerMtu=23; attValueCapacity=20; chunksPerFrame=0; audioPayloadBytes=0;
           stopStreaming();
-          Serial.println("[BLE] connected; LED=blue");
           break;
         case EventType::DISCONNECTED:
           stopStreaming();
           disconnectedAt=millis(); restartAdvertising=true;
-          Serial.println("[BLE] disconnected; LED=red");
           break;
         case EventType::COMMAND:
           processCommand(message.command, message.version);
@@ -666,18 +643,13 @@ bool sendAudioFrame(const AudioFrame& frame, uint16_t sequence) {
 void transmitterTask(void* parameter) {
   (void)parameter;
   AudioFrame frame;
-  uint32_t generation=0, sent=0;
+  uint32_t generation=0;
   for (;;) {
     if (xQueueReceive(audioFrameQueue, &frame, pdMS_TO_TICKS(100)) != pdTRUE) continue;
     if (!streamingEnabled.load() || frame.generation != streamGeneration.load()) continue;
-    if (generation != frame.generation) { generation=frame.generation; sent=0; }
-    if (sendAudioFrame(frame, frame.sequence)) {
-      ++sent;
-      if (sent % 100 == 0) Serial.printf("[AUDIO] frames=%lu captured=%lu dropped=%lu notifyOK=%lu notifyFail=%lu controlDrop=%lu\n",
-        static_cast<unsigned long>(sent), static_cast<unsigned long>(capturedFrames.load()),
-        static_cast<unsigned long>(captureDrops.load()), static_cast<unsigned long>(notifyAccepted.load()),
-        static_cast<unsigned long>(notifyRejected.load()), static_cast<unsigned long>(controlDrops.load()));
-    } else if (streamingEnabled.load() && generation == streamGeneration.load()) {
+    generation=frame.generation;
+    if (!sendAudioFrame(frame, frame.sequence) &&
+        streamingEnabled.load() && generation == streamGeneration.load()) {
       requestStreamError(ErrorCode::TRANSPORT_CHANGED, generation);
     }
   }
@@ -719,7 +691,6 @@ void initializeBLE() {
   advertising->setMinPreferred(0x06);
   advertising->setMaxPreferred(0x12);
   advertising->start();
-  Serial.println("[BLE] dk-pendant advertising; release 1.0.0 / audio protocol 2 / device-ID OTA protocol 3");
 }
 void fatalSetup(const char* message) {
   Serial.println(message);
@@ -736,9 +707,7 @@ void setup() {
   microphoneI2S.setTimeout(200);
   microphoneReady=microphoneI2S.begin(I2S_MODE_STD, SAMPLE_RATE,
     I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);
-  Serial.println(microphoneReady ? "[MIC] ready" : "[MIC] initialization failed");
-#else
-  Serial.println("[AUDIO] simulated 440 Hz; no microphone required");
+  if (!microphoneReady) Serial.println("[MIC] initialization failed");
 #endif
   audioFrameQueue=xQueueCreate(4, sizeof(AudioFrame));
   controlQueue=xQueueCreate(12, sizeof(ControlMessage));
@@ -747,7 +716,7 @@ void setup() {
   if (esp_efuse_mac_get_default(factoryMac) != ESP_OK) fatalSetup("[FATAL] device identity unavailable");
   snprintf(synapDeviceId, sizeof(synapDeviceId), "SYNAP-%02X%02X%02X%02X%02X%02X",
     factoryMac[0], factoryMac[1], factoryMac[2], factoryMac[3], factoryMac[4], factoryMac[5]);
-  Serial.printf("[DEVICE] %s\n", synapDeviceId);
+  Serial.printf("Synap %u %s\n", SYNAP_FIRMWARE_BUILD, synapDeviceId);
   initializeBLE();
   if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
       xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, nullptr, 0) != pdPASS ||

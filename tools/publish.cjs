@@ -25,7 +25,7 @@ const releases=api('releases?per_page=100');
 if(!releases.some(r=>r.tag_name===tag)) {
   execFileSync('gh',['release','create',tag,'bundle/firmware.bin','bundle/latest.json','bundle/synap_esp32s3.ino',
     '--repo',repo,'--target',manifest.commit,'--title',`Synap ${manifest.version} · build ${manifest.build}`,
-    '--notes','ESP32-S3FH4R2: 4 MB flash, 2 MB QSPI PSRAM. Application-only OTA; existing default partition layout. See README for first-time owner authorization.'],{stdio:'inherit'});
+    '--notes','ESP32-S3FH4R2: 4 MB flash, 2 MB QSPI PSRAM. Application-only OTA; existing default partition layout. Device-ID OTA; no key entry.'],{stdio:'inherit'});
 }
 const blob=api('git/blobs','POST',{content:binary.toString('base64'),encoding:'base64'});
 const artifact=new URL(manifest.url).pathname.split('/ota-releases/')[1];
