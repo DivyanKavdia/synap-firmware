@@ -56,3 +56,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node tools/publish.cjs
+      - name: Verify public manifest, binary digest and browser CORS headers
+        run: node tools/check-feed.cjs

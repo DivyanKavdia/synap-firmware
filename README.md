@@ -1,4 +1,4 @@
-# Synap ESP32-S3 BLE OTA — firmware 1.0.0 / build 503
+# Synap ESP32-S3 BLE OTA — firmware 1.0.0
 
 This firmware repository is intentionally separate from the PWA-only GitHub repository.
 It contains the complete existing audio sketch plus a BLE updater. Use with
@@ -6,28 +6,36 @@ PWA 1.0.0 at https://divyankavdia.github.io/synap-pwa/.
 Updates are approved in the PWA with a per-pendant owner key. No BOOT press is
 required once this firmware is installed and the owner key has been retrieved.
 
+## Automatic GitHub updates
+
+Push to `main`: CI compiles and validates this exact board, publishes a release,
+and atomically updates the PWA feed. Connect in synap-pwa, tap Update pendant,
+and approve. No manual .bin selection or physical button is needed after one-time
+owner-key enrollment. See [OTA_RELEASES.md](OTA_RELEASES.md) for setup, build
+numbering, authorization storage and safety details.
+
 ## Release numbering
 
-Firmware release numbering restarts at **1.0.0**. The internal OTA build counter
-advances to **503** (previously 502); it is not the semantic release version.
-Audio and authenticated OTA protocols remain v2. The matching PWA release is
-also version 1.0.0, establishing the synchronized base release.
+The synchronized firmware/PWA baseline remains **1.0.0**. Official firmware
+builds use `1000 + github.run_number`, starting at 1001; local source builds
+default to 504. The increasing counter, not only the version, identifies an
+update. Audio and authenticated OTA protocols remain v2.
 
 ## Read before flashing
 
-- Target: ESP32-S3, Arduino-ESP32 core **3.3.5**, Adafruit NeoPixel library.
+- Target: **ESP32-S3FH4R2**, 4 MB flash, 2 MB QSPI PSRAM, Arduino-ESP32 **3.3.5**, Adafruit NeoPixel **1.15.2**.
 - The inherited audio default is a **440 Hz test tone**, not microphone capture.
   Set `USE_REAL_I2S_MIC` to `1` for INMP441 after checking wiring: BCLK4, WS5,
   DIN6, L/R grounded, 3.3 V power. Keep your existing real-microphone configuration
   when integrating this into another firmware revision.
 - RGB LED default GPIO48. The updater does not read BOOT/GPIO0 or require a
   physical unlock. Confirm the LED pin against your actual board schematic.
-- Preserve the correct board, flash size, PSRAM and USB settings for YOUR board.
-  The previous build log selected an ESP32-S3 DevKit LiPo with 4 MB flash; that
-  menu selection alone does not prove the physical pendant is that model.
-- Source/protocol tests were run here. An ESP32-S3 toolchain and a physical board
-  were not available: **this is not a board-compiled or hardware-qualified release**.
-  No precompiled .bin is supplied. Keep USB recovery available during first tests.
+- CI uses ESP32S3 Dev Module, FlashSize 4M, PSRAM enabled (QSPI), USB hardware
+  CDC, and the existing default two-slot OTA layout (0x140000 bytes per app).
+- The real sketch is compiled in GitHub Actions, then its size, ESP32-S3 image
+  header, compatibility and exact build identity are checked before publication.
+  Hardware OTA/reboot/power-loss testing remains required; keep USB recovery
+  available during first tests. Precompiled application binaries are in Releases.
 
 ## One-time setup — USB key retrieval
 
@@ -48,30 +56,33 @@ After either installation route, retrieve the new owner key once over USB.
    each OTA slot. If it does not, select a larger OTA layout compatible with
    your real flash size and install that layout **by USB**, backing up device
    data first. This package does not silently replace the partition table.
-4. Compile and USB-upload. Check Serial at 115200 for build 503 and BLE startup.
+4. Compile and USB-upload. Check Serial at 115200 for the expected build and BLE startup.
    Verify normal recording/stop works before testing firmware transfer.
 5. In Serial Monitor at 115200, send `OTAKEY` with a newline. Copy the 64-character
    owner key to a private password manager. It is generated on the device, is not
    a key from this repository, and is never printed in ordinary startup logs.
    The command is available through the sketch's configured USB/UART `Serial`.
-6. In PWA Settings → Pendant firmware → Check pendant, confirm build 503 and
+6. In PWA Settings → Pendant firmware → Check pendant, confirm the expected build and
    nonzero available OTA space. If characteristics are missing after a USB
    upgrade, disconnect, close other BLE clients and reconnect. If the OS retains
    the old GATT table, forget/reselect the pendant. Do not clear browser audio data.
 
-## Future updates — Bluetooth only
+## Manual file fallback — Bluetooth only
+
+Normally use the automatic GitHub flow above. These instructions are for a
+manually compiled application image.
 
 1. Build the next firmware with the same correct hardware configuration and
-   keep the OTA code/marker. Increment `SYNAP_FIRMWARE_BUILD` in the standalone sketch
-   for each release (next build: 504); update the human-readable version too.
+   keep the OTA code/marker. Set `SYNAP_BUILD` in the standalone sketch
+   to a number higher than the running build; update the human-readable version too.
 2. Export the **application .bin** (usually `synap_esp32s3.ino.bin`). Do not
    choose `.merged.bin`, `.bootloader.bin` or `.partitions.bin`. No bootloader,
    partition-table, flash-layout or unrelated-board update is supported over BLE.
 3. Keep the pendant on stable power, close to the phone. Connect via the PWA,
    stop/save recording, then select the .bin in Settings.
 4. Paste that pendant's owner key and confirm the on-screen approval. No button
-   press or USB connection is needed. The PWA does not save the key; re-enter it
-   for each update. Firmware keeps the key in NVS across normal application OTA.
+   press or USB connection is needed. Manual file mode requires the key for each update. The automatic GitHub flow
+   can remember authorization when you explicitly opt in. Firmware keeps the key in NVS across normal application OTA.
    Erasing NVS/all flash creates a new key; retrieve it again over USB.
 5. Click Update firmware. Recording and processing are blocked while transferring.
    Keep the page visible/unlocked. A screen wake lock is requested where supported.
@@ -116,8 +127,9 @@ After either installation route, retrieve the new owner key once over USB.
   attempt (including a wrong MAC). Attempts are spaced by at least one second;
   five failures trigger 30 seconds of cooldown. Cooldown survives BLE reconnect,
   not power loss. Wrong/malformed approval cannot start flash writes.
-- The key stays in memory only in the PWA, is not logged or uploaded, and the
-  password field is cleared after an update attempt or disconnect. Do not paste
+- The PWA can remember a non-extractable HMAC CryptoKey per pendant in IndexedDB
+  with explicit consent. It never logs/uploads the key or stores plaintext, and
+  clears the password input after an attempt/disconnect. Do not paste
   it into untrusted sites or share it in screenshots, issues, logs or GitHub.
 - This authenticates the owner's chosen image, **not its publisher**. SHA-256 and
   public markers do not make an untrusted image safe. BLE bonding/encryption,

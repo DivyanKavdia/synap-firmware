@@ -1,4 +1,4 @@
-/* ArduinoDroid single-file edition of Synap firmware 1.0.0 / build 503.
+/* ArduinoDroid single-file edition of Synap firmware 1.0.0 / automated OTA builds.
  * All project headers are embedded below; no separate .h files are needed.
  * Requires Arduino-ESP32 3.3.5 and Adafruit NeoPixel.
  * Select your actual ESP32-S3 board and an OTA-capable partition scheme.
@@ -9,7 +9,7 @@
  */
 
 /*
- * Synap Pendant 1.0.0 (build 503) — ESP32-S3 / Arduino-ESP32 3.3.5
+ * Synap Pendant 1.0.0 — ESP32-S3FH4R2 / Arduino-ESP32 3.3.5
  * Binary BLE Protocol v2; 16 kHz mono PCM16, 50 ms frames.
  * Default: generated 440 Hz tone. No microphone is needed.
  * INMP441: 3V3, GND, BCLK=4, WS=5, SD=6, L/R=GND.
@@ -739,7 +739,9 @@ void initializeBLE() {
 #if defined(CONFIG_NIMBLE_ENABLED)
   bleServer->advertiseOnDisconnect(true);
 #endif
-  BLEService* service=bleServer->createService(SERVICE_UUID);
+  // Audio/control + OTA/status/challenge/identity exceed Bluedroid's default
+  // 15-handle service reservation. NimBLE accepts this overload as well.
+  BLEService* service=bleServer->createService(BLEUUID(SERVICE_UUID),32);
   audioCharacteristic=service->createCharacteristic(AUDIO_CHAR_UUID,
     BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
   audioCharacteristic->setCallbacks(new AudioCallbacks());
