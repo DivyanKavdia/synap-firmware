@@ -21,7 +21,7 @@ I2SClass microphoneI2S;
 bool microphoneReady = false;
 #endif
 
-#define DEVICE_NAME "dk-pendant"
+#define DEVICE_NAME "synap"
 #define DEVICE_ID_UUID "4fa1234c-0000-1000-8000-00805f9b34fb"
 // Public board identity, independent of firmware version, NVS and OTA authorization.
 char synapDeviceId[19] = {};
@@ -232,7 +232,7 @@ class OtaSession {
 #define OTA_WRITE_UUID "4fa12348-0000-1000-8000-00805f9b34fb"
 #define OTA_STATUS_UUID "4fa12349-0000-1000-8000-00805f9b34fb"
 #ifndef SYNAP_BUILD
-#define SYNAP_BUILD 1006
+#define SYNAP_BUILD 1008
 #endif
 static_assert(SYNAP_BUILD > 503 && SYNAP_BUILD <= 65535, "OTA build must fit the protocol counter");
 constexpr uint16_t SYNAP_FIRMWARE_BUILD = SYNAP_BUILD;

@@ -38,7 +38,7 @@ Legacy NVS owner-key data is neither read nor erased.
   and the default two-slot OTA partition layout (0x140000 bytes per application).
 - The standalone sketch embeds all project headers. Put only synap_esp32s3.ino in a matching sketch folder.
 - Public version remains 1.0.0; releases use 1000 + github.run_number (maximum 65535).
-  Local source defaults to build 1006. Use an appropriately increasing build for manual releases.
+  Local source defaults to build 1008. Use an appropriately increasing build for manual releases.
   Do not reset the workflow counter without choosing a higher build base.
 
 ## Initial factory install and prototype migration
@@ -72,7 +72,7 @@ The manual path does not enforce increasing build numbers; the GitHub path does.
 Read-only characteristic: 4fa1234c-0000-1000-8000-00805f9b34fb.
 Exactly 18 UTF-8 bytes: SYNAP- followed by 12 uppercase hex digits from the factory eFuse MAC.
 It remains stable across reboots, app updates and NVS erasure on the same board.
-The advertising name remains dk-pendant. The ID is initialized before BLE starts using
+The Bluetooth advertising name is `synap` (previously `dk-pendant`). The ID is initialized before BLE starts using
 esp_efuse_mac_get_default from esp_mac.h.
 
 The separate ...34b characteristic reports firmware hardware/version/build identity.
