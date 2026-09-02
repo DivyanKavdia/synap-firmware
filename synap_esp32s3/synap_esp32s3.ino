@@ -3,8 +3,8 @@
  * Requires Arduino-ESP32 3.3.5 and Adafruit NeoPixel.
  * Select your actual ESP32-S3 board and an OTA-capable partition scheme.
  * Default is simulated audio (USE_REAL_I2S_MIC=0).
- * After USB upload, send OTAKEY + newline at 115200 baud to retrieve your
- * private key for PWA-only future updates. Do not publish that key.
+ * OTA protocol 3 uses the public device ID as the update target, with no owner key.
+ * Device IDs and SHA-256 are not authentication; nearby BLE clients can update.
  * Source/protocol checked; not compiled or tested on physical ESP32-S3 here.
  */
 
@@ -119,9 +119,6 @@ void initializeBLE();
 void fatalSetup(const char* message);
 
 // Explicit OTA prototypes for Arduino sketch preprocessing.
-void otaRefreshChallenge();
-void otaLoadOwnerKey();
-void otaSerialCommands();
 bool otaBusy();
 void otaPublish(bool notify);
 void otaInitialize(BLEService* service);
@@ -134,12 +131,12 @@ void otaTick();
 
 // Transport-independent protocol engine; only the control task calls these methods.
 namespace Synap {
-enum OtaState : uint8_t { OTA_DISABLED, LOCKED, ARMED, RECEIVING, READY, COMMITTED, FAILED };
-enum OtaError : uint8_t { OK, NOT_ARMED, BAD_PACKET, BAD_SIZE, BAD_OFFSET, FLASH_ERROR,
-  INVALID_IMAGE, HASH_MISMATCH, LINK_LOST, TIMED_OUT, CANCELLED, BUSY, AUTH_FAILED, AUTH_THROTTLED };
+enum OtaState : uint8_t { OTA_DISABLED, AVAILABLE, RESERVED, RECEIVING, READY, COMMITTED, FAILED };
+enum OtaError : uint8_t { OK, NOT_AVAILABLE, BAD_PACKET, BAD_SIZE, BAD_OFFSET, FLASH_ERROR,
+  INVALID_IMAGE, HASH_MISMATCH, LINK_LOST, TIMED_OUT, CANCELLED, BUSY, DEVICE_MISMATCH };
 struct OtaBackend {
   virtual ~OtaBackend() = default;
-  virtual OtaError authorize(const uint8_t* metadata, const uint8_t* mac, uint32_t now) = 0;
+  virtual bool matchesDevice(const uint8_t* deviceId) = 0;
   virtual bool begin(uint32_t size, const uint8_t* hash) = 0;
   virtual bool write(const uint8_t* data, size_t size) = 0;
   virtual OtaError finish() = 0;
@@ -161,7 +158,7 @@ class OtaSession {
   bool busy() const { return state==RECEIVING || state==READY || state==COMMITTED; }
   void configure(uint32_t bytes, uint16_t data) {
     capacity=bytes;maxData=data;
-    if (!busy()) { state=capacity && maxData>=64 ? LOCKED : OTA_DISABLED;error=OK;session=offset=0; }
+    if (!busy()) { state=capacity && maxData>=64 ? AVAILABLE : OTA_DISABLED;error=OK;session=offset=0; }
   }
   void fail(OtaError reason) {
     backend.abort();state=FAILED;error=reason;lastLength=0;
@@ -177,16 +174,15 @@ class OtaSession {
     if (state==COMMITTED) return;
     if (!p || n<5 || n>PACKET_MAX) { if (busy()) fail(BAD_PACKET);return; }
     const uint8_t command=p[0];const uint32_t id=u32(p+1);
-    if (command==1) { // Authenticated BEGIN: command, session, length, sha256, HMAC-SHA256.
+    if (command==1) { // BEGIN: command, session, length, sha256, 18-byte public device ID.
       if (busy()) return;
       session=id;offset=0;
       if (!capacity || maxData<64) { state=OTA_DISABLED;error=BAD_SIZE;return; }
       if (recording) { error=BUSY;return; }
-      if (n!=73 || !id) { error=BAD_PACKET;return; }
+      if (n!=59 || !id) { error=BAD_PACKET;return; }
       const uint32_t bytes=u32(p+5);
       if (bytes<36 || bytes>capacity) { error=BAD_SIZE;return; }
-      const OtaError auth=backend.authorize(p,p+41,now);
-      if (auth!=OK) { state=LOCKED;error=auth;return; }
+      if (!backend.matchesDevice(p+41)) { state=AVAILABLE;error=DEVICE_MISMATCH;return; }
       session=id;offset=0;size=bytes;error=OK;lastLength=0;
       owner=connection;
       if (!backend.begin(bytes,p+9)) { fail(FLASH_ERROR);return; }
@@ -218,7 +214,7 @@ class OtaSession {
     fail(BAD_PACKET);
   }
   void status(uint8_t* p, uint16_t build) const {
-    memset(p,0,20);p[0]=0xD7;p[1]=2;p[2]=state;p[3]=error;
+    memset(p,0,20);p[0]=0xD7;p[1]=3;p[2]=state;p[3]=error;
     put32(p+4,session);put32(p+8,offset);put32(p+12,capacity);
     p[16]=maxData&255;p[17]=maxData>>8;p[18]=build&255;p[19]=build>>8;
   }
@@ -234,15 +230,11 @@ class OtaSession {
 // BEGIN EMBEDDED SynapOTA.h
 #include <esp_ota_ops.h>
 #include <mbedtls/sha256.h>
-#include <mbedtls/md.h>
-#include <esp_random.h>
-#include <Preferences.h>
 
 #define OTA_WRITE_UUID "4fa12348-0000-1000-8000-00805f9b34fb"
 #define OTA_STATUS_UUID "4fa12349-0000-1000-8000-00805f9b34fb"
-#define OTA_CHALLENGE_UUID "4fa1234a-0000-1000-8000-00805f9b34fb"
 #ifndef SYNAP_BUILD
-#define SYNAP_BUILD 505
+#define SYNAP_BUILD 506
 #endif
 static_assert(SYNAP_BUILD > 503 && SYNAP_BUILD <= 65535, "OTA build must fit the protocol counter");
 constexpr uint16_t SYNAP_FIRMWARE_BUILD = SYNAP_BUILD;
@@ -251,80 +243,21 @@ constexpr uint16_t SYNAP_FIRMWARE_BUILD = SYNAP_BUILD;
 // Kept in the image and exposed over BLE for release/board verification.
 static const char SYNAP_FIRMWARE_ID[] =
   "SYNAP-FW:esp32s3-fh4r2-qspi-4m:1.0.0:" SYNAP_STRING(SYNAP_BUILD);
-// Compatibility marker, NOT a cryptographic signature. Only install trusted local binaries.
-static const char SYNAP_PRODUCT[] = "SYNAP-ESP32S3-OTA-V1";
-// Retain the V1 marker for the one-time migration from existing firmware.
-static const char SYNAP_AUTH_PRODUCT[] = "SYNAP-ESP32S3-OTA-AUTH-V2";
-static const char OTA_AUTH_DOMAIN[] = "SYNAP-OTA-V2";
-uint8_t otaOwnerKey[32]{};
-uint8_t otaChallenge[16]{};
-BLECharacteristic* otaChallengeCharacteristic=nullptr;
-
-void otaRefreshChallenge() {
-  esp_fill_random(otaChallenge,sizeof(otaChallenge));
-  if (otaChallengeCharacteristic) otaChallengeCharacteristic->setValue(otaChallenge,sizeof(otaChallenge));
-}
-void otaLoadOwnerKey() {
-  Preferences preferences;
-  if (!preferences.begin("synap-ota",false)) fatalSetup("[OTA] Cannot open owner key storage");
-  if (!preferences.isKey("ownerKey")) {
-    // BLEDevice::init has already enabled the RF entropy source.
-    esp_fill_random(otaOwnerKey,sizeof(otaOwnerKey));
-    if (preferences.putBytes("ownerKey",otaOwnerKey,sizeof(otaOwnerKey))!=sizeof(otaOwnerKey)) {
-      preferences.end();fatalSetup("[OTA] Cannot persist owner key");
-    }
-  } else if (preferences.getBytesLength("ownerKey")!=sizeof(otaOwnerKey) ||
-             preferences.getBytes("ownerKey",otaOwnerKey,sizeof(otaOwnerKey))!=sizeof(otaOwnerKey)) {
-    preferences.end();fatalSetup("[OTA] Invalid owner key storage; USB recovery required");
-  }
-  preferences.end();
-}
-// USB/UART Serial only: never expose the owner key through BLE or normal startup logs.
-void otaSerialCommands() {
-  static char command[24]{};static size_t used=0;static bool overflow=false;
-  for (unsigned budget=0;budget<64 && Serial.available();++budget) {
-    const char c=char(Serial.read());
-    if (c=='\r' || c=='\n') {
-      command[used]='\0';
-      if (!overflow && strcmp(command,"OTAKEY")==0) {
-        Serial.print("SYNAP OTA OWNER KEY: ");
-        for (uint8_t byte:otaOwnerKey) Serial.printf("%02x",byte);
-        Serial.println("\nKeep this key private. Enter it only in your trusted Synap PWA.");
-      }
-      used=0;overflow=false;
-    } else if (used<sizeof(command)-1) command[used++]=c;
-    else overflow=true;
-  }
-}
+// Compatibility marker, NOT a signature. No secret or publisher authentication.
+static const char SYNAP_PRODUCT[] = "SYNAP-ESP32S3-OTA-ID-V3";
+static const char SYNAP_TARGET_MARKER[] = "SYNAP-FW:esp32s3-fh4r2-qspi-4m:";
 
 class EspOtaBackend : public Synap::OtaBackend {
  public:
   const esp_partition_t* target=nullptr;
-  Synap::OtaError authorize(const uint8_t* metadata, const uint8_t* mac, uint32_t now) override {
-    // Global (not per connection) cooldown: reconnecting does not reset failed-attempt throttling.
-    if (attempted && uint32_t(now-lastAttempt)<cooldown) return Synap::AUTH_THROTTLED;
-    attempted=true;lastAttempt=now;cooldown=1000;
-    uint8_t message[sizeof(OTA_AUTH_DOMAIN)-1+16+41], expectedMac[32];
-    memcpy(message,OTA_AUTH_DOMAIN,sizeof(OTA_AUTH_DOMAIN)-1);
-    memcpy(message+sizeof(OTA_AUTH_DOMAIN)-1,otaChallenge,16);
-    memcpy(message+sizeof(OTA_AUTH_DOMAIN)-1+16,metadata,41);
-    const auto* md=mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-    const int result=md ? mbedtls_md_hmac(md,otaOwnerKey,sizeof(otaOwnerKey),message,sizeof(message),expectedMac) : -1;
-    uint8_t different=0;
-    if (result==0) for (size_t i=0;i<32;++i) different |= expectedMac[i]^mac[i];
-    // Consume the challenge even on a bad attempt. Old approval cannot be replayed.
-    otaRefreshChallenge();
-    if (result!=0 || different) {
-      if (++failedAttempts>=5) { cooldown=30000;failedAttempts=0; }
-      return Synap::AUTH_FAILED;
-    }
-    failedAttempts=0;return Synap::OK;
+  bool matchesDevice(const uint8_t* deviceId) override {
+    return memcmp(deviceId,synapDeviceId,18)==0;
   }
   bool begin(uint32_t size, const uint8_t* hash) override {
     abort();
     target=esp_ota_get_next_update_partition(nullptr);
     if (!target || target==esp_ota_get_running_partition() || size>target->size) return false;
-    memcpy(expected,hash,32);markerPosition=0;markerFound=false;
+    memcpy(expected,hash,32);markerPosition=targetPosition=0;markerFound=targetFound=false;
     mbedtls_sha256_init(&sha);hashActive=true;
     if (mbedtls_sha256_starts(&sha,0)!=0) { abort();return false; }
     if (esp_ota_begin(target,OTA_WITH_SEQUENTIAL_WRITES,&handle)!=ESP_OK) { abort();return false; }
@@ -333,10 +266,17 @@ class EspOtaBackend : public Synap::OtaBackend {
   bool write(const uint8_t* data, size_t size) override {
     if (!handleActive || esp_ota_write(handle,data,size)!=ESP_OK ||
         mbedtls_sha256_update(&sha,data,size)!=0) return false;
-    for (size_t i=0;i<size && !markerFound;++i) {
-      if (data[i]==uint8_t(SYNAP_AUTH_PRODUCT[markerPosition])) ++markerPosition;
-      else markerPosition=data[i]==uint8_t(SYNAP_AUTH_PRODUCT[0]) ? 1 : 0;
-      if (markerPosition==sizeof(SYNAP_AUTH_PRODUCT)-1) markerFound=true;
+    for (size_t i=0;i<size && (!markerFound || !targetFound);++i) {
+      if (!markerFound) {
+        if (data[i]==uint8_t(SYNAP_PRODUCT[markerPosition])) ++markerPosition;
+        else markerPosition=data[i]==uint8_t(SYNAP_PRODUCT[0]) ? 1 : 0;
+        if (markerPosition==sizeof(SYNAP_PRODUCT)-1) markerFound=true;
+      }
+      if (!targetFound) {
+        if (data[i]==uint8_t(SYNAP_TARGET_MARKER[targetPosition])) ++targetPosition;
+        else targetPosition=data[i]==uint8_t(SYNAP_TARGET_MARKER[0]) ? 1 : 0;
+        if (targetPosition==sizeof(SYNAP_TARGET_MARKER)-1) targetFound=true;
+      }
     }
     return true;
   }
@@ -345,7 +285,7 @@ class EspOtaBackend : public Synap::OtaBackend {
     if (!hashActive || mbedtls_sha256_finish(&sha,digest)!=0) return Synap::HASH_MISMATCH;
     mbedtls_sha256_free(&sha);hashActive=false;
     if (memcmp(digest,expected,32)!=0) return Synap::HASH_MISMATCH;
-    if (!markerFound) return Synap::INVALID_IMAGE;
+    if (!markerFound || !targetFound) return Synap::INVALID_IMAGE;
     // ESP-IDF validates the full image, chip/revision and signatures if enabled.
     handleActive=false; // esp_ota_end frees the handle even on error.
     return esp_ota_end(handle)==ESP_OK ? Synap::OK : Synap::INVALID_IMAGE;
@@ -356,13 +296,10 @@ class EspOtaBackend : public Synap::OtaBackend {
     if (hashActive) { mbedtls_sha256_free(&sha);hashActive=false; }
   }
  private:
-  bool attempted=false;
-  uint8_t failedAttempts=0;
-  uint32_t lastAttempt=0,cooldown=1000;
   esp_ota_handle_t handle=0;
   mbedtls_sha256_context sha{};
-  bool handleActive=false,hashActive=false,markerFound=false;
-  size_t markerPosition=0;
+  bool handleActive=false,hashActive=false,markerFound=false,targetFound=false;
+  size_t markerPosition=0,targetPosition=0;
   uint8_t expected[32]{};
 };
 
@@ -392,32 +329,28 @@ void otaPublish(bool notify) {
   if (notify && deviceConnected.load()) otaStatusCharacteristic->notify();
 }
 void otaInitialize(BLEService* service) {
-  otaLoadOwnerKey();
   otaQueue=xQueueCreate(4,sizeof(OtaMessage));
   if (!otaQueue) fatalSetup("[OTA] queue allocation failed");
   auto* command=service->createCharacteristic(OTA_WRITE_UUID,BLECharacteristic::PROPERTY_WRITE);
   command->setCallbacks(new OtaWriteCallbacks());
   otaStatusCharacteristic=service->createCharacteristic(OTA_STATUS_UUID,
     BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-  otaChallengeCharacteristic=service->createCharacteristic(OTA_CHALLENGE_UUID,BLECharacteristic::PROPERTY_READ);
   auto* identity=service->createCharacteristic("4fa1234b-0000-1000-8000-00805f9b34fb",BLECharacteristic::PROPERTY_READ);
   identity->setValue(SYNAP_FIRMWARE_ID);
-  otaRefreshChallenge();
 #if defined(CONFIG_BLUEDROID_ENABLED)
   otaStatusCharacteristic->addDescriptor(new BLE2902());
 #endif
   otaPublish(false);
-  Serial.printf("[OTA] %s / %s build=%u; PWA-only approval. Send OTAKEY over Serial for your owner key.\n",
-    SYNAP_PRODUCT,SYNAP_AUTH_PRODUCT,SYNAP_FIRMWARE_BUILD);
+  Serial.printf("[OTA] %s build=%u; target=%s; no update key required.\n",
+    SYNAP_PRODUCT,SYNAP_FIRMWARE_BUILD,synapDeviceId);
 }
 void otaTick() {
   if (!otaQueue || !otaStatusCharacteristic) return;
-  static uint32_t configuredConnection=UINT32_MAX,rebootAt=0,challengeConnection=UINT32_MAX;
+  static uint32_t configuredConnection=UINT32_MAX,rebootAt=0;
   const uint32_t now=millis(),generation=connectionGeneration.load();
   const bool connected=deviceConnected.load();
   const Synap::OtaState previous=otaSession.state;
   otaSession.tick(now,generation,connected);
-  if (challengeConnection!=generation) { otaRefreshChallenge();challengeConnection=generation; }
   if (connected && !otaBusy()) {
     const uint16_t mtu=bleServer->getPeerMTU(bleServer->getConnId());
     const uint16_t packet=mtu>185 ? 182 : (mtu>=23 ? mtu-3 : 20);
@@ -743,7 +676,7 @@ void initializeBLE() {
 #if defined(CONFIG_NIMBLE_ENABLED)
   bleServer->advertiseOnDisconnect(true);
 #endif
-  // Audio/control + device ID + OTA/status/challenge/build identity exceed Bluedroid's default
+  // Audio/control + device ID + OTA/status/build identity exceed Bluedroid's default
   // 15-handle service reservation. NimBLE accepts this overload as well.
   BLEService* service=bleServer->createService(BLEUUID(SERVICE_UUID),32);
   audioCharacteristic=service->createCharacteristic(AUDIO_CHAR_UUID,
@@ -771,7 +704,7 @@ void initializeBLE() {
   advertising->setMinPreferred(0x06);
   advertising->setMaxPreferred(0x12);
   advertising->start();
-  Serial.println("[BLE] dk-pendant advertising; release 1.0.0 / audio protocol 2 / authenticated OTA protocol 2");
+  Serial.println("[BLE] dk-pendant advertising; release 1.0.0 / audio protocol 2 / device-ID OTA protocol 3");
 }
 void fatalSetup(const char* message) {
   Serial.println(message);
@@ -817,5 +750,4 @@ void setup() {
   }
 #endif
 }
-void loop() { otaSerialCommands(); delay(20); }
-
+void loop() { delay(20); }

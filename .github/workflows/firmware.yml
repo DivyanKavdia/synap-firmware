@@ -25,7 +25,7 @@ jobs:
           arduino-cli core install esp32:esp32@3.3.5 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli lib install "Adafruit NeoPixel@1.15.2"
       - name: Test release validation
-        run: node --test tests/release.cjs
+        run: node --test tests/*.cjs
       - name: Compile application (4 MB flash, QSPI PSRAM, existing default OTA slots)
         env:
           RUN_NUMBER: ${{ github.run_number }}
