@@ -18,6 +18,7 @@
  */
 #include <Arduino.h>
 #include <BLEDevice.h>
+#include <esp_mac.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #if defined(CONFIG_BLUEDROID_ENABLED)
@@ -37,6 +38,9 @@ bool microphoneReady = false;
 #endif
 
 #define DEVICE_NAME "dk-pendant"
+#define DEVICE_ID_UUID "4fa1234c-0000-1000-8000-00805f9b34fb"
+// Public board identity, independent of firmware version, NVS and OTA authorization.
+char synapDeviceId[19] = {};
 #define SERVICE_UUID "4fa12345-0000-1000-8000-00805f9b34fb"
 #define AUDIO_CHAR_UUID "4fa12346-0000-1000-8000-00805f9b34fb"
 #define CONTROL_CHAR_UUID "4fa12347-0000-1000-8000-00805f9b34fb"
@@ -238,7 +242,7 @@ class OtaSession {
 #define OTA_STATUS_UUID "4fa12349-0000-1000-8000-00805f9b34fb"
 #define OTA_CHALLENGE_UUID "4fa1234a-0000-1000-8000-00805f9b34fb"
 #ifndef SYNAP_BUILD
-#define SYNAP_BUILD 504
+#define SYNAP_BUILD 505
 #endif
 static_assert(SYNAP_BUILD > 503 && SYNAP_BUILD <= 65535, "OTA build must fit the protocol counter");
 constexpr uint16_t SYNAP_FIRMWARE_BUILD = SYNAP_BUILD;
@@ -739,7 +743,7 @@ void initializeBLE() {
 #if defined(CONFIG_NIMBLE_ENABLED)
   bleServer->advertiseOnDisconnect(true);
 #endif
-  // Audio/control + OTA/status/challenge/identity exceed Bluedroid's default
+  // Audio/control + device ID + OTA/status/challenge/build identity exceed Bluedroid's default
   // 15-handle service reservation. NimBLE accepts this overload as well.
   BLEService* service=bleServer->createService(BLEUUID(SERVICE_UUID),32);
   audioCharacteristic=service->createCharacteristic(AUDIO_CHAR_UUID,
@@ -756,6 +760,8 @@ void initializeBLE() {
 #endif
   // NimBLE creates CCCDs itself. BLE2902::getNotifications() is NOT a
   // subscription test under NimBLE; do not use it to gate START.
+  auto* deviceIdentity = service->createCharacteristic(DEVICE_ID_UUID, BLECharacteristic::PROPERTY_READ);
+  deviceIdentity->setValue(synapDeviceId);
   updateStatusCharacteristic(false);
   otaInitialize(service);
   service->start();
@@ -789,6 +795,11 @@ void setup() {
   audioFrameQueue=xQueueCreate(4, sizeof(AudioFrame));
   controlQueue=xQueueCreate(12, sizeof(ControlMessage));
   if (!audioFrameQueue || !controlQueue) fatalSetup("[FATAL] queue allocation failed");
+  uint8_t factoryMac[6];
+  if (esp_efuse_mac_get_default(factoryMac) != ESP_OK) fatalSetup("[FATAL] device identity unavailable");
+  snprintf(synapDeviceId, sizeof(synapDeviceId), "SYNAP-%02X%02X%02X%02X%02X%02X",
+    factoryMac[0], factoryMac[1], factoryMac[2], factoryMac[3], factoryMac[4], factoryMac[5]);
+  Serial.printf("[DEVICE] %s\n", synapDeviceId);
   initializeBLE();
   if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
       xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, nullptr, 0) != pdPASS ||
@@ -807,3 +818,4 @@ void setup() {
 #endif
 }
 void loop() { otaSerialCommands(); delay(20); }
+

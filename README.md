@@ -18,7 +18,7 @@ numbering, authorization storage and safety details.
 
 The synchronized firmware/PWA baseline remains **1.0.0**. Official firmware
 builds use `1000 + github.run_number`, starting at 1001; local source builds
-default to 504. The increasing counter, not only the version, identifies an
+default to 505. The increasing counter, not only the version, identifies an
 update. Audio and authenticated OTA protocols remain v2.
 
 ## Read before flashing
@@ -178,3 +178,12 @@ in the PWA README and implemented in the embedded `OtaSession` class.
 Files: one complete standalone sketch and this guide. No PWA
 copy, generated binary or device key is bundled. Preferences and mbedTLS are
 provided by the ESP32 core; no new third-party firmware dependency is required.
+
+
+## Permanent device identity and PWA setup
+
+The read-only BLE characteristic `4fa1234c-0000-1000-8000-00805f9b34fb` returns exactly 18 UTF-8 bytes: `SYNAP-` followed by the 12 uppercase hexadecimal digits of the ESP32-S3 factory eFuse MAC. The ID is generated before BLE starts and is available independently of the OTA subsystem. It stays the same across reboot, firmware updates and NVS erasure on the same board. The normal BLE name remains `dk-pendant` for compatibility.
+
+The factory MAC is read with `esp_efuse_mac_get_default` from `esp_mac.h`; see [Espressif's ESP32-S3 MAC documentation](https://docs.espressif.com/projects/esp-idf/en/v5.5.3/esp32s3/api-reference/system/misc_system_api.html). The existing `...34b` characteristic remains the firmware target/version/build identity used for update compatibility. Do not substitute it for the per-board identifier.
+
+PWA setup reads this device identifier after connection and saves a browser-local device association. No OTAKEY or firmware-update approval is involved in setup. The ID is public metadata, not a credential or proof of ownership; authenticated updates still use the existing independent owner-key flow. Older firmware must receive an identity-enabled build before it can expose the permanent ID.
