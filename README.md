@@ -2,7 +2,7 @@
 
 This firmware repository is intentionally separate from the PWA-only GitHub repository.
 It contains the complete existing audio sketch plus a BLE updater. Use with
-PWA 5.7.0 or newer at https://divyankavdia.github.io/ai-pendant-app/.
+PWA 1.0.0 at https://divyankavdia.github.io/synap-pwa/.
 Updates are approved in the PWA with a per-pendant owner key. No BOOT press is
 required once this firmware is installed and the owner key has been retrieved.
 
@@ -10,9 +10,8 @@ required once this firmware is installed and the owner key has been retrieved.
 
 Firmware release numbering restarts at **1.0.0**. The internal OTA build counter
 advances to **503** (previously 502); it is not the semantic release version.
-Audio and authenticated OTA protocols remain v2. The matching PWA 1.0.0
-renumbering is pending confirmation of its renamed repository; existing PWA
-5.7.0 remains compatible.
+Audio and authenticated OTA protocols remain v2. The matching PWA release is
+also version 1.0.0, establishing the synchronized base release.
 
 ## Read before flashing
 
