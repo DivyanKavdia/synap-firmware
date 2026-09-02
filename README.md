@@ -1,10 +1,18 @@
-# Synap ESP32-S3 BLE OTA — firmware 5.2.0 / build 502
+# Synap ESP32-S3 BLE OTA — firmware 1.0.0 / build 503
 
 This firmware repository is intentionally separate from the PWA-only GitHub repository.
 It contains the complete existing audio sketch plus a BLE updater. Use with
 PWA 5.7.0 or newer at https://divyankavdia.github.io/ai-pendant-app/.
 Updates are approved in the PWA with a per-pendant owner key. No BOOT press is
 required once this firmware is installed and the owner key has been retrieved.
+
+## Release numbering
+
+Firmware release numbering restarts at **1.0.0**. The internal OTA build counter
+advances to **503** (previously 502); it is not the semantic release version.
+Audio and authenticated OTA protocols remain v2. The matching PWA 1.0.0
+renumbering is pending confirmation of its renamed repository; existing PWA
+5.7.0 remains compatible.
 
 ## Read before flashing
 
@@ -30,8 +38,9 @@ A device without OTA support, or needing a new partition layout, requires USB
 installation. An app cannot retrofit OTA into firmware already running without it.
 After either installation route, retrieve the new owner key once over USB.
 
-1. Clone or download this repository. Open the sketch under `firmware/`. Keep `dk_pendant_esp32s3.ino`, `SynapOTA.h`, and
-   `OtaSession.h` together in the `dk_pendant_esp32s3` sketch folder.
+1. Download `synap_esp32s3/synap_esp32s3.ino`. Open it in a fresh sketch folder named
+   `synap_esp32s3`, with only this one `.ino` file. All project headers are embedded;
+   do not add an older sketch as a second tab.
 2. Open that sketch in Arduino IDE / ArduinoDroid. Select the actual ESP32-S3
    board and Arduino-ESP32 3.3.5; install Adafruit NeoPixel if needed.
 3. Select an OTA-capable partition scheme containing two application partitions
@@ -40,13 +49,13 @@ After either installation route, retrieve the new owner key once over USB.
    each OTA slot. If it does not, select a larger OTA layout compatible with
    your real flash size and install that layout **by USB**, backing up device
    data first. This package does not silently replace the partition table.
-4. Compile and USB-upload. Check Serial at 115200 for build 502 and BLE startup.
+4. Compile and USB-upload. Check Serial at 115200 for build 503 and BLE startup.
    Verify normal recording/stop works before testing firmware transfer.
 5. In Serial Monitor at 115200, send `OTAKEY` with a newline. Copy the 64-character
    owner key to a private password manager. It is generated on the device, is not
    a key from this repository, and is never printed in ordinary startup logs.
    The command is available through the sketch's configured USB/UART `Serial`.
-6. In PWA Settings → Pendant firmware → Check pendant, confirm build 502 and
+6. In PWA Settings → Pendant firmware → Check pendant, confirm build 503 and
    nonzero available OTA space. If characteristics are missing after a USB
    upgrade, disconnect, close other BLE clients and reconnect. If the OS retains
    the old GATT table, forget/reselect the pendant. Do not clear browser audio data.
@@ -54,9 +63,9 @@ After either installation route, retrieve the new owner key once over USB.
 ## Future updates — Bluetooth only
 
 1. Build the next firmware with the same correct hardware configuration and
-   keep the OTA code/marker. Increment `SYNAP_FIRMWARE_BUILD` in `SynapOTA.h`
-   for each release (for example 503); update the human-readable version too.
-2. Export the **application .bin** (usually `dk_pendant_esp32s3.ino.bin`). Do not
+   keep the OTA code/marker. Increment `SYNAP_FIRMWARE_BUILD` in the standalone sketch
+   for each release (next build: 504); update the human-readable version too.
+2. Export the **application .bin** (usually `synap_esp32s3.ino.bin`). Do not
    choose `.merged.bin`, `.bootloader.bin` or `.partitions.bin`. No bootloader,
    partition-table, flash-layout or unrelated-board update is supported over BLE.
 3. Keep the pendant on stable power, close to the phone. Connect via the PWA,
@@ -77,7 +86,7 @@ After either installation route, retrieve the new owner key once over USB.
 - SHA-256 is computed by the PWA and independently on the received firmware.
   ESP-IDF validates the complete image; both sides also check ESP32-S3 application
   headers and the `SYNAP-ESP32S3-OTA-AUTH-V2` compatibility marker. The old marker
-  remains in this image for migration, but 5.2+ rejects images missing the new one.
+  remains in this image for migration, but this release rejects images missing the new one.
 - Flash writes run in the control task, not synchronous BLE callbacks. A bounded
   queue, transfer ID, connection generation, exact next offset and duplicate-byte
   checks prevent silent chunk loss or reordering. The UI only advances progress
@@ -120,23 +129,9 @@ After either installation route, retrieve the new owner key once over USB.
 
 ## Validation included / still required
 
-Host protocol tests (no external dependencies):
-
-```sh
-g++ -std=c++17 -Wall -Wextra -Werror tests/ota_session.cpp -o /tmp/synap-ota-test
-/tmp/synap-ota-test
-# Optional: Node + g++ + OpenSSL development headers/library
-node tests/ota_auth.cjs
-```
-
-Covered: authorization gate, connection ownership, recording lock, size/chip checks, exact chunk
-order, valid/invalid duplicates, partial uploads, hash/image failure paths,
-timeouts (including clock wrap), disconnect, abort and isolated final commit.
-These use a fake flash backend; they do not prove actual flash writes or boot.
-The authentication harness executes the actual firmware authorization method
-with OpenSSL replacing mbedTLS, compares against an independent Node HMAC vector,
-and tests wrong keys, changed metadata, nonce replay, throttling and clock wrap.
-It is not a complete ESP/mBedTLS compile or test of NVS and the radio RNG.
+The OTA protocol and authentication engine passed host regression tests during
+preparation. Those tests are not bundled in this single-file distribution.
+A full ESP32-S3 compile and hardware validation are still required.
 
 Before normal use on a test pendant:
 
@@ -164,11 +159,11 @@ bytes but advertises protocol 2. State 1 means awaiting PWA authorization; state
 2 is reserved for legacy migration. Minimum data capacity is 64 bytes (MTU 76),
 so the authenticated BEGIN fits. Errors 12/13 mean failed/throttled authorization.
 The full wire layout is documented
-in the PWA README and implemented in `OtaSession.h`.
+in the PWA README and implemented in the embedded `OtaSession` class.
 
 - [Espressif ESP32-S3 OTA API, IDF 5.5](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32s3/api-reference/system/ota.html)
 - [Arduino-ESP32 BLE API, 3.3.5](https://github.com/espressif/arduino-esp32/tree/3.3.5/libraries/BLE)
 
-Files: one complete sketch, two headers, this guide and two host tests. No PWA
+Files: one complete standalone sketch and this guide. No PWA
 copy, generated binary or device key is bundled. Preferences and mbedTLS are
 provided by the ESP32 core; no new third-party firmware dependency is required.

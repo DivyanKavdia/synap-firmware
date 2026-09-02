@@ -1,4 +1,4 @@
-/* ArduinoDroid single-file edition of Synap firmware 5.2.0 / build 502.
+/* ArduinoDroid single-file edition of Synap firmware 1.0.0 / build 503.
  * All project headers are embedded below; no separate .h files are needed.
  * Requires Arduino-ESP32 3.3.5 and Adafruit NeoPixel.
  * Select your actual ESP32-S3 board and an OTA-capable partition scheme.
@@ -9,7 +9,7 @@
  */
 
 /*
- * Synap Pendant 5.2.0 (build 502) — ESP32-S3 / Arduino-ESP32 3.3.5
+ * Synap Pendant 1.0.0 (build 503) — ESP32-S3 / Arduino-ESP32 3.3.5
  * Binary BLE Protocol v2; 16 kHz mono PCM16, 50 ms frames.
  * Default: generated 440 Hz tone. No microphone is needed.
  * INMP441: 3V3, GND, BCLK=4, WS=5, SD=6, L/R=GND.
@@ -237,7 +237,7 @@ class OtaSession {
 #define OTA_WRITE_UUID "4fa12348-0000-1000-8000-00805f9b34fb"
 #define OTA_STATUS_UUID "4fa12349-0000-1000-8000-00805f9b34fb"
 #define OTA_CHALLENGE_UUID "4fa1234a-0000-1000-8000-00805f9b34fb"
-constexpr uint16_t SYNAP_FIRMWARE_BUILD = 502;
+constexpr uint16_t SYNAP_FIRMWARE_BUILD = 503;
 // Compatibility marker, NOT a cryptographic signature. Only install trusted local binaries.
 static const char SYNAP_PRODUCT[] = "SYNAP-ESP32S3-OTA-V1";
 // Retain the V1 marker for the one-time migration from existing firmware.
@@ -752,7 +752,7 @@ void initializeBLE() {
   advertising->setMinPreferred(0x06);
   advertising->setMaxPreferred(0x12);
   advertising->start();
-  Serial.println("[BLE] dk-pendant advertising; release 5.2.0 / audio protocol 2 / authenticated OTA protocol 2");
+  Serial.println("[BLE] dk-pendant advertising; release 1.0.0 / audio protocol 2 / authenticated OTA protocol 2");
 }
 void fatalSetup(const char* message) {
   Serial.println(message);
