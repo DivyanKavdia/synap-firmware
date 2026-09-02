@@ -237,7 +237,16 @@ class OtaSession {
 #define OTA_WRITE_UUID "4fa12348-0000-1000-8000-00805f9b34fb"
 #define OTA_STATUS_UUID "4fa12349-0000-1000-8000-00805f9b34fb"
 #define OTA_CHALLENGE_UUID "4fa1234a-0000-1000-8000-00805f9b34fb"
-constexpr uint16_t SYNAP_FIRMWARE_BUILD = 503;
+#ifndef SYNAP_BUILD
+#define SYNAP_BUILD 504
+#endif
+static_assert(SYNAP_BUILD > 503 && SYNAP_BUILD <= 65535, "OTA build must fit the protocol counter");
+constexpr uint16_t SYNAP_FIRMWARE_BUILD = SYNAP_BUILD;
+#define SYNAP_STRING_INNER(x) #x
+#define SYNAP_STRING(x) SYNAP_STRING_INNER(x)
+// Kept in the image and exposed over BLE for release/board verification.
+static const char SYNAP_FIRMWARE_ID[] =
+  "SYNAP-FW:esp32s3-fh4r2-qspi-4m:1.0.0:" SYNAP_STRING(SYNAP_BUILD);
 // Compatibility marker, NOT a cryptographic signature. Only install trusted local binaries.
 static const char SYNAP_PRODUCT[] = "SYNAP-ESP32S3-OTA-V1";
 // Retain the V1 marker for the one-time migration from existing firmware.
@@ -387,6 +396,8 @@ void otaInitialize(BLEService* service) {
   otaStatusCharacteristic=service->createCharacteristic(OTA_STATUS_UUID,
     BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
   otaChallengeCharacteristic=service->createCharacteristic(OTA_CHALLENGE_UUID,BLECharacteristic::PROPERTY_READ);
+  auto* identity=service->createCharacteristic("4fa1234b-0000-1000-8000-00805f9b34fb",BLECharacteristic::PROPERTY_READ);
+  identity->setValue(SYNAP_FIRMWARE_ID);
   otaRefreshChallenge();
 #if defined(CONFIG_BLUEDROID_ENABLED)
   otaStatusCharacteristic->addDescriptor(new BLE2902());
