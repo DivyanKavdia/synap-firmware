@@ -1,5 +1,5 @@
 /*
- * DK Pendant 5.0.0 — ESP32-S3 / Arduino-ESP32 3.3.5
+ * Synap Pendant 5.1.0 (build 501) — ESP32-S3 / Arduino-ESP32 3.3.5
  * Binary BLE Protocol v2; 16 kHz mono PCM16, 50 ms frames.
  * Default: generated 440 Hz tone. No microphone is needed.
  * INMP441: 3V3, GND, BCLK=4, WS=5, SD=6, L/R=GND.
@@ -104,6 +104,8 @@ bool sendAudioFrame(const AudioFrame& frame, uint16_t sequence);
 void initializeBLE();
 void fatalSetup(const char* message);
 
+#include "SynapOTA.h"
+
 void setDeviceState(DeviceState state, ErrorCode error) {
   deviceState = state;
   errorCode = error;
@@ -153,6 +155,7 @@ bool configureTransportFromPeerMtu() {
   return audioPayloadBytes + AUDIO_HEADER_BYTES <= attValueCapacity;
 }
 void startStreaming(uint8_t version) {
+  if (otaBusy()) { updateStatusCharacteristic(true); return; }
   if (!deviceConnected.load()) return;
   if (version != PROTOCOL_VERSION) { stopStreaming(ErrorCode::PROTOCOL_MISMATCH); return; }
   // Repeated START is idempotent; it must not reset an active take's sequence.
@@ -218,6 +221,7 @@ class AudioCallbacks : public BLECharacteristicCallbacks {
 
 void processCommand(uint8_t command, uint8_t version) {
   if (!deviceConnected.load()) return;
+  if (otaBusy()) { updateStatusCharacteristic(true); return; }
   if (version != PROTOCOL_VERSION) { stopStreaming(ErrorCode::PROTOCOL_MISMATCH); return; }
   switch (command) {
     case CMD_START: startStreaming(version); break;
@@ -239,7 +243,7 @@ void controlTask(void* parameter) {
   (void)parameter;
   ControlMessage message;
   for (;;) {
-    if (xQueueReceive(controlQueue, &message, pdMS_TO_TICKS(100)) == pdTRUE) {
+    if (xQueueReceive(controlQueue, &message, pdMS_TO_TICKS(10)) == pdTRUE) {
       if (message.connection != connectionGeneration.load()) continue;
       switch (message.type) {
         case EventType::CONNECTED:
@@ -277,6 +281,7 @@ void controlTask(void* parameter) {
       bleServer->startAdvertising();
     }
 #endif
+    otaTick();
   }
 }
 
@@ -406,6 +411,7 @@ void initializeBLE() {
   // NimBLE creates CCCDs itself. BLE2902::getNotifications() is NOT a
   // subscription test under NimBLE; do not use it to gate START.
   updateStatusCharacteristic(false);
+  otaInitialize(service);
   service->start();
   BLEAdvertising* advertising=BLEDevice::getAdvertising();
   advertising->addServiceUUID(SERVICE_UUID);
@@ -413,7 +419,7 @@ void initializeBLE() {
   advertising->setMinPreferred(0x06);
   advertising->setMaxPreferred(0x12);
   advertising->start();
-  Serial.println("[BLE] dk-pendant advertising; release 5.0.0 / protocol 2");
+  Serial.println("[BLE] dk-pendant advertising; release 5.1.0 / audio protocol 2 / OTA protocol 1");
 }
 void fatalSetup(const char* message) {
   Serial.println(message);
@@ -437,11 +443,21 @@ void setup() {
   audioFrameQueue=xQueueCreate(4, sizeof(AudioFrame));
   controlQueue=xQueueCreate(12, sizeof(ControlMessage));
   if (!audioFrameQueue || !controlQueue) fatalSetup("[FATAL] queue allocation failed");
-  if (xTaskCreatePinnedToCore(controlTask, "control", 4096, nullptr, 3, nullptr, 1) != pdPASS ||
+  initializeBLE();
+  if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
       xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, nullptr, 0) != pdPASS ||
       xTaskCreatePinnedToCore(transmitterTask, "transmit", 4096, nullptr, 2, nullptr, 1) != pdPASS) {
     fatalSetup("[FATAL] task allocation failed");
   }
-  initializeBLE();
+#if defined(CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE) && CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+  // Basic startup validation only. Stock Arduino bootloaders usually disable rollback.
+#if USE_REAL_I2S_MIC
+  if (microphoneReady)
+#endif
+  {
+    const esp_err_t result=esp_ota_mark_app_valid_cancel_rollback();
+    Serial.printf("[OTA] startup validation result=%d\n",int(result));
+  }
+#endif
 }
 void loop() { delay(1000); }
