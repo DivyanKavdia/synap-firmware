@@ -18,7 +18,7 @@ Connect, stop/save recording, then approve the GitHub update. The PWA targets th
 
 This is unauthenticated OTA. Public device IDs and SHA-256 are not owner or publisher authentication. A nearby BLE client can initiate an update, including malicious code with matching headers/markers/hash. No signing, secret, Secure Boot or exclusive ownership protection is added. This tradeoff does not constitute production security qualification.
 
-Interrupted uncommitted transfers restart from zero. A lost commit ACK requires reconnect verification. Stock Arduino bootloaders may not enable rollback: do not assume recovery from a valid image that cannot boot.
+An interrupted uncommitted transfer remains resumable in device RAM for two minutes and is rebound only when session, image hash, size and device ID all match. A reboot, power loss or expired window starts a new transfer. A lost commit ACK requires reconnect verification. Stock Arduino bootloaders may not enable rollback: do not assume recovery from a valid image that cannot boot.
 
 ## Checks
 

@@ -18,6 +18,9 @@ std::vector<uint8_t> packet(uint8_t command,size_t n=5){
 std::vector<uint8_t> begin(const char* id=ID){
   auto p=packet(1,59);OtaSession::put32(p.data()+5,64);memcpy(p.data()+41,id,18);return p;
 }
+std::vector<uint8_t> resume(const char* id=ID){
+  auto p=packet(6,59);OtaSession::put32(p.data()+5,64);memcpy(p.data()+41,id,18);return p;
+}
 std::vector<uint8_t> data(){
   auto p=packet(2,73);p[9]=0xe9;p[21]=9;OtaSession::put32(p.data()+9+32,0xabcd5432);return p;
 }
@@ -39,7 +42,12 @@ int main(){
   auto outOfOrder=data();OtaSession::put32(outOfOrder.data()+5,1);send(t,outOfOrder);assert(t.error==BAD_OFFSET&&g.commits==0);
   send(t,begin());send(t,data());g.result=HASH_MISMATCH;send(t,packet(3));assert(t.state==FAILED&&t.error==HASH_MISMATCH&&g.commits==0);
   send(t,begin());t.tick(50000,1,true);assert(t.error==TIMED_OUT&&g.commits==0);
-  send(t,begin());t.tick(200,2,true);assert(t.error==LINK_LOST&&g.commits==0);
-  send(t,begin());send(t,packet(5));assert(t.error==CANCELLED&&g.commits==0);
-  puts("PASS: device target, legacy rejection, idle guard, ordering, duplicate, commit, hash failure, timeout, disconnect and cancellation");
+  send(t,begin());g.result=OK;t.tick(200,2,true);assert(t.state==RECEIVING&&t.offset==0);
+  send(t,resume(),2);send(t,data(),2);assert(t.offset==64&&g.writes==2); // Rebind and continue.
+  send(t,packet(3),2);send(t,packet(4),2);assert(t.state==COMMITTED&&g.commits==1);
+  Flash h;OtaSession u(h);u.configure(2048,503);send(u,begin());u.tick(200,2,false);
+  u.tick(120201,2,false);assert(u.state==FAILED&&u.error==LINK_LOST); // Bounded resume window.
+  Flash j;OtaSession v(j);v.configure(2048,503);send(v,begin());send(v,packet(5));
+  assert(v.error==CANCELLED&&j.commits==0);
+  puts("PASS: device target, ordering, duplicate, commit, hash failure, timeout, reconnect resume and cancellation");
 }

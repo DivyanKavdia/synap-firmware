@@ -59,7 +59,7 @@ constexpr uint8_t AUDIO_HEADER_BYTES = 8;
 constexpr uint8_t MIN_CHUNKS_PER_FRAME = 10;
 constexpr uint8_t MAX_CHUNKS_PER_FRAME = 20;
 constexpr uint16_t MIN_REQUIRED_MTU = 91;
-constexpr uint16_t REQUESTED_MTU = 185;
+constexpr uint16_t REQUESTED_MTU = 517;
 constexpr uint16_t MAX_AUDIO_PAYLOAD_BYTES = 160;
 constexpr uint8_t RGB_LED_PIN = 48;
 constexpr int8_t I2S_BCLK_PIN = 4, I2S_WS_PIN = 5, I2S_DATA_IN_PIN = 6;
@@ -145,7 +145,7 @@ struct OtaBackend {
 };
 class OtaSession {
  public:
-  static constexpr size_t PACKET_MAX = 182;
+  static constexpr size_t PACKET_MAX = 512;
   OtaState state = OTA_DISABLED;
   OtaError error = OK;
   uint32_t session = 0, offset = 0, capacity = 0;
@@ -161,12 +161,19 @@ class OtaSession {
     if (!busy()) { state=capacity && maxData>=64 ? AVAILABLE : OTA_DISABLED;error=OK;session=offset=0; }
   }
   void fail(OtaError reason) {
-    backend.abort();state=FAILED;error=reason;lastLength=0;
+    backend.abort();state=FAILED;error=reason;lastLength=0;orphanedAt=0;
   }
   void tick(uint32_t now, uint32_t connection, bool connected) {
     if (state==COMMITTED) return; // Boot selection is already committed; never claim cancellation.
     if (busy()) {
-      if (!connected || connection!=owner) { fail(LINK_LOST);return; }
+      // Preserve the flash handle and rolling hash across a short BLE interruption.
+      // A matching RESUME packet explicitly binds a new BLE connection generation.
+      if (!connected || connection!=owner) {
+        if (!orphanedAt) orphanedAt=now ? now : 1;
+        if (uint32_t(now-orphanedAt)>120000u) fail(LINK_LOST);
+        return;
+      }
+      orphanedAt=0;
       if (uint32_t(now-last)>45000u) fail(TIMED_OUT);
     }
   }
@@ -174,6 +181,12 @@ class OtaSession {
     if (state==COMMITTED) return;
     if (!p || n<5 || n>PACKET_MAX) { if (busy()) fail(BAD_PACKET);return; }
     const uint8_t command=p[0];const uint32_t id=u32(p+1);
+    if (command==6) { // RESUME: same envelope as BEGIN; never erases or restarts flash.
+      if (n!=59 || !busy() || state==COMMITTED || !id || id!=session ||
+          u32(p+5)!=size || memcmp(p+9,expectedHash,32)!=0 ||
+          !backend.matchesDevice(p+41)) return;
+      owner=connection;last=now;orphanedAt=0;error=OK;return;
+    }
     if (command==1) { // BEGIN: command, session, length, sha256, 18-byte public device ID.
       if (busy()) return;
       session=id;offset=0;
@@ -184,7 +197,7 @@ class OtaSession {
       if (bytes<36 || bytes>capacity) { error=BAD_SIZE;return; }
       if (!backend.matchesDevice(p+41)) { state=AVAILABLE;error=DEVICE_MISMATCH;return; }
       session=id;offset=0;size=bytes;error=OK;lastLength=0;
-      owner=connection;
+      memcpy(expectedHash,p+9,32);owner=connection;orphanedAt=0;
       if (!backend.begin(bytes,p+9)) { fail(FLASH_ERROR);return; }
       state=RECEIVING;last=now;return;
     }
@@ -220,8 +233,9 @@ class OtaSession {
   }
  private:
   OtaBackend& backend;
-  uint32_t owner=0,last=0,size=0,lastOffset=0;
+  uint32_t owner=0,last=0,size=0,lastOffset=0,orphanedAt=0;
   size_t lastLength=0;
+  uint8_t expectedHash[32]{};
   uint8_t lastData[PACKET_MAX-9]{};
 };
 }
@@ -329,9 +343,10 @@ void otaPublish(bool notify) {
   if (notify && deviceConnected.load()) otaStatusCharacteristic->notify();
 }
 void otaInitialize(BLEService* service) {
-  otaQueue=xQueueCreate(4,sizeof(OtaMessage));
+  otaQueue=xQueueCreate(16,sizeof(OtaMessage));
   if (!otaQueue) fatalSetup("[OTA] queue allocation failed");
-  auto* command=service->createCharacteristic(OTA_WRITE_UUID,BLECharacteristic::PROPERTY_WRITE);
+  auto* command=service->createCharacteristic(OTA_WRITE_UUID,
+    BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
   command->setCallbacks(new OtaWriteCallbacks());
   otaStatusCharacteristic=service->createCharacteristic(OTA_STATUS_UUID,
     BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
@@ -353,7 +368,7 @@ void otaTick() {
   otaSession.tick(now,generation,connected);
   if (connected && !otaBusy()) {
     const uint16_t mtu=bleServer->getPeerMTU(bleServer->getConnId());
-    const uint16_t packet=mtu>185 ? 182 : (mtu>=23 ? mtu-3 : 20);
+    const uint16_t packet=mtu>515 ? 512 : (mtu>=23 ? mtu-3 : 20);
     const uint16_t data=packet>9 ? packet-9 : 0;
     if (configuredConnection!=generation || otaSession.maxData!=data) {
       const auto* partition=esp_ota_get_next_update_partition(nullptr);
@@ -369,7 +384,7 @@ void otaTick() {
   OtaMessage message;
   if (xQueueReceive(otaQueue,&message,0)==pdTRUE && connected && message.connection==generation) {
     otaSession.packet(message.data,message.length,now,generation,streamingEnabled.load());
-    // A disconnect during flash work invalidates the session before any further packet.
+    // Re-check ownership; disconnects enter the bounded resumable state.
     otaSession.tick(millis(),connectionGeneration.load(),deviceConnected.load());
     otaPublish(true);
   }

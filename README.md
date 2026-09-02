@@ -84,12 +84,13 @@ Integers are little-endian. Every packet starts with command u8 and nonzero tran
 | 3 Verify | none; valid only after the full declared image |
 | 4 Commit | none; valid only after Verify |
 | 5 Abort | none; unavailable after Commit |
+| 6 Resume | image length u32, SHA-256 (32 bytes), target device ID (18 bytes); rebinds an interrupted session |
 
 Status: magic D7, protocol 03, state u8, error u8, transfer ID u32, next offset u32,
 slot capacity u32, maxData u16, build u16 (20 total bytes).
 States: 0 unavailable, 1 available, 2 reserved, 3 receiving, 4 verified, 5 committed, 6 failed.
 Error 12 means device-ID mismatch. Existing packet/size/flash/hash/connection/timeout errors retain their codes.
-Writes are capped at 182 bytes; maxData must be at least 64, so minimum MTU remains 76.
+Writes are capped at 512 bytes; maxData is up to 503 bytes and must be at least 64.
 
 The device compares the target ID before opening the inactive slot.
 It checks image headers/chip, flashed SHA-256, the SYNAP-ESP32S3-OTA-ID-V3 marker and
@@ -98,12 +99,16 @@ the SYNAP-FW:esp32s3-fh4r2-qspi-4m: hardware prefix. These checks are not signat
 ## Failure behavior and validation
 
 The control task owns flash writes; BLE callbacks only queue bounded packets.
-The session and connection generation bind subsequent packets to the current transfer.
+The session and connection generation bind subsequent packets to the current transfer. A matching
+Resume packet can bind a new BLE connection to the same in-memory flash handle, hash, image and offset.
 Exact next offsets are required; only an identical repeat of the previous data packet is idempotent.
-The PWA waits for written-byte ACKs and falls back to status reads if notifications are lost.
+The PWA sends short write-without-response windows and waits for a written-byte ACK after each window;
+it falls back to status reads if notifications are lost.
 
-Cancellation, disconnect, invalid images, hash failure or a 45-second stall before Commit leave the
-previous boot selection intact. Partial inactive-slot bytes are not selected. Retry starts from zero.
+Cancellation, invalid images, hash failure or a 45-second connected stall before Commit leave the
+previous boot selection intact. A BLE disconnect keeps the session resumable in RAM for two minutes.
+Power loss, reboot or expiration of that window requires a new transfer. Partial inactive-slot bytes
+are never selected.
 After Commit, cancellation is impossible. A lost acknowledgement requires reconnect verification,
 not an automatic second flash.
 
