@@ -1,5 +1,5 @@
 /*
- * Synap Pendant 5.1.0 (build 501) — ESP32-S3 / Arduino-ESP32 3.3.5
+ * Synap Pendant 5.2.0 (build 502) — ESP32-S3 / Arduino-ESP32 3.3.5
  * Binary BLE Protocol v2; 16 kHz mono PCM16, 50 ms frames.
  * Default: generated 440 Hz tone. No microphone is needed.
  * INMP441: 3V3, GND, BCLK=4, WS=5, SD=6, L/R=GND.
@@ -419,7 +419,7 @@ void initializeBLE() {
   advertising->setMinPreferred(0x06);
   advertising->setMaxPreferred(0x12);
   advertising->start();
-  Serial.println("[BLE] dk-pendant advertising; release 5.1.0 / audio protocol 2 / OTA protocol 1");
+  Serial.println("[BLE] dk-pendant advertising; release 5.2.0 / audio protocol 2 / authenticated OTA protocol 2");
 }
 void fatalSetup(const char* message) {
   Serial.println(message);
@@ -460,4 +460,4 @@ void setup() {
   }
 #endif
 }
-void loop() { delay(1000); }
+void loop() { otaSerialCommands(); delay(20); }

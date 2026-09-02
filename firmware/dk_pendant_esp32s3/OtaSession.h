@@ -7,9 +7,10 @@
 namespace Synap {
 enum OtaState : uint8_t { DISABLED, LOCKED, ARMED, RECEIVING, READY, COMMITTED, FAILED };
 enum OtaError : uint8_t { OK, NOT_ARMED, BAD_PACKET, BAD_SIZE, BAD_OFFSET, FLASH_ERROR,
-  INVALID_IMAGE, HASH_MISMATCH, LINK_LOST, TIMED_OUT, CANCELLED, BUSY };
+  INVALID_IMAGE, HASH_MISMATCH, LINK_LOST, TIMED_OUT, CANCELLED, BUSY, AUTH_FAILED, AUTH_THROTTLED };
 struct OtaBackend {
   virtual ~OtaBackend() = default;
+  virtual OtaError authorize(const uint8_t* metadata, const uint8_t* mac, uint32_t now) = 0;
   virtual bool begin(uint32_t size, const uint8_t* hash) = 0;
   virtual bool write(const uint8_t* data, size_t size) = 0;
   virtual OtaError finish() = 0;
@@ -31,37 +32,34 @@ class OtaSession {
   bool busy() const { return state==RECEIVING || state==READY || state==COMMITTED; }
   void configure(uint32_t bytes, uint16_t data) {
     capacity=bytes;maxData=data;
-    if (!busy()) state=capacity && maxData>=36 ? LOCKED : DISABLED;
-  }
-  void arm(uint32_t now, uint32_t connection) {
-    if (!busy() && capacity && maxData>=36) {
-      state=ARMED;error=OK;session=offset=0;owner=connection;last=now;
-    }
+    if (!busy()) { state=capacity && maxData>=64 ? LOCKED : DISABLED;error=OK;session=offset=0; }
   }
   void fail(OtaError reason) {
     backend.abort();state=FAILED;error=reason;lastLength=0;
   }
   void tick(uint32_t now, uint32_t connection, bool connected) {
     if (state==COMMITTED) return; // Boot selection is already committed; never claim cancellation.
-    if (state==ARMED || busy()) {
+    if (busy()) {
       if (!connected || connection!=owner) { fail(LINK_LOST);return; }
-      if (uint32_t(now-last) > (state==ARMED ? 90000u : 45000u)) {
-        if (state==ARMED) { state=LOCKED;error=OK; }
-        else fail(TIMED_OUT);
-      }
+      if (uint32_t(now-last)>45000u) fail(TIMED_OUT);
     }
   }
   void packet(const uint8_t* p, size_t n, uint32_t now, uint32_t connection, bool recording) {
     if (state==COMMITTED) return;
     if (!p || n<5 || n>PACKET_MAX) { if (busy()) fail(BAD_PACKET);return; }
     const uint8_t command=p[0];const uint32_t id=u32(p+1);
-    if (command==1) { // BEGIN: command, session, length, sha256.
-      if (state!=ARMED || owner!=connection) { if (!busy()) error=NOT_ARMED;return; }
+    if (command==1) { // Authenticated BEGIN: command, session, length, sha256, HMAC-SHA256.
+      if (busy()) return;
+      session=id;offset=0;
+      if (!capacity || maxData<64) { state=DISABLED;error=BAD_SIZE;return; }
       if (recording) { error=BUSY;return; }
-      if (n!=41 || !id) { error=BAD_PACKET;return; }
+      if (n!=73 || !id) { error=BAD_PACKET;return; }
       const uint32_t bytes=u32(p+5);
       if (bytes<36 || bytes>capacity) { error=BAD_SIZE;return; }
+      const OtaError auth=backend.authorize(p,p+41,now);
+      if (auth!=OK) { state=LOCKED;error=auth;return; }
       session=id;offset=0;size=bytes;error=OK;lastLength=0;
+      owner=connection;
       if (!backend.begin(bytes,p+9)) { fail(FLASH_ERROR);return; }
       state=RECEIVING;last=now;return;
     }
@@ -91,7 +89,7 @@ class OtaSession {
     fail(BAD_PACKET);
   }
   void status(uint8_t* p, uint16_t build) const {
-    memset(p,0,20);p[0]=0xD7;p[1]=1;p[2]=state;p[3]=error;
+    memset(p,0,20);p[0]=0xD7;p[1]=2;p[2]=state;p[3]=error;
     put32(p+4,session);put32(p+8,offset);put32(p+12,capacity);
     p[16]=maxData&255;p[17]=maxData>>8;p[18]=build&255;p[19]=build>>8;
   }
