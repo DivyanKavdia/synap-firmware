@@ -5,7 +5,7 @@
 
 // Transport-independent protocol engine; only the control task calls these methods.
 namespace Synap {
-enum OtaState : uint8_t { DISABLED, LOCKED, ARMED, RECEIVING, READY, COMMITTED, FAILED };
+enum OtaState : uint8_t { OTA_DISABLED, LOCKED, ARMED, RECEIVING, READY, COMMITTED, FAILED };
 enum OtaError : uint8_t { OK, NOT_ARMED, BAD_PACKET, BAD_SIZE, BAD_OFFSET, FLASH_ERROR,
   INVALID_IMAGE, HASH_MISMATCH, LINK_LOST, TIMED_OUT, CANCELLED, BUSY, AUTH_FAILED, AUTH_THROTTLED };
 struct OtaBackend {
@@ -20,7 +20,7 @@ struct OtaBackend {
 class OtaSession {
  public:
   static constexpr size_t PACKET_MAX = 182;
-  OtaState state = DISABLED;
+  OtaState state = OTA_DISABLED;
   OtaError error = OK;
   uint32_t session = 0, offset = 0, capacity = 0;
   uint16_t maxData = 0;
@@ -32,7 +32,7 @@ class OtaSession {
   bool busy() const { return state==RECEIVING || state==READY || state==COMMITTED; }
   void configure(uint32_t bytes, uint16_t data) {
     capacity=bytes;maxData=data;
-    if (!busy()) { state=capacity && maxData>=64 ? LOCKED : DISABLED;error=OK;session=offset=0; }
+    if (!busy()) { state=capacity && maxData>=64 ? LOCKED : OTA_DISABLED;error=OK;session=offset=0; }
   }
   void fail(OtaError reason) {
     backend.abort();state=FAILED;error=reason;lastLength=0;
@@ -51,7 +51,7 @@ class OtaSession {
     if (command==1) { // Authenticated BEGIN: command, session, length, sha256, HMAC-SHA256.
       if (busy()) return;
       session=id;offset=0;
-      if (!capacity || maxData<64) { state=DISABLED;error=BAD_SIZE;return; }
+      if (!capacity || maxData<64) { state=OTA_DISABLED;error=BAD_SIZE;return; }
       if (recording) { error=BUSY;return; }
       if (n!=73 || !id) { error=BAD_PACKET;return; }
       const uint32_t bytes=u32(p+5);

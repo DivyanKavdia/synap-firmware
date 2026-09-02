@@ -1,14 +1,20 @@
 // g++ -std=c++17 -Wall -Wextra -Werror tests/ota_session.cpp -o /tmp/synap-ota-test
+// Reproduce ESP32 core symbols before parsing the OTA header.
+#define DISABLED 0x00
+enum STATUS { OK = 0, FAIL, PENDING, BUSY };
 #include "../firmware/dk_pendant_esp32s3/OtaSession.h"
 #include <assert.h>
 #include <vector>
 #include <iostream>
 using namespace Synap;
+static_assert(DISABLED == 0x00, "Keep the ESP32 GPIO macro intact");
+static_assert(Synap::OTA_DISABLED == 0 && Synap::LOCKED == 1 && Synap::FAILED == 6,
+              "OTA state bytes must remain protocol-compatible");
 struct Flash : OtaBackend {
   int begins=0,writes=0,commits=0,aborts=0;
   bool beginOK=true,writeOK=true,commitOK=true;
-  OtaError finishResult=OK;
-  OtaError authResult=OK;
+  OtaError finishResult=Synap::OK;
+  OtaError authResult=Synap::OK;
   int authorizations=0;
   OtaError authorize(const uint8_t*,const uint8_t*,uint32_t) override {++authorizations;return authResult;}
   bool begin(uint32_t,const uint8_t*) override {++begins;return beginOK;}
@@ -38,7 +44,7 @@ int main() {
   {Flash f;OtaSession s(f);s.configure(1024,173);f.authResult=AUTH_FAILED;
    send(s,begin());assert(s.error==AUTH_FAILED && f.begins==0);
    f.authResult=AUTH_THROTTLED;send(s,begin());assert(s.error==AUTH_THROTTLED && f.begins==0);
-   f.authResult=OK;send(s,begin(),10,1,true);assert(s.error==BUSY && f.begins==0);
+   f.authResult=Synap::OK;send(s,begin(),10,1,true);assert(s.error==Synap::BUSY && f.begins==0);
    auto legacy=begin();legacy.resize(41);send(s,legacy);assert(s.error==BAD_PACKET && f.begins==0);
    send(s,begin());assert(s.state==RECEIVING);
    send(s,data(),10,2);assert(f.writes==0); // Authenticated transfer belongs to this connection.
@@ -50,7 +56,7 @@ int main() {
    s.configure(1024,173);send(s,begin());send(s,data());send(s,data(40));send(s,command(3));
    assert(s.error==failure && f.commits==0 && f.aborts>0);}
   {Flash f;OtaSession s(f);s.configure(64,173);send(s,begin());assert(s.error==BAD_SIZE && f.begins==0 && f.authorizations==0);}
-  {Flash f;OtaSession s(f);s.configure(1024,63);assert(s.state==DISABLED);send(s,begin());assert(f.begins==0);}
+  {Flash f;OtaSession s(f);s.configure(1024,63);assert(s.state==OTA_DISABLED);send(s,begin());assert(f.begins==0);}
   for(int scenario=0;scenario<9;++scenario) {Flash f;OtaSession s(f);s.configure(1024,173);send(s,begin());
     if(scenario==0) {send(s,data(1));assert(s.error==BAD_OFFSET);}
     if(scenario==1) {auto p=data();p[21]=0;send(s,p);assert(s.error==INVALID_IMAGE);}
