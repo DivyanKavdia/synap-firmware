@@ -1,6 +1,6 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
-const target='esp32s3-fh4r2-qspi-4m',version='1.0.0',slotSize=0x140000;
+const target='esp32s3-fh4r2-qspi-4m',version='0.0.1',slotSize=0x140000;
 const repository='DivyanKavdia/synap-firmware',workflow='.github/workflows/firmware.yml';
 const allowedBranches=new Set(['ota-test','ota-releases']);
 function validate(bytes,build) {
@@ -36,6 +36,6 @@ if(require.main===module) {
   fs.writeFileSync(path.join(out,'latest.json'),JSON.stringify(manifest,null,2)+'\n');
   const source=fs.readFileSync('synap_esp32s3/synap_esp32s3.ino','utf8').replace(/^#define SYNAP_BUILD \d+$/m,`#define SYNAP_BUILD ${build}`);
   fs.writeFileSync(path.join(out,'synap_esp32s3.ino'),source);
-  console.log(`Validated ${version} build ${build} for ${manifest.channel}: ${bytes.length}/${slotSize} bytes; ${manifest.sha256}`);
+  console.log(`Validated Synap ${version} build ${build} for ${manifest.channel}: ${bytes.length}/${slotSize} bytes; ${manifest.sha256}`);
 }
 module.exports={validate,createManifest,canonicalManifest,target,version,slotSize,allowedBranches,repository,workflow};
