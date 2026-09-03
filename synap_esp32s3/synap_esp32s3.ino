@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <BLEDevice.h>
 #include <esp_mac.h>
+#include <esp_system.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #if defined(CONFIG_BLUEDROID_ENABLED)
@@ -23,6 +24,7 @@ bool microphoneReady = false;
 
 #define DEVICE_NAME "synap"
 #define DEVICE_ID_UUID "4fa1234c-0000-1000-8000-00805f9b34fb"
+#define DIAGNOSTICS_UUID "4fa1234d-0000-1000-8000-00805f9b34fb"
 // Public board identity, independent of firmware version, NVS and OTA authorization.
 char synapDeviceId[19] = {};
 #define SERVICE_UUID "4fa12345-0000-1000-8000-00805f9b34fb"
@@ -32,6 +34,8 @@ char synapDeviceId[19] = {};
 constexpr uint8_t PROTOCOL_VERSION = 2;
 constexpr uint8_t AUDIO_PACKET_MAGIC = 0xA5;
 constexpr uint8_t STATUS_PACKET_MAGIC = 0x5A;
+constexpr uint8_t DIAGNOSTICS_MAGIC = 0xD6;
+constexpr uint8_t DIAGNOSTICS_VERSION = 1;
 constexpr uint8_t CMD_STOP = 0x00;
 constexpr uint8_t CMD_START = 0x01;
 constexpr uint8_t CMD_GET_STATUS = 0x02;
@@ -70,6 +74,7 @@ Adafruit_NeoPixel statusLed(1, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);
 BLEServer* bleServer = nullptr;
 BLECharacteristic* audioCharacteristic = nullptr;
 BLECharacteristic* controlCharacteristic = nullptr;
+BLECharacteristic* diagnosticsCharacteristic = nullptr;
 #if defined(CONFIG_BLUEDROID_ENABLED)
 BLE2902* audioCccd = nullptr;
 #endif
@@ -84,10 +89,12 @@ std::atomic<uint8_t> chunksPerFrame{0};
 float tonePhase = 0;
 uint32_t disconnectedAt = 0;
 bool restartAdvertising = false;
+esp_reset_reason_t bootResetReason = ESP_RST_UNKNOWN;
 
 // Explicit prototypes prevent Arduino's auto-prototyper from duplicating defaults.
 void setDeviceState(DeviceState state, ErrorCode error);
 void updateStatusCharacteristic(bool notify);
+void updateDiagnosticsCharacteristic();
 void stopStreaming(ErrorCode reason = ErrorCode::NONE);
 bool configureTransportFromPeerMtu();
 void startStreaming(uint8_t version);
@@ -241,7 +248,7 @@ constexpr uint16_t SYNAP_FIRMWARE_BUILD = SYNAP_BUILD;
 // Kept in the image and exposed over BLE for release/board verification.
 static const char SYNAP_FIRMWARE_ID[] =
   "SYNAP-FW:esp32s3-fh4r2-qspi-4m:1.0.0:" SYNAP_STRING(SYNAP_BUILD);
-// Compatibility marker, NOT a signature. No secret or publisher authentication.
+// Compatibility marker. Publisher authenticity is enforced by the signed production manifest in the PWA.
 static const char SYNAP_PRODUCT[] = "SYNAP-ESP32S3-OTA-ID-V3";
 static const char SYNAP_TARGET_MARKER[] = "SYNAP-FW:esp32s3-fh4r2-qspi-4m:";
 
@@ -364,11 +371,14 @@ void otaTick() {
   }
   if (otaOverflow.exchange(false) && otaBusy() && otaSession.state!=Synap::COMMITTED) otaSession.fail(Synap::BAD_PACKET);
   OtaMessage message;
-  if (xQueueReceive(otaQueue,&message,0)==pdTRUE && connected && message.connection==generation) {
-    otaSession.packet(message.data,message.length,now,generation,streamingEnabled.load());
-    // Re-check ownership; disconnects enter the bounded resumable state.
+  // Drain a short burst each control-loop iteration so cumulative-ACK windows do not
+  // spend most of their time waiting in RAM. Flash writes remain strictly ordered.
+  for (uint8_t drained=0;drained<4 && xQueueReceive(otaQueue,&message,0)==pdTRUE;drained++) {
+    if (!connected || message.connection!=generation) continue;
+    otaSession.packet(message.data,message.length,millis(),generation,streamingEnabled.load());
     otaSession.tick(millis(),connectionGeneration.load(),deviceConnected.load());
     otaPublish(true);
+    if (otaSession.state==Synap::FAILED || otaSession.state==Synap::COMMITTED) break;
   }
   if (otaSession.state!=previous) {
     otaPublish(true);
@@ -383,6 +393,9 @@ void otaTick() {
 }
 // END EMBEDDED SynapOTA.h
 
+static void put32le(uint8_t* p, uint32_t value) {
+  p[0]=value&255;p[1]=(value>>8)&255;p[2]=(value>>16)&255;p[3]=(value>>24)&255;
+}
 
 void setDeviceState(DeviceState state, ErrorCode error) {
   deviceState = state;
@@ -407,6 +420,27 @@ void updateStatusCharacteristic(bool notify) {
   value[14]=audioPayloadBytes & 255; value[15]=audioPayloadBytes >> 8;
   controlCharacteristic->setValue(value, sizeof(value));
   if (notify && deviceConnected.load()) controlCharacteristic->notify();
+}
+void updateDiagnosticsCharacteristic() {
+  if (!diagnosticsCharacteristic) return;
+  uint8_t value[32] = {};
+  value[0]=DIAGNOSTICS_MAGIC;value[1]=DIAGNOSTICS_VERSION;
+  uint8_t flags=0;
+#if USE_REAL_I2S_MIC
+  flags|=0x01;
+#endif
+  if (deviceConnected.load()) flags|=0x02;
+  if (streamingEnabled.load()) flags|=0x04;
+  if (otaBusy()) flags|=0x08;
+  value[2]=flags;value[3]=static_cast<uint8_t>(bootResetReason);
+  put32le(value+4,capturedFrames.load());
+  put32le(value+8,captureDrops.load());
+  put32le(value+12,notifyRejected.load());
+  put32le(value+16,controlDrops.load());
+  put32le(value+20,ESP.getFreeHeap());
+  put32le(value+24,ESP.getMinFreeHeap());
+  put32le(value+28,millis()/1000u);
+  diagnosticsCharacteristic->setValue(value,sizeof(value));
 }
 void stopStreaming(ErrorCode reason) {
   streamingEnabled.store(false);
@@ -492,6 +526,12 @@ class AudioCallbacks : public BLECharacteristicCallbacks {
   void onStatus(BLECharacteristic* characteristic, Status status, uint32_t code) override {
     (void)characteristic; (void)code;
     if (status == SUCCESS_NOTIFY) ++notifyAccepted; else ++notifyRejected;
+  }
+};
+class DiagnosticsCallbacks : public BLECharacteristicCallbacks {
+  void onRead(BLECharacteristic* characteristic) override {
+    (void)characteristic;
+    updateDiagnosticsCharacteristic();
   }
 };
 
@@ -663,9 +703,9 @@ void initializeBLE() {
 #if defined(CONFIG_NIMBLE_ENABLED)
   bleServer->advertiseOnDisconnect(true);
 #endif
-  // Audio/control + device ID + OTA/status/build identity exceed Bluedroid's default
-  // 15-handle service reservation. NimBLE accepts this overload as well.
-  BLEService* service=bleServer->createService(BLEUUID(SERVICE_UUID),32);
+  // Audio/control + device ID + OTA/status/build identity + diagnostics exceed
+  // Bluedroid's default service reservation. NimBLE accepts this overload as well.
+  BLEService* service=bleServer->createService(BLEUUID(SERVICE_UUID),36);
   audioCharacteristic=service->createCharacteristic(AUDIO_CHAR_UUID,
     BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
   audioCharacteristic->setCallbacks(new AudioCallbacks());
@@ -682,6 +722,9 @@ void initializeBLE() {
   // subscription test under NimBLE; do not use it to gate START.
   auto* deviceIdentity = service->createCharacteristic(DEVICE_ID_UUID, BLECharacteristic::PROPERTY_READ);
   deviceIdentity->setValue(synapDeviceId);
+  diagnosticsCharacteristic=service->createCharacteristic(DIAGNOSTICS_UUID,BLECharacteristic::PROPERTY_READ);
+  diagnosticsCharacteristic->setCallbacks(new DiagnosticsCallbacks());
+  updateDiagnosticsCharacteristic();
   updateStatusCharacteristic(false);
   otaInitialize(service);
   service->start();
@@ -700,6 +743,7 @@ void fatalSetup(const char* message) {
 void setup() {
   Serial.begin(115200);
   delay(400);
+  bootResetReason=esp_reset_reason();
   statusLed.begin();
   setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
 #if USE_REAL_I2S_MIC
@@ -716,22 +760,28 @@ void setup() {
   if (esp_efuse_mac_get_default(factoryMac) != ESP_OK) fatalSetup("[FATAL] device identity unavailable");
   snprintf(synapDeviceId, sizeof(synapDeviceId), "SYNAP-%02X%02X%02X%02X%02X%02X",
     factoryMac[0], factoryMac[1], factoryMac[2], factoryMac[3], factoryMac[4], factoryMac[5]);
-  Serial.printf("Synap %u %s\n", SYNAP_FIRMWARE_BUILD, synapDeviceId);
+  Serial.printf("Synap %u %s reset=%u\n", SYNAP_FIRMWARE_BUILD, synapDeviceId, unsigned(bootResetReason));
   initializeBLE();
   if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
       xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, nullptr, 0) != pdPASS ||
       xTaskCreatePinnedToCore(transmitterTask, "transmit", 4096, nullptr, 2, nullptr, 1) != pdPASS) {
     fatalSetup("[FATAL] task allocation failed");
   }
+}
+void loop() {
 #if defined(CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE) && CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
-  // Basic startup validation only. Stock Arduino bootloaders usually disable rollback.
+  static bool bootValidated=false;
+  // Leave a newly selected image in PENDING_VERIFY long enough to prove that
+  // BLE, queues and (when fitted) the microphone survive early runtime startup.
+  if (!bootValidated && millis()>5000 && bleServer && audioFrameQueue && controlQueue
 #if USE_REAL_I2S_MIC
-  if (microphoneReady)
+      && microphoneReady
 #endif
-  {
+  ) {
     const esp_err_t result=esp_ota_mark_app_valid_cancel_rollback();
-    Serial.printf("[OTA] startup validation result=%d\n",int(result));
+    if (result==ESP_OK || result==ESP_ERR_NOT_FOUND) bootValidated=true;
+    Serial.printf("[OTA] delayed boot validation result=%d\n",int(result));
   }
 #endif
+  delay(20);
 }
-void loop() { delay(20); }
