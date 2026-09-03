@@ -26,14 +26,17 @@ jobs:
           arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli core install esp32:esp32@3.3.5 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli lib install "Adafruit NeoPixel@1.15.2"
-      - name: Test release and OTA validation
-        run: node --test tests/*.cjs
+      - name: Test release, OTA and hardware interaction preparation
+        run: |
+          node tools/prepare-interactions.cjs --check synap_esp32s3/synap_esp32s3.ino
+          node --test tests/*.cjs
       - name: Compile application (4 MB flash, QSPI PSRAM, default dual OTA slots)
         env:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           build=$((1000 + RUN_NUMBER))
           test "$build" -le 65535
+          node tools/prepare-interactions.cjs synap_esp32s3/synap_esp32s3.ino
           arduino-cli compile --fqbn 'esp32:esp32:esp32s3:FlashSize=4M,PartitionScheme=default,PSRAM=enabled,USBMode=hwcdc,CDCOnBoot=cdc' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build" --output-dir compiled synap_esp32s3
           node tools/release.cjs compiled/synap_esp32s3.ino.bin "$build" "$GITHUB_SHA" bundle "$SYNAP_RELEASE_BRANCH"
       - uses: actions/upload-artifact@v4
