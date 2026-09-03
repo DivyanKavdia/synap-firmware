@@ -29,13 +29,15 @@ function createManifest(bytes,build,commit,branch='ota-test') {
   return manifest;
 }
 if(require.main===module) {
-  const [input,number,commit,out,branchArg]=process.argv.slice(2),build=Number(number),branch=branchArg||process.env.SYNAP_RELEASE_BRANCH||'ota-test';
+  const [input,number,commit,out,branchArg,sourceArg]=process.argv.slice(2),build=Number(number),branch=branchArg||process.env.SYNAP_RELEASE_BRANCH||'ota-test';
   const bytes=fs.readFileSync(input),manifest=createManifest(bytes,build,commit,branch);
   fs.mkdirSync(out,{recursive:true});
   fs.writeFileSync(path.join(out,'firmware.bin'),bytes);
   fs.writeFileSync(path.join(out,'latest.json'),JSON.stringify(manifest,null,2)+'\n');
-  const source=fs.readFileSync('synap_esp32s3/synap_esp32s3.ino','utf8').replace(/^#define SYNAP_BUILD \d+$/m,`#define SYNAP_BUILD ${build}`);
+  const sourcePath=sourceArg||'synap_esp32s3/synap_esp32s3.ino';
+  const source=fs.readFileSync(sourcePath,'utf8').replace(/^#define SYNAP_BUILD \d+$/m,`#define SYNAP_BUILD ${build}`);
   fs.writeFileSync(path.join(out,'synap_esp32s3.ino'),source);
+  fs.writeFileSync(path.join(out,'source.sha256'),crypto.createHash('sha256').update(source).digest('hex')+'  synap_esp32s3.ino\n');
   console.log(`Validated Synap ${version} build ${build} for ${manifest.channel}: ${bytes.length}/${slotSize} bytes; ${manifest.sha256}`);
 }
 module.exports={validate,createManifest,canonicalManifest,target,version,slotSize,allowedBranches,repository,workflow};
