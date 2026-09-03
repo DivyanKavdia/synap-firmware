@@ -4,13 +4,13 @@
 using namespace Synap;
 constexpr const char* ID="SYNAP-AABBCCDDEEFF";
 struct Flash : OtaBackend {
-  unsigned begins=0,writes=0,commits=0;OtaError result=OK;
+  unsigned begins=0,writes=0,commits=0,aborts=0;OtaError result=OK;
   bool matchesDevice(const uint8_t* id) override {return memcmp(id,ID,18)==0;}
   bool begin(uint32_t,const uint8_t*) override {++begins;return true;}
   bool write(const uint8_t*,size_t) override {++writes;return true;}
   OtaError finish() override {return result;}
   bool commit() override {++commits;return true;}
-  void abort() override {}
+  void abort() override {++aborts;}
 };
 std::vector<uint8_t> packet(uint8_t command,size_t n=5){
   std::vector<uint8_t> p(n);p[0]=command;OtaSession::put32(p.data()+1,7);return p;
@@ -24,7 +24,8 @@ std::vector<uint8_t> resume(const char* id=ID){
 std::vector<uint8_t> data(){
   auto p=packet(2,73);p[9]=0xe9;p[21]=9;OtaSession::put32(p.data()+9+32,0xabcd5432);return p;
 }
-void send(OtaSession& s,const std::vector<uint8_t>& p,uint32_t connection=1,bool recording=false){s.packet(p.data(),p.size(),100,connection,recording);}
+void sendAt(OtaSession& s,const std::vector<uint8_t>& p,uint32_t now,uint32_t connection=1,bool recording=false){s.packet(p.data(),p.size(),now,connection,recording);}
+void send(OtaSession& s,const std::vector<uint8_t>& p,uint32_t connection=1,bool recording=false){sendAt(s,p,100,connection,recording);}
 int main(){
   Flash f;OtaSession s(f);s.configure(2048,173);
   uint8_t status[20];s.status(status,1004);assert(status[1]==3);
@@ -38,16 +39,31 @@ int main(){
   send(s,packet(3));assert(s.state==READY);
   send(s,packet(4));assert(s.state==COMMITTED&&f.commits==1);
   s.tick(50000,2,false);send(s,packet(5));assert(s.state==COMMITTED); // Never cancel a committed image.
+
   Flash g;OtaSession t(g);t.configure(2048,173);send(t,begin());
   auto outOfOrder=data();OtaSession::put32(outOfOrder.data()+5,1);send(t,outOfOrder);assert(t.error==BAD_OFFSET&&g.commits==0);
   send(t,begin());send(t,data());g.result=HASH_MISMATCH;send(t,packet(3));assert(t.state==FAILED&&t.error==HASH_MISMATCH&&g.commits==0);
-  send(t,begin());t.tick(50000,1,true);assert(t.error==TIMED_OUT&&g.commits==0);
-  send(t,begin());g.result=OK;t.tick(200,2,true);assert(t.state==RECEIVING&&t.offset==0);
-  send(t,resume(),2);send(t,data(),2);assert(t.offset==64&&g.writes==2); // Rebind and continue.
-  send(t,packet(3),2);send(t,packet(4),2);assert(t.state==COMMITTED&&g.commits==1);
-  Flash h;OtaSession u(h);u.configure(2048,503);send(u,begin());u.tick(200,2,false);
-  u.tick(120201,2,false);assert(u.state==FAILED&&u.error==LINK_LOST); // Bounded resume window.
-  Flash j;OtaSession v(j);v.configure(2048,503);send(v,begin());send(v,packet(5));
-  assert(v.error==CANCELLED&&j.commits==0);
-  puts("PASS: device target, ordering, duplicate, commit, hash failure, timeout, reconnect resume and cancellation");
+
+  // A phone can suspend the browser while BLE remains logically connected. The
+  // prepared production engine must retain the flash handle and exact offset for
+  // the full recovery window instead of reproducing the old 45-second abort.
+  Flash h;OtaSession u(h);u.configure(2048,503);send(u,begin());send(u,data());
+  const unsigned abortsBeforePause=h.aborts;
+  u.tick(600000,1,true);assert(u.state==RECEIVING&&u.error==OK&&u.offset==64&&h.aborts==abortsBeforePause);
+  u.tick(899999,1,true);assert(u.state==RECEIVING&&u.offset==64&&h.aborts==abortsBeforePause);
+  u.tick(900101,1,true);assert(u.state==FAILED&&u.error==TIMED_OUT&&h.aborts==abortsBeforePause+1);
+
+  // A real disconnect gets the same bounded retention window and can be rebound
+  // by a matching session/hash/device RESUME without erasing already-written data.
+  Flash j;OtaSession v(j);v.configure(2048,503);send(v,begin());send(v,data());
+  v.tick(200,2,false);v.tick(899999,2,false);assert(v.state==RECEIVING&&v.offset==64);
+  send(v,resume(),2);assert(v.state==RECEIVING&&v.offset==64&&v.error==OK);
+  send(v,packet(3),2);send(v,packet(4),2);assert(v.state==COMMITTED&&j.commits==1);
+
+  Flash k;OtaSession w(k);w.configure(2048,503);send(w,begin());
+  w.tick(200,2,false);w.tick(900201,2,false);assert(w.state==FAILED&&w.error==LINK_LOST); // Bounded cleanup.
+
+  Flash m;OtaSession x(m);x.configure(2048,503);send(x,begin());send(x,packet(5));
+  assert(x.error==CANCELLED&&m.commits==0);
+  puts("PASS: device target, ordering, duplicate, commit, hash failure, 15-minute phone-lock retention, reconnect resume and bounded cleanup");
 }
