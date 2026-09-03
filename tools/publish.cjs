@@ -28,9 +28,9 @@ if(existing) {
 if(production) {
   const tag=`v${manifest.version}-build.${manifest.build}`,releases=api('releases?per_page=100');
   if(!releases.some(r=>r.tag_name===tag)) {
-    execFileSync('gh',['release','create',tag,'bundle/firmware.bin','bundle/latest.json','bundle/synap_esp32s3.ino',
+    execFileSync('gh',['release','create',tag,'bundle/firmware.bin','bundle/latest.json','bundle/synap_esp32s3.ino','bundle/source.sha256',
       '--repo',repo,'--target',manifest.commit,'--title',`Synap ${manifest.version} · build ${manifest.build}`,
-      '--notes','Production-qualified ESP32-S3FH4R2 firmware. GitHub OIDC build provenance, verified release commit, resumable BLE OTA, 4 MB flash, 2 MB QSPI PSRAM, default dual OTA slots.'],{stdio:'inherit'});
+      '--notes','Production-qualified ESP32-S3FH4R2 firmware. GitHub OIDC build provenance, exact prepared source + source hash, verified release commit, resumable BLE OTA, 4 MB flash, 2 MB QSPI PSRAM, default dual OTA slots.'],{stdio:'inherit'});
   }
 }
 const blob=api('git/blobs','POST',{content:binary.toString('base64'),encoding:'base64'});
