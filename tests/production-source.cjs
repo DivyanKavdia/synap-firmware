@@ -1,0 +1,24 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const {prepare}=require('../tools/prepare-interactions.cjs');
+const {patch}=require('../tools/patch-runtime-fixes.cjs');
+const root=path.join(__dirname,'..');
+
+test('production preparation is reproducible and retains mobile OTA safely',()=>{
+  const source=fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8');
+  const prepared=patch(prepare(source));
+  assert.match(prepared,/SYNAP-FW:esp32s3-fh4r2-qspi-4m:0\.0\.1:/);
+  assert.match(prepared,/900000u/,'OTA resume must survive mobile background suspension');
+  assert.match(prepared,/#define SYNAP_BATTERY_MONITOR_ENABLE 0/,'unaudited battery ADC must stay disabled');
+  assert.match(prepared,/vTaskDelay\(pdMS_TO_TICKS\(60\)\)/,'STOP must quiesce audio before acknowledgement');
+  assert.match(prepared,/SYNAP-%02X%02X%02X%02X%02X%02X/,'public hardware ID must come from eFuse MAC');
+  assert.match(prepared,/TOUCH_SLEEP_HOLD_MS/);
+  assert.match(prepared,/publishRememberEvent/);
+  assert.match(prepared,/CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE/);
+});
+
+test('audio source mode is explicit until production microphone hardware is confirmed',()=>{
+  const source=fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8');
+  assert.match(source,/#ifndef USE_REAL_I2S_MIC\s*\n#define USE_REAL_I2S_MIC 0/);
+  assert.match(source,/I2S_BCLK_PIN = 4, I2S_WS_PIN = 5, I2S_DATA_IN_PIN = 6/);
+});
