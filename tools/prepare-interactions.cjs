@@ -157,7 +157,6 @@ void updateStatusCharacteristic(bool notify);`,
     const uint32_t phase=now%1400u;
     if (phase<55u || (phase>=180u && phase<235u)) { r=LED_DIM; g=2; }
   } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {
-    // Low battery: subtle red double-pulse, without changing the functional state.
     const uint32_t phase=now%5000u;
     if (phase<40u || (phase>=180u && phase<220u)) r=LED_DIM;
   } else if (deviceState == DeviceState::DISCONNECTED) {
@@ -240,7 +239,7 @@ void sampleBattery(bool force) {
 
 void enterDeepSleep(const char* reason) {
   if (otaBusy() || streamingEnabled.load()) return;
-  Serial.printf("[POWER] deep sleep: %s battery=%umV\n", reason?reason:"idle", unsigned(batteryMillivolts));
+  Serial.printf("[POWER] deep sleep: %s battery=%umV\\n", reason?reason:"idle", unsigned(batteryMillivolts));
   statusLed.clear();statusLed.show();
   delay(25);
   BLEDevice::deinit(true);
@@ -301,7 +300,6 @@ void pollTouchControl() {
           enterDeepSleep("touch-hold");
         } else if (held>=TOUCH_DEBOUNCE_MS && held<TOUCH_SLEEP_HOLD_MS &&
             deviceConnected.load() && !streamingEnabled.load()) {
-          // Start on release so the same TTP223 can distinguish tap from 3 s sleep hold.
           touchFirstTapAt=0;
           queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,streamGeneration.load());
         }
