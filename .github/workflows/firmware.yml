@@ -68,13 +68,29 @@ jobs:
         with:
           name: verified-firmware
           path: bundle
+      - name: Confirm this source is still the main release candidate
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current="$(gh api repos/DivyanKavdia/synap-firmware/commits/main --jq .sha)"
+          if [ "$current" = "$GITHUB_SHA" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "Current source $GITHUB_SHA is eligible for production publish."
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "Source $GITHUB_SHA was superseded by $current; skipping attestation, publish and feed verification."
+          fi
       - name: Attest production firmware with GitHub OIDC
+        if: steps.current.outputs.release == 'true'
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: bundle/firmware.bin
       - name: Publish production firmware atomically
+        if: steps.current.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: node tools/publish.cjs
       - name: Verify public manifest, binary, GitHub provenance and CORS
+        if: steps.current.outputs.release == 'true'
         run: node tools/check-feed.cjs
