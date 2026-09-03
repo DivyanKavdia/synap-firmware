@@ -1,8 +1,10 @@
-// Compile the actual transport-independent firmware engine with a fake flash backend.
+// Compile the exact prepared transport-independent firmware engine with a fake flash backend.
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),{execFileSync}=require('node:child_process');
-test('native firmware engine rejects mismatched/legacy targets before flash and preserves transfer recovery',()=>{
-  const source=fs.readFileSync(path.join(__dirname,'../synap_esp32s3/synap_esp32s3.ino'),'utf8');
+const {prepare}=require('../tools/prepare-interactions.cjs');
+test('native firmware engine rejects mismatched targets and preserves resumable OTA across phone suspension',()=>{
+  const raw=fs.readFileSync(path.join(__dirname,'../synap_esp32s3/synap_esp32s3.ino'),'utf8');
+  const source=prepare(raw);
   const engine=source.split('// BEGIN EMBEDDED OtaSession.h')[1].split('// END EMBEDDED OtaSession.h')[0];
   const fixture=fs.readFileSync(path.join(__dirname,'session.cpp'),'utf8');
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'synap-ota-engine-'));
