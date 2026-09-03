@@ -10,6 +10,31 @@ function replaceOnce(source, before, after, label) {
 function prepare(source) {
   let out = source;
 
+  // Mobile browsers can suspend JavaScript while leaving the BLE link logically
+  // connected. The old firmware destroyed the OTA handle after 45 seconds in
+  // that state, making an otherwise resumable transfer restart from byte zero.
+  // Retain both connected-idle and disconnected sessions for a bounded 15-minute
+  // recovery window. A validated RESUME command still has to match session,
+  // image digest and public device ID before a new connection can take ownership.
+  out = replaceOnce(out,
+`      if (!connected || connection!=owner) {
+        if (!orphanedAt) orphanedAt=now ? now : 1;
+        if (uint32_t(now-orphanedAt)>120000u) fail(LINK_LOST);
+        return;
+      }
+      orphanedAt=0;
+      if (uint32_t(now-last)>45000u) fail(TIMED_OUT);`,
+`      if (!connected || connection!=owner) {
+        if (!orphanedAt) orphanedAt=now ? now : 1;
+        if (uint32_t(now-orphanedAt)>900000u) fail(LINK_LOST);
+        return;
+      }
+      orphanedAt=0;
+      // Screen lock/background suspension is expected on mobile. Keep the flash
+      // handle and exact persisted offset long enough for the PWA to resume.
+      if (uint32_t(now-last)>900000u) fail(TIMED_OUT);`,
+  'OTA phone-suspension retention');
+
   out = replaceOnce(out,
 `constexpr uint8_t RGB_LED_PIN = 48;
 constexpr int8_t I2S_BCLK_PIN = 4, I2S_WS_PIN = 5, I2S_DATA_IN_PIN = 6;`,
@@ -168,11 +193,11 @@ if (require.main === module) {
   if (!file) throw new Error('Usage: node tools/prepare-interactions.cjs [--check] <sketch>');
   const source=fs.readFileSync(file,'utf8');
   const prepared=prepare(source);
-  for (const marker of ['pollTouchControl','TOUCH_DOUBLE_TAP_MS','Firmware update: two short amber pulses','Connected/ready: one blue pulse']) {
+  for (const marker of ['pollTouchControl','TOUCH_DOUBLE_TAP_MS','Firmware update: two short amber pulses','Connected/ready: one blue pulse','900000u','Screen lock/background suspension is expected on mobile']) {
     if (!prepared.includes(marker)) throw new Error('Prepared firmware missing '+marker);
   }
   if (!check) fs.writeFileSync(file,prepared);
-  console.log(check?'PASS: touch and low-power LED preparation':'Prepared touch controls and low-power LED states');
+  console.log(check?'PASS: touch, low-power LED and OTA suspension preparation':'Prepared touch controls, low-power LED states and OTA suspension recovery');
 }
 
 module.exports={prepare};
