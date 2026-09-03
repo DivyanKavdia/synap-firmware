@@ -51,6 +51,24 @@ void enterDeepSleep`,
 
 void enterDeepSleep`,'battery sample guard end');
 
+  out=replaceOnce(out,
+`    case CMD_STOP:
+      stopStreaming();
+      break;`,
+`    case CMD_STOP:
+      // STOP can arrive while an audio notification is still inside the BLE stack.
+      // First invalidate capture/transmit work without issuing a second notification,
+      // then give the transmitter one short scheduling window to leave notify(), and
+      // only then publish CONNECTED_IDLE. This avoids iOS/Bluefy dropping GATT when
+      // audio + control notifications collide at the end of a take.
+      streamingEnabled.store(false);
+      ++streamGeneration;
+      if (audioFrameQueue) xQueueReset(audioFrameQueue);
+      setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);
+      vTaskDelay(pdMS_TO_TICKS(60));
+      updateStatusCharacteristic(true);
+      break;`,'safe stop acknowledgement');
+
   return out;
 }
 
