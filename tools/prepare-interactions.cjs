@@ -10,6 +10,16 @@ function replaceOnce(source, before, after, label) {
 function prepare(source) {
   let out = source;
 
+  out = replaceOnce(out,
+`// Synap 1.0.0 | ESP32-S3FH4R2 | Arduino-ESP32 3.3.5 + Adafruit NeoPixel.`,
+`// Synap 0.0.1 | ESP32-S3FH4R2 | Arduino-ESP32 3.3.5 + Adafruit NeoPixel.`,
+  'public firmware version comment');
+
+  out = replaceOnce(out,
+`  "SYNAP-FW:esp32s3-fh4r2-qspi-4m:1.0.0:" SYNAP_STRING(SYNAP_BUILD);`,
+`  "SYNAP-FW:esp32s3-fh4r2-qspi-4m:0.0.1:" SYNAP_STRING(SYNAP_BUILD);`,
+  'public firmware version identity');
+
   // Mobile browsers can suspend JavaScript while leaving the BLE link logically
   // connected. The old firmware destroyed the OTA handle after 45 seconds in
   // that state, making an otherwise resumable transfer restart from byte zero.
@@ -193,11 +203,11 @@ if (require.main === module) {
   if (!file) throw new Error('Usage: node tools/prepare-interactions.cjs [--check] <sketch>');
   const source=fs.readFileSync(file,'utf8');
   const prepared=prepare(source);
-  for (const marker of ['pollTouchControl','TOUCH_DOUBLE_TAP_MS','Firmware update: two short amber pulses','Connected/ready: one blue pulse','900000u','Screen lock/background suspension is expected on mobile']) {
+  for (const marker of ['Synap 0.0.1','SYNAP-FW:esp32s3-fh4r2-qspi-4m:0.0.1:','pollTouchControl','TOUCH_DOUBLE_TAP_MS','Firmware update: two short amber pulses','Connected/ready: one blue pulse','900000u','Screen lock/background suspension is expected on mobile']) {
     if (!prepared.includes(marker)) throw new Error('Prepared firmware missing '+marker);
   }
   if (!check) fs.writeFileSync(file,prepared);
-  console.log(check?'PASS: touch, low-power LED and OTA suspension preparation':'Prepared touch controls, low-power LED states and OTA suspension recovery');
+  console.log(check?'PASS: Synap 0.0.1, touch, low-power LED and OTA suspension preparation':'Prepared Synap 0.0.1 with touch controls, low-power LED states and OTA suspension recovery');
 }
 
 module.exports={prepare};
