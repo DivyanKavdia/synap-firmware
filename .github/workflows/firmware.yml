@@ -52,20 +52,23 @@ jobs:
     environment: production
     env:
       SYNAP_RELEASE_BRANCH: ota-releases
-      SYNAP_RELEASE_PRIVATE_KEY_PEM: ${{ secrets.SYNAP_RELEASE_PRIVATE_KEY_PEM }}
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: verified-firmware
           path: bundle
-      - name: Sign production manifest
-        run: node tools/sign-manifest.cjs bundle/latest.json
+      - name: Attest production firmware with GitHub OIDC
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: bundle/firmware.bin
       - name: Publish production firmware atomically
         env:
           GH_TOKEN: ${{ github.token }}
         run: node tools/publish.cjs
-      - name: Verify public manifest, binary, signature policy and CORS
+      - name: Verify public manifest, binary, GitHub provenance and CORS
         run: node tools/check-feed.cjs

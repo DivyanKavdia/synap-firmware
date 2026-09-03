@@ -1,6 +1,7 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const target='esp32s3-fh4r2-qspi-4m',version='1.0.0',slotSize=0x140000;
+const repository='DivyanKavdia/synap-firmware',workflow='.github/workflows/firmware.yml';
 const allowedBranches=new Set(['ota-test','ota-releases']);
 function validate(bytes,build) {
   if(!Number.isInteger(build)||build<=503||build>65535) throw Error('Invalid build counter');
@@ -12,19 +13,20 @@ function validate(bytes,build) {
   return crypto.createHash('sha256').update(bytes).digest('hex');
 }
 function canonicalManifest(m) {
-  const signed={schema:m.schema,version:m.version,build:m.build,target:m.target,protocol:m.protocol,chip:m.chip,
+  return JSON.stringify({schema:m.schema,version:m.version,build:m.build,target:m.target,protocol:m.protocol,chip:m.chip,
     flashBytes:m.flashBytes,psramBytes:m.psramBytes,partition:m.partition,size:m.size,sha256:m.sha256,
-    commit:m.commit,identity:m.identity,url:m.url,channel:m.channel};
-  return JSON.stringify(signed);
+    commit:m.commit,identity:m.identity,url:m.url,channel:m.channel});
 }
 function createManifest(bytes,build,commit,branch='ota-test') {
   if(!allowedBranches.has(branch)) throw Error('Invalid release branch');
   if(!/^[0-9a-f]{40}$/.test(commit)) throw Error('Invalid source commit');
-  const sha256=validate(bytes,build),channel=branch==='ota-releases'?'production':'test';
+  const sha256=validate(bytes,build),production=branch==='ota-releases',channel=production?'production':'test';
   const artifact=`builds/${build}-${sha256}.bin`;
-  return {schema:2,version,build,target,protocol:3,chip:9,flashBytes:4194304,psramBytes:2097152,
+  const manifest={schema:production?3:2,version,build,target,protocol:3,chip:9,flashBytes:4194304,psramBytes:2097152,
     partition:'default',size:bytes.length,sha256,commit,identity:`SYNAP-FW:${target}:${version}:${build}`,
-    url:`https://raw.githubusercontent.com/DivyanKavdia/synap-firmware/${branch}/${artifact}`,channel};
+    url:`https://raw.githubusercontent.com/${repository}/${branch}/${artifact}`,channel};
+  if(production) manifest.provenance={provider:'github-actions',repository,workflow};
+  return manifest;
 }
 if(require.main===module) {
   const [input,number,commit,out,branchArg]=process.argv.slice(2),build=Number(number),branch=branchArg||process.env.SYNAP_RELEASE_BRANCH||'ota-test';
@@ -36,4 +38,4 @@ if(require.main===module) {
   fs.writeFileSync(path.join(out,'synap_esp32s3.ino'),source);
   console.log(`Validated ${version} build ${build} for ${manifest.channel}: ${bytes.length}/${slotSize} bytes; ${manifest.sha256}`);
 }
-module.exports={validate,createManifest,canonicalManifest,target,version,slotSize,allowedBranches};
+module.exports={validate,createManifest,canonicalManifest,target,version,slotSize,allowedBranches,repository,workflow};
