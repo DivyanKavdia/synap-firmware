@@ -1,7 +1,7 @@
 {
   "schema": 3,
   "version": "0.0.1",
-  "build": 1021,
+  "build": 1022,
   "target": "esp32s3-fh4r2-qspi-4m",
   "protocol": 3,
   "chip": 9,
@@ -9,10 +9,10 @@
   "psramBytes": 2097152,
   "partition": "default",
   "size": 646272,
-  "sha256": "0f531d828214c323419565950381d4a97903723ec6e2cb12df87d91c58976664",
-  "commit": "ebe05f3af1bd82aea4e51fda6bc652265a7fa43a",
-  "identity": "SYNAP-FW:esp32s3-fh4r2-qspi-4m:0.0.1:1021",
-  "url": "https://raw.githubusercontent.com/DivyanKavdia/synap-firmware/ota-releases/builds/1021-0f531d828214c323419565950381d4a97903723ec6e2cb12df87d91c58976664.bin",
+  "sha256": "0ca422dd815f539c06deb7df0317b51af1eaf1581fc09c0381909e820497fbc9",
+  "commit": "489be925aa210c7b9d73d29cd6f698bc5c6019b2",
+  "identity": "SYNAP-FW:esp32s3-fh4r2-qspi-4m:0.0.1:1022",
+  "url": "https://raw.githubusercontent.com/DivyanKavdia/synap-firmware/ota-releases/builds/1022-0ca422dd815f539c06deb7df0317b51af1eaf1581fc09c0381909e820497fbc9.bin",
   "channel": "production",
   "provenance": {
     "provider": "github-actions",
