@@ -30,16 +30,21 @@ jobs:
         run: |
           node tools/prepare-interactions.cjs --check synap_esp32s3/synap_esp32s3.ino
           node --test tests/*.cjs
+      - name: Prepare auditable production source
+        run: |
+          mkdir -p prepared/synap_esp32s3
+          cp synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32s3/synap_esp32s3.ino
+          node tools/prepare-interactions.cjs prepared/synap_esp32s3/synap_esp32s3.ino
+          node tools/patch-runtime-fixes.cjs prepared/synap_esp32s3/synap_esp32s3.ino
+          test "$(git status --porcelain -- synap_esp32s3)" = ""
       - name: Compile application (4 MB flash, QSPI PSRAM, default dual OTA slots)
         env:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           build=$((1000 + RUN_NUMBER))
           test "$build" -le 65535
-          node tools/prepare-interactions.cjs synap_esp32s3/synap_esp32s3.ino
-          node tools/patch-runtime-fixes.cjs synap_esp32s3/synap_esp32s3.ino
-          arduino-cli compile --fqbn 'esp32:esp32:esp32s3:FlashSize=4M,PartitionScheme=default,PSRAM=enabled,USBMode=hwcdc,CDCOnBoot=cdc' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build" --output-dir compiled synap_esp32s3
-          node tools/release.cjs compiled/synap_esp32s3.ino.bin "$build" "$GITHUB_SHA" bundle "$SYNAP_RELEASE_BRANCH"
+          arduino-cli compile --fqbn 'esp32:esp32:esp32s3:FlashSize=4M,PartitionScheme=default,PSRAM=enabled,USBMode=hwcdc,CDCOnBoot=cdc' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build" --output-dir compiled prepared/synap_esp32s3
+          node tools/release.cjs compiled/synap_esp32s3.ino.bin "$build" "$GITHUB_SHA" bundle "$SYNAP_RELEASE_BRANCH" prepared/synap_esp32s3/synap_esp32s3.ino
       - uses: actions/upload-artifact@v4
         with:
           name: verified-firmware
