@@ -1,13 +1,11 @@
-name: Repair production OTA 1013 artifact
+name: Repair historical OTA 1013 artifact
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 permissions:
   contents: write
   actions: read
 jobs:
   repair:
-    if: github.event.head_commit.message == 'Repair production OTA 1013 artifact'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,7 +18,7 @@ jobs:
           unzip -q verified-firmware.zip -d bundle
           test "$(stat -c%s bundle/firmware.bin)" = "645760"
           echo '6025aa48a9f72c2ea63993b50091f68870c620214f9f32bd35454052a41d66e2  bundle/firmware.bin' | sha256sum -c -
-      - name: Replace corrupted production binary blob
+      - name: Replace corrupted historical production binary blob
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -51,11 +49,10 @@ jobs:
           api(`git/refs/heads/${branch}`,'PATCH',{sha:commit.sha,force:false});
           const published = api(`contents/${path}?ref=${branch}`);
           if (published.size !== expectedSize) throw new Error(`Published binary size is ${published.size}, expected ${expectedSize}`);
-          console.log(`Repaired production build 1013 binary: ${commit.sha}`);
+          console.log(`Repaired historical production build 1013 binary: ${commit.sha}`);
           NODE
-      - name: Confirm production manifest remains build 1013
+      - name: Verify historical artifact remains addressable
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api repos/DivyanKavdia/synap-firmware/contents/latest.json?ref=ota-releases --jq .content | tr -d '\n' | base64 -d > latest.json
-          node -e "const m=require('./latest.json'); if(m.build!==1013||m.sha256!=='6025aa48a9f72c2ea63993b50091f68870c620214f9f32bd35454052a41d66e2'||!m.signing) process.exit(1); console.log('Production manifest OK:',m.build,m.sha256)"
+          gh api repos/DivyanKavdia/synap-firmware/contents/builds/1013-6025aa48a9f72c2ea63993b50091f68870c620214f9f32bd35454052a41d66e2.bin?ref=ota-releases --jq .size | grep -x 645760
