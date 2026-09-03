@@ -1,0 +1,61 @@
+name: Repair production OTA 1013 artifact
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'Repair production OTA 1013 artifact'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download verified build 1013 artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/DivyanKavdia/synap-firmware/actions/artifacts/9875425214/zip > verified-firmware.zip
+          mkdir bundle
+          unzip -q verified-firmware.zip -d bundle
+          test "$(stat -c%s bundle/firmware.bin)" = "645760"
+          echo '6025aa48a9f72c2ea63993b50091f68870c620214f9f32bd35454052a41d66e2  bundle/firmware.bin' | sha256sum -c -
+      - name: Replace corrupted production binary blob
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const {execFileSync} = require('child_process');
+          const repo = 'DivyanKavdia/synap-firmware';
+          const branch = 'ota-releases';
+          const path = 'builds/1013-6025aa48a9f72c2ea63993b50091f68870c620214f9f32bd35454052a41d66e2.bin';
+          const expectedSize = 645760;
+          const expectedHash = '6025aa48a9f72c2ea63993b50091f68870c620214f9f32bd35454052a41d66e2';
+          function api(endpoint, method='GET', body) {
+            return JSON.parse(execFileSync('gh', ['api', `repos/${repo}/${endpoint}`, '--method', method, ...(body ? ['--input','-'] : [])], {
+              input: body ? JSON.stringify(body) : undefined,
+              encoding: 'utf8',
+              maxBuffer: 20 * 1024 * 1024
+            }));
+          }
+          const binary = fs.readFileSync('bundle/firmware.bin');
+          if (binary.length !== expectedSize) throw new Error('Verified artifact size changed');
+          const crypto = require('crypto');
+          if (crypto.createHash('sha256').update(binary).digest('hex') !== expectedHash) throw new Error('Verified artifact hash changed');
+          const current = api(`branches/${branch}`);
+          const baseCommit = api(`git/commits/${current.commit.sha}`);
+          const blob = api('git/blobs','POST',{content:binary.toString('base64'),encoding:'base64'});
+          const tree = api('git/trees','POST',{base_tree:baseCommit.tree.sha,tree:[{path,mode:'100644',type:'blob',sha:blob.sha}]});
+          const commit = api('git/commits','POST',{message:'Repair production build 1013 binary',tree:tree.sha,parents:[current.commit.sha]});
+          api(`git/refs/heads/${branch}`,'PATCH',{sha:commit.sha,force:false});
+          const published = api(`contents/${path}?ref=${branch}`);
+          if (published.size !== expectedSize) throw new Error(`Published binary size is ${published.size}, expected ${expectedSize}`);
+          console.log(`Repaired production build 1013 binary: ${commit.sha}`);
+          NODE
+      - name: Confirm production manifest remains build 1013
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/DivyanKavdia/synap-firmware/contents/latest.json?ref=ota-releases --jq .content | tr -d '\n' | base64 -d > latest.json
+          node -e "const m=require('./latest.json'); if(m.build!==1013||m.sha256!=='6025aa48a9f72c2ea63993b50091f68870c620214f9f32bd35454052a41d66e2'||!m.signing) process.exit(1); console.log('Production manifest OK:',m.build,m.sha256)"
