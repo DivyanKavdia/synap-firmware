@@ -2,17 +2,26 @@ name: Build and publish pendant firmware
 on:
   push:
     branches: [main]
-  workflow_dispatch:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        required: true
+        default: test
+        type: choice
+        options: [test, production]
 permissions:
   contents: read
 concurrency:
-  group: firmware-${{ github.ref }}
+  group: firmware-${{ github.ref }}-${{ inputs.channel || 'test' }}
   cancel-in-progress: false
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      SYNAP_RELEASE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.channel == 'production' && 'ota-releases' || 'ota-test' }}
     steps:
       - uses: actions/checkout@v4
       - uses: arduino/setup-arduino-cli@v2
@@ -24,16 +33,16 @@ jobs:
           arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli core install esp32:esp32@3.3.5 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli lib install "Adafruit NeoPixel@1.15.2"
-      - name: Test release validation
+      - name: Test release and OTA validation
         run: node --test tests/*.cjs
-      - name: Compile application (4 MB flash, QSPI PSRAM, existing default OTA slots)
+      - name: Compile application (4 MB flash, QSPI PSRAM, default dual OTA slots)
         env:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           build=$((1000 + RUN_NUMBER))
           test "$build" -le 65535
           arduino-cli compile --fqbn 'esp32:esp32:esp32s3:FlashSize=4M,PartitionScheme=default,PSRAM=enabled,USBMode=hwcdc,CDCOnBoot=cdc' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build" --output-dir compiled synap_esp32s3
-          node tools/release.cjs compiled/synap_esp32s3.ino.bin "$build" "$GITHUB_SHA" bundle
+          node tools/release.cjs compiled/synap_esp32s3.ino.bin "$build" "$GITHUB_SHA" bundle "$SYNAP_RELEASE_BRANCH"
       - uses: actions/upload-artifact@v4
         with:
           name: verified-firmware
@@ -44,6 +53,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.channel == 'production' && 'production' || 'test' }}
+    env:
+      SYNAP_RELEASE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.channel == 'production' && 'ota-releases' || 'ota-test' }}
+      SYNAP_RELEASE_PRIVATE_KEY_PEM: ${{ secrets.SYNAP_RELEASE_PRIVATE_KEY_PEM }}
     permissions:
       contents: write
     steps:
@@ -52,9 +65,12 @@ jobs:
         with:
           name: verified-firmware
           path: bundle
-      - name: Publish release and atomically advertise verified binary
+      - name: Sign production manifest
+        if: env.SYNAP_RELEASE_BRANCH == 'ota-releases'
+        run: node tools/sign-manifest.cjs bundle/latest.json
+      - name: Publish channel atomically
         env:
           GH_TOKEN: ${{ github.token }}
         run: node tools/publish.cjs
-      - name: Verify public manifest, binary digest and browser CORS headers
+      - name: Verify public manifest, binary, signature policy and CORS
         run: node tools/check-feed.cjs

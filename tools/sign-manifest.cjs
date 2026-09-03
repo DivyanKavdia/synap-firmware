@@ -1,0 +1,14 @@
+'use strict';
+const fs=require('node:fs'),crypto=require('node:crypto');
+const {canonicalManifest}=require('./release.cjs');
+const keyId='prod-2026-01';
+const file=process.argv[2]||'bundle/latest.json';
+const pem=process.env.SYNAP_RELEASE_PRIVATE_KEY_PEM;
+if(!pem)throw Error('SYNAP_RELEASE_PRIVATE_KEY_PEM is required for production publication');
+const manifest=JSON.parse(fs.readFileSync(file,'utf8'));
+if(manifest.schema!==2||manifest.channel!=='production')throw Error('Only production schema-2 manifests may be signed');
+const signature=crypto.sign('sha256',Buffer.from(canonicalManifest(manifest)),{key:pem,dsaEncoding:'ieee-p1363'});
+if(signature.length!==64)throw Error('Unexpected ECDSA signature length');
+manifest.signing={alg:'ES256',keyId,value:signature.toString('base64')};
+fs.writeFileSync(file,JSON.stringify(manifest,null,2)+'\n');
+console.log(`Signed production build ${manifest.build} with ${keyId}`);
