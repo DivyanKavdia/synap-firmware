@@ -20,12 +20,6 @@ function prepare(source) {
 `  "SYNAP-FW:esp32s3-fh4r2-qspi-4m:0.0.1:" SYNAP_STRING(SYNAP_BUILD);`,
   'public firmware version identity');
 
-  // Mobile browsers can suspend JavaScript while leaving the BLE link logically
-  // connected. The old firmware destroyed the OTA handle after 45 seconds in
-  // that state, making an otherwise resumable transfer restart from byte zero.
-  // Retain both connected-idle and disconnected sessions for a bounded 15-minute
-  // recovery window. A validated RESUME command still has to match session,
-  // image digest and public device ID before a new connection can take ownership.
   out = replaceOnce(out,
 `      if (!connected || connection!=owner) {
         if (!orphanedAt) orphanedAt=now ? now : 1;
@@ -59,6 +53,11 @@ constexpr uint8_t TOUCH_INPUT_PIN = SYNAP_TOUCH_PIN;
 constexpr uint8_t TOUCH_ACTIVE_LEVEL = SYNAP_TOUCH_ACTIVE_LEVEL;
 constexpr uint16_t TOUCH_DEBOUNCE_MS = 35;
 constexpr uint16_t TOUCH_DOUBLE_TAP_MS = 500;
+constexpr uint16_t TOUCH_LONG_PRESS_MS = 1200;
+constexpr uint8_t MEMORY_EVENT_MAGIC = 0xB6;
+constexpr uint8_t MEMORY_EVENT_VERSION = 1;
+constexpr uint8_t MEMORY_EVENT_REMEMBER = 1;
+// TTP223 OUT is a digital, active-high push-pull signal by default.
 // Status LED is intentionally off most of the time. Short, dim pulses make the
 // state visible without turning the onboard WS2812 into a material battery load.
 constexpr uint8_t LED_DIM = 4;
@@ -68,8 +67,8 @@ constexpr int8_t I2S_BCLK_PIN = 4, I2S_WS_PIN = 5, I2S_DATA_IN_PIN = 6;`,
   out = replaceOnce(out,
 `esp_reset_reason_t bootResetReason = ESP_RST_UNKNOWN;`,
 `esp_reset_reason_t bootResetReason = ESP_RST_UNKNOWN;
-uint32_t touchFirstTapAt = 0;
-bool touchRawState = false, touchStableState = false;
+uint32_t touchFirstTapAt = 0, touchPressedAt = 0, memoryAckUntil = 0, memoryEventCounter = 0;
+bool touchRawState = false, touchStableState = false, touchLongSent = false, touchLongEligible = false;
 uint32_t touchChangedAt = 0;
 uint32_t lastLedPattern = UINT32_MAX;`,
   'interaction globals');
@@ -79,6 +78,7 @@ uint32_t lastLedPattern = UINT32_MAX;`,
 void updateStatusCharacteristic(bool notify);`,
 `void setDeviceState(DeviceState state, ErrorCode error);
 void updateStatusLed(bool force = false);
+void publishRememberEvent();
 void pollTouchControl();
 void updateStatusCharacteristic(bool notify);`,
   'interaction prototypes');
@@ -112,21 +112,20 @@ void updateStatusCharacteristic(bool notify);`,
 `void updateStatusLed(bool force) {
   const uint32_t now = millis();
   uint8_t r=0,g=0,b=0;
-  if (otaBusy()) {
-    // Firmware update: two short amber pulses every 1.4 s.
+  if (memoryAckUntil && static_cast<int32_t>(memoryAckUntil-now)>0) {
+    // Remember This acknowledgement: short cyan confirmation while recording.
+    const uint32_t phase=(memoryAckUntil-now)%240u;
+    if (phase>120u) { g=LED_DIM+2; b=LED_DIM+2; }
+  } else if (otaBusy()) {
     const uint32_t phase=now%1400u;
     if (phase<55u || (phase>=180u && phase<235u)) { r=LED_DIM; g=2; }
   } else if (deviceState == DeviceState::DISCONNECTED) {
-    // Powered but not connected: one red pulse every 5 s.
     if (now%5000u<35u) r=LED_DIM;
   } else if (deviceState == DeviceState::CONNECTED_IDLE) {
-    // Connected/ready: one blue pulse every 6 s.
     if (now%6000u<30u) b=LED_DIM;
   } else if (deviceState == DeviceState::STREAMING) {
-    // Recording: a slightly more frequent green pulse.
     if (now%1800u<45u) g=LED_DIM+1;
   } else {
-    // Error: magenta pulse every 1.2 s.
     if (now%1200u<70u) { r=LED_DIM; b=LED_DIM; }
   }
   const uint32_t pattern=(uint32_t(r)<<16)|(uint32_t(g)<<8)|b;
@@ -142,25 +141,52 @@ void setDeviceState(DeviceState state, ErrorCode error) {
   updateStatusLed(true);
 }
 
+void publishRememberEvent() {
+  if (!controlCharacteristic || !deviceConnected.load() || !streamingEnabled.load() || otaBusy()) return;
+  uint8_t value[12] = {MEMORY_EVENT_MAGIC, MEMORY_EVENT_VERSION, MEMORY_EVENT_REMEMBER, 0};
+  value[3] = (streamingEnabled.load()?0x01:0) | (deviceConnected.load()?0x02:0);
+  const uint32_t counter=++memoryEventCounter, uptime=millis();
+  put32le(value+4,counter);put32le(value+8,uptime);
+  // Multiplex the event on the existing control notify channel. Status packets
+  // remain 16 bytes/0x5A; PWA can safely distinguish 12-byte/0xB6 memory events.
+  controlCharacteristic->setValue(value,sizeof(value));
+  controlCharacteristic->notify();
+  updateStatusCharacteristic(false); // keep subsequent reads canonical status
+  memoryAckUntil=millis()+480u;
+  updateStatusLed(true);
+}
+
 void pollTouchControl() {
   const uint32_t now=millis();
   const bool raw=digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL;
   if (raw!=touchRawState) { touchRawState=raw; touchChangedAt=now; }
   if (raw!=touchStableState && uint32_t(now-touchChangedAt)>=TOUCH_DEBOUNCE_MS) {
     touchStableState=raw;
-    if (touchStableState && deviceConnected.load() && !otaBusy()) {
-      if (!streamingEnabled.load()) {
-        // A single tap while connected and idle starts recording immediately.
-        touchFirstTapAt=0;
-        queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,streamGeneration.load());
-      } else if (touchFirstTapAt && uint32_t(now-touchFirstTapAt)<=TOUCH_DOUBLE_TAP_MS) {
-        // While recording, require a deliberate second tap to stop.
-        touchFirstTapAt=0;
-        queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
-      } else {
-        touchFirstTapAt=now;
+    if (touchStableState) {
+      touchPressedAt=now;touchLongSent=false;
+      touchLongEligible=deviceConnected.load() && streamingEnabled.load() && !otaBusy();
+      if (deviceConnected.load() && !otaBusy()) {
+        if (!streamingEnabled.load()) {
+          // Short press while idle starts capture. A hold that begins idle does not
+          // create a highlight; Remember This is only armed if capture was active.
+          touchFirstTapAt=0;
+          queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,streamGeneration.load());
+        } else if (touchFirstTapAt && uint32_t(now-touchFirstTapAt)<=TOUCH_DOUBLE_TAP_MS) {
+          // Double short press while recording stops capture.
+          touchFirstTapAt=0;
+          queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
+        } else {
+          touchFirstTapAt=now;
+        }
       }
+    } else {
+      touchPressedAt=0;touchLongSent=false;touchLongEligible=false;
     }
+  }
+  if (touchStableState && touchLongEligible && !touchLongSent && touchPressedAt &&
+      uint32_t(now-touchPressedAt)>=TOUCH_LONG_PRESS_MS && deviceConnected.load() &&
+      streamingEnabled.load() && !otaBusy()) {
+    touchLongSent=true;touchFirstTapAt=0;publishRememberEvent();
   }
   if (touchFirstTapAt && uint32_t(now-touchFirstTapAt)>TOUCH_DOUBLE_TAP_MS) touchFirstTapAt=0;
 }
@@ -203,11 +229,11 @@ if (require.main === module) {
   if (!file) throw new Error('Usage: node tools/prepare-interactions.cjs [--check] <sketch>');
   const source=fs.readFileSync(file,'utf8');
   const prepared=prepare(source);
-  for (const marker of ['Synap 0.0.1','SYNAP-FW:esp32s3-fh4r2-qspi-4m:0.0.1:','pollTouchControl','TOUCH_DOUBLE_TAP_MS','Firmware update: two short amber pulses','Connected/ready: one blue pulse','900000u','Screen lock/background suspension is expected on mobile']) {
+  for (const marker of ['Synap 0.0.1','SYNAP-FW:esp32s3-fh4r2-qspi-4m:0.0.1:','pollTouchControl','TOUCH_DOUBLE_TAP_MS','TOUCH_LONG_PRESS_MS','MEMORY_EVENT_MAGIC','publishRememberEvent','900000u','Screen lock/background suspension is expected on mobile']) {
     if (!prepared.includes(marker)) throw new Error('Prepared firmware missing '+marker);
   }
   if (!check) fs.writeFileSync(file,prepared);
-  console.log(check?'PASS: Synap 0.0.1, touch, low-power LED and OTA suspension preparation':'Prepared Synap 0.0.1 with touch controls, low-power LED states and OTA suspension recovery');
+  console.log(check?'PASS: Synap 0.0.1, TTP223 gestures, Remember This and OTA suspension preparation':'Prepared Synap 0.0.1 with TTP223 long-press Remember This');
 }
 
 module.exports={prepare};
