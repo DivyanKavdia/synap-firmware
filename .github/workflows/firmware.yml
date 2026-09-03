@@ -4,24 +4,17 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-    inputs:
-      channel:
-        description: Release channel
-        required: true
-        default: test
-        type: choice
-        options: [test, production]
 permissions:
   contents: read
 concurrency:
-  group: firmware-${{ github.ref }}-${{ inputs.channel || 'test' }}
+  group: firmware-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      SYNAP_RELEASE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.channel == 'production' && 'ota-releases' || 'ota-test' }}
+      SYNAP_RELEASE_BRANCH: ota-releases
     steps:
       - uses: actions/checkout@v4
       - uses: arduino/setup-arduino-cli@v2
@@ -53,9 +46,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.channel == 'production' && 'production' || 'test' }}
+    environment: production
     env:
-      SYNAP_RELEASE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.channel == 'production' && 'ota-releases' || 'ota-test' }}
+      SYNAP_RELEASE_BRANCH: ota-releases
       SYNAP_RELEASE_PRIVATE_KEY_PEM: ${{ secrets.SYNAP_RELEASE_PRIVATE_KEY_PEM }}
     permissions:
       contents: write
@@ -66,9 +59,8 @@ jobs:
           name: verified-firmware
           path: bundle
       - name: Sign production manifest
-        if: env.SYNAP_RELEASE_BRANCH == 'ota-releases'
         run: node tools/sign-manifest.cjs bundle/latest.json
-      - name: Publish channel atomically
+      - name: Publish production firmware atomically
         env:
           GH_TOKEN: ${{ github.token }}
         run: node tools/publish.cjs
