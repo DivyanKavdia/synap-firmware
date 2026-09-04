@@ -30,7 +30,7 @@ jobs:
         run: |
           node tools/prepare-interactions.cjs --check synap_esp32s3/synap_esp32s3.ino
           node --test tests/*.cjs
-      - name: Prepare auditable shared production source
+      - name: Prepare auditable S3 and C3 production sources
         run: |
           mkdir -p prepared/synap_esp32s3 prepared/synap_esp32c3
           cp synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32s3/synap_esp32s3.ino
@@ -39,17 +39,27 @@ jobs:
           node tools/materialize-target.cjs --check esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino
           node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3/synap_esp32c3.ino
           test "$(git status --porcelain -- synap_esp32s3)" = ""
+          if [ -f synap_esp32c3/synap_esp32c3.ino ]; then
+            cmp -s synap_esp32c3/synap_esp32c3.ino prepared/synap_esp32c3/synap_esp32c3.ino || \
+              echo "C3 checked-in source differs from generated target and will be synchronized after publish."
+          fi
       - name: Compile S3 and C3 application targets with one build number
         env:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           build=$((1000 + RUN_NUMBER))
           test "$build" -le 65535
-          mkdir -p compiled-s3 compiled-c3 bundle/esp32s3-fh4r2-qspi-4m bundle/esp32c3-supermini-4m
+          mkdir -p compiled-s3 compiled-c3 bundle/esp32s3-fh4r2-qspi-4m bundle/esp32c3-supermini-4m bundle/source-sync
           arduino-cli compile --fqbn 'esp32:esp32:esp32s3:FlashSize=4M,PartitionScheme=default,PSRAM=enabled,USBMode=hwcdc,CDCOnBoot=cdc' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build" --output-dir compiled-s3 prepared/synap_esp32s3
           arduino-cli compile --fqbn 'esp32:esp32:esp32c3:FlashSize=4M,PartitionScheme=default' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build" --output-dir compiled-c3 prepared/synap_esp32c3
           node tools/release.cjs compiled-s3/synap_esp32s3.ino.bin "$build" "$GITHUB_SHA" bundle/esp32s3-fh4r2-qspi-4m "$SYNAP_RELEASE_BRANCH" prepared/synap_esp32s3/synap_esp32s3.ino esp32s3-fh4r2-qspi-4m
           node tools/release.cjs compiled-c3/synap_esp32c3.ino.bin "$build" "$GITHUB_SHA" bundle/esp32c3-supermini-4m "$SYNAP_RELEASE_BRANCH" prepared/synap_esp32c3/synap_esp32c3.ino esp32c3-supermini-4m
+          s3_factory="$(find compiled-s3 -maxdepth 1 -type f -name '*.merged.bin' -print -quit)"
+          c3_factory="$(find compiled-c3 -maxdepth 1 -type f -name '*.merged.bin' -print -quit)"
+          test -n "$s3_factory" && test -n "$c3_factory"
+          cp "$s3_factory" bundle/esp32s3-fh4r2-qspi-4m/factory.bin
+          cp "$c3_factory" bundle/esp32c3-supermini-4m/factory.bin
+          cp prepared/synap_esp32c3/synap_esp32c3.ino bundle/source-sync/synap_esp32c3.ino
       - uses: actions/upload-artifact@v4
         with:
           name: verified-firmware
@@ -104,3 +114,17 @@ jobs:
       - name: Verify public manifests, binaries, GitHub provenance and CORS
         if: steps.current.outputs.release == 'true'
         run: node tools/check-feed.cjs
+      - name: Synchronize explicit ESP32-C3 source into main
+        if: steps.current.outputs.release == 'true'
+        run: |
+          mkdir -p synap_esp32c3
+          cp bundle/source-sync/synap_esp32c3.ino synap_esp32c3/synap_esp32c3.ino
+          if git diff --quiet -- synap_esp32c3/synap_esp32c3.ino && git ls-files --error-unmatch synap_esp32c3/synap_esp32c3.ino >/dev/null 2>&1; then
+            echo "ESP32-C3 source already synchronized."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add synap_esp32c3/synap_esp32c3.ino
+          git commit -m "Sync explicit ESP32-C3 firmware source"
+          git push origin HEAD:main
