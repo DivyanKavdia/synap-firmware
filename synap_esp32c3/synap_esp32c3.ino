@@ -78,7 +78,7 @@ constexpr uint8_t MEMORY_EVENT_MAGIC = 0xB6;
 constexpr uint8_t MEMORY_EVENT_VERSION = 1;
 constexpr uint8_t MEMORY_EVENT_REMEMBER = 1;
 constexpr uint8_t BATTERY_EVENT_MAGIC = 0xB7;
-constexpr uint8_t BATTERY_EVENT_VERSION = 1;
+constexpr uint8_t BATTERY_EVENT_VERSION = 2;
 // TTP223 OUT is a digital, active-high push-pull signal by default.
 // Battery sensing assumes B+ -> 1 MOhm -> GPIO1 -> 330 kOhm -> GND, with
 // 100 nF from GPIO8 to GND. Implausible readings are reported but marked unavailable.
@@ -132,7 +132,7 @@ bool touchRawState = false, touchStableState = false, touchLongSent = false, tou
 uint32_t touchChangedAt = 0;
 uint32_t lastLedPattern = UINT32_MAX;
 uint32_t lastBatterySampleAt = 0, lastBatteryPublishAt = 0;
-uint16_t batteryMillivolts = 0;
+uint16_t batteryMillivolts = 0, batteryAdcMillivolts = 0, batteryAdcRaw = 0;
 uint8_t batteryPercent = 0, batteryValidSamples = 0, batteryCriticalSamples = 0;
 bool batteryAvailable = false;
 
@@ -518,12 +518,17 @@ void publishBatteryEvent(bool force) {
   if (!controlCharacteristic || !deviceConnected.load()) return;
   const uint32_t now=millis();
   if (!force && uint32_t(now-lastBatteryPublishAt)<BATTERY_SAMPLE_MS) return;
-  uint8_t value[8] = {BATTERY_EVENT_MAGIC, BATTERY_EVENT_VERSION, batteryPercent, 0, 0, 0, 0, 0};
+  // Battery event v2 extends the original 8-byte packet without changing its
+  // first 8 bytes. New fields expose the actual ADC measurement even when the
+  // reconstructed LiPo voltage is outside the trusted percentage window.
+  uint8_t value[12] = {BATTERY_EVENT_MAGIC, BATTERY_EVENT_VERSION, batteryPercent, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   if (batteryAvailable) value[3]|=0x01;
   if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) value[3]|=0x02;
   if (batteryCritical()) value[3]|=0x04;
   value[4]=batteryMillivolts&255;value[5]=batteryMillivolts>>8;
   value[6]=BATTERY_LOW_MV&255;value[7]=BATTERY_LOW_MV>>8;
+  value[8]=batteryAdcMillivolts&255;value[9]=batteryAdcMillivolts>>8;
+  value[10]=batteryAdcRaw&255;value[11]=batteryAdcRaw>>8;
   if (eventCharacteristic) {
     eventCharacteristic->setValue(value,sizeof(value));
     eventCharacteristic->notify();
@@ -549,9 +554,20 @@ void sampleBattery(bool force) {
   const uint32_t now=millis();
   if (!force && uint32_t(now-lastBatterySampleAt)<BATTERY_SAMPLE_MS) return;
   lastBatterySampleAt=now;
-  uint32_t total=0;
-  for (uint8_t i=0;i<8;++i) { total+=analogReadMilliVolts(BATTERY_ADC_PIN); delayMicroseconds(200); }
-  const uint32_t adcMv=total/8u;
+  // High-value divider needs settling time. Throw away one conversion, then
+  // average both calibrated millivolts and raw ADC counts over 16 samples.
+  (void)analogRead(BATTERY_ADC_PIN);
+  delayMicroseconds(1200);
+  uint32_t mvTotal=0, rawTotal=0;
+  for (uint8_t i=0;i<16;++i) {
+    rawTotal+=analogRead(BATTERY_ADC_PIN);
+    mvTotal+=analogReadMilliVolts(BATTERY_ADC_PIN);
+    delayMicroseconds(250);
+  }
+  const uint32_t adcMv=mvTotal/16u;
+  const uint32_t adcRaw=rawTotal/16u;
+  batteryAdcMillivolts=uint16_t(adcMv>65535u?65535u:adcMv);
+  batteryAdcRaw=uint16_t(adcRaw>65535u?65535u:adcRaw);
   const uint32_t cellMv=(adcMv*(BATTERY_DIVIDER_TOP_OHMS+BATTERY_DIVIDER_BOTTOM_OHMS)+
     BATTERY_DIVIDER_BOTTOM_OHMS/2u)/BATTERY_DIVIDER_BOTTOM_OHMS;
   if (cellMv>=2800u && cellMv<=4350u) {
@@ -570,9 +586,9 @@ void sampleBattery(bool force) {
     batteryAvailable=false;batteryValidSamples=0;batteryCriticalSamples=0;
     batteryMillivolts=uint16_t(cellMv>65535u?65535u:cellMv);batteryPercent=0;
   }
-  Serial.printf("[BATTERY] gpio=%u adc=%lumV cell=%umV available=%u percent=%u\n",
-    static_cast<unsigned>(BATTERY_ADC_PIN),static_cast<unsigned long>(adcMv),static_cast<unsigned>(batteryMillivolts),
-    batteryAvailable?1u:0u,static_cast<unsigned>(batteryPercent));
+  Serial.printf("[BATTERY] gpio=%u raw=%u adc=%umV cell=%umV available=%u percent=%u\n",
+    static_cast<unsigned>(BATTERY_ADC_PIN),static_cast<unsigned>(batteryAdcRaw),static_cast<unsigned>(batteryAdcMillivolts),
+    static_cast<unsigned>(batteryMillivolts),batteryAvailable?1u:0u,static_cast<unsigned>(batteryPercent));
   publishBatteryEvent(true);
   updateStatusLed(true);
 #endif
