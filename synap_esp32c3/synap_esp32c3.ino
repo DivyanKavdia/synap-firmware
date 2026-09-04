@@ -909,9 +909,7 @@ bool acquireAudioFrame(AudioFrame& frame) {
     received += count;
   }
   for (uint16_t i=0; i<SAMPLES_PER_FRAME; ++i) {
-    int32_t sample=raw[i] >> 14;
-    if (sample > 32767) sample=32767;
-    if (sample < -32768) sample=-32768;
+    const int32_t sample=raw[i] >> 16;
     frame.samples[i]=static_cast<int16_t>(sample);
   }
 #else
