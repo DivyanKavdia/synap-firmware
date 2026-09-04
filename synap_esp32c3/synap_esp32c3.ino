@@ -647,45 +647,50 @@ void publishRememberEvent() {
 }
 
 void pollTouchControl() {
+  constexpr uint16_t TOUCH_MIN_TAP_MS = 80;
+  constexpr uint16_t TOUCH_REARM_MS = 220;
+  static uint32_t touchRearmAt = 0;
   const uint32_t now=millis();
   const bool raw=digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL;
   if (raw!=touchRawState) { touchRawState=raw; touchChangedAt=now; }
   if (raw!=touchStableState && uint32_t(now-touchChangedAt)>=TOUCH_DEBOUNCE_MS) {
     touchStableState=raw;
     if (touchStableState) {
-      touchPressedAt=now;touchLongSent=false;
+      if (static_cast<int32_t>(now-touchRearmAt)<0) return;
+      touchPressedAt=now;
+      touchLongSent=false;
       touchIdlePress=!streamingEnabled.load();
       touchLongEligible=deviceConnected.load() && streamingEnabled.load() && !otaBusy();
-      if (!touchIdlePress && deviceConnected.load() && !otaBusy()) {
-        if (touchFirstTapAt && uint32_t(now-touchFirstTapAt)<=TOUCH_DOUBLE_TAP_MS) {
-          touchFirstTapAt=0;
-          queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
-        } else touchFirstTapAt=now;
-      }
+      Serial.printf("[TOUCH] press gpio=%u streaming=%u connected=%u\n",
+        unsigned(TOUCH_INPUT_PIN),streamingEnabled.load()?1u:0u,deviceConnected.load()?1u:0u);
     } else {
       const uint32_t held=touchPressedAt ? uint32_t(now-touchPressedAt) : 0;
+      const bool wasLong=touchLongSent;
       const bool wasIdle=touchIdlePress;
       touchPressedAt=0;touchLongSent=false;touchLongEligible=false;touchIdlePress=false;
-      if (wasIdle && !otaBusy()) {
-        if (held>=TOUCH_SLEEP_HOLD_MS && !streamingEnabled.load()) {
-          touchFirstTapAt=0;
-          enterDeepSleep("touch-hold");
-        } else if (held>=TOUCH_DEBOUNCE_MS && held<TOUCH_SLEEP_HOLD_MS &&
-            deviceConnected.load() && !streamingEnabled.load()) {
-          touchFirstTapAt=0;
-          queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,streamGeneration.load());
-        }
+      if (held>=TOUCH_SLEEP_HOLD_MS && wasIdle && !streamingEnabled.load() && !otaBusy()) {
+        touchRearmAt=now+TOUCH_REARM_MS;
+        Serial.println("[TOUCH] sleep hold");
+        enterDeepSleep("touch-hold");
+      } else if (!wasLong && held>=TOUCH_MIN_TAP_MS && held<TOUCH_LONG_PRESS_MS &&
+                 deviceConnected.load() && !otaBusy()) {
+        touchRearmAt=now+TOUCH_REARM_MS;
+        const uint8_t command=streamingEnabled.load()?CMD_STOP:CMD_START;
+        Serial.printf("[TOUCH] tap %ums -> %s\n",unsigned(held),command==CMD_START?"START":"STOP");
+        queueEvent(EventType::COMMAND,command,PROTOCOL_VERSION,streamGeneration.load());
+      } else if (held && held<TOUCH_MIN_TAP_MS) {
+        Serial.printf("[TOUCH] ignored short pulse %ums\n",unsigned(held));
       }
     }
   }
   if (touchStableState && touchLongEligible && !touchLongSent && touchPressedAt &&
       uint32_t(now-touchPressedAt)>=TOUCH_LONG_PRESS_MS && deviceConnected.load() &&
       streamingEnabled.load() && !otaBusy()) {
-    touchLongSent=true;touchFirstTapAt=0;publishRememberEvent();
+    touchLongSent=true;
+    Serial.println("[TOUCH] long press -> REMEMBER");
+    publishRememberEvent();
   }
-  if (touchFirstTapAt && uint32_t(now-touchFirstTapAt)>TOUCH_DOUBLE_TAP_MS) touchFirstTapAt=0;
 }
-
 void updateStatusCharacteristic(bool notify) {
   if (!controlCharacteristic) return;
   uint8_t value[16] = { STATUS_PACKET_MAGIC, PROTOCOL_VERSION,
@@ -1045,7 +1050,7 @@ void setup() {
   Serial.begin(115200);
   delay(400);
   bootResetReason=esp_reset_reason();
-  pinMode(TOUCH_INPUT_PIN, INPUT_PULLDOWN);
+  pinMode(TOUCH_INPUT_PIN, INPUT);
   touchRawState=digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL;
   touchStableState=touchRawState;
   touchChangedAt=millis();
