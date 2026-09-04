@@ -38,6 +38,7 @@ jobs:
           node tools/patch-runtime-fixes.cjs prepared/synap_esp32s3/synap_esp32s3.ino
           node tools/patch-event-channel.cjs prepared/synap_esp32s3/synap_esp32s3.ino
           node tools/patch-battery-v2.cjs prepared/synap_esp32s3/synap_esp32s3.ino
+          node tools/patch-audio-reliability.cjs prepared/synap_esp32s3/synap_esp32s3.ino
           node tools/materialize-target.cjs --check esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino
           node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3/synap_esp32c3.ino
           test "$(git status --porcelain -- synap_esp32s3)" = ""
