@@ -10,6 +10,18 @@ function replaceOnce(source,before,after,label){
 function patch(source){
   let out=source;
 
+  // Keep product semver aligned across the PWA, checked-in firmware and shipped binary.
+  // prepare-interactions.cjs still contains a legacy 0.0.1 rewrite; normalize it here
+  // until the preparation layer is replaced by explicit target configuration.
+  out=replaceOnce(out,
+`// Synap 0.0.1 | ESP32-S3FH4R2 | Arduino-ESP32 3.3.5 + Adafruit NeoPixel.`,
+`// Synap 1.0.0 | ESP32-S3FH4R2 | Arduino-ESP32 3.3.5 + Adafruit NeoPixel.`,
+  'production public firmware version comment');
+  out=replaceOnce(out,
+`  "SYNAP-FW:esp32s3-fh4r2-qspi-4m:0.0.1:" SYNAP_STRING(SYNAP_BUILD);`,
+`  "SYNAP-FW:esp32s3-fh4r2-qspi-4m:1.0.0:" SYNAP_STRING(SYNAP_BUILD);`,
+  'production public firmware identity');
+
   // The production pendant hardware uses the original 1 MOhm / 330 kOhm divider.
   // Do not override BATTERY_DIVIDER_BOTTOM_OHMS from prepare-interactions.cjs.
 
