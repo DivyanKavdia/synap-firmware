@@ -50,7 +50,7 @@ jobs:
           build=$((1000 + RUN_NUMBER))
           test "$build" -le 65535
           mkdir -p compiled-s3 compiled-c3 bundle/esp32s3-fh4r2-qspi-4m bundle/esp32c3-supermini-4m bundle/source-sync
-          arduino-cli compile --fqbn 'esp32:esp32:esp32s3:FlashSize=4M,PartitionScheme=default,PSRAM=enabled,USBMode=hwcdc,CDCOnBoot=cdc' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build -DUSE_REAL_I2S_MIC=1" --output-dir compiled-s3 prepared/synap_esp32s3
+          arduino-cli compile --fqbn 'esp32:esp32:esp32s3:FlashSize=4M,PartitionScheme=default,PSRAM=enabled,USBMode=hwcdc,CDCOnBoot=cdc' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build -DUSE_REAL_I2S_MIC=1 -DSYNAP_TOUCH_PIN=13" --output-dir compiled-s3 prepared/synap_esp32s3
           arduino-cli compile --fqbn 'esp32:esp32:esp32c3:FlashSize=4M,PartitionScheme=default' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build" --output-dir compiled-c3 prepared/synap_esp32c3
           node tools/release.cjs compiled-s3/synap_esp32s3.ino.bin "$build" "$GITHUB_SHA" bundle/esp32s3-fh4r2-qspi-4m "$SYNAP_RELEASE_BRANCH" prepared/synap_esp32s3/synap_esp32s3.ino esp32s3-fh4r2-qspi-4m
           node tools/release.cjs compiled-c3/synap_esp32c3.ino.bin "$build" "$GITHUB_SHA" bundle/esp32c3-supermini-4m "$SYNAP_RELEASE_BRANCH" prepared/synap_esp32c3/synap_esp32c3.ino esp32c3-supermini-4m
