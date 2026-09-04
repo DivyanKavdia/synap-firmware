@@ -19,6 +19,8 @@ test('production preparation is reproducible and retains mobile OTA safely',()=>
   assert.match(prepared,/batteryAvailable=batteryValidSamples>=1/,'one averaged valid sample should make battery telemetry available');
   assert.match(prepared,/case CMD_GET_STATUS:[\s\S]*?sampleBattery\(true\)/,'fresh battery telemetry must be sent after the PWA subscribes and requests status');
   assert.match(prepared,/void publishBatteryEvent\(bool force\)[\s\S]*?controlCharacteristic->notify\(\);[\s\S]*?vTaskDelay\(pdMS_TO_TICKS\(20\)\)[\s\S]*?updateStatusCharacteristic\(false\)/,'battery notification must be allowed to leave before restoring control status');
+  assert.match(prepared,/streamStartedAt=millis\(\)[\s\S]*?setDeviceState\(DeviceState::STREAMING/,'stream start time must be captured on the pendant');
+  assert.match(prepared,/value\[3\]\|=0x04[\s\S]*?put32le\(value\+8,eventTime\)/,'memory packet must mark and carry stream-relative milliseconds');
   assert.match(prepared,/void publishRememberEvent\(\)[\s\S]*?controlCharacteristic->notify\(\);[\s\S]*?vTaskDelay\(pdMS_TO_TICKS\(20\)\)[\s\S]*?updateStatusCharacteristic\(false\)[\s\S]*?memoryAckUntil/,'memory marker must be allowed to leave before restoring control status');
   assert.match(prepared,/batteryMillivolts=uint16_t\(cellMv>65535u\?65535u:cellMv\)/,'invalid ADC readings should still expose measured voltage for diagnostics');
   assert.match(prepared,/\[BATTERY\] gpio=/,'battery sampling diagnostics must remain available over serial');
@@ -33,4 +35,10 @@ test('audio source mode is explicit until production microphone hardware is conf
   const source=fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8');
   assert.match(source,/#ifndef USE_REAL_I2S_MIC\s*\n#define USE_REAL_I2S_MIC 0/);
   assert.match(source,/I2S_BCLK_PIN = 4, I2S_WS_PIN = 5, I2S_DATA_IN_PIN = 6/);
+});
+
+test('generated C3 source sync cannot create a second release build',()=>{
+  const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
+  assert.match(workflow,/bundle\/source-sync\/synap_esp32s3\.ino/,'verified artifact should retain the exact prepared S3 source');
+  assert.match(workflow,/Sync explicit ESP32-C3 firmware source \[skip ci\]/,'generated C3 sync commit must not trigger another firmware workflow');
 });
