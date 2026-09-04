@@ -14,6 +14,7 @@ This document is the engineering baseline for the best-known Synap firmware stat
 - OTA protocol: **3**
 - Production S3 uses the physical I2S microphone.
 - TTP223 touch input on production S3: **GPIO13**.
+- Battery sensing on production S3: **GPIO8**.
 - Pendant recordings remain stateless: audio is streamed to the PWA rather than stored locally on the pendant.
 
 The source tree keeps explicit application targets for `synap_esp32s3/` and `synap_esp32c3/`. Both share the BLE application protocol, stable device identity and resumable OTA model.
@@ -29,11 +30,37 @@ The source tree keeps explicit application targets for `synap_esp32s3/` and `syn
 | TTP223 OUT / SIG | GPIO13 |
 | TTP223 VCC | 3.3 V |
 | TTP223 GND | GND |
+| Battery ADC sense | GPIO8 |
 | INMP44/INMP441 VDD | 3.3 V |
 | INMP44/INMP441 GND | GND |
 | INMP44/INMP441 L/R | GND / left channel |
 
 Production S3 releases compile with `USE_REAL_I2S_MIC=1`. The deterministic 440 Hz source is retained only as a development fallback.
+
+## Battery monitor wiring
+
+The audited prototype divider is:
+
+```text
+Battery + ---- 1 MOhm ----+---- GPIO8
+                           |
+                         470 kOhm
+                           |
+Battery - / GND -----------+---- GND
+
+GPIO8 ---- 100 nF (104) ---- GND
+```
+
+The 100 nF capacitor is recommended for ADC stability. Firmware reconstructs battery voltage using the 1 MOhm / 470 kOhm divider ratio, averages multiple ADC samples, estimates percentage and publishes battery state to the PWA.
+
+Production ESP32-S3 monitoring is enabled. ESP32-C3 battery monitoring remains disabled until its battery-sense hardware is separately validated.
+
+Current thresholds:
+
+- low battery: **3.60 V**
+- critical battery: **3.40 V**
+
+A confirmed critical battery condition blocks OTA activity and allows the firmware to enter deep sleep when it is safe to do so.
 
 ## Touch interaction model
 
@@ -119,10 +146,6 @@ See `OTA_RELEASES.md` for feed details.
 
 The workflow tests release/protocol preparation, prepares S3/C3 production sources, compiles both targets under one build number, creates OTA/factory artifacts, publishes production metadata/binaries, verifies the feed and synchronizes generated C3 source where required.
 
-## Battery/power note
-
-The interaction preparation contains battery/deep-sleep infrastructure, but unaudited battery ADC monitoring is intentionally disabled in the production runtime guard until the final battery sensing hardware/divider is validated. Deep-sleep touch behavior is independent of enabling battery ADC telemetry.
-
 ## Initial USB flashing
 
 The first installation uses the target-specific sketch/board configuration over USB. Once a compatible Synap OTA-enabled firmware is installed, normal firmware updates are intended to be one-click BLE OTA from the PWA with no physical boot-button sequence and no user-pasted OTA key.
@@ -131,4 +154,4 @@ The first installation uses the target-specific sketch/board configuration over 
 
 Treat **4 September 2026 / build 1052** as the reference baseline when investigating regressions. Do not assume that a later Git commit is a later published firmware: confirm the production `ota-releases/latest.json` build and target first.
 
-Do not flash an S3 binary onto a C3 or vice versa. Any change to BLE protocol, OTA format, pin mapping, interaction gestures or partition assumptions must update the corresponding tests and documentation in the same change.
+Do not flash an S3 binary onto a C3 or vice versa. Any change to BLE protocol, OTA format, pin mapping, interaction gestures, battery divider or partition assumptions must update the corresponding tests and documentation in the same change.
