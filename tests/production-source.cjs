@@ -39,8 +39,13 @@ test('audio source mode is explicit until production microphone hardware is conf
   assert.match(source,/I2S_BCLK_PIN = 4, I2S_WS_PIN = 5, I2S_DATA_IN_PIN = 6/);
 });
 
-test('generated C3 source sync cannot create a second release build',()=>{
+test('release workflow publishes only a current candidate and gates post-publish work on the atomic result',()=>{
   const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
+  const publisher=fs.readFileSync(path.join(root,'tools/publish.cjs'),'utf8');
   assert.match(workflow,/bundle\/source-sync\/synap_esp32s3\.ino/,'verified artifact should retain the exact prepared S3 source');
   assert.match(workflow,/Sync explicit ESP32-C3 firmware source \[skip ci\]/,'generated C3 sync commit must not trigger another firmware workflow');
+  assert.match(workflow,/id: publish_result/,'publish step must expose its final outcome');
+  assert.match(workflow,/steps\.publish_result\.outputs\.published == 'true'/,'feed verification and source sync must run only after an actual publish');
+  assert.match(publisher,/setPublished\(false\).*Superseded source commit/s,'superseded candidates must explicitly report no publish');
+  assert.match(publisher,/setPublished\(true\);\s*console\.log\(`Published/,'successful branch update must explicitly report publish success');
 });
