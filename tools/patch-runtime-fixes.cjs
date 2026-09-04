@@ -19,6 +19,12 @@ function patch(source){
   'battery telemetry cadence');
 
   out=replaceOnce(out,
+`uint32_t touchFirstTapAt = 0, touchPressedAt = 0, memoryAckUntil = 0, memoryEventCounter = 0;`,
+`uint32_t touchFirstTapAt = 0, touchPressedAt = 0, memoryAckUntil = 0, memoryEventCounter = 0;
+uint32_t streamStartedAt = 0;`,
+  'stream-relative memory clock');
+
+  out=replaceOnce(out,
 `// Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 330 kOhm -> GND, with
 // 100 nF from GPIO8 to GND. Implausible/unstable readings are treated unavailable.`,
 `// Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 330 kOhm -> GND, with
@@ -60,6 +66,20 @@ bool batteryCritical() {
   updateStatusCharacteristic(false);
   lastBatteryPublishAt=now;`,
   'battery notification handoff');
+
+  out=replaceOnce(out,
+`  value[3] = (streamingEnabled.load()?0x01:0) | (deviceConnected.load()?0x02:0);
+  const uint32_t counter=++memoryEventCounter, uptime=millis();
+  put32le(value+4,counter);put32le(value+8,uptime);`,
+`  value[3] = (streamingEnabled.load()?0x01:0) | (deviceConnected.load()?0x02:0);
+  const uint32_t counter=++memoryEventCounter;
+  // Bit 2 means bytes 8..11 are milliseconds from the start of this stream.
+  // Older PWAs ignore the flag and keep using their local timer, so packet v1
+  // remains backward compatible while newer clients get exact pendant timing.
+  const uint32_t eventTime=streamStartedAt ? uint32_t(millis()-streamStartedAt) : millis();
+  if (streamStartedAt) value[3]|=0x04;
+  put32le(value+4,counter);put32le(value+8,eventTime);`,
+  'stream-relative memory payload');
 
   out=replaceOnce(out,
 `  controlCharacteristic->setValue(value,sizeof(value));
@@ -133,6 +153,24 @@ void enterDeepSleep`,'battery sample guard end');
   'battery ADC attenuation');
 
   out=replaceOnce(out,
+`  setDeviceState(DeviceState::STREAMING, ErrorCode::NONE);
+  streamingEnabled.store(true);
+  updateStatusCharacteristic(true);`,
+`  streamStartedAt=millis();
+  setDeviceState(DeviceState::STREAMING, ErrorCode::NONE);
+  streamingEnabled.store(true);
+  updateStatusCharacteristic(true);`,
+  'stream start timestamp');
+
+  out=replaceOnce(out,
+`void stopStreaming(ErrorCode reason) {
+  streamingEnabled.store(false);`,
+`void stopStreaming(ErrorCode reason) {
+  streamingEnabled.store(false);
+  streamStartedAt=0;`,
+  'stream timestamp reset');
+
+  out=replaceOnce(out,
 `    case CMD_GET_STATUS:
       if (!streamingEnabled.load()) {
         if (configureTransportFromPeerMtu()) setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);
@@ -156,6 +194,7 @@ void enterDeepSleep`,'battery sample guard end');
       break;`,
 `    case CMD_STOP:
       streamingEnabled.store(false);
+      streamStartedAt=0;
       ++streamGeneration;
       if (audioFrameQueue) xQueueReset(audioFrameQueue);
       setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);
