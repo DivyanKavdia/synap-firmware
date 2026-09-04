@@ -31,6 +31,7 @@ char synapDeviceId[19] = {};
 #define SERVICE_UUID "4fa12345-0000-1000-8000-00805f9b34fb"
 #define AUDIO_CHAR_UUID "4fa12346-0000-1000-8000-00805f9b34fb"
 #define CONTROL_CHAR_UUID "4fa12347-0000-1000-8000-00805f9b34fb"
+#define EVENT_CHAR_UUID "4fa1234e-0000-1000-8000-00805f9b34fb"
 
 constexpr uint8_t PROTOCOL_VERSION = 2;
 constexpr uint8_t AUDIO_PACKET_MAGIC = 0xA5;
@@ -108,6 +109,7 @@ Adafruit_NeoPixel statusLed(1, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);
 BLEServer* bleServer = nullptr;
 BLECharacteristic* audioCharacteristic = nullptr;
 BLECharacteristic* controlCharacteristic = nullptr;
+BLECharacteristic* eventCharacteristic = nullptr;
 BLECharacteristic* diagnosticsCharacteristic = nullptr;
 #if defined(CONFIG_BLUEDROID_ENABLED)
 BLE2902* audioCccd = nullptr;
@@ -522,6 +524,11 @@ void publishBatteryEvent(bool force) {
   if (batteryCritical()) value[3]|=0x04;
   value[4]=batteryMillivolts&255;value[5]=batteryMillivolts>>8;
   value[6]=BATTERY_LOW_MV&255;value[7]=BATTERY_LOW_MV>>8;
+  if (eventCharacteristic) {
+    eventCharacteristic->setValue(value,sizeof(value));
+    eventCharacteristic->notify();
+  }
+  // Compatibility path for PWA builds that predate EVENT_CHAR_UUID.
   controlCharacteristic->setValue(value,sizeof(value));
   controlCharacteristic->notify();
   // Bluedroid may defer notification transmission. Give the 8-byte battery payload
@@ -608,6 +615,11 @@ void publishRememberEvent() {
   const uint32_t eventTime=streamStartedAt ? uint32_t(millis()-streamStartedAt) : millis();
   if (streamStartedAt) value[3]|=0x04;
   put32le(value+4,counter);put32le(value+8,eventTime);
+  if (eventCharacteristic) {
+    eventCharacteristic->setValue(value,sizeof(value));
+    eventCharacteristic->notify();
+  }
+  // Compatibility path for PWA builds that predate EVENT_CHAR_UUID.
   controlCharacteristic->setValue(value,sizeof(value));
   controlCharacteristic->notify();
   // Memory markers share the control characteristic with status packets. Mirror the
@@ -979,10 +991,16 @@ void initializeBLE() {
     BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE |
     BLECharacteristic::PROPERTY_WRITE_NR | BLECharacteristic::PROPERTY_NOTIFY);
   controlCharacteristic->setCallbacks(new ControlCallbacks());
+  // Protocol-v2 migration channel: asynchronous pendant events no longer need to
+  // overwrite the command/status value. Legacy control notifications remain during
+  // the transition so already-installed PWAs continue to receive battery/markers.
+  eventCharacteristic=service->createCharacteristic(EVENT_CHAR_UUID,
+    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
 #if defined(CONFIG_BLUEDROID_ENABLED)
   audioCccd=new BLE2902();
   audioCharacteristic->addDescriptor(audioCccd);
   controlCharacteristic->addDescriptor(new BLE2902());
+  eventCharacteristic->addDescriptor(new BLE2902());
 #endif
   // NimBLE creates CCCDs itself. BLE2902::getNotifications() is NOT a
   // subscription test under NimBLE; do not use it to gate START.
