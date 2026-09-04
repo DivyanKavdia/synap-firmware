@@ -16,6 +16,11 @@ function patch(source){
   'S3 battery divider bottom resistor');
 
   out=replaceOnce(out,
+`constexpr uint32_t BATTERY_SAMPLE_MS = 30000u;`,
+`constexpr uint32_t BATTERY_SAMPLE_MS = 15000u;`,
+  'battery telemetry cadence');
+
+  out=replaceOnce(out,
 `// Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 330 kOhm -> GND, with
 // 100 nF from GPIO8 to GND. Implausible/unstable readings are treated unavailable.`,
 `// Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 470 kOhm -> GND, with
