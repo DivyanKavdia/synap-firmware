@@ -62,6 +62,20 @@ bool batteryCritical() {
   'battery notification handoff');
 
   out=replaceOnce(out,
+`  controlCharacteristic->setValue(value,sizeof(value));
+  controlCharacteristic->notify();
+  updateStatusCharacteristic(false);
+  memoryAckUntil=millis()+480u;`,
+`  controlCharacteristic->setValue(value,sizeof(value));
+  controlCharacteristic->notify();
+  // Memory markers share the control characteristic with status packets. Mirror the
+  // battery handoff so the 12-byte event is transmitted before status is restored.
+  vTaskDelay(pdMS_TO_TICKS(20));
+  updateStatusCharacteristic(false);
+  memoryAckUntil=millis()+480u;`,
+  'memory notification handoff');
+
+  out=replaceOnce(out,
 `void sampleBattery(bool force) {
   const uint32_t now=millis();`,
 `void sampleBattery(bool force) {
