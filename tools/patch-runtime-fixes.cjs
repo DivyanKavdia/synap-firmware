@@ -56,6 +56,13 @@ bool batteryCritical() {
   const uint32_t now=millis();`,'battery sample guard start');
 
   out=replaceOnce(out,
+`    batteryAvailable=batteryValidSamples>=2;`,
+`    // A single averaged conversion is sufficient for UI availability. Critical
+    // actions still require multiple corroborating samples via batteryCritical().
+    batteryAvailable=batteryValidSamples>=1;`,
+  'battery availability after first valid sample');
+
+  out=replaceOnce(out,
 `  publishBatteryEvent(true);
   updateStatusLed(true);
 }
@@ -67,6 +74,31 @@ void enterDeepSleep`,
 }
 
 void enterDeepSleep`,'battery sample guard end');
+
+  out=replaceOnce(out,
+`  analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_2_5db);`,
+`  // GPIO8 sees up to about 1.34 V from a 4.2 V cell through the 1M/470k divider.
+  // 6 dB attenuation gives comfortable headroom and avoids top-end clipping.
+  analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_6db);`,
+  'battery ADC attenuation');
+
+  out=replaceOnce(out,
+`    case CMD_GET_STATUS:
+      if (!streamingEnabled.load()) {
+        if (configureTransportFromPeerMtu()) setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);
+        else setDeviceState(DeviceState::ERROR, ErrorCode::MTU_TOO_SMALL);
+      }
+      updateStatusCharacteristic(true);`,
+`    case CMD_GET_STATUS:
+      if (!streamingEnabled.load()) {
+        if (configureTransportFromPeerMtu()) setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);
+        else setDeviceState(DeviceState::ERROR, ErrorCode::MTU_TOO_SMALL);
+      }
+      updateStatusCharacteristic(true);
+      // The PWA requests status only after control notifications are subscribed,
+      // so this guarantees fresh battery telemetry reaches the client on connect.
+      sampleBattery(true);`,
+  'battery sample on subscribed status request');
 
   out=replaceOnce(out,
 `    case CMD_STOP:
