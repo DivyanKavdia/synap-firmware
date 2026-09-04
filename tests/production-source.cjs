@@ -17,6 +17,9 @@ test('production preparation is reproducible and retains mobile OTA safely',()=>
   assert.match(prepared,/analogSetPinAttenuation\(BATTERY_ADC_PIN, ADC_6db\)/,'GPIO8 ADC must have headroom for the 1M/470k divider');
   assert.match(prepared,/batteryAvailable=batteryValidSamples>=1/,'one averaged valid sample should make battery telemetry available');
   assert.match(prepared,/case CMD_GET_STATUS:[\s\S]*?sampleBattery\(true\)/,'fresh battery telemetry must be sent after the PWA subscribes and requests status');
+  assert.match(prepared,/controlCharacteristic->notify\(\);[\s\S]*?vTaskDelay\(pdMS_TO_TICKS\(20\)\)[\s\S]*?updateStatusCharacteristic\(false\)/,'battery notification must be allowed to leave before restoring control status');
+  assert.match(prepared,/batteryMillivolts=uint16_t\(cellMv>65535u\?65535u:cellMv\)/,'invalid ADC readings should still expose measured voltage for diagnostics');
+  assert.match(prepared,/\[BATTERY\] gpio=/,'battery sampling diagnostics must remain available over serial');
   assert.match(prepared,/vTaskDelay\(pdMS_TO_TICKS\(60\)\)/,'STOP must quiesce audio before acknowledgement');
   assert.match(prepared,/SYNAP-%02X%02X%02X%02X%02X%02X/,'public hardware ID must come from eFuse MAC');
   assert.match(prepared,/TOUCH_SLEEP_HOLD_MS/);
