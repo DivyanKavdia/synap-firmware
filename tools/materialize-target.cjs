@@ -44,7 +44,7 @@ function materialize(source,targetId){
   if(out.includes(PRIMARY_TARGET))throw Error('C3 source still contains the S3 target identity');
   if(out.includes('SYNAP-ESP32S3-OTA-ID-V3'))throw Error('C3 source still contains the S3 product marker');
   if(out.includes('esp_sleep_enable_ext1_wakeup'))throw Error('C3 source still contains unsupported EXT1 wake');
-  if(!out.includes(`SYNAP-FW:${target.id}:0.0.1:`))throw Error('C3 firmware identity was not materialized');
+  if(!out.includes(`SYNAP-FW:${target.id}:1.0.0:`))throw Error('C3 firmware identity was not materialized');
   if(!out.includes(target.productMarker))throw Error('C3 OTA marker was not materialized');
   if(!out.includes('p[21]!=5 || p[22]!=0'))throw Error('C3 chip image check was not materialized');
   if(!out.includes('esp_deep_sleep_enable_gpio_wakeup'))throw Error('C3 GPIO deep-sleep wake was not materialized');
