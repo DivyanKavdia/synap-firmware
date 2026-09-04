@@ -108,15 +108,16 @@ jobs:
         with:
           subject-path: bundle/esp32c3-supermini-4m/firmware.bin
       - name: Publish production firmware atomically
+        id: publish_result
         if: steps.current.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: node tools/publish.cjs
       - name: Verify public manifests, binaries, GitHub provenance and CORS
-        if: steps.current.outputs.release == 'true'
+        if: steps.publish_result.outputs.published == 'true'
         run: node tools/check-feed.cjs
       - name: Synchronize explicit ESP32-C3 source into main
-        if: steps.current.outputs.release == 'true'
+        if: steps.publish_result.outputs.published == 'true'
         run: |
           mkdir -p synap_esp32c3
           cp bundle/source-sync/synap_esp32c3.ino synap_esp32c3/synap_esp32c3.ino
