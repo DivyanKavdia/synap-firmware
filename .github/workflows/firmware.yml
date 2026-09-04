@@ -12,7 +12,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     env:
       SYNAP_RELEASE_BRANCH: ota-releases
     steps:
@@ -30,21 +30,26 @@ jobs:
         run: |
           node tools/prepare-interactions.cjs --check synap_esp32s3/synap_esp32s3.ino
           node --test tests/*.cjs
-      - name: Prepare auditable production source
+      - name: Prepare auditable shared production source
         run: |
-          mkdir -p prepared/synap_esp32s3
+          mkdir -p prepared/synap_esp32s3 prepared/synap_esp32c3
           cp synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32s3/synap_esp32s3.ino
           node tools/prepare-interactions.cjs prepared/synap_esp32s3/synap_esp32s3.ino
           node tools/patch-runtime-fixes.cjs prepared/synap_esp32s3/synap_esp32s3.ino
+          node tools/materialize-target.cjs --check esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino
+          node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3/synap_esp32c3.ino
           test "$(git status --porcelain -- synap_esp32s3)" = ""
-      - name: Compile application (4 MB flash, QSPI PSRAM, default dual OTA slots)
+      - name: Compile S3 and C3 application targets with one build number
         env:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           build=$((1000 + RUN_NUMBER))
           test "$build" -le 65535
-          arduino-cli compile --fqbn 'esp32:esp32:esp32s3:FlashSize=4M,PartitionScheme=default,PSRAM=enabled,USBMode=hwcdc,CDCOnBoot=cdc' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build" --output-dir compiled prepared/synap_esp32s3
-          node tools/release.cjs compiled/synap_esp32s3.ino.bin "$build" "$GITHUB_SHA" bundle "$SYNAP_RELEASE_BRANCH" prepared/synap_esp32s3/synap_esp32s3.ino
+          mkdir -p compiled-s3 compiled-c3 bundle/esp32s3-fh4r2-qspi-4m bundle/esp32c3-supermini-4m
+          arduino-cli compile --fqbn 'esp32:esp32:esp32s3:FlashSize=4M,PartitionScheme=default,PSRAM=enabled,USBMode=hwcdc,CDCOnBoot=cdc' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build" --output-dir compiled-s3 prepared/synap_esp32s3
+          arduino-cli compile --fqbn 'esp32:esp32:esp32c3:FlashSize=4M,PartitionScheme=default' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build" --output-dir compiled-c3 prepared/synap_esp32c3
+          node tools/release.cjs compiled-s3/synap_esp32s3.ino.bin "$build" "$GITHUB_SHA" bundle/esp32s3-fh4r2-qspi-4m "$SYNAP_RELEASE_BRANCH" prepared/synap_esp32s3/synap_esp32s3.ino esp32s3-fh4r2-qspi-4m
+          node tools/release.cjs compiled-c3/synap_esp32c3.ino.bin "$build" "$GITHUB_SHA" bundle/esp32c3-supermini-4m "$SYNAP_RELEASE_BRANCH" prepared/synap_esp32c3/synap_esp32c3.ino esp32c3-supermini-4m
       - uses: actions/upload-artifact@v4
         with:
           name: verified-firmware
@@ -54,7 +59,7 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     environment: production
     env:
       SYNAP_RELEASE_BRANCH: ota-releases
@@ -81,16 +86,21 @@ jobs:
             echo "release=false" >> "$GITHUB_OUTPUT"
             echo "Source $GITHUB_SHA was superseded by $current; skipping attestation, publish and feed verification."
           fi
-      - name: Attest production firmware with GitHub OIDC
+      - name: Attest ESP32-S3 production firmware with GitHub OIDC
         if: steps.current.outputs.release == 'true'
         uses: actions/attest-build-provenance@v3
         with:
-          subject-path: bundle/firmware.bin
+          subject-path: bundle/esp32s3-fh4r2-qspi-4m/firmware.bin
+      - name: Attest ESP32-C3 production firmware with GitHub OIDC
+        if: steps.current.outputs.release == 'true'
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: bundle/esp32c3-supermini-4m/firmware.bin
       - name: Publish production firmware atomically
         if: steps.current.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: node tools/publish.cjs
-      - name: Verify public manifest, binary, GitHub provenance and CORS
+      - name: Verify public manifests, binaries, GitHub provenance and CORS
         if: steps.current.outputs.release == 'true'
         run: node tools/check-feed.cjs
