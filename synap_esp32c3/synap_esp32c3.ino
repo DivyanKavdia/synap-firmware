@@ -80,7 +80,7 @@ constexpr uint8_t BATTERY_EVENT_MAGIC = 0xB7;
 constexpr uint8_t BATTERY_EVENT_VERSION = 1;
 // TTP223 OUT is a digital, active-high push-pull signal by default.
 // Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 470 kOhm -> GND, with
-// 100 nF from GPIO8 to GND. Implausible/unstable readings are treated unavailable.
+// 100 nF from GPIO8 to GND. Implausible readings are reported but marked unavailable.
 // Status LED is intentionally off most of the time. Short, dim pulses make the
 // state visible without turning the onboard WS2812 into a material battery load.
 constexpr uint8_t LED_DIM = 4;
@@ -523,6 +523,10 @@ void publishBatteryEvent(bool force) {
   value[6]=BATTERY_LOW_MV&255;value[7]=BATTERY_LOW_MV>>8;
   controlCharacteristic->setValue(value,sizeof(value));
   controlCharacteristic->notify();
+  // Bluedroid may defer notification transmission. Give the 8-byte battery payload
+  // a short window before restoring the 16-byte control/status value so mobile
+  // browsers never observe the restored status in place of the queued battery event.
+  vTaskDelay(pdMS_TO_TICKS(20));
   updateStatusCharacteristic(false);
   lastBatteryPublishAt=now;
 }
@@ -553,9 +557,14 @@ void sampleBattery(bool force) {
       if (batteryCriticalSamples<255) ++batteryCriticalSamples;
     } else batteryCriticalSamples=0;
   } else {
+    // Preserve the reconstructed voltage even when it is outside the expected
+    // LiPo range. The PWA can then distinguish bad wiring/ADC from missing BLE.
     batteryAvailable=false;batteryValidSamples=0;batteryCriticalSamples=0;
-    batteryMillivolts=0;batteryPercent=0;
+    batteryMillivolts=uint16_t(cellMv>65535u?65535u:cellMv);batteryPercent=0;
   }
+  Serial.printf("[BATTERY] gpio=%u adc=%lumV cell=%umV available=%u percent=%u\n",
+    static_cast<unsigned>(BATTERY_ADC_PIN),static_cast<unsigned long>(adcMv),static_cast<unsigned>(batteryMillivolts),
+    batteryAvailable?1u:0u,static_cast<unsigned>(batteryPercent));
   publishBatteryEvent(true);
   updateStatusLed(true);
 #endif
