@@ -9,6 +9,9 @@ function api(endpoint,method='GET',body) {
   return JSON.parse(execFileSync('gh',['api',`repos/${repo}/${endpoint}`,'--method',method,...(body?['--input','-']:[])],
     {input:body?JSON.stringify(body):undefined,encoding:'utf8'}));
 }
+function setPublished(value){
+  if(process.env.GITHUB_OUTPUT)fs.appendFileSync(process.env.GITHUB_OUTPUT,`published=${value?'true':'false'}\n`);
+}
 
 const artifacts=Object.values(TARGETS).map(config=>{
   const dir=path.join('bundle',config.id),manifest=JSON.parse(fs.readFileSync(path.join(dir,'latest.json'),'utf8'));
@@ -30,14 +33,14 @@ for(const item of artifacts){
   ))throw Error(`Production provenance declaration invalid for ${m.target}`);
   if(!production&&(m.schema!==2||m.signing||m.provenance))throw Error(`Test trust metadata invalid for ${m.target}`);
 }
-if(api('commits/main').sha!==commit){console.log('Superseded source commit; not advertising an older release.');process.exit(0);}
+if(api('commits/main').sha!==commit){setPublished(false);console.log('Superseded source commit; not advertising an older release.');process.exit(0);}
 
 const production=branch==='ota-releases';
 const branches=api('branches?per_page=100'),existing=branches.find(b=>b.name===branch);let base;
 if(existing){
   base=api(`git/commits/${existing.commit.sha}`);
   const old=api(`contents/latest.json?ref=${branch}`),previous=JSON.parse(Buffer.from(old.content,'base64').toString());
-  if(previous.build>=build){console.log('This or a newer build is already published.');process.exit(0);}
+  if(previous.build>=build){setPublished(false);console.log('This or a newer build is already published.');process.exit(0);}
 }
 
 if(production){
@@ -72,4 +75,5 @@ const tree=api('git/trees','POST',{...(base?{base_tree:base.tree.sha}:{}),tree:t
 const commitObject=api('git/commits','POST',{message:`Publish ${production?'production':'test'} build ${build}`,tree:tree.sha,parents:existing?[existing.commit.sha]:[]});
 if(existing)api(`git/refs/heads/${branch}`,'PATCH',{sha:commitObject.sha,force:false});
 else api('git/refs','POST',{ref:`refs/heads/${branch}`,sha:commitObject.sha});
+setPublished(true);
 console.log(`Published ${production?'production':'test'} build ${build} for ${artifacts.map(x=>x.config.id).join(', ')}`);
