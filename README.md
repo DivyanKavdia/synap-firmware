@@ -1,28 +1,42 @@
-# Synap Firmware
+# Synap firmware
 
-Synap pendant firmware for supported ESP32 targets.
+This repository contains the production firmware source and OTA release tooling for Synap pendants.
 
-## ESP32-S3 SuperMini production audio
+## Supported hardware
 
-The production ESP32-S3 build uses the physical I2S microphone path.
+- ESP32-S3 SuperMini / ESP32-S3FH4R2 target
+- ESP32-C3 SuperMini target
 
-Pin mapping:
+The S3 source is maintained in `synap_esp32s3/synap_esp32s3.ino`. The C3 source is materialized from the same protocol/runtime design and synchronized into `synap_esp32c3/synap_esp32c3.ino` by the release workflow.
 
-- GPIO 4 -> I2S BCLK / SCK
-- GPIO 5 -> I2S WS / LRCLK
-- GPIO 6 <- I2S microphone SD / DOUT
-- 3.3V -> microphone VDD
-- GND -> microphone GND
-- microphone L/R -> GND for the left slot used by firmware
-- GPIO 48 -> onboard RGB status LED
+## BLE protocol
 
-The GitHub production workflow compiles the ESP32-S3 target with `USE_REAL_I2S_MIC=1`. The 440 Hz synthetic source remains available only as a development/test fallback when that flag is disabled.
+The firmware exposes the Synap BLE service and characteristics used by `synap-pwa` for:
 
-## Firmware source
+- audio streaming
+- recording control/status
+- stable public device identity
+- diagnostics
+- resumable BLE OTA
 
-- `synap_esp32s3/synap_esp32s3.ino` — ESP32-S3 source
-- `synap_esp32c3/synap_esp32c3.ino` — ESP32-C3 target source
+Firmware and PWA protocol changes should remain backward-compatible wherever possible.
 
-## OTA
+## ESP32-S3 hardware defaults
 
-Production firmware is built and published by `.github/workflows/firmware.yml`.
+Current S3 source defaults:
+
+- 16 kHz mono PCM
+- GPIO 48 onboard RGB LED
+- I2S BCLK GPIO 4
+- I2S WS GPIO 5
+- I2S data-in GPIO 6
+
+`USE_REAL_I2S_MIC` can be enabled for physical I2S microphone builds. When disabled, the firmware emits a deterministic 440 Hz test tone for transport validation.
+
+## Releases
+
+`.github/workflows/firmware.yml` builds and publishes signed OTA release artifacts from `main`.
+
+The public OTA feed is published to the `ota-releases` branch. Release publishing includes board identity, build number, SHA-256 integrity data, and provenance checks.
+
+See `OTA_RELEASES.md` for OTA release details.
