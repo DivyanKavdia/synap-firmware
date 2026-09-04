@@ -20,7 +20,7 @@ Both targets share the same BLE application protocol, device identity model and 
 | I2S WS | 5 |
 | I2S microphone data | 6 |
 
-The sketch defaults to deterministic 440 Hz test audio unless `USE_REAL_I2S_MIC=1` is supplied at compile time.
+Production ESP32-S3 releases are compiled with `USE_REAL_I2S_MIC=1`, so they capture the physical I2S microphone. The deterministic 440 Hz source is retained only as a development/test fallback when that flag is disabled.
 
 ### ESP32-C3 SuperMini
 
