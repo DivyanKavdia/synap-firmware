@@ -10,10 +10,8 @@ function replaceOnce(source,before,after,label){
 function patch(source){
   let out=source;
 
-  out=replaceOnce(out,
-`constexpr uint32_t BATTERY_DIVIDER_BOTTOM_OHMS = 330000u;`,
-`constexpr uint32_t BATTERY_DIVIDER_BOTTOM_OHMS = 470000u;`,
-  'S3 battery divider bottom resistor');
+  // The production pendant hardware uses the original 1 MOhm / 330 kOhm divider.
+  // Do not override BATTERY_DIVIDER_BOTTOM_OHMS from prepare-interactions.cjs.
 
   out=replaceOnce(out,
 `constexpr uint32_t BATTERY_SAMPLE_MS = 30000u;`,
@@ -23,7 +21,7 @@ function patch(source){
   out=replaceOnce(out,
 `// Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 330 kOhm -> GND, with
 // 100 nF from GPIO8 to GND. Implausible/unstable readings are treated unavailable.`,
-`// Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 470 kOhm -> GND, with
+`// Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 330 kOhm -> GND, with
 // 100 nF from GPIO8 to GND. Implausible readings are reported but marked unavailable.`,
   'battery divider wiring comment');
 
@@ -115,8 +113,8 @@ void enterDeepSleep`,'battery sample guard end');
 
   out=replaceOnce(out,
 `  analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_2_5db);`,
-`  // GPIO8 sees up to about 1.34 V from a 4.2 V cell through the 1M/470k divider.
-  // 6 dB attenuation gives comfortable headroom and avoids top-end clipping.
+`  // GPIO8 sees up to about 1.04 V from a 4.2 V cell through the 1M/330k divider.
+  // 6 dB attenuation comfortably covers the expected range while retaining resolution.
   analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_6db);`,
   'battery ADC attenuation');
 
