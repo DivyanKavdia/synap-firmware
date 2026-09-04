@@ -12,6 +12,7 @@ test('production preparation is reproducible and retains mobile OTA safely',()=>
   assert.match(prepared,/#if CONFIG_IDF_TARGET_ESP32S3\s*\n#define SYNAP_BATTERY_MONITOR_ENABLE 1\s*\n#else\s*\n#define SYNAP_BATTERY_MONITOR_ENABLE 0/,'battery monitor must be enabled only on audited ESP32-S3 hardware');
   assert.match(prepared,/BATTERY_DIVIDER_TOP_OHMS = 1000000u/,'battery divider top resistor must be 1 MOhm');
   assert.match(prepared,/BATTERY_DIVIDER_BOTTOM_OHMS = 470000u/,'battery divider bottom resistor must match the 470 kOhm build');
+  assert.match(prepared,/BATTERY_SAMPLE_MS = 15000u/,'battery telemetry should refresh every 15 seconds');
   assert.match(prepared,/SYNAP_BATTERY_ADC_PIN\s*\n#define SYNAP_BATTERY_ADC_PIN 8/,'S3 battery sense pin must remain GPIO8');
   assert.match(prepared,/analogSetPinAttenuation\(BATTERY_ADC_PIN, ADC_6db\)/,'GPIO8 ADC must have headroom for the 1M/470k divider');
   assert.match(prepared,/batteryAvailable=batteryValidSamples>=1/,'one averaged valid sample should make battery telemetry available');
