@@ -9,7 +9,10 @@ test('production preparation is reproducible and retains mobile OTA safely',()=>
   const prepared=patch(prepare(source));
   assert.match(prepared,/SYNAP-FW:esp32s3-fh4r2-qspi-4m:0\.0\.1:/);
   assert.match(prepared,/900000u/,'OTA resume must survive mobile background suspension');
-  assert.match(prepared,/#define SYNAP_BATTERY_MONITOR_ENABLE 0/,'unaudited battery ADC must stay disabled');
+  assert.match(prepared,/#if CONFIG_IDF_TARGET_ESP32S3\s*\n#define SYNAP_BATTERY_MONITOR_ENABLE 1\s*\n#else\s*\n#define SYNAP_BATTERY_MONITOR_ENABLE 0/,'battery monitor must be enabled only on audited ESP32-S3 hardware');
+  assert.match(prepared,/BATTERY_DIVIDER_TOP_OHMS = 1000000u/,'battery divider top resistor must be 1 MOhm');
+  assert.match(prepared,/BATTERY_DIVIDER_BOTTOM_OHMS = 470000u/,'battery divider bottom resistor must match the 470 kOhm build');
+  assert.match(prepared,/SYNAP_BATTERY_ADC_PIN\s*\n#define SYNAP_BATTERY_ADC_PIN 8/,'S3 battery sense pin must remain GPIO8');
   assert.match(prepared,/vTaskDelay\(pdMS_TO_TICKS\(60\)\)/,'STOP must quiesce audio before acknowledgement');
   assert.match(prepared,/SYNAP-%02X%02X%02X%02X%02X%02X/,'public hardware ID must come from eFuse MAC');
   assert.match(prepared,/TOUCH_SLEEP_HOLD_MS/);
