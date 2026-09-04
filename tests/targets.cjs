@@ -28,6 +28,8 @@ test('C3 program is generated from the same prepared production source with targ
   assert.match(c3,/constexpr uint8_t RGB_LED_PIN = 8;/);
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);
   assert.match(c3,/#define SYNAP_BATTERY_ADC_PIN 1/);
+  assert.match(c3,/esp_deep_sleep_enable_gpio_wakeup\(1ULL<<TOUCH_INPUT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH\)/);
+  assert.doesNotMatch(c3,/esp_sleep_enable_ext1_wakeup/);
   assert.match(c3,/xTaskCreate\(controlTask/);
   assert.doesNotMatch(c3,/xTaskCreatePinnedToCore/);
   assert.match(c3,/I2S_BCLK_PIN = 4, I2S_WS_PIN = 5, I2S_DATA_IN_PIN = 6/);
