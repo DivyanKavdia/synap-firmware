@@ -20,8 +20,10 @@ test('target catalog keeps S3 as backward-compatible primary and adds C3',()=>{
 
 test('C3 program is generated from the same prepared production source with target-safe differences only',()=>{
   const s3=prepared(),c3=materialize(s3,'esp32c3-supermini-4m');
-  assert.match(s3,/SYNAP-FW:esp32s3-fh4r2-qspi-4m:0\.0\.1:/);
-  assert.match(c3,/SYNAP-FW:esp32c3-supermini-4m:0\.0\.1:/);
+  assert.match(s3,/SYNAP-FW:esp32s3-fh4r2-qspi-4m:1\.0\.0:/);
+  assert.match(c3,/SYNAP-FW:esp32c3-supermini-4m:1\.0\.0:/);
+  assert.doesNotMatch(s3,/SYNAP-FW:esp32s3-fh4r2-qspi-4m:0\.0\.1:/);
+  assert.doesNotMatch(c3,/SYNAP-FW:esp32c3-supermini-4m:0\.0\.1:/);
   assert.match(c3,/SYNAP-ESP32C3-OTA-ID-V3/);
   assert.doesNotMatch(c3,/SYNAP-ESP32S3-OTA-ID-V3/);
   assert.match(c3,/p\[21\]!=5 \|\| p\[22\]!=0/);
