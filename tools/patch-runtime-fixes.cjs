@@ -95,8 +95,8 @@ bool batteryCritical() {
     batteryMillivolts=uint16_t(cellMv>65535u?65535u:cellMv);batteryPercent=0;
   }
   Serial.printf("[BATTERY] gpio=%u adc=%lumV cell=%umV available=%u percent=%u\\n",
-    unsigned(BATTERY_ADC_PIN),unsigned long(adcMv),unsigned(batteryMillivolts),
-    batteryAvailable?1u:0u,unsigned(batteryPercent));
+    static_cast<unsigned>(BATTERY_ADC_PIN),static_cast<unsigned long>(adcMv),static_cast<unsigned>(batteryMillivolts),
+    batteryAvailable?1u:0u,static_cast<unsigned>(batteryPercent));
   publishBatteryEvent(true);`,
   'battery invalid-reading diagnostics');
 
