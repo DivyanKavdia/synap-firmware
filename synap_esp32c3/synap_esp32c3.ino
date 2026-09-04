@@ -70,7 +70,7 @@ constexpr uint16_t TOUCH_SLEEP_HOLD_MS = 3000;
 constexpr uint32_t AUTO_SLEEP_DISCONNECTED_MS = 300000u;
 constexpr uint32_t BATTERY_SAMPLE_MS = 30000u;
 constexpr uint32_t BATTERY_DIVIDER_TOP_OHMS = 1000000u;
-constexpr uint32_t BATTERY_DIVIDER_BOTTOM_OHMS = 330000u;
+constexpr uint32_t BATTERY_DIVIDER_BOTTOM_OHMS = 470000u;
 constexpr uint16_t BATTERY_LOW_MV = 3600;
 constexpr uint16_t BATTERY_CRITICAL_MV = 3400;
 constexpr uint8_t MEMORY_EVENT_MAGIC = 0xB6;
@@ -79,7 +79,7 @@ constexpr uint8_t MEMORY_EVENT_REMEMBER = 1;
 constexpr uint8_t BATTERY_EVENT_MAGIC = 0xB7;
 constexpr uint8_t BATTERY_EVENT_VERSION = 1;
 // TTP223 OUT is a digital, active-high push-pull signal by default.
-// Battery sensing assumes B+ -> 1 MOhm -> GPIO1 -> 330 kOhm -> GND, with
+// Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 470 kOhm -> GND, with
 // 100 nF from GPIO8 to GND. Implausible/unstable readings are treated unavailable.
 // Status LED is intentionally off most of the time. Short, dim pulses make the
 // state visible without turning the onboard WS2812 into a material battery load.
@@ -496,7 +496,11 @@ uint8_t batteryPercentFromMillivolts(uint16_t mv) {
 }
 
 #ifndef SYNAP_BATTERY_MONITOR_ENABLE
+#if CONFIG_IDF_TARGET_ESP32S3
+#define SYNAP_BATTERY_MONITOR_ENABLE 1
+#else
 #define SYNAP_BATTERY_MONITOR_ENABLE 0
+#endif
 #endif
 bool batteryCritical() {
 #if SYNAP_BATTERY_MONITOR_ENABLE
