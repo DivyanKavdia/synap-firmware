@@ -59,6 +59,7 @@ jobs:
           test -n "$s3_factory" && test -n "$c3_factory"
           cp "$s3_factory" bundle/esp32s3-fh4r2-qspi-4m/factory.bin
           cp "$c3_factory" bundle/esp32c3-supermini-4m/factory.bin
+          cp prepared/synap_esp32s3/synap_esp32s3.ino bundle/source-sync/synap_esp32s3.ino
           cp prepared/synap_esp32c3/synap_esp32c3.ino bundle/source-sync/synap_esp32c3.ino
       - uses: actions/upload-artifact@v4
         with:
@@ -126,5 +127,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add synap_esp32c3/synap_esp32c3.ino
-          git commit -m "Sync explicit ESP32-C3 firmware source"
+          git commit -m "Sync explicit ESP32-C3 firmware source [skip ci]"
           git push origin HEAD:main
