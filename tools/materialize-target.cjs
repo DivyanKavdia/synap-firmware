@@ -25,6 +25,12 @@ function materialize(source,targetId){
   out=out.replace('Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 330 kOhm -> GND, with',
     'Battery sensing assumes B+ -> 1 MOhm -> GPIO1 -> 330 kOhm -> GND, with');
   out=replaceOnce(out,
+`  esp_sleep_enable_ext1_wakeup(1ULL<<TOUCH_INPUT_PIN, ESP_EXT1_WAKEUP_ANY_HIGH);`,
+`  // ESP32-C3 has no EXT1 wake controller. Its deep-sleep GPIO wake API keeps
+  // the same active-high touch behavior without depending on RTC EXT1 support.
+  esp_deep_sleep_enable_gpio_wakeup(1ULL<<TOUCH_INPUT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);`,
+  'C3 deep-sleep GPIO wake');
+  out=replaceOnce(out,
 `  if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
       xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, nullptr, 0) != pdPASS ||
       xTaskCreatePinnedToCore(transmitterTask, "transmit", 4096, nullptr, 2, nullptr, 1) != pdPASS) {`,
@@ -37,9 +43,11 @@ function materialize(source,targetId){
 
   if(out.includes(PRIMARY_TARGET))throw Error('C3 source still contains the S3 target identity');
   if(out.includes('SYNAP-ESP32S3-OTA-ID-V3'))throw Error('C3 source still contains the S3 product marker');
+  if(out.includes('esp_sleep_enable_ext1_wakeup'))throw Error('C3 source still contains unsupported EXT1 wake');
   if(!out.includes(`SYNAP-FW:${target.id}:0.0.1:`))throw Error('C3 firmware identity was not materialized');
   if(!out.includes(target.productMarker))throw Error('C3 OTA marker was not materialized');
   if(!out.includes('p[21]!=5 || p[22]!=0'))throw Error('C3 chip image check was not materialized');
+  if(!out.includes('esp_deep_sleep_enable_gpio_wakeup'))throw Error('C3 GPIO deep-sleep wake was not materialized');
   return out;
 }
 
