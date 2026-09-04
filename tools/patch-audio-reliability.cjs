@@ -24,11 +24,8 @@ function patch(source){
   'maximum audio payload');
 
   out=replaceOnce(out,
-`  if (chunks < 10 || chunks > 20 || !payload || payload > 160) return false;
-  uint8_t packet[AUDIO_HEADER_BYTES+MAX_AUDIO_PAYLOAD_BYTES];`,
-`  if (chunks < MIN_CHUNKS_PER_FRAME || chunks > MAX_CHUNKS_PER_FRAME ||
-      !payload || payload > MAX_AUDIO_PAYLOAD_BYTES) return false;
-  uint8_t packet[AUDIO_HEADER_BYTES+MAX_AUDIO_PAYLOAD_BYTES];`,
+`  if (chunks < 10 || chunks > 20 || !payload || payload > 160) return false;\n  uint8_t packet[AUDIO_HEADER_BYTES+MAX_AUDIO_PAYLOAD_BYTES];`,
+`  if (chunks < MIN_CHUNKS_PER_FRAME || chunks > MAX_CHUNKS_PER_FRAME ||\n      !payload || payload > MAX_AUDIO_PAYLOAD_BYTES) return false;\n  uint8_t packet[AUDIO_HEADER_BYTES+MAX_AUDIO_PAYLOAD_BYTES];`,
   'audio send bounds');
 
   // Finish each frame with transport headroom. The capture side remains clocked
@@ -47,18 +44,20 @@ function patch(source){
 `  audioFrameQueue=xQueueCreate(20, sizeof(AudioFrame));`,
   'audio queue depth');
 
+  // The INMP44x family provides 24-bit signed I2S data in a 32-bit slot. Convert
+  // the signed slot to PCM16 first. The former >>14 applied ~12 dB hidden digital
+  // gain and could hard-clip normal near-field speech before BLE transmission.
+  out=replaceOnce(out,
+`    int32_t sample=raw[i] >> 14;\n    if (sample > 32767) sample=32767;\n    if (sample < -32768) sample=-32768;\n    frame.samples[i]=static_cast<int16_t>(sample);`,
+`    const int32_t sample=raw[i] >> 16;\n    frame.samples[i]=static_cast<int16_t>(sample);`,
+  'microphone PCM normalization');
+
   // Battery telemetry is low priority while streaming. Sampling continues, but
   // defer its BLE notification until idle so audio never competes with periodic
   // battery/control traffic on constrained mobile links.
   out=replaceOnce(out,
-`  publishBatteryEvent(true);
-  updateStatusLed(true);
-#endif
-}`,
-`  if (!streamingEnabled.load()) publishBatteryEvent(true);
-  updateStatusLed(true);
-#endif
-}`,
+`  publishBatteryEvent(true);\n  updateStatusLed(true);\n#endif\n}`,
+`  if (!streamingEnabled.load()) publishBatteryEvent(true);\n  updateStatusLed(true);\n#endif\n}`,
   'defer battery notification during audio');
 
   return out;
