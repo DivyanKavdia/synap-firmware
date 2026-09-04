@@ -2,99 +2,133 @@
 
 Production firmware for the Synap pendant.
 
-The current source tree keeps explicit application targets for:
+## Known-good baseline — 4 September 2026
 
-- `synap_esp32s3/` — ESP32-S3 SuperMini / ESP32-S3FH4R2
-- `synap_esp32c3/` — ESP32-C3 SuperMini
+This document is the engineering baseline for the best-known Synap firmware state as of **4 September 2026**.
 
-Both targets share the same BLE application protocol, device identity model and resumable OTA protocol. Target-specific source is kept explicit so initial USB flashing, troubleshooting and manufacturing do not depend on build-time source rewriting.
+- Product version: **1.0.0**
+- Latest published ESP32-S3 production OTA build: **1052**
+- ESP32-S3 target: `esp32s3-fh4r2-qspi-4m`
+- ESP32-C3 target: `esp32c3-supermini-4m`
+- Recording BLE protocol: **2**
+- OTA protocol: **3**
+- Production S3 uses the physical I2S microphone.
+- TTP223 touch input on production S3: **GPIO13**.
+- Pendant recordings remain stateless: audio is streamed to the PWA rather than stored locally on the pendant.
 
-## Current board wiring
+The source tree keeps explicit application targets for `synap_esp32s3/` and `synap_esp32c3/`. Both share the BLE application protocol, stable device identity and resumable OTA model.
 
-### ESP32-S3 SuperMini
+## ESP32-S3 hardware wiring
 
-| Function | GPIO |
-| --- | ---: |
-| RGB status LED | 48 |
-| I2S BCLK | 4 |
-| I2S WS | 5 |
-| I2S microphone data | 6 |
+| Function | GPIO / connection |
+| --- | --- |
+| RGB status NeoPixel | GPIO48 |
+| I2S BCLK / SCK | GPIO4 |
+| I2S WS / LRCLK | GPIO5 |
+| I2S microphone DATA / SD | GPIO6 |
+| TTP223 OUT / SIG | GPIO13 |
+| TTP223 VCC | 3.3 V |
+| TTP223 GND | GND |
+| INMP44/INMP441 VDD | 3.3 V |
+| INMP44/INMP441 GND | GND |
+| INMP44/INMP441 L/R | GND / left channel |
 
-Production ESP32-S3 releases are compiled with `USE_REAL_I2S_MIC=1`, so they capture the physical I2S microphone. The deterministic 440 Hz source is retained only as a development/test fallback when that flag is disabled.
+Production S3 releases compile with `USE_REAL_I2S_MIC=1`. The deterministic 440 Hz source is retained only as a development fallback.
 
-### ESP32-C3 SuperMini
+## Touch interaction model
 
-The C3 target is generated from the audited S3 application source by `tools/materialize-target.cjs`, which applies only the target-specific board identity and hardware pin mapping required for the C3 build. The generated C3 source is synchronized back into `main` after successful production publication.
+The production interaction layer uses a debounced gesture state machine rather than a simple touch toggle.
 
-## BLE service
+- debounce: approximately **35 ms**
+- double-tap window: approximately **500 ms**
+- long press: approximately **1.2 s**
+- sleep hold / very long press: approximately **3 s**
 
-Primary service UUID:
+Expected user interactions:
 
-`4fa12345-0000-1000-8000-00805f9b34fb`
+| Pendant state | Gesture | Result |
+| --- | --- | --- |
+| Connected + idle | Long press | Start recording |
+| Recording | Long press | Create **Remember This** marker; recording continues |
+| Recording | Double tap | Stop recording |
+| Idle | Very long press (~3 s) | Enter deep sleep |
+| Deep sleep | Touch/wake input | Wake and resume BLE advertising |
 
-Characteristics include audio, control/status, stable public device identity, diagnostics, OTA write and OTA status.
+Touch actions are guarded during OTA. The Remember event is sent to the PWA, which associates the marker with the current recording and timeline offset. No recording audio is stored on the pendant.
 
-The public device identity is derived from the ESP factory MAC and survives firmware updates. It is intended to let the PWA recognize the same physical pendant across reconnects and OTA releases without requiring users to manage an OTA key.
+## BLE service and identity
 
-## Audio protocol
+Primary service UUID: `4fa12345-0000-1000-8000-00805f9b34fb`
+
+Important characteristics:
+
+- audio: `4fa12346-0000-1000-8000-00805f9b34fb`
+- control/status: `4fa12347-0000-1000-8000-00805f9b34fb`
+- OTA write: `4fa12348-0000-1000-8000-00805f9b34fb`
+- OTA status: `4fa12349-0000-1000-8000-00805f9b34fb`
+- firmware identity: `4fa1234b-0000-1000-8000-00805f9b34fb`
+- permanent public device ID: `4fa1234c-0000-1000-8000-00805f9b34fb`
+- diagnostics: `4fa1234d-0000-1000-8000-00805f9b34fb`
+
+The permanent `SYNAP-XXXXXXXXXXXX` identity is derived from the ESP factory MAC and survives OTA. It replaces user-managed OTA keys for normal operation and update targeting.
+
+## Audio transport
 
 - PCM: 16 kHz, signed 16-bit, mono
-- Frame duration: 50 ms
-- Samples per frame: 800
-- PCM bytes per frame: 1600
-- BLE application packet header: 8 bytes
-- Audio frame split across 10–20 BLE notifications depending on negotiated ATT capacity
+- I2S capture: 32-bit samples converted to PCM16
+- frame: 50 ms / 800 samples / 1600 PCM bytes
+- BLE audio header: 8 bytes
+- frame split: 10–20 BLE notifications according to negotiated ATT capacity
+- requested MTU: 517
+- maximum audio payload: 160 bytes
 
-The PWA starts and stops streaming through the control characteristic using protocol version 2.
+Production S3 has been physically validated with the real microphone path and audio reaching the PWA.
 
-## Status LED
+## LED / interaction feedback
 
-ESP32-S3 uses the onboard GPIO 48 NeoPixel:
+GPIO48 is the onboard RGB NeoPixel. Core state semantics remain:
 
-- red — disconnected
-- blue — BLE connected / idle
-- green — streaming
-- error state — firmware error indication
+- red: disconnected
+- blue: connected / idle
+- green: recording / streaming
+- error indication for firmware faults
+
+The interaction layer can temporarily pulse feedback for touch actions such as Remember without changing the underlying state.
+
+## Recording and phone-screen behavior
+
+The pendant intentionally has no local recording store. A recording exists in the PWA/browser and the pendant streams live PCM over BLE.
+
+If the browser merely suspends JavaScript while the screen is off but BLE remains connected, the PWA recovery path should not falsely stop the recording when the page resumes. If the phone/browser actually terminates the BLE GATT connection while locked, audio cannot be captured during that disconnected interval because there is no pendant-local audio buffer/storage.
+
+This distinction is important when diagnosing screen-lock failures: inspect Diagnostics for an actual GATT disconnect rather than treating every foreground gap as a firmware stop.
 
 ## OTA model
 
-Synap OTA is application-level BLE OTA and does not require Wi-Fi credentials on the pendant.
+Synap uses application-level BLE OTA; Wi-Fi credentials are not required on the pendant. The PWA selects the release by permanent device identity and hardware target.
 
-The PWA downloads the correct signed production firmware, validates the release metadata and sends the image over BLE. OTA state and byte offset are maintained by the pendant during a short BLE interruption so the PWA can reconnect and resume instead of restarting the transfer from byte zero.
+OTA verifies target/device compatibility, ESP image structure, product/target markers, SHA-256 digest and the OTA partition. Protocol 3 supports reconnect/resume rather than deliberately restarting from byte zero after a short BLE interruption.
 
-The firmware verifies:
+The production release feed is maintained on the `ota-releases` branch by GitHub Actions. As of this baseline the S3 production feed points to build **1052**.
 
-- target/device compatibility
-- ESP image structure
-- product and target markers
-- SHA-256 digest
-- target OTA partition
-
-The public OTA release feed is maintained on the `ota-releases` branch by GitHub Actions.
-
-See [`OTA_RELEASES.md`](OTA_RELEASES.md) for release/feed details.
+See `OTA_RELEASES.md` for feed details.
 
 ## Build and release
 
-Production releases are built by `.github/workflows/firmware.yml` with Arduino-ESP32 `3.3.5` and pinned dependencies.
+`.github/workflows/firmware.yml` builds with Arduino-ESP32 3.3.5 and pinned dependencies. Production S3 compile flags include real-mic capture and `SYNAP_TOUCH_PIN=13`.
 
-The workflow:
+The workflow tests release/protocol preparation, prepares S3/C3 production sources, compiles both targets under one build number, creates OTA/factory artifacts, publishes production metadata/binaries, verifies the feed and synchronizes generated C3 source where required.
 
-1. runs firmware protocol/release tests
-2. prepares audited target sources
-3. compiles both ESP32-S3 and ESP32-C3 with one build number
-4. creates OTA and factory binaries
-5. attests production firmware provenance
-6. atomically publishes the OTA feed
-7. verifies the public manifests, binaries, provenance and CORS
-8. synchronizes the explicit generated ESP32-C3 source back to `main`
+## Battery/power note
+
+The interaction preparation contains battery/deep-sleep infrastructure, but unaudited battery ADC monitoring is intentionally disabled in the production runtime guard until the final battery sensing hardware/divider is validated. Deep-sleep touch behavior is independent of enabling battery ADC telemetry.
 
 ## Initial USB flashing
 
-For the first flash, use the target-specific sketch directory and the corresponding board target in Arduino IDE/Arduino CLI. After a compatible Synap OTA-enabled build is installed once, normal updates are intended to happen through the Synap PWA over BLE.
+The first installation uses the target-specific sketch/board configuration over USB. Once a compatible Synap OTA-enabled firmware is installed, normal firmware updates are intended to be one-click BLE OTA from the PWA with no physical boot-button sequence and no user-pasted OTA key.
 
-## Development notes
+## Release discipline
 
-Do not reuse an ESP32-S3 firmware binary on an ESP32-C3 or vice versa. Although the product protocol is shared, the MCU targets and firmware images are different.
+Treat **4 September 2026 / build 1052** as the reference baseline when investigating regressions. Do not assume that a later Git commit is a later published firmware: confirm the production `ota-releases/latest.json` build and target first.
 
-When changing the BLE protocol, OTA format, hardware mapping or partition assumptions, update the associated tests and release validation in the same change.
+Do not flash an S3 binary onto a C3 or vice versa. Any change to BLE protocol, OTA format, pin mapping, interaction gestures or partition assumptions must update the corresponding tests and documentation in the same change.
