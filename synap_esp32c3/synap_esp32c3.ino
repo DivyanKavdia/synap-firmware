@@ -46,11 +46,11 @@ constexpr uint16_t FRAME_DURATION_MS = 50;
 constexpr uint16_t SAMPLES_PER_FRAME = 800;
 constexpr uint16_t AUDIO_BYTES_PER_FRAME = 1600;
 constexpr uint8_t AUDIO_HEADER_BYTES = 8;
-constexpr uint8_t MIN_CHUNKS_PER_FRAME = 10;
+constexpr uint8_t MIN_CHUNKS_PER_FRAME = 4;
 constexpr uint8_t MAX_CHUNKS_PER_FRAME = 20;
 constexpr uint16_t MIN_REQUIRED_MTU = 91;
 constexpr uint16_t REQUESTED_MTU = 517;
-constexpr uint16_t MAX_AUDIO_PAYLOAD_BYTES = 160;
+constexpr uint16_t MAX_AUDIO_PAYLOAD_BYTES = 500;
 constexpr uint8_t RGB_LED_PIN = 8;
 #ifndef SYNAP_TOUCH_PIN
 #define SYNAP_TOUCH_PIN 3
@@ -589,7 +589,7 @@ void sampleBattery(bool force) {
   Serial.printf("[BATTERY] gpio=%u raw=%u adc=%umV cell=%umV available=%u percent=%u\n",
     static_cast<unsigned>(BATTERY_ADC_PIN),static_cast<unsigned>(batteryAdcRaw),static_cast<unsigned>(batteryAdcMillivolts),
     static_cast<unsigned>(batteryMillivolts),batteryAvailable?1u:0u,static_cast<unsigned>(batteryPercent));
-  publishBatteryEvent(true);
+  if (!streamingEnabled.load()) publishBatteryEvent(true);
   updateStatusLed(true);
 #endif
 }
@@ -951,7 +951,8 @@ void acquisitionTask(void* parameter) {
 bool sendAudioFrame(const AudioFrame& frame, uint16_t sequence) {
   const uint8_t chunks=chunksPerFrame;
   const uint16_t payload=audioPayloadBytes, capacity=attValueCapacity;
-  if (chunks < 10 || chunks > 20 || !payload || payload > 160) return false;
+  if (chunks < MIN_CHUNKS_PER_FRAME || chunks > MAX_CHUNKS_PER_FRAME ||
+      !payload || payload > MAX_AUDIO_PAYLOAD_BYTES) return false;
   uint8_t packet[AUDIO_HEADER_BYTES+MAX_AUDIO_PAYLOAD_BYTES];
   const uint8_t* pcm=reinterpret_cast<const uint8_t*>(frame.samples);
   const uint32_t started=micros();
@@ -968,7 +969,7 @@ bool sendAudioFrame(const AudioFrame& frame, uint16_t sequence) {
     memcpy(packet+AUDIO_HEADER_BYTES, pcm+offset, length);
     audioCharacteristic->setValue(packet, AUDIO_HEADER_BYTES+length);
     audioCharacteristic->notify();
-    const uint32_t target=started+static_cast<uint32_t>(index+1)*50000UL/chunks;
+    const uint32_t target=started+static_cast<uint32_t>(index+1)*45000UL/chunks;
     while (static_cast<int32_t>(target-micros()) > 1000) vTaskDelay(1);
     while (static_cast<int32_t>(target-micros()) > 0) delayMicroseconds(50);
   }
@@ -1066,7 +1067,7 @@ void setup() {
     I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);
   if (!microphoneReady) Serial.println("[MIC] initialization failed");
 #endif
-  audioFrameQueue=xQueueCreate(4, sizeof(AudioFrame));
+  audioFrameQueue=xQueueCreate(20, sizeof(AudioFrame));
   controlQueue=xQueueCreate(12, sizeof(ControlMessage));
   if (!audioFrameQueue || !controlQueue) fatalSetup("[FATAL] queue allocation failed");
   uint8_t factoryMac[6];
