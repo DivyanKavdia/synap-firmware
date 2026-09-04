@@ -1,7 +1,7 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {PRIMARY_TARGET,TARGETS,getTarget}=require('./targets.cjs');
-const target=PRIMARY_TARGET,version='0.0.1',slotSize=getTarget(PRIMARY_TARGET).slotSize;
+const target=PRIMARY_TARGET,version='1.0.0',slotSize=getTarget(PRIMARY_TARGET).slotSize;
 const repository='DivyanKavdia/synap-firmware',workflow='.github/workflows/firmware.yml';
 const allowedBranches=new Set(['ota-test','ota-releases']);
 
