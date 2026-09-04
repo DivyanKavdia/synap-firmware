@@ -9,13 +9,30 @@ function replaceOnce(source,before,after,label){
 
 function patch(source){
   let out=source;
+
+  out=replaceOnce(out,
+`constexpr uint32_t BATTERY_DIVIDER_BOTTOM_OHMS = 330000u;`,
+`constexpr uint32_t BATTERY_DIVIDER_BOTTOM_OHMS = 470000u;`,
+  'S3 battery divider bottom resistor');
+
+  out=replaceOnce(out,
+`// Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 330 kOhm -> GND, with
+// 100 nF from GPIO8 to GND. Implausible/unstable readings are treated unavailable.`,
+`// Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 470 kOhm -> GND, with
+// 100 nF from GPIO8 to GND. Implausible/unstable readings are treated unavailable.`,
+  'battery divider wiring comment');
+
   out=replaceOnce(out,
 `bool batteryCritical() {
   return batteryAvailable && batteryValidSamples>=3 && batteryCriticalSamples>=2 &&
     batteryMillivolts<=BATTERY_CRITICAL_MV;
 }`,
 `#ifndef SYNAP_BATTERY_MONITOR_ENABLE
+#if CONFIG_IDF_TARGET_ESP32S3
+#define SYNAP_BATTERY_MONITOR_ENABLE 1
+#else
 #define SYNAP_BATTERY_MONITOR_ENABLE 0
+#endif
 #endif
 bool batteryCritical() {
 #if SYNAP_BATTERY_MONITOR_ENABLE
