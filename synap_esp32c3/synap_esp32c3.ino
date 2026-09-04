@@ -1,4 +1,4 @@
-// Synap 0.0.1 | ESP32-C3 SuperMini | Arduino-ESP32 3.3.5 + Adafruit NeoPixel.
+// Synap 1.0.0 | ESP32-C3 SuperMini | Arduino-ESP32 3.3.5 + Adafruit NeoPixel.
 // Standalone sketch; default 440 Hz test audio. Board/protocol details: README.md.
 #include <Arduino.h>
 #include <BLEDevice.h>
@@ -125,6 +125,7 @@ uint32_t disconnectedAt = 0;
 bool restartAdvertising = false;
 esp_reset_reason_t bootResetReason = ESP_RST_UNKNOWN;
 uint32_t touchFirstTapAt = 0, touchPressedAt = 0, memoryAckUntil = 0, memoryEventCounter = 0;
+uint32_t streamStartedAt = 0;
 bool touchRawState = false, touchStableState = false, touchLongSent = false, touchLongEligible = false, touchIdlePress = false;
 uint32_t touchChangedAt = 0;
 uint32_t lastLedPattern = UINT32_MAX;
@@ -299,7 +300,7 @@ constexpr uint16_t SYNAP_FIRMWARE_BUILD = SYNAP_BUILD;
 #define SYNAP_STRING(x) SYNAP_STRING_INNER(x)
 // Kept in the image and exposed over BLE for release/board verification.
 static const char SYNAP_FIRMWARE_ID[] =
-  "SYNAP-FW:esp32c3-supermini-4m:0.0.1:" SYNAP_STRING(SYNAP_BUILD);
+  "SYNAP-FW:esp32c3-supermini-4m:1.0.0:" SYNAP_STRING(SYNAP_BUILD);
 // Compatibility marker. Publisher authenticity is enforced by the signed production manifest in the PWA.
 static const char SYNAP_PRODUCT[] = "SYNAP-ESP32C3-OTA-ID-V3";
 static const char SYNAP_TARGET_MARKER[] = "SYNAP-FW:esp32c3-supermini-4m:";
@@ -600,10 +601,18 @@ void publishRememberEvent() {
   if (!controlCharacteristic || !deviceConnected.load() || !streamingEnabled.load() || otaBusy()) return;
   uint8_t value[12] = {MEMORY_EVENT_MAGIC, MEMORY_EVENT_VERSION, MEMORY_EVENT_REMEMBER, 0};
   value[3] = (streamingEnabled.load()?0x01:0) | (deviceConnected.load()?0x02:0);
-  const uint32_t counter=++memoryEventCounter, uptime=millis();
-  put32le(value+4,counter);put32le(value+8,uptime);
+  const uint32_t counter=++memoryEventCounter;
+  // Bit 2 means bytes 8..11 are milliseconds from the start of this stream.
+  // Older PWAs ignore the flag and keep using their local timer, so packet v1
+  // remains backward compatible while newer clients get exact pendant timing.
+  const uint32_t eventTime=streamStartedAt ? uint32_t(millis()-streamStartedAt) : millis();
+  if (streamStartedAt) value[3]|=0x04;
+  put32le(value+4,counter);put32le(value+8,eventTime);
   controlCharacteristic->setValue(value,sizeof(value));
   controlCharacteristic->notify();
+  // Memory markers share the control characteristic with status packets. Mirror the
+  // battery handoff so the 12-byte event is transmitted before status is restored.
+  vTaskDelay(pdMS_TO_TICKS(20));
   updateStatusCharacteristic(false);
   memoryAckUntil=millis()+480u;
   updateStatusLed(true);
@@ -685,6 +694,7 @@ void updateDiagnosticsCharacteristic() {
 }
 void stopStreaming(ErrorCode reason) {
   streamingEnabled.store(false);
+  streamStartedAt=0;
   ++streamGeneration; // Invalidates queued AND already-in-flight old task work.
   if (audioFrameQueue) xQueueReset(audioFrameQueue);
   if (!deviceConnected.load()) setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
@@ -725,6 +735,7 @@ void startStreaming(uint8_t version) {
   xQueueReset(audioFrameQueue);
   ++streamGeneration;
   capturedFrames=0; captureDrops=0; notifyAccepted=0; notifyRejected=0;
+  streamStartedAt=millis();
   setDeviceState(DeviceState::STREAMING, ErrorCode::NONE);
   streamingEnabled.store(true);
   updateStatusCharacteristic(true);
@@ -784,6 +795,7 @@ void processCommand(uint8_t command, uint8_t version) {
     case CMD_START: startStreaming(version); break;
     case CMD_STOP:
       streamingEnabled.store(false);
+      streamStartedAt=0;
       ++streamGeneration;
       if (audioFrameQueue) xQueueReset(audioFrameQueue);
       setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);
