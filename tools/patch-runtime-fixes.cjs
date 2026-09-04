@@ -24,7 +24,7 @@ function patch(source){
 `// Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 330 kOhm -> GND, with
 // 100 nF from GPIO8 to GND. Implausible/unstable readings are treated unavailable.`,
 `// Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 470 kOhm -> GND, with
-// 100 nF from GPIO8 to GND. Implausible/unstable readings are treated unavailable.`,
+// 100 nF from GPIO8 to GND. Implausible readings are reported but marked unavailable.`,
   'battery divider wiring comment');
 
   out=replaceOnce(out,
@@ -49,6 +49,21 @@ bool batteryCritical() {
 }`,'battery critical guard');
 
   out=replaceOnce(out,
+`  controlCharacteristic->setValue(value,sizeof(value));
+  controlCharacteristic->notify();
+  updateStatusCharacteristic(false);
+  lastBatteryPublishAt=now;`,
+`  controlCharacteristic->setValue(value,sizeof(value));
+  controlCharacteristic->notify();
+  // Bluedroid may defer notification transmission. Give the 8-byte battery payload
+  // a short window before restoring the 16-byte control/status value so mobile
+  // browsers never observe the restored status in place of the queued battery event.
+  vTaskDelay(pdMS_TO_TICKS(20));
+  updateStatusCharacteristic(false);
+  lastBatteryPublishAt=now;`,
+  'battery notification handoff');
+
+  out=replaceOnce(out,
 `void sampleBattery(bool force) {
   const uint32_t now=millis();`,
 `void sampleBattery(bool force) {
@@ -66,6 +81,24 @@ bool batteryCritical() {
     // actions still require multiple corroborating samples via batteryCritical().
     batteryAvailable=batteryValidSamples>=1;`,
   'battery availability after first valid sample');
+
+  out=replaceOnce(out,
+`  } else {
+    batteryAvailable=false;batteryValidSamples=0;batteryCriticalSamples=0;
+    batteryMillivolts=0;batteryPercent=0;
+  }
+  publishBatteryEvent(true);`,
+`  } else {
+    // Preserve the reconstructed voltage even when it is outside the expected
+    // LiPo range. The PWA can then distinguish bad wiring/ADC from missing BLE.
+    batteryAvailable=false;batteryValidSamples=0;batteryCriticalSamples=0;
+    batteryMillivolts=uint16_t(cellMv>65535u?65535u:cellMv);batteryPercent=0;
+  }
+  Serial.printf("[BATTERY] gpio=%u adc=%lumV cell=%umV available=%u percent=%u\\n",
+    unsigned(BATTERY_ADC_PIN),unsigned long(adcMv),unsigned(batteryMillivolts),
+    batteryAvailable?1u:0u,unsigned(batteryPercent));
+  publishBatteryEvent(true);`,
+  'battery invalid-reading diagnostics');
 
   out=replaceOnce(out,
 `  publishBatteryEvent(true);
