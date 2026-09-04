@@ -11,6 +11,16 @@ function patch(source){
   let out=source;
 
   out=replaceOnce(out,
+`constexpr uint32_t BATTERY_DIVIDER_BOTTOM_OHMS = 330000u;`,
+`constexpr uint32_t BATTERY_DIVIDER_BOTTOM_OHMS = 470000u;`,
+  'production battery divider bottom resistor');
+
+  out=replaceOnce(out,
+`// Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 330 kOhm -> GND, with\n// 100 nF from GPIO8 to GND. Implausible readings are reported but marked unavailable.`,
+`// Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 470 kOhm -> GND, with\n// 100 nF from GPIO8 to GND. Implausible readings are reported but marked unavailable.`,
+  'production battery divider wiring comment');
+
+  out=replaceOnce(out,
 `constexpr uint8_t BATTERY_EVENT_VERSION = 1;`,
 `constexpr uint8_t BATTERY_EVENT_VERSION = 2;`,
   'battery event version');
