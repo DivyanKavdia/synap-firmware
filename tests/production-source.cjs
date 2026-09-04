@@ -7,7 +7,9 @@ const root=path.join(__dirname,'..');
 test('production preparation is reproducible and retains mobile OTA safely',()=>{
   const source=fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8');
   const prepared=patch(prepare(source));
-  assert.match(prepared,/SYNAP-FW:esp32s3-fh4r2-qspi-4m:0\.0\.1:/);
+  assert.match(prepared,/Synap 1\.0\.0 \| ESP32-S3FH4R2/,'shipped firmware semver must match the PWA product baseline');
+  assert.match(prepared,/SYNAP-FW:esp32s3-fh4r2-qspi-4m:1\.0\.0:/);
+  assert.doesNotMatch(prepared,/SYNAP-FW:esp32s3-fh4r2-qspi-4m:0\.0\.1:/);
   assert.match(prepared,/900000u/,'OTA resume must survive mobile background suspension');
   assert.match(prepared,/#if CONFIG_IDF_TARGET_ESP32S3\s*\n#define SYNAP_BATTERY_MONITOR_ENABLE 1\s*\n#else\s*\n#define SYNAP_BATTERY_MONITOR_ENABLE 0/,'battery monitor must be enabled only on audited ESP32-S3 hardware');
   assert.match(prepared,/BATTERY_DIVIDER_TOP_OHMS = 1000000u/,'battery divider top resistor must be 1 MOhm');
