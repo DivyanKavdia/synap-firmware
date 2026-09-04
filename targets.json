@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "version": "1.0.0",
-  "build": 1086,
+  "build": 1089,
   "channel": "production",
   "primary": "esp32s3-fh4r2-qspi-4m",
   "targets": {
