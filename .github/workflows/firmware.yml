@@ -120,6 +120,8 @@ jobs:
         run: node tools/publish.cjs
       - name: Verify public manifests, binaries, GitHub provenance and CORS
         if: steps.publish_result.outputs.published == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: node tools/check-feed.cjs
       - name: Synchronize explicit ESP32-C3 source into main
         if: steps.publish_result.outputs.published == 'true'
