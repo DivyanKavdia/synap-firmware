@@ -523,15 +523,25 @@ void applyCpuPowerProfile(bool active) {
 bool startMicrophone() {
 #if USE_REAL_I2S_MIC
   if (microphoneReady) return true;
-  microphoneI2S.setPins(I2S_BCLK_PIN, I2S_WS_PIN, -1, I2S_DATA_IN_PIN);
-  microphoneI2S.setTimeout(80);
-  microphoneReady=microphoneI2S.begin(I2S_MODE_STD, SAMPLE_RATE,
-    I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);
-  if (microphoneReady) {
-    microphoneValidated=true;
-    Serial.println("[POWER] microphone I2S on");
-  } else Serial.println("[MIC] initialization failed");
-  return microphoneReady;
+  constexpr uint8_t MIC_START_ATTEMPTS=3;
+  for (uint8_t attempt=1; attempt<=MIC_START_ATTEMPTS; ++attempt) {
+    if (attempt>1) {
+      microphoneI2S.end();
+      vTaskDelay(pdMS_TO_TICKS(25u*attempt));
+    }
+    microphoneI2S.setPins(I2S_BCLK_PIN, I2S_WS_PIN, -1, I2S_DATA_IN_PIN);
+    microphoneI2S.setTimeout(80);
+    microphoneReady=microphoneI2S.begin(I2S_MODE_STD, SAMPLE_RATE,
+      I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);
+    if (microphoneReady) {
+      microphoneValidated=true;
+      Serial.printf("[POWER] microphone I2S on attempt=%u\n",unsigned(attempt));
+      return true;
+    }
+    Serial.printf("[MIC] initialization failed attempt=%u/%u\n",unsigned(attempt),unsigned(MIC_START_ATTEMPTS));
+  }
+  microphoneReady=false;
+  return false;
 #else
   return true;
 #endif
@@ -1068,12 +1078,21 @@ bool acquireAudioFrame(AudioFrame& frame) {
   static int32_t raw[SAMPLES_PER_FRAME];
   size_t received=0;
   uint8_t emptyReads=0;
+  bool microphoneRecoveryUsed=false;
   while (received < sizeof(raw)) {
     if (!streamingEnabled.load() || frame.generation != streamGeneration.load()) return false;
     const size_t count = microphoneI2S.readBytes(
       reinterpret_cast<char*>(raw)+received, sizeof(raw)-received);
     if (!count) {
       if (++emptyReads < 3) continue;
+      if (!microphoneRecoveryUsed) {
+        microphoneRecoveryUsed=true;
+        Serial.println("[MIC] empty I2S reads; restarting capture driver");
+        stopMicrophone();
+        vTaskDelay(pdMS_TO_TICKS(35));
+        if (!streamingEnabled.load() || frame.generation != streamGeneration.load()) return false;
+        if (startMicrophone()) { received=0; emptyReads=0; continue; }
+      }
       return false;
     }
     emptyReads=0;
