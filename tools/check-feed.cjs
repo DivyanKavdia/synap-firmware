@@ -3,17 +3,40 @@
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {repository,workflow,PRIMARY_TARGET,TARGETS}=require('./release.cjs');
 const branch=process.env.SYNAP_RELEASE_BRANCH||'ota-test',origin='https://divyankavdia.github.io';
+const githubToken=process.env.GH_TOKEN||process.env.GITHUB_TOKEN||'';
 if(!['ota-test','ota-releases'].includes(branch))throw Error('Invalid release branch');
 
 const local=Object.values(TARGETS).map(config=>({config,manifest:JSON.parse(fs.readFileSync(path.join('bundle',config.id,'latest.json'),'utf8'))}));
 const primary=local.find(x=>x.config.id===PRIMARY_TARGET);
 if(!primary)throw Error('Primary target bundle missing');
 
+const sleep=milliseconds=>new Promise(resolve=>setTimeout(resolve,milliseconds));
+function requestHeaders(url){
+  const headers={Origin:origin,Accept:'application/vnd.github+json','User-Agent':'synap-firmware-feed-check'};
+  if(githubToken&&new URL(url).hostname==='api.github.com')headers.Authorization=`Bearer ${githubToken}`;
+  return headers;
+}
 async function get(url,checkCors=true){
-  const response=await fetch(url,{headers:{Origin:origin,Accept:'application/vnd.github+json'},redirect:'error',signal:AbortSignal.timeout(30000)});
-  if(!response.ok)throw Error(`HTTP ${response.status} at ${url}`);
-  if(checkCors&&!['*',origin].includes(response.headers.get('access-control-allow-origin')))throw Error('Public firmware response does not permit PWA cross-origin access');
-  return response;
+  let lastError=null;
+  for(let attempt=0;attempt<6;attempt++){
+    try{
+      const response=await fetch(url,{headers:requestHeaders(url),redirect:'error',signal:AbortSignal.timeout(30000)});
+      if(response.ok){
+        if(checkCors&&!['*',origin].includes(response.headers.get('access-control-allow-origin')))throw Error('Public firmware response does not permit PWA cross-origin access');
+        return response;
+      }
+      const retryable=[403,404,409,429,500,502,503,504].includes(response.status);
+      lastError=Error(`HTTP ${response.status} at ${url}`);
+      if(!retryable||attempt===5)throw lastError;
+      const retryAfter=Number(response.headers.get('retry-after'));
+      await sleep(Number.isFinite(retryAfter)&&retryAfter>0?retryAfter*1000:750*(2**attempt));
+    }catch(error){
+      lastError=error;
+      if(attempt===5||!['AbortError','TimeoutError','TypeError'].includes(error?.name))throw error;
+      await sleep(750*(2**attempt));
+    }
+  }
+  throw lastError||Error(`Unable to fetch ${url}`);
 }
 async function authoritativeJson(file){
   const payload=await (await get(`https://api.github.com/repos/${repository}/contents/${file}?ref=${branch}`)).json();
