@@ -890,7 +890,7 @@ void stopStreaming(ErrorCode reason) {
   ++streamGeneration; // Invalidates queued AND already-in-flight old task work.
   if (audioFrameQueue) xQueueReset(audioFrameQueue);
 #if USE_REAL_I2S_MIC
-  if (microphoneReady) { vTaskDelay(pdMS_TO_TICKS(90)); stopMicrophone(); }
+  if (reason==ErrorCode::AUDIO_SOURCE_FAILED && microphoneReady) stopMicrophone();
 #endif
   applyCpuPowerProfile(false);
   if (!deviceConnected.load()) setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
@@ -996,8 +996,7 @@ void processCommand(uint8_t command, uint8_t version) {
       ++streamGeneration;
       if (audioFrameQueue) xQueueReset(audioFrameQueue);
       setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);
-      vTaskDelay(pdMS_TO_TICKS(90));
-      stopMicrophone();
+      vTaskDelay(pdMS_TO_TICKS(60));
       applyCpuPowerProfile(false);
       updateStatusCharacteristic(true);
       break;
@@ -1296,7 +1295,6 @@ void setup() {
   sampleBattery(true);
 #if USE_REAL_I2S_MIC
   microphoneValidated=startMicrophone();
-  if (microphoneValidated) stopMicrophone();
 #endif
   applyCpuPowerProfile(false);
   audioFrameQueue=xQueueCreate(20, sizeof(AudioFrame));
