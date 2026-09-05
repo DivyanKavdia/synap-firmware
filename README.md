@@ -43,16 +43,19 @@ The calibration reference is the measured full-charge point **4.13 V cell / 1.32
 
 ## Touch interaction
 
-TTP223 is an active-HIGH digital input in momentary mode. Firmware uses timing/context rather than analog sensitivity because TTP223 exposes only a digital output.
+TTP223 is an active-HIGH digital input in momentary mode. The touch contract is intentionally small and state-specific:
 
 | Pendant state | Gesture | Result |
 | --- | --- | --- |
-| Connected + idle | press/release 0.55–1.4 s | start recording |
-| Recording | deliberate 0.30–0.95 s tap | stop recording |
-| Recording | hold about 1.2 s | Remember This marker; recording continues |
-| Idle | hold at least 3 s | deep sleep |
+| Connected + idle | hold at least 2 s and less than 5 s, then release | start recording |
+| Recording | double tap | stop recording |
+| Recording | single tap or other hold shorter than 5 s | no action |
+| Connected + idle | single tap / double tap | no action |
+| Any non-OTA state | hold at least 5 s, then release | enter deep sleep; an active recording is stopped cleanly first |
+| Deep sleep | hold touch continuously for 5 s, then release | wake and remain awake |
+| Deep sleep | release before 5 s | return to deep sleep |
 
-A ~1.5 s lockout follows connect/stream-state transitions, reducing accidental reversals. Deep sleep is entered only after the touch input is released so an already-HIGH wake source cannot create an immediate wake loop.
+The 2-second START is evaluated on release, preventing a 5-second sleep gesture from accidentally starting a recording at the 2-second mark. A short state-transition lockout prevents the same physical contact from immediately reversing a state change. **Remember This is no longer assigned to the touch sensor.** Touch actions are ignored during OTA.
 
 ## BLE service and protocols
 
