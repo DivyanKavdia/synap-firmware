@@ -8,10 +8,11 @@ const {patch:audio}=require('../tools/patch-audio-reliability.cjs');
 const {patch:codec}=require('../tools/patch-audio-codec-v3.cjs');
 const {patch:touch}=require('../tools/patch-touch-reliability.cjs');
 const {patch:harden}=require('../tools/patch-production-hardening.cjs');
+const {patch:power}=require('../tools/patch-power-controls-v2.cjs');
 const {materialize}=require('../tools/materialize-target.cjs');
 const {TARGETS,PRIMARY_TARGET}=require('../tools/targets.cjs');
 const root=path.join(__dirname,'..');
-function prepared(){let source=fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8');for(const fn of [prepare,runtime,events,battery,audio,codec,touch,harden])source=fn(source);return source}
+function prepared(){let source=fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8');for(const fn of [prepare,runtime,events,battery,audio,codec,touch,harden,power])source=fn(source);return source}
 
 test('target catalog keeps S3 as backward-compatible primary and adds C3',()=>{
   assert.equal(PRIMARY_TARGET,'esp32s3-fh4r2-qspi-4m');
@@ -39,6 +40,12 @@ test('C3 program is generated from the exact final production source with target
   assert.match(c3,/I2S_BCLK_PIN = 4, I2S_WS_PIN = 5, I2S_DATA_IN_PIN = 6/);
   assert.match(c3,/AUDIO_PROTOCOL_VERSION = 3/);
   assert.match(c3,/MIN_CHUNKS_PER_FRAME = 1/);
+  assert.match(c3,/CMD_STANDBY = 0x03/);
+  assert.match(c3,/CMD_WAKE = 0x04/);
+  assert.match(c3,/STANDBY=4/);
+  assert.match(c3,/double tap -> START/);
+  assert.match(c3,/single touch wake/);
+  assert.doesNotMatch(c3,/TOUCH_START_HOLD_MS = 2000/);
   assert.match(c3,/900000u/,'mobile OTA resume behavior is shared');
   assert.match(c3,/SYNAP_BATTERY_MONITOR_ENABLE 0/,'battery monitor remains disabled until hardware is audited');
   assert.doesNotMatch(c3,/GPIO8/,'generated C3 source must not retain S3 battery-pin comments');
