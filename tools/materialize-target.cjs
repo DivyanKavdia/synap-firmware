@@ -20,10 +20,13 @@ function materialize(source,targetId){
   out=out.split('SYNAP-ESP32S3-OTA-ID-V3').join(target.productMarker);
   out=replaceOnce(out,'p[21]!=9 || p[22]!=0','p[21]!=5 || p[22]!=0','ESP image chip ID');
   out=replaceOnce(out,'constexpr uint8_t RGB_LED_PIN = 48;','constexpr uint8_t RGB_LED_PIN = 8;','C3 status LED pin');
-  out=replaceOnce(out,'#define SYNAP_TOUCH_PIN 7','#define SYNAP_TOUCH_PIN 3','C3 touch/wake pin');
+  // Final prepared S3 source explicitly carries the production GPIO13 touch pin.
+  // Materialization converts that auditable hardware mapping to the C3 GPIO3 pin.
+  out=replaceOnce(out,'#define SYNAP_TOUCH_PIN 13','#define SYNAP_TOUCH_PIN 3','C3 touch/wake pin');
   out=replaceOnce(out,'#define SYNAP_BATTERY_ADC_PIN 8','#define SYNAP_BATTERY_ADC_PIN 1','C3 battery ADC pin');
-  out=out.replace('Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 330 kOhm -> GND, with',
-    'Battery sensing assumes B+ -> 1 MOhm -> GPIO1 -> 330 kOhm -> GND, with');
+  // The C3 battery monitor remains disabled until its sensing hardware is audited,
+  // but generated source and diagnostics must still describe the C3 GPIO correctly.
+  out=out.replace(/GPIO8/g,'GPIO1');
   out=replaceOnce(out,
 `  esp_sleep_enable_ext1_wakeup(1ULL<<TOUCH_INPUT_PIN, ESP_EXT1_WAKEUP_ANY_HIGH);`,
 `  // ESP32-C3 has no EXT1 wake controller. Its deep-sleep GPIO wake API keeps
