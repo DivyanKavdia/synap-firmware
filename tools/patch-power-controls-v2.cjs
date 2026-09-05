@@ -47,6 +47,18 @@ constexpr uint8_t POWER_STATE_DEEP_SLEEP = 3;`,
 bool remoteStandby = false;`,
   'remote standby state');
 
+  // Keep the status LED completely off in BLE standby. Without this explicit arm,
+  // the generic "other state" error pattern would flash purple and waste power.
+  out=replaceOnce(out,
+`  } else if (deviceState == DeviceState::STREAMING) {`,
+`  } else if (deviceState == DeviceState::STANDBY) {
+    // BLE stays alive for remote wake; the visible LED intentionally stays off.
+  } else if (deviceState == DeviceState::STREAMING) {`,
+  'standby LED off');
+
+  // Replace the old 5-second wake confirmation with a true single-touch wake.
+  // Consume the physical wake touch so it cannot become the first tap of a
+  // double-tap recording gesture after boot.
   out=replaceFunction(out,'bool confirmTouchWakeHold()',`bool confirmTouchWakeHold() {
   const esp_sleep_wakeup_cause_t cause=esp_sleep_get_wakeup_cause();
   bool touchWake=(cause==ESP_SLEEP_WAKEUP_EXT1);
@@ -113,6 +125,8 @@ void enterRemoteStandby() {
 `;
   out=out.slice(0,sleepAt)+helpers+out.slice(sleepAt);
 
+  // Publish the final true-deep-sleep state before BLE is deinitialized. The PWA
+  // can persist it and distinguish an intentional sleep disconnect from link loss.
   const sleepBodyAnchor=`void enterDeepSleep(const char* reason) {
   if (otaBusy() || streamingEnabled.load()) return;
   if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) return;`;
@@ -146,6 +160,7 @@ void enterRemoteStandby() {
         else setDeviceState(DeviceState::ERROR, ErrorCode::MTU_TOO_SMALL);
       }
       updateStatusCharacteristic(true);
+      sampleBattery(true);
       break;
     case CMD_STANDBY:
       enterRemoteStandby();
@@ -159,26 +174,32 @@ void enterRemoteStandby() {
   }
 }`,'power-aware command handling');
 
-  out=replaceOnce(out,
-`        case EventType::CONNECTED:
-          restartAdvertising=false;
-          peerMtu=23; attValueCapacity=20; chunksPerFrame=0; audioPayloadBytes=0;
-          stopStreaming();
-          break;`,
-`        case EventType::CONNECTED:
-          restartAdvertising=false;
-          peerMtu=23; attValueCapacity=20; chunksPerFrame=0; audioPayloadBytes=0;
-          if (remoteStandby) {
+  // Preserve any existing CONNECTED-case preparation (battery and transport
+  // bookkeeping) and replace only its normal stop action with standby-aware logic.
+  {
+    const caseStart=out.indexOf('case EventType::CONNECTED:');
+    const caseEnd=out.indexOf('case EventType::DISCONNECTED:',caseStart);
+    if(caseStart<0||caseEnd<0)throw new Error('Missing power-controls anchor: CONNECTED event arm');
+    let arm=out.slice(caseStart,caseEnd);
+    const stopAt=arm.indexOf('stopStreaming();');
+    if(stopAt<0)throw new Error('Missing power-controls anchor: CONNECTED stop action');
+    const replacement=`if (remoteStandby) {
             setDeviceState(DeviceState::STANDBY, ErrorCode::NONE);
             updateStatusCharacteristic(true);
             publishPowerEvent(POWER_STATE_STANDBY);
           } else {
             stopStreaming();
             publishPowerEvent(POWER_STATE_AWAKE);
-          }
-          break;`,
-  'standby-preserving reconnect');
+          }`;
+    arm=arm.slice(0,stopAt)+replacement+arm.slice(stopAt+'stopStreaming();'.length);
+    out=out.slice(0,caseStart)+arm+out.slice(caseEnd);
+  }
 
+  // Unified TTP223 model:
+  // * deep sleep: any single touch wakes (handled at boot above)
+  // * awake: double tap toggles START/STOP
+  // * remote standby: one physical tap wakes
+  // * any awake state: >=5 s hold -> true deep sleep
   out=replaceFunction(out,'void pollTouchControl()',`void pollTouchControl() {
   constexpr uint16_t TOUCH_TAP_MIN_MS = 80;
   constexpr uint16_t TOUCH_TAP_MAX_MS = 450;
