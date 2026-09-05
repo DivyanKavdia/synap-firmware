@@ -489,12 +489,19 @@ void setDeviceState(DeviceState state, ErrorCode error) {
 }
 
 uint8_t batteryPercentFromMillivolts(uint16_t mv) {
-  if (mv>=4200) return 100;
-  if (mv>=4000) return 80 + uint32_t(mv-4000)*20/200;
-  if (mv>=3800) return 40 + uint32_t(mv-3800)*40/200;
-  if (mv>=3600) return 15 + uint32_t(mv-3600)*25/200;
-  if (mv>=3400) return 5 + uint32_t(mv-3400)*10/200;
-  if (mv>=3200) return uint32_t(mv-3200)*5/200;
+  // Production calibration: DMM 4.13 V, ADC 1.32 V, raw 1544 = full charge.
+  // Interpolate between LiPo discharge anchors rather than using a linear scale.
+  if (mv>=4130) return 100;
+  if (mv>=4050) return 90 + uint32_t(mv-4050)*10/80;
+  if (mv>=3950) return 80 + uint32_t(mv-3950)*10/100;
+  if (mv>=3850) return 70 + uint32_t(mv-3850)*10/100;
+  if (mv>=3780) return 60 + uint32_t(mv-3780)*10/70;
+  if (mv>=3720) return 50 + uint32_t(mv-3720)*10/60;
+  if (mv>=3680) return 40 + uint32_t(mv-3680)*10/40;
+  if (mv>=3620) return 30 + uint32_t(mv-3620)*10/60;
+  if (mv>=3550) return 20 + uint32_t(mv-3550)*10/70;
+  if (mv>=3450) return 10 + uint32_t(mv-3450)*10/100;
+  if (mv>=3300) return uint32_t(mv-3300)*10/150;
   return 0;
 }
 
@@ -568,8 +575,12 @@ void sampleBattery(bool force) {
   const uint32_t adcRaw=rawTotal/16u;
   batteryAdcMillivolts=uint16_t(adcMv>65535u?65535u:adcMv);
   batteryAdcRaw=uint16_t(adcRaw>65535u?65535u:adcRaw);
-  const uint32_t cellMv=(adcMv*(BATTERY_DIVIDER_TOP_OHMS+BATTERY_DIVIDER_BOTTOM_OHMS)+
-    BATTERY_DIVIDER_BOTTOM_OHMS/2u)/BATTERY_DIVIDER_BOTTOM_OHMS;
+  // Calibrate the divider from the measured full-charge point: 1.32 V ADC =
+  // 4.13 V cell (raw 1544). This is only a 0.04% correction versus the ideal
+  // 1M/470k divider ratio, but makes the real hardware full point exact.
+  constexpr uint32_t BATTERY_CAL_ADC_MV = 1320u;
+  constexpr uint32_t BATTERY_CAL_CELL_MV = 4130u;
+  const uint32_t cellMv=(adcMv*BATTERY_CAL_CELL_MV + BATTERY_CAL_ADC_MV/2u)/BATTERY_CAL_ADC_MV;
   if (cellMv>=2800u && cellMv<=4350u) {
     batteryMillivolts=uint16_t(cellMv);
     batteryPercent=batteryPercentFromMillivolts(batteryMillivolts);
