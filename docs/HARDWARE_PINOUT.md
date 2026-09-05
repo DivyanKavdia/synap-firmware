@@ -81,14 +81,17 @@ Expected module configuration:
 - VCC: 3.3 V
 - GND: common ground
 
-Current interaction model is intentionally asymmetric to prevent accidental recording starts/stops from clothing or handling:
+Current production interaction model:
 
-- while connected and idle: press and release for approximately 0.55–1.4 seconds to start listening
-- while recording: a deliberate 0.30–0.95 second tap stops listening
-- while recording: long press for approximately 1.2 seconds triggers Remember This
-- while idle: hold for at least 3 seconds to enter deep sleep
-- after connect or a recording-state transition, touch is ignored for approximately 1.5 seconds
-- Remember This does not interrupt audio capture
+- while connected and idle: hold for at least 2 seconds but less than 5 seconds, then release, to start recording
+- while recording: double tap to stop recording
+- while recording: a single tap or any other hold shorter than 5 seconds does nothing
+- while connected and idle: single tap and double tap do nothing
+- in any non-OTA state: hold for at least 5 seconds, then release, to enter deep sleep; if recording, capture is stopped cleanly first
+- from deep sleep: keep TTP223 continuously touched for 5 seconds, then release, to wake and remain awake
+- a shorter deep-sleep wake touch returns the device to deep sleep
+- the 2-second START is evaluated on release so a 5-second sleep hold cannot accidentally start recording
+- Remember This is no longer assigned to the touch sensor
 - touch actions are ignored during OTA
 - deep sleep is not entered while TTP223 OUT is still HIGH, preventing an immediate wake loop
 
@@ -101,7 +104,7 @@ The production power-saving status model uses short dim pulses rather than leavi
 - red pulse: BLE disconnected
 - blue pulse: connected / idle
 - green pulse: recording
-- cyan acknowledgement: Remember This
+- cyan acknowledgement: asynchronous Remember event from supported non-touch control paths
 - amber pulse pattern: OTA
 - purple pulse pattern: error
 
