@@ -30,6 +30,13 @@ static_assert(SAMPLES_PER_FRAME % 2 == 0, "ADPCM frame requires an even PCM samp
 static_assert(ADPCM_BYTES_PER_FRAME == 404, "Synap protocol-v3 ADPCM frame size");`,
   'ADPCM transport size');
 
+  // The former 91-byte floor was derived from 1600-byte PCM frames. A 404-byte
+  // ADPCM frame fits in at most 20 chunks from ATT MTU 32 upward.
+  out=replaceOnce(out,
+`constexpr uint16_t MIN_REQUIRED_MTU = 91;`,
+`constexpr uint16_t MIN_REQUIRED_MTU = 32;`,
+  'compressed minimum MTU');
+
   out=replaceOnce(out,
 `  chunksPerFrame = (AUDIO_BYTES_PER_FRAME + bounded - 1) / bounded;`,
 `  chunksPerFrame = (TRANSPORT_BYTES_PER_FRAME + bounded - 1) / bounded;`,
@@ -83,12 +90,15 @@ uint16_t encodeImaAdpcm(const int16_t* samples, uint8_t* output) {
 encoder+`bool sendAudioFrame(const AudioFrame& frame, uint16_t sequence) {`,
   'IMA ADPCM encoder');
 
+  // sendAudioFrame runs only in the transmitter task. Keep its two large scratch
+  // buffers in BSS instead of consuming nearly 1 KB of the task stack on every
+  // first frame, which could reset the ESP and drop BLE at recording start.
   out=replaceOnce(out,
 `  uint8_t packet[AUDIO_HEADER_BYTES+MAX_AUDIO_PAYLOAD_BYTES];
   const uint8_t* pcm=reinterpret_cast<const uint8_t*>(frame.samples);
   const uint32_t started=micros();`,
-`  uint8_t packet[AUDIO_HEADER_BYTES+MAX_AUDIO_PAYLOAD_BYTES];
-  uint8_t encoded[ADPCM_BYTES_PER_FRAME];
+`  static uint8_t packet[AUDIO_HEADER_BYTES+MAX_AUDIO_PAYLOAD_BYTES];
+  static uint8_t encoded[ADPCM_BYTES_PER_FRAME];
   const uint16_t encodedBytes=encodeImaAdpcm(frame.samples,encoded);
   if (encodedBytes!=TRANSPORT_BYTES_PER_FRAME) return false;
   const uint32_t started=micros();`,
@@ -106,6 +116,13 @@ encoder+`bool sendAudioFrame(const AudioFrame& frame, uint16_t sequence) {`,
 `    memcpy(packet+AUDIO_HEADER_BYTES, pcm+offset, length);`,
 `    memcpy(packet+AUDIO_HEADER_BYTES, encoded+offset, length);`,
   'compressed packet payload');
+
+  // BLE notify plus the 1608-byte queued AudioFrame need more than the original
+  // 4 KB margin even after moving codec scratch storage out of the stack.
+  out=replaceOnce(out,
+`xTaskCreatePinnedToCore(transmitterTask, "transmit", 4096, nullptr, 2, nullptr, 1)`,
+`xTaskCreatePinnedToCore(transmitterTask, "transmit", 8192, nullptr, 2, nullptr, 1)`,
+  'transmitter stack headroom');
 
   return out;
 }
