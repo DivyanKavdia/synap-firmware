@@ -708,39 +708,70 @@ void publishRememberEvent() {
 }
 
 void pollTouchControl() {
-  constexpr uint16_t TOUCH_MIN_TAP_MS = 80;
-  constexpr uint16_t TOUCH_REARM_MS = 220;
+  constexpr uint16_t TOUCH_START_HOLD_MS = 550;
+  constexpr uint16_t TOUCH_START_MAX_MS = 1400;
+  constexpr uint16_t TOUCH_STOP_MIN_MS = 140;
+  constexpr uint16_t TOUCH_STOP_MAX_MS = 850;
+  constexpr uint16_t TOUCH_REARM_MS = 650;
+  constexpr uint16_t TOUCH_STATE_LOCKOUT_MS = 900;
   static uint32_t touchRearmAt = 0;
+  static bool lastConnectedState = false;
+  static bool lastStreamingState = false;
   const uint32_t now=millis();
+  const bool connected=deviceConnected.load();
+  const bool streaming=streamingEnabled.load();
+
+  if (connected!=lastConnectedState || streaming!=lastStreamingState) {
+    lastConnectedState=connected;
+    lastStreamingState=streaming;
+    touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
+    touchPressedAt=0;
+    touchLongSent=false;
+    touchLongEligible=false;
+    touchIdlePress=false;
+  }
+
   const bool raw=digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL;
   if (raw!=touchRawState) { touchRawState=raw; touchChangedAt=now; }
   if (raw!=touchStableState && uint32_t(now-touchChangedAt)>=TOUCH_DEBOUNCE_MS) {
     touchStableState=raw;
     if (touchStableState) {
-      if (static_cast<int32_t>(now-touchRearmAt)<0) return;
+      if (static_cast<int32_t>(now-touchRearmAt)<0) {
+        touchPressedAt=0;
+        touchLongSent=false;
+        touchLongEligible=false;
+        touchIdlePress=false;
+        Serial.println("[TOUCH] ignored during state lockout");
+        return;
+      }
       touchPressedAt=now;
       touchLongSent=false;
-      touchIdlePress=!streamingEnabled.load();
-      touchLongEligible=deviceConnected.load() && streamingEnabled.load() && !otaBusy();
+      touchIdlePress=!streaming;
+      touchLongEligible=connected && streaming && !otaBusy();
       Serial.printf("[TOUCH] press gpio=%u streaming=%u connected=%u\n",
-        unsigned(TOUCH_INPUT_PIN),streamingEnabled.load()?1u:0u,deviceConnected.load()?1u:0u);
+        unsigned(TOUCH_INPUT_PIN),streaming?1u:0u,connected?1u:0u);
     } else {
       const uint32_t held=touchPressedAt ? uint32_t(now-touchPressedAt) : 0;
       const bool wasLong=touchLongSent;
       const bool wasIdle=touchIdlePress;
       touchPressedAt=0;touchLongSent=false;touchLongEligible=false;touchIdlePress=false;
+
       if (held>=TOUCH_SLEEP_HOLD_MS && wasIdle && !streamingEnabled.load() && !otaBusy()) {
         touchRearmAt=now+TOUCH_REARM_MS;
         Serial.println("[TOUCH] sleep hold");
         enterDeepSleep("touch-hold");
-      } else if (!wasLong && held>=TOUCH_MIN_TAP_MS && held<TOUCH_LONG_PRESS_MS &&
-                 deviceConnected.load() && !otaBusy()) {
+      } else if (!wasLong && wasIdle && held>=TOUCH_START_HOLD_MS && held<=TOUCH_START_MAX_MS &&
+                 deviceConnected.load() && !streamingEnabled.load() && !otaBusy()) {
         touchRearmAt=now+TOUCH_REARM_MS;
-        const uint8_t command=streamingEnabled.load()?CMD_STOP:CMD_START;
-        Serial.printf("[TOUCH] tap %ums -> %s\n",unsigned(held),command==CMD_START?"START":"STOP");
-        queueEvent(EventType::COMMAND,command,PROTOCOL_VERSION,streamGeneration.load());
-      } else if (held && held<TOUCH_MIN_TAP_MS) {
-        Serial.printf("[TOUCH] ignored short pulse %ums\n",unsigned(held));
+        Serial.printf("[TOUCH] deliberate start hold %ums -> START\n",unsigned(held));
+        queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,streamGeneration.load());
+      } else if (!wasLong && !wasIdle && held>=TOUCH_STOP_MIN_MS && held<=TOUCH_STOP_MAX_MS &&
+                 deviceConnected.load() && streamingEnabled.load() && !otaBusy()) {
+        touchRearmAt=now+TOUCH_REARM_MS;
+        Serial.printf("[TOUCH] deliberate stop tap %ums -> STOP\n",unsigned(held));
+        queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
+      } else if (held) {
+        Serial.printf("[TOUCH] ignored gesture %ums idle=%u\n",unsigned(held),wasIdle?1u:0u);
       }
     }
   }
