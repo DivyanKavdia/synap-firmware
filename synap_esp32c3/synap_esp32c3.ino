@@ -44,6 +44,13 @@ constexpr uint8_t DIAGNOSTICS_VERSION = 1;
 constexpr uint8_t CMD_STOP = 0x00;
 constexpr uint8_t CMD_START = 0x01;
 constexpr uint8_t CMD_GET_STATUS = 0x02;
+constexpr uint8_t CMD_STANDBY = 0x03;
+constexpr uint8_t CMD_WAKE = 0x04;
+constexpr uint8_t POWER_EVENT_MAGIC = 0xE2;
+constexpr uint8_t POWER_EVENT_VERSION = 1;
+constexpr uint8_t POWER_STATE_AWAKE = 1;
+constexpr uint8_t POWER_STATE_STANDBY = 2;
+constexpr uint8_t POWER_STATE_DEEP_SLEEP = 3;
 constexpr uint32_t SAMPLE_RATE = 16000;
 constexpr uint16_t FRAME_DURATION_MS = 50;
 constexpr uint16_t SAMPLES_PER_FRAME = 800;
@@ -102,7 +109,7 @@ constexpr uint32_t IDLE_CPU_MHZ = 80, ACTIVE_CPU_MHZ = 160;
 constexpr uint32_t IDLE_CPU_MHZ = 80, ACTIVE_CPU_MHZ = 160;
 #endif
 
-enum class DeviceState : uint8_t { DISCONNECTED=0, CONNECTED_IDLE=1, STREAMING=2, ERROR=3 };
+enum class DeviceState : uint8_t { DISCONNECTED=0, CONNECTED_IDLE=1, STREAMING=2, ERROR=3, STANDBY=4 };
 enum class ErrorCode : uint8_t {
   NONE=0, MTU_TOO_SMALL=1, AUDIO_NOT_SUBSCRIBED=2,
   AUDIO_SOURCE_FAILED=3, PROTOCOL_MISMATCH=4, BAD_COMMAND=5, TRANSPORT_CHANGED=6
@@ -140,6 +147,7 @@ std::atomic<uint8_t> chunksPerFrame{0};
 float tonePhase = 0;
 uint32_t disconnectedAt = 0;
 bool restartAdvertising = false;
+bool remoteStandby = false;
 esp_reset_reason_t bootResetReason = ESP_RST_UNKNOWN;
 uint32_t touchFirstTapAt = 0, touchPressedAt = 0, memoryAckUntil = 0, memoryEventCounter = 0;
 uint32_t streamStartedAt = 0;
@@ -488,6 +496,8 @@ void updateStatusLed(bool force) {
     if (now%5000u<35u) r=LED_DIM;
   } else if (deviceState == DeviceState::CONNECTED_IDLE) {
     if (now%6000u<30u) b=LED_DIM;
+  } else if (deviceState == DeviceState::STANDBY) {
+    // BLE stays alive for remote wake; the visible LED intentionally stays off.
   } else if (deviceState == DeviceState::STREAMING) {
     if (now%1800u<45u) g=LED_DIM+1;
   } else {
@@ -687,31 +697,65 @@ bool confirmTouchWakeHold() {
   touchWake=touchWake || (cause==ESP_SLEEP_WAKEUP_GPIO);
 #endif
   if (!touchWake) return true;
+  Serial.println("[TOUCH] single touch wake");
+  while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) delay(8);
+  touchRawState=false;touchStableState=false;touchPressedAt=0;touchFirstTapAt=0;
+  touchChangedAt=millis();
+  return true;
+}
 
-  Serial.println("[TOUCH] wake detected; hold for 5 seconds to stay awake");
-  const uint32_t started=millis();
-  while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) {
-    if (uint32_t(millis()-started)>=TOUCH_SLEEP_HOLD_MS) {
-      Serial.println("[TOUCH] 5 second wake hold confirmed");
-      // Consume the wake gesture completely. Normal gesture timing starts only
-      // after the user releases the sensor.
-      while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) delay(10);
-      touchRawState=false;touchStableState=false;touchPressedAt=0;touchFirstTapAt=0;
-      touchChangedAt=millis();
-      return true;
-    }
-    delay(10);
+void publishPowerEvent(uint8_t powerState) {
+  if (!eventCharacteristic || !deviceConnected.load()) return;
+  uint8_t value[6] = {POWER_EVENT_MAGIC, POWER_EVENT_VERSION, powerState,
+    static_cast<uint8_t>(deviceState),
+    static_cast<uint8_t>(SYNAP_FIRMWARE_BUILD & 255),
+    static_cast<uint8_t>(SYNAP_FIRMWARE_BUILD >> 8)};
+  eventCharacteristic->setValue(value,sizeof(value));
+  eventCharacteristic->notify();
+}
+
+bool exitRemoteStandby() {
+  if (!remoteStandby) return true;
+  if (otaBusy()) return false;
+#if USE_REAL_I2S_MIC
+  if (!startMicrophone()) {
+    remoteStandby=false;
+    setDeviceState(DeviceState::ERROR, ErrorCode::AUDIO_SOURCE_FAILED);
+    updateStatusCharacteristic(true);
+    return false;
   }
+#endif
+  remoteStandby=false;
+  applyCpuPowerProfile(false);
+  setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);
+  configureTransportFromPeerMtu();
+  updateStatusCharacteristic(true);
+  publishPowerEvent(POWER_STATE_AWAKE);
+  Serial.println("[POWER] remote standby -> awake");
+  return true;
+}
 
-  Serial.println("[TOUCH] wake hold too short; returning to deep sleep");
-  delay(40);
-  armTouchWakeAndSleep();
-  return false;
+void enterRemoteStandby() {
+  if (otaBusy()) { updateStatusCharacteristic(true); return; }
+  if (streamingEnabled.load()) stopStreaming();
+  remoteStandby=true;
+#if USE_REAL_I2S_MIC
+  if (microphoneReady) stopMicrophone();
+#endif
+  applyCpuPowerProfile(false);
+  setDeviceState(DeviceState::STANDBY, ErrorCode::NONE);
+  updateStatusCharacteristic(true);
+  publishPowerEvent(POWER_STATE_STANDBY);
+  statusLed.clear();statusLed.show();
+  Serial.println("[POWER] remote standby; BLE remains available");
 }
 
 void enterDeepSleep(const char* reason) {
   if (otaBusy() || streamingEnabled.load()) return;
   if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) return;
+  remoteStandby=false;
+  publishPowerEvent(POWER_STATE_DEEP_SLEEP);
+  if (deviceConnected.load()) delay(140);
   Serial.printf("[POWER] deep sleep: %s battery=%umV\n", reason?reason:"idle", unsigned(batteryMillivolts));
   stopMicrophone();
   applyCpuPowerProfile(false);
@@ -762,16 +806,18 @@ void publishRememberEvent() {
 }
 
 void pollTouchControl() {
-  constexpr uint16_t TOUCH_START_HOLD_MS = 2000;
+  constexpr uint16_t TOUCH_TAP_MIN_MS = 80;
   constexpr uint16_t TOUCH_TAP_MAX_MS = 450;
   constexpr uint16_t TOUCH_STATE_LOCKOUT_MS = 650;
   static uint32_t touchRearmAt = 0;
   static bool lastConnectedState = false;
   static bool lastStreamingState = false;
+  static bool lastStandbyState = false;
   static bool sleepAfterStop = false;
   const uint32_t now=millis();
   const bool connected=deviceConnected.load();
   const bool streaming=streamingEnabled.load();
+  const bool standby=remoteStandby;
   const bool raw=digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL;
 
   if (sleepAfterStop && !streaming && !raw && !otaBusy()) {
@@ -780,27 +826,25 @@ void pollTouchControl() {
     return;
   }
 
-  if (connected!=lastConnectedState || streaming!=lastStreamingState) {
+  if (connected!=lastConnectedState || streaming!=lastStreamingState || standby!=lastStandbyState) {
     lastConnectedState=connected;
     lastStreamingState=streaming;
+    lastStandbyState=standby;
     touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
     touchPressedAt=0;
     touchFirstTapAt=0;
   }
 
+  if (touchFirstTapAt && uint32_t(now-touchFirstTapAt)>TOUCH_DOUBLE_TAP_MS) touchFirstTapAt=0;
   if (raw!=touchRawState) { touchRawState=raw; touchChangedAt=now; }
   if (raw!=touchStableState && uint32_t(now-touchChangedAt)>=TOUCH_DEBOUNCE_MS) {
     touchStableState=raw;
     if (touchStableState) {
       if (static_cast<int32_t>(now-touchRearmAt)<0) {
-        touchPressedAt=0;
-        touchFirstTapAt=0;
-        Serial.println("[TOUCH] ignored during state lockout");
+        touchPressedAt=0;touchFirstTapAt=0;
         return;
       }
       touchPressedAt=now;
-      Serial.printf("[TOUCH] press gpio=%u streaming=%u connected=%u\n",
-        unsigned(TOUCH_INPUT_PIN),streaming?1u:0u,connected?1u:0u);
       return;
     }
 
@@ -810,7 +854,7 @@ void pollTouchControl() {
 
     if (held>=TOUCH_SLEEP_HOLD_MS && !otaBusy()) {
       touchFirstTapAt=0;
-      Serial.printf("[TOUCH] %ums hold -> SLEEP\n",unsigned(held));
+      Serial.printf("[TOUCH] %ums hold -> DEEP SLEEP\n",unsigned(held));
       if (streamingEnabled.load()) {
         sleepAfterStop=true;
         queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
@@ -820,33 +864,36 @@ void pollTouchControl() {
       return;
     }
 
-    if (streamingEnabled.load()) {
-      if (held<=TOUCH_TAP_MAX_MS && !otaBusy()) {
-        if (touchFirstTapAt && uint32_t(now-touchFirstTapAt)<=TOUCH_DOUBLE_TAP_MS) {
-          touchFirstTapAt=0;
-          touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
-          Serial.println("[TOUCH] double tap while recording -> STOP");
-          queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
-        } else {
-          touchFirstTapAt=now;
-          Serial.println("[TOUCH] first recording tap; waiting for second tap");
-        }
-      } else {
-        touchFirstTapAt=0;
-        Serial.printf("[TOUCH] recording gesture %ums ignored\n",unsigned(held));
-      }
+    if (held<TOUCH_TAP_MIN_MS || held>TOUCH_TAP_MAX_MS || otaBusy()) {
+      touchFirstTapAt=0;
       return;
     }
 
-    // Double tap while idle intentionally does nothing. Starting requires one
-    // deliberate two-second hold and release; a five-second hold is reserved for sleep.
-    touchFirstTapAt=0;
-    if (held>=TOUCH_START_HOLD_MS && held<TOUCH_SLEEP_HOLD_MS && connected && !otaBusy()) {
+    if (remoteStandby) {
+      touchFirstTapAt=0;
       touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
-      Serial.printf("[TOUCH] %ums hold -> START\n",unsigned(held));
-      queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,streamGeneration.load());
+      Serial.println("[TOUCH] single tap -> wake from remote standby");
+      exitRemoteStandby();
+      return;
+    }
+
+    if (!touchFirstTapAt) {
+      touchFirstTapAt=now;
+      return;
+    }
+
+    if (uint32_t(now-touchFirstTapAt)<=TOUCH_DOUBLE_TAP_MS) {
+      touchFirstTapAt=0;
+      touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
+      if (streamingEnabled.load()) {
+        Serial.println("[TOUCH] double tap -> STOP");
+        queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
+      } else if (connected) {
+        Serial.println("[TOUCH] double tap -> START");
+        queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,streamGeneration.load());
+      }
     } else {
-      Serial.printf("[TOUCH] idle gesture %ums ignored\n",unsigned(held));
+      touchFirstTapAt=now;
     }
   }
 }
@@ -989,28 +1036,33 @@ void processCommand(uint8_t command, uint8_t version) {
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
   if (version != PROTOCOL_VERSION) { stopStreaming(ErrorCode::PROTOCOL_MISMATCH); return; }
   switch (command) {
-    case CMD_START: startStreaming(version); break;
+    case CMD_START:
+      if (remoteStandby && !exitRemoteStandby()) break;
+      startStreaming(version);
+      break;
     case CMD_STOP:
-      streamingEnabled.store(false);
-      streamStartedAt=0;
-      ++streamGeneration;
-      if (audioFrameQueue) xQueueReset(audioFrameQueue);
-      setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);
-      vTaskDelay(pdMS_TO_TICKS(60));
-      applyCpuPowerProfile(false);
-      updateStatusCharacteristic(true);
+      if (remoteStandby) updateStatusCharacteristic(true);
+      else stopStreaming();
       break;
     case CMD_GET_STATUS:
-      if (!streamingEnabled.load()) {
+      if (remoteStandby) {
+        setDeviceState(DeviceState::STANDBY, ErrorCode::NONE);
+      } else if (!streamingEnabled.load()) {
         if (configureTransportFromPeerMtu()) setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);
         else setDeviceState(DeviceState::ERROR, ErrorCode::MTU_TOO_SMALL);
       }
       updateStatusCharacteristic(true);
-      // The PWA requests status only after control notifications are subscribed,
-      // so this guarantees fresh battery telemetry reaches the client on connect.
       sampleBattery(true);
       break;
-    default: stopStreaming(ErrorCode::BAD_COMMAND); break;
+    case CMD_STANDBY:
+      enterRemoteStandby();
+      break;
+    case CMD_WAKE:
+      exitRemoteStandby();
+      break;
+    default:
+      stopStreaming(ErrorCode::BAD_COMMAND);
+      break;
   }
 }
 void controlTask(void* parameter) {
@@ -1024,7 +1076,14 @@ void controlTask(void* parameter) {
           restartAdvertising=false;
           disconnectedAt=0;
           peerMtu=23; attValueCapacity=20; chunksPerFrame=0; audioPayloadBytes=0;
-          stopStreaming();
+          if (remoteStandby) {
+            setDeviceState(DeviceState::STANDBY, ErrorCode::NONE);
+            updateStatusCharacteristic(true);
+            publishPowerEvent(POWER_STATE_STANDBY);
+          } else {
+            stopStreaming();
+            publishPowerEvent(POWER_STATE_AWAKE);
+          }
           sampleBattery(true);
           break;
         case EventType::DISCONNECTED:
