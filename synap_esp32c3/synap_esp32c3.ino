@@ -21,6 +21,7 @@
 #include <ESP_I2S.h>
 I2SClass microphoneI2S;
 bool microphoneReady = false;
+bool microphoneValidated = false;
 #endif
 
 #define DEVICE_NAME "synap"
@@ -86,6 +87,13 @@ constexpr uint8_t BATTERY_EVENT_VERSION = 2;
 // state visible without turning the onboard WS2812 into a material battery load.
 constexpr uint8_t LED_DIM = 4;
 constexpr int8_t I2S_BCLK_PIN = 4, I2S_WS_PIN = 5, I2S_DATA_IN_PIN = 6;
+#if CONFIG_IDF_TARGET_ESP32S3
+constexpr uint32_t IDLE_CPU_MHZ = 80, ACTIVE_CPU_MHZ = 240;
+#elif CONFIG_IDF_TARGET_ESP32C3
+constexpr uint32_t IDLE_CPU_MHZ = 80, ACTIVE_CPU_MHZ = 160;
+#else
+constexpr uint32_t IDLE_CPU_MHZ = 80, ACTIVE_CPU_MHZ = 160;
+#endif
 
 enum class DeviceState : uint8_t { DISCONNECTED=0, CONNECTED_IDLE=1, STREAMING=2, ERROR=3 };
 enum class ErrorCode : uint8_t {
@@ -488,6 +496,46 @@ void setDeviceState(DeviceState state, ErrorCode error) {
   updateStatusLed(true);
 }
 
+void applyCpuPowerProfile(bool active) {
+  static uint32_t appliedMHz = 0;
+  const uint32_t targetMHz = active ? ACTIVE_CPU_MHZ : IDLE_CPU_MHZ;
+  if (appliedMHz == targetMHz) return;
+  if (setCpuFrequencyMhz(targetMHz)) {
+    appliedMHz = targetMHz;
+    Serial.printf("[POWER] cpu=%luMHz mode=%s\n",
+      static_cast<unsigned long>(targetMHz),active?"active":"idle");
+  } else {
+    Serial.printf("[POWER] cpu profile change to %luMHz failed\n",
+      static_cast<unsigned long>(targetMHz));
+  }
+}
+
+bool startMicrophone() {
+#if USE_REAL_I2S_MIC
+  if (microphoneReady) return true;
+  microphoneI2S.setPins(I2S_BCLK_PIN, I2S_WS_PIN, -1, I2S_DATA_IN_PIN);
+  microphoneI2S.setTimeout(80);
+  microphoneReady=microphoneI2S.begin(I2S_MODE_STD, SAMPLE_RATE,
+    I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);
+  if (microphoneReady) {
+    microphoneValidated=true;
+    Serial.println("[POWER] microphone I2S on");
+  } else Serial.println("[MIC] initialization failed");
+  return microphoneReady;
+#else
+  return true;
+#endif
+}
+
+void stopMicrophone() {
+#if USE_REAL_I2S_MIC
+  if (!microphoneReady) return;
+  microphoneI2S.end();
+  microphoneReady=false;
+  Serial.println("[POWER] microphone I2S off");
+#endif
+}
+
 uint8_t batteryPercentFromMillivolts(uint16_t mv) {
   // Production calibration: DMM 4.13 V, ADC 1.32 V, raw 1544 = full charge.
   // Interpolate between LiPo discharge anchors rather than using a linear scale.
@@ -608,6 +656,8 @@ void sampleBattery(bool force) {
 void enterDeepSleep(const char* reason) {
   if (otaBusy() || streamingEnabled.load()) return;
   Serial.printf("[POWER] deep sleep: %s battery=%umV\n", reason?reason:"idle", unsigned(batteryMillivolts));
+  stopMicrophone();
+  applyCpuPowerProfile(false);
   statusLed.clear();statusLed.show();
   delay(25);
   BLEDevice::deinit(true);
@@ -741,6 +791,10 @@ void stopStreaming(ErrorCode reason) {
   streamStartedAt=0;
   ++streamGeneration; // Invalidates queued AND already-in-flight old task work.
   if (audioFrameQueue) xQueueReset(audioFrameQueue);
+#if USE_REAL_I2S_MIC
+  if (microphoneReady) { vTaskDelay(pdMS_TO_TICKS(90)); stopMicrophone(); }
+#endif
+  applyCpuPowerProfile(false);
   if (!deviceConnected.load()) setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
   else if (reason == ErrorCode::NONE) setDeviceState(DeviceState::CONNECTED_IDLE, reason);
   else setDeviceState(DeviceState::ERROR, reason);
@@ -772,8 +826,9 @@ void startStreaming(uint8_t version) {
     stopStreaming(ErrorCode::AUDIO_NOT_SUBSCRIBED); return;
   }
 #endif
+  applyCpuPowerProfile(true);
 #if USE_REAL_I2S_MIC
-  if (!microphoneReady) { stopStreaming(ErrorCode::AUDIO_SOURCE_FAILED); return; }
+  if (!startMicrophone()) { stopStreaming(ErrorCode::AUDIO_SOURCE_FAILED); return; }
 #endif
   if (!configureTransportFromPeerMtu()) { stopStreaming(ErrorCode::MTU_TOO_SMALL); return; }
   xQueueReset(audioFrameQueue);
@@ -843,7 +898,9 @@ void processCommand(uint8_t command, uint8_t version) {
       ++streamGeneration;
       if (audioFrameQueue) xQueueReset(audioFrameQueue);
       setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);
-      vTaskDelay(pdMS_TO_TICKS(60));
+      vTaskDelay(pdMS_TO_TICKS(90));
+      stopMicrophone();
+      applyCpuPowerProfile(false);
       updateStatusCharacteristic(true);
       break;
     case CMD_GET_STATUS:
@@ -904,6 +961,7 @@ void controlTask(void* parameter) {
     pollTouchControl();
     otaTick();
     powerTick();
+    applyCpuPowerProfile(streamingEnabled.load() || otaBusy());
     updateStatusLed();
   }
 }
@@ -943,7 +1001,7 @@ void acquisitionTask(void* parameter) {
 #endif
   for (;;) {
     if (!streamingEnabled.load() || !deviceConnected.load()) {
-      vTaskDelay(pdMS_TO_TICKS(10));
+      vTaskDelay(pdMS_TO_TICKS(40));
 #if !USE_REAL_I2S_MIC
       wake=xTaskGetTickCount();
 #endif
@@ -1075,12 +1133,10 @@ void setup() {
   setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
   sampleBattery(true);
 #if USE_REAL_I2S_MIC
-  microphoneI2S.setPins(I2S_BCLK_PIN, I2S_WS_PIN, -1, I2S_DATA_IN_PIN);
-  microphoneI2S.setTimeout(200);
-  microphoneReady=microphoneI2S.begin(I2S_MODE_STD, SAMPLE_RATE,
-    I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);
-  if (!microphoneReady) Serial.println("[MIC] initialization failed");
+  microphoneValidated=startMicrophone();
+  if (microphoneValidated) stopMicrophone();
 #endif
+  applyCpuPowerProfile(false);
   audioFrameQueue=xQueueCreate(20, sizeof(AudioFrame));
   controlQueue=xQueueCreate(12, sizeof(ControlMessage));
   if (!audioFrameQueue || !controlQueue) fatalSetup("[FATAL] queue allocation failed");
@@ -1105,7 +1161,7 @@ void loop() {
   // BLE, queues and (when fitted) the microphone survive early runtime startup.
   if (!bootValidated && millis()>5000 && bleServer && audioFrameQueue && controlQueue
 #if USE_REAL_I2S_MIC
-      && microphoneReady
+      && microphoneValidated
 #endif
   ) {
     const esp_err_t result=esp_ota_mark_app_valid_cancel_rollback();
