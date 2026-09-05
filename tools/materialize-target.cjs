@@ -30,16 +30,28 @@ function materialize(source,targetId){
   // the same active-high touch behavior without depending on RTC EXT1 support.
   esp_deep_sleep_enable_gpio_wakeup(1ULL<<TOUCH_INPUT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);`,
   'C3 deep-sleep GPIO wake');
-  out=replaceOnce(out,
-`  if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
+
+  // Base-source reproducibility tests use the original 4 KB transmitter stack;
+  // production ADPCM preparation raises it to 8 KB. Preserve the validated input
+  // value while converting only the S3 core affinity into a C3 single-core task.
+  const taskPrefix=`  if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
       xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, nullptr, 0) != pdPASS ||
-      xTaskCreatePinnedToCore(transmitterTask, "transmit", 8192, nullptr, 2, nullptr, 1) != pdPASS) {`,
-`  // ESP32-C3 is single-core. Keep the same priority ordering without pinning to
-  // non-existent core 1; retain the larger transmitter stack used by ADPCM + BLE.
+      xTaskCreatePinnedToCore(transmitterTask, "transmit", `;
+  const taskSuffix=`, nullptr, 2, nullptr, 1) != pdPASS) {`;
+  const taskStart=out.indexOf(taskPrefix);
+  if(taskStart<0)throw Error('Missing target materialization anchor: single-core task creation');
+  if(out.indexOf(taskPrefix,taskStart+taskPrefix.length)>=0)throw Error('Ambiguous target materialization anchor: single-core task creation');
+  const stackStart=taskStart+taskPrefix.length,stackEnd=out.indexOf(taskSuffix,stackStart);
+  if(stackEnd<0)throw Error('Missing transmitter stack value in task creation');
+  const transmitterStack=out.slice(stackStart,stackEnd);
+  if(!['4096','8192'].includes(transmitterStack))throw Error(`Unsupported transmitter stack ${transmitterStack}`);
+  const taskBefore=taskPrefix+transmitterStack+taskSuffix;
+  const taskAfter=`  // ESP32-C3 is single-core. Keep the same priority ordering without pinning to
+  // non-existent core 1; preserve the validated transmitter stack.
   if (xTaskCreate(controlTask, "control", 8192, nullptr, 3, nullptr) != pdPASS ||
       xTaskCreate(acquisitionTask, "capture", 4096, nullptr, 2, nullptr) != pdPASS ||
-      xTaskCreate(transmitterTask, "transmit", 8192, nullptr, 2, nullptr) != pdPASS) {`,
-  'single-core task creation');
+      xTaskCreate(transmitterTask, "transmit", ${transmitterStack}, nullptr, 2, nullptr) != pdPASS) {`;
+  out=replaceOnce(out,taskBefore,taskAfter,'single-core task creation');
 
   if(out.includes(PRIMARY_TARGET))throw Error('C3 source still contains the S3 target identity');
   if(out.includes('SYNAP-ESP32S3-OTA-ID-V3'))throw Error('C3 source still contains the S3 product marker');
