@@ -20,7 +20,10 @@ test('final production S3 source matches the shipped audio, touch, power and OTA
   assert.match(s3,/uint8_t emptyReads=0[\s\S]*?\+\+emptyReads < 3/,'transient I2S timeouts must not kill a take immediately');
   assert.match(s3,/uint16_t liveMtu=bleServer->getPeerMTU[\s\S]*?liveCapacity < uint16_t\(AUDIO_HEADER_BYTES\+audioPayloadBytes\.load\(\)\)[\s\S]*?peerMtu=liveMtu/,'compatible asynchronous MTU changes must stay live');
   assert.doesNotMatch(s3,/getPeerMTU\(bleServer->getConnId\(\)\) != peerMtu[\s\S]*?stopStreaming\(ErrorCode::TRANSPORT_CHANGED\)/);
-  assert.match(s3,/TOUCH_STOP_MIN_MS = 300/);assert.match(s3,/TOUCH_STOP_MAX_MS = 950/);assert.match(s3,/TOUCH_STATE_LOCKOUT_MS = 1500/);
+  assert.match(s3,/TOUCH_START_HOLD_MS = 2000/);assert.match(s3,/TOUCH_SLEEP_HOLD_MS = 5000/);assert.match(s3,/TOUCH_TAP_MAX_MS = 450/);
+  assert.match(s3,/double tap while recording -> STOP/);assert.match(s3,/wake detected; hold for 5 seconds to stay awake/);
+  const poll=s3.slice(s3.indexOf('void pollTouchControl() {'),s3.indexOf('\n}\n',s3.indexOf('void pollTouchControl() {'))+3);
+  assert.doesNotMatch(poll,/publishRememberEvent|TOUCH_STOP_MIN_MS|TOUCH_STOP_MAX_MS/,'legacy touch gestures must be absent');
   assert.match(s3,/enterDeepSleep[\s\S]*?digitalRead\(TOUCH_INPUT_PIN\)==TOUCH_ACTIVE_LEVEL\) return/,'sleep must wait for touch release');
   assert.match(s3,/batteryCritical\(\) && otaBusy\(\)[\s\S]*?otaSession\.fail\(Synap::BUSY\)/,'critical battery must stop an in-progress OTA');
   assert.match(s3,/1\.32 V ADC for a 4\.13 V cell on the 1M\/470k divider/);
@@ -31,6 +34,7 @@ test('C3 materialization preserves the same recording protocol with target-safe 
   const s3=productionS3(),c3=materialize(s3,'esp32c3-supermini-4m');
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);assert.match(c3,/#define SYNAP_BATTERY_ADC_PIN 1/);assert.doesNotMatch(c3,/GPIO8/);
   assert.match(c3,/AUDIO_PROTOCOL_VERSION = 3/);assert.match(c3,/MIN_CHUNKS_PER_FRAME = 1/);assert.match(c3,/MIN_REQUIRED_MTU = 32/);
+  assert.match(c3,/TOUCH_START_HOLD_MS = 2000/);assert.match(c3,/TOUCH_SLEEP_HOLD_MS = 5000/);
   assert.match(c3,/xTaskCreate\(transmitterTask, "transmit", 8192/);assert.doesNotMatch(c3,/xTaskCreatePinnedToCore/);
   assert.match(c3,/SYNAP_BATTERY_MONITOR_ENABLE 0/,'C3 battery monitor stays disabled until its divider is physically audited');
   assert.match(c3,/esp_deep_sleep_enable_gpio_wakeup/);assert.doesNotMatch(c3,/esp_sleep_enable_ext1_wakeup/);
