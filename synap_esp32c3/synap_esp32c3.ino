@@ -75,7 +75,7 @@ constexpr uint8_t BATTERY_ADC_PIN = SYNAP_BATTERY_ADC_PIN;
 constexpr uint16_t TOUCH_DEBOUNCE_MS = 35;
 constexpr uint16_t TOUCH_DOUBLE_TAP_MS = 500;
 constexpr uint16_t TOUCH_LONG_PRESS_MS = 1200;
-constexpr uint16_t TOUCH_SLEEP_HOLD_MS = 3000;
+constexpr uint16_t TOUCH_SLEEP_HOLD_MS = 5000;
 constexpr uint32_t AUTO_SLEEP_DISCONNECTED_MS = 300000u;
 constexpr uint32_t BATTERY_SAMPLE_MS = 15000u;
 constexpr uint32_t BATTERY_DIVIDER_TOP_OHMS = 1000000u;
@@ -663,6 +663,42 @@ void sampleBattery(bool force) {
 #endif
 }
 
+void armTouchWakeAndSleep() {
+  // ESP32-C3 has no EXT1 wake controller. Its deep-sleep GPIO wake API keeps
+  // the same active-high touch behavior without depending on RTC EXT1 support.
+  esp_deep_sleep_enable_gpio_wakeup(1ULL<<TOUCH_INPUT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);
+  esp_deep_sleep_start();
+}
+
+bool confirmTouchWakeHold() {
+  const esp_sleep_wakeup_cause_t cause=esp_sleep_get_wakeup_cause();
+  bool touchWake=(cause==ESP_SLEEP_WAKEUP_EXT1);
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+  touchWake=touchWake || (cause==ESP_SLEEP_WAKEUP_GPIO);
+#endif
+  if (!touchWake) return true;
+
+  Serial.println("[TOUCH] wake detected; hold for 5 seconds to stay awake");
+  const uint32_t started=millis();
+  while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) {
+    if (uint32_t(millis()-started)>=TOUCH_SLEEP_HOLD_MS) {
+      Serial.println("[TOUCH] 5 second wake hold confirmed");
+      // Consume the wake gesture completely. Normal gesture timing starts only
+      // after the user releases the sensor.
+      while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) delay(10);
+      touchRawState=false;touchStableState=false;touchPressedAt=0;touchFirstTapAt=0;
+      touchChangedAt=millis();
+      return true;
+    }
+    delay(10);
+  }
+
+  Serial.println("[TOUCH] wake hold too short; returning to deep sleep");
+  delay(40);
+  armTouchWakeAndSleep();
+  return false;
+}
+
 void enterDeepSleep(const char* reason) {
   if (otaBusy() || streamingEnabled.load()) return;
   if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) return;
@@ -674,10 +710,7 @@ void enterDeepSleep(const char* reason) {
   BLEDevice::deinit(true);
   // Enter only after TTP223 has been released. Next active-high touch wakes and
   // restarts the firmware from setup(), restoring advertising automatically.
-  // ESP32-C3 has no EXT1 wake controller. Its deep-sleep GPIO wake API keeps
-  // the same active-high touch behavior without depending on RTC EXT1 support.
-  esp_deep_sleep_enable_gpio_wakeup(1ULL<<TOUCH_INPUT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);
-  esp_deep_sleep_start();
+  armTouchWakeAndSleep();
 }
 
 void powerTick() {
@@ -719,79 +752,92 @@ void publishRememberEvent() {
 }
 
 void pollTouchControl() {
-  constexpr uint16_t TOUCH_START_HOLD_MS = 550;
-  constexpr uint16_t TOUCH_START_MAX_MS = 1400;
-  constexpr uint16_t TOUCH_STOP_MIN_MS = 300;
-  constexpr uint16_t TOUCH_STOP_MAX_MS = 950;
-  constexpr uint16_t TOUCH_REARM_MS = 650;
-  constexpr uint16_t TOUCH_STATE_LOCKOUT_MS = 1500;
+  constexpr uint16_t TOUCH_START_HOLD_MS = 2000;
+  constexpr uint16_t TOUCH_TAP_MAX_MS = 450;
+  constexpr uint16_t TOUCH_STATE_LOCKOUT_MS = 650;
   static uint32_t touchRearmAt = 0;
   static bool lastConnectedState = false;
   static bool lastStreamingState = false;
+  static bool sleepAfterStop = false;
   const uint32_t now=millis();
   const bool connected=deviceConnected.load();
   const bool streaming=streamingEnabled.load();
+  const bool raw=digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL;
+
+  if (sleepAfterStop && !streaming && !raw && !otaBusy()) {
+    sleepAfterStop=false;
+    enterDeepSleep("touch-hold-after-stop");
+    return;
+  }
 
   if (connected!=lastConnectedState || streaming!=lastStreamingState) {
     lastConnectedState=connected;
     lastStreamingState=streaming;
     touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
     touchPressedAt=0;
-    touchLongSent=false;
-    touchLongEligible=false;
-    touchIdlePress=false;
+    touchFirstTapAt=0;
   }
 
-  const bool raw=digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL;
   if (raw!=touchRawState) { touchRawState=raw; touchChangedAt=now; }
   if (raw!=touchStableState && uint32_t(now-touchChangedAt)>=TOUCH_DEBOUNCE_MS) {
     touchStableState=raw;
     if (touchStableState) {
       if (static_cast<int32_t>(now-touchRearmAt)<0) {
         touchPressedAt=0;
-        touchLongSent=false;
-        touchLongEligible=false;
-        touchIdlePress=false;
+        touchFirstTapAt=0;
         Serial.println("[TOUCH] ignored during state lockout");
         return;
       }
       touchPressedAt=now;
-      touchLongSent=false;
-      touchIdlePress=!streaming;
-      touchLongEligible=connected && streaming && !otaBusy();
       Serial.printf("[TOUCH] press gpio=%u streaming=%u connected=%u\n",
         unsigned(TOUCH_INPUT_PIN),streaming?1u:0u,connected?1u:0u);
-    } else {
-      const uint32_t held=touchPressedAt ? uint32_t(now-touchPressedAt) : 0;
-      const bool wasLong=touchLongSent;
-      const bool wasIdle=touchIdlePress;
-      touchPressedAt=0;touchLongSent=false;touchLongEligible=false;touchIdlePress=false;
-
-      if (held>=TOUCH_SLEEP_HOLD_MS && wasIdle && !streamingEnabled.load() && !otaBusy()) {
-        touchRearmAt=now+TOUCH_REARM_MS;
-        Serial.println("[TOUCH] sleep hold");
-        enterDeepSleep("touch-hold");
-      } else if (!wasLong && wasIdle && held>=TOUCH_START_HOLD_MS && held<=TOUCH_START_MAX_MS &&
-                 deviceConnected.load() && !streamingEnabled.load() && !otaBusy()) {
-        touchRearmAt=now+TOUCH_REARM_MS;
-        Serial.printf("[TOUCH] deliberate start hold %ums -> START\n",unsigned(held));
-        queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,streamGeneration.load());
-      } else if (!wasLong && !wasIdle && held>=TOUCH_STOP_MIN_MS && held<=TOUCH_STOP_MAX_MS &&
-                 deviceConnected.load() && streamingEnabled.load() && !otaBusy()) {
-        touchRearmAt=now+TOUCH_REARM_MS;
-        Serial.printf("[TOUCH] deliberate stop tap %ums -> STOP\n",unsigned(held));
-        queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
-      } else if (held) {
-        Serial.printf("[TOUCH] ignored gesture %ums idle=%u\n",unsigned(held),wasIdle?1u:0u);
-      }
+      return;
     }
-  }
-  if (touchStableState && touchLongEligible && !touchLongSent && touchPressedAt &&
-      uint32_t(now-touchPressedAt)>=TOUCH_LONG_PRESS_MS && deviceConnected.load() &&
-      streamingEnabled.load() && !otaBusy()) {
-    touchLongSent=true;
-    Serial.println("[TOUCH] long press -> REMEMBER");
-    publishRememberEvent();
+
+    const uint32_t held=touchPressedAt ? uint32_t(now-touchPressedAt) : 0;
+    touchPressedAt=0;
+    if (!held) return;
+
+    if (held>=TOUCH_SLEEP_HOLD_MS && !otaBusy()) {
+      touchFirstTapAt=0;
+      Serial.printf("[TOUCH] %ums hold -> SLEEP\n",unsigned(held));
+      if (streamingEnabled.load()) {
+        sleepAfterStop=true;
+        queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
+      } else {
+        enterDeepSleep("touch-hold");
+      }
+      return;
+    }
+
+    if (streamingEnabled.load()) {
+      if (held<=TOUCH_TAP_MAX_MS && !otaBusy()) {
+        if (touchFirstTapAt && uint32_t(now-touchFirstTapAt)<=TOUCH_DOUBLE_TAP_MS) {
+          touchFirstTapAt=0;
+          touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
+          Serial.println("[TOUCH] double tap while recording -> STOP");
+          queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
+        } else {
+          touchFirstTapAt=now;
+          Serial.println("[TOUCH] first recording tap; waiting for second tap");
+        }
+      } else {
+        touchFirstTapAt=0;
+        Serial.printf("[TOUCH] recording gesture %ums ignored\n",unsigned(held));
+      }
+      return;
+    }
+
+    // Double tap while idle intentionally does nothing. Starting requires one
+    // deliberate two-second hold and release; a five-second hold is reserved for sleep.
+    touchFirstTapAt=0;
+    if (held>=TOUCH_START_HOLD_MS && held<TOUCH_SLEEP_HOLD_MS && connected && !otaBusy()) {
+      touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
+      Serial.printf("[TOUCH] %ums hold -> START\n",unsigned(held));
+      queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,streamGeneration.load());
+    } else {
+      Serial.printf("[TOUCH] idle gesture %ums ignored\n",unsigned(held));
+    }
   }
 }
 void updateStatusCharacteristic(bool notify) {
@@ -1225,6 +1271,7 @@ void setup() {
   statusLed.begin();
   statusLed.clear();
   statusLed.show();
+  if (!confirmTouchWakeHold()) return;
   disconnectedAt=millis();
   setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
   sampleBattery(true);
