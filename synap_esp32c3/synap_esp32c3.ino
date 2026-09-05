@@ -54,7 +54,7 @@ constexpr uint16_t TRANSPORT_BYTES_PER_FRAME = ADPCM_BYTES_PER_FRAME;
 constexpr uint8_t AUDIO_HEADER_BYTES = 8;
 static_assert(SAMPLES_PER_FRAME % 2 == 0, "ADPCM frame requires an even PCM sample count");
 static_assert(ADPCM_BYTES_PER_FRAME == 404, "Synap protocol-v3 ADPCM frame size");
-constexpr uint8_t MIN_CHUNKS_PER_FRAME = 4;
+constexpr uint8_t MIN_CHUNKS_PER_FRAME = 1;
 constexpr uint8_t MAX_CHUNKS_PER_FRAME = 20;
 constexpr uint16_t MIN_REQUIRED_MTU = 32;
 constexpr uint16_t REQUESTED_MTU = 517;
@@ -88,8 +88,8 @@ constexpr uint8_t MEMORY_EVENT_REMEMBER = 1;
 constexpr uint8_t BATTERY_EVENT_MAGIC = 0xB7;
 constexpr uint8_t BATTERY_EVENT_VERSION = 2;
 // TTP223 OUT is a digital, active-high push-pull signal by default.
-// Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 470 kOhm -> GND, with
-// 100 nF from GPIO8 to GND. Implausible readings are reported but marked unavailable.
+// Battery sensing assumes B+ -> 1 MOhm -> GPIO1 -> 470 kOhm -> GND, with
+// 100 nF from GPIO1 to GND. Implausible readings are reported but marked unavailable.
 // Status LED is intentionally off most of the time. Short, dim pulses make the
 // state visible without turning the onboard WS2812 into a material battery load.
 constexpr uint8_t LED_DIM = 4;
@@ -425,6 +425,9 @@ void otaTick() {
   const bool connected=deviceConnected.load();
   const Synap::OtaState previous=otaSession.state;
   otaSession.tick(now,generation,connected);
+  if (batteryCritical() && otaBusy() && otaSession.state!=Synap::COMMITTED) {
+    otaSession.fail(Synap::BUSY);
+  }
   if (connected && !otaBusy()) {
     const uint16_t mtu=bleServer->getPeerMTU(bleServer->getConnId());
     const uint16_t packet=mtu>515 ? 512 : (mtu>=23 ? mtu-3 : 20);
@@ -662,6 +665,7 @@ void sampleBattery(bool force) {
 
 void enterDeepSleep(const char* reason) {
   if (otaBusy() || streamingEnabled.load()) return;
+  if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) return;
   Serial.printf("[POWER] deep sleep: %s battery=%umV\n", reason?reason:"idle", unsigned(batteryMillivolts));
   stopMicrophone();
   applyCpuPowerProfile(false);
@@ -717,10 +721,10 @@ void publishRememberEvent() {
 void pollTouchControl() {
   constexpr uint16_t TOUCH_START_HOLD_MS = 550;
   constexpr uint16_t TOUCH_START_MAX_MS = 1400;
-  constexpr uint16_t TOUCH_STOP_MIN_MS = 140;
-  constexpr uint16_t TOUCH_STOP_MAX_MS = 850;
+  constexpr uint16_t TOUCH_STOP_MIN_MS = 300;
+  constexpr uint16_t TOUCH_STOP_MAX_MS = 950;
   constexpr uint16_t TOUCH_REARM_MS = 650;
-  constexpr uint16_t TOUCH_STATE_LOCKOUT_MS = 900;
+  constexpr uint16_t TOUCH_STATE_LOCKOUT_MS = 1500;
   static uint32_t touchRearmAt = 0;
   static bool lastConnectedState = false;
   static bool lastStreamingState = false;
@@ -986,9 +990,18 @@ void controlTask(void* parameter) {
     if (!deviceConnected.load() && deviceState != DeviceState::DISCONNECTED) {
       stopStreaming(); disconnectedAt=millis(); restartAdvertising=true;
     }
-    if (deviceConnected.load() && streamingEnabled.load() &&
-        bleServer->getPeerMTU(bleServer->getConnId()) != peerMtu) {
-      stopStreaming(ErrorCode::TRANSPORT_CHANGED);
+    if (deviceConnected.load() && streamingEnabled.load()) {
+      uint16_t liveMtu=bleServer->getPeerMTU(bleServer->getConnId());
+      if (liveMtu<23) liveMtu=23;
+      if (liveMtu!=peerMtu) {
+        const uint16_t liveCapacity=liveMtu-3;
+        if (liveCapacity < uint16_t(AUDIO_HEADER_BYTES+audioPayloadBytes.load())) {
+          stopStreaming(ErrorCode::TRANSPORT_CHANGED);
+        } else {
+          peerMtu=liveMtu;attValueCapacity=liveCapacity;
+          updateStatusCharacteristic(true);
+        }
+      }
     }
 #if defined(CONFIG_BLUEDROID_ENABLED)
     if (restartAdvertising && !deviceConnected.load() && millis()-disconnectedAt > 250) {
@@ -1008,11 +1021,16 @@ bool acquireAudioFrame(AudioFrame& frame) {
 #if USE_REAL_I2S_MIC
   static int32_t raw[SAMPLES_PER_FRAME];
   size_t received=0;
+  uint8_t emptyReads=0;
   while (received < sizeof(raw)) {
     if (!streamingEnabled.load() || frame.generation != streamGeneration.load()) return false;
     const size_t count = microphoneI2S.readBytes(
       reinterpret_cast<char*>(raw)+received, sizeof(raw)-received);
-    if (!count) return false;
+    if (!count) {
+      if (++emptyReads < 3) continue;
+      return false;
+    }
+    emptyReads=0;
     received += count;
   }
   for (uint16_t i=0; i<SAMPLES_PER_FRAME; ++i) {
@@ -1201,7 +1219,7 @@ void setup() {
   touchChangedAt=millis();
   pinMode(BATTERY_ADC_PIN, INPUT);
   analogReadResolution(12);
-  // GPIO8 sees up to about 1.04 V from a 4.2 V cell through the 1M/330k divider.
+  // GPIO1 is calibrated at 1.32 V ADC for a 4.13 V cell on the 1M/470k divider.
   // 6 dB attenuation comfortably covers the expected range while retaining resolution.
   analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_6db);
   statusLed.begin();
