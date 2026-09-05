@@ -56,7 +56,7 @@ static_assert(SAMPLES_PER_FRAME % 2 == 0, "ADPCM frame requires an even PCM samp
 static_assert(ADPCM_BYTES_PER_FRAME == 404, "Synap protocol-v3 ADPCM frame size");
 constexpr uint8_t MIN_CHUNKS_PER_FRAME = 4;
 constexpr uint8_t MAX_CHUNKS_PER_FRAME = 20;
-constexpr uint16_t MIN_REQUIRED_MTU = 91;
+constexpr uint16_t MIN_REQUIRED_MTU = 32;
 constexpr uint16_t REQUESTED_MTU = 517;
 constexpr uint16_t MAX_AUDIO_PAYLOAD_BYTES = 500;
 constexpr uint8_t RGB_LED_PIN = 8;
@@ -1101,8 +1101,8 @@ bool sendAudioFrame(const AudioFrame& frame, uint16_t sequence) {
   const uint16_t payload=audioPayloadBytes, capacity=attValueCapacity;
   if (chunks < MIN_CHUNKS_PER_FRAME || chunks > MAX_CHUNKS_PER_FRAME ||
       !payload || payload > MAX_AUDIO_PAYLOAD_BYTES) return false;
-  uint8_t packet[AUDIO_HEADER_BYTES+MAX_AUDIO_PAYLOAD_BYTES];
-  uint8_t encoded[ADPCM_BYTES_PER_FRAME];
+  static uint8_t packet[AUDIO_HEADER_BYTES+MAX_AUDIO_PAYLOAD_BYTES];
+  static uint8_t encoded[ADPCM_BYTES_PER_FRAME];
   const uint16_t encodedBytes=encodeImaAdpcm(frame.samples,encoded);
   if (encodedBytes!=TRANSPORT_BYTES_PER_FRAME) return false;
   const uint32_t started=micros();
@@ -1225,10 +1225,10 @@ void setup() {
   Serial.printf("Synap %u %s reset=%u\n", SYNAP_FIRMWARE_BUILD, synapDeviceId, unsigned(bootResetReason));
   initializeBLE();
   // ESP32-C3 is single-core. Keep the same priority ordering without pinning to
-  // non-existent core 1; the audio queue remains bounded to four 50 ms frames.
+  // non-existent core 1; preserve the validated transmitter stack.
   if (xTaskCreate(controlTask, "control", 8192, nullptr, 3, nullptr) != pdPASS ||
       xTaskCreate(acquisitionTask, "capture", 4096, nullptr, 2, nullptr) != pdPASS ||
-      xTaskCreate(transmitterTask, "transmit", 4096, nullptr, 2, nullptr) != pdPASS) {
+      xTaskCreate(transmitterTask, "transmit", 8192, nullptr, 2, nullptr) != pdPASS) {
     fatalSetup("[FATAL] task allocation failed");
   }
 }
