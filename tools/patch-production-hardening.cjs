@@ -20,6 +20,25 @@ function patch(source){let out=source;
   out=replaceOnce(out,`bool startMicrophone() {\n#if USE_REAL_I2S_MIC\n  if (microphoneReady) return true;\n  microphoneI2S.setPins(I2S_BCLK_PIN, I2S_WS_PIN, -1, I2S_DATA_IN_PIN);\n  microphoneI2S.setTimeout(80);\n  microphoneReady=microphoneI2S.begin(I2S_MODE_STD, SAMPLE_RATE,\n    I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);\n  if (microphoneReady) {\n    microphoneValidated=true;\n    Serial.println("[POWER] microphone I2S on");\n  } else Serial.println("[MIC] initialization failed");\n  return microphoneReady;\n#else\n  return true;\n#endif\n}`,
 `bool startMicrophone() {\n#if USE_REAL_I2S_MIC\n  if (microphoneReady) return true;\n  constexpr uint8_t MIC_START_ATTEMPTS=3;\n  for (uint8_t attempt=1; attempt<=MIC_START_ATTEMPTS; ++attempt) {\n    if (attempt>1) {\n      microphoneI2S.end();\n      vTaskDelay(pdMS_TO_TICKS(25u*attempt));\n    }\n    microphoneI2S.setPins(I2S_BCLK_PIN, I2S_WS_PIN, -1, I2S_DATA_IN_PIN);\n    microphoneI2S.setTimeout(80);\n    microphoneReady=microphoneI2S.begin(I2S_MODE_STD, SAMPLE_RATE,\n      I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);\n    if (microphoneReady) {\n      microphoneValidated=true;\n      Serial.printf("[POWER] microphone I2S on attempt=%u\\n",unsigned(attempt));\n      return true;\n    }\n    Serial.printf("[MIC] initialization failed attempt=%u/%u\\n",unsigned(attempt),unsigned(MIC_START_ATTEMPTS));\n  }\n  microphoneReady=false;\n  return false;\n#else\n  return true;\n#endif\n}`,'microphone initialization retries');
 
+  // Reliability takes precedence over the small idle-power saving from repeatedly
+  // tearing down I2S. Keep the microphone clocked for the whole awake session.
+  // Deep sleep still shuts I2S down, and a genuine audio-source failure tears it
+  // down so the next START gets a clean retry path.
+  out=replaceOnce(out,
+`  if (audioFrameQueue) xQueueReset(audioFrameQueue);\n#if USE_REAL_I2S_MIC\n  if (microphoneReady) { vTaskDelay(pdMS_TO_TICKS(90)); stopMicrophone(); }\n#endif\n  applyCpuPowerProfile(false);`,
+`  if (audioFrameQueue) xQueueReset(audioFrameQueue);\n#if USE_REAL_I2S_MIC\n  if (reason==ErrorCode::AUDIO_SOURCE_FAILED && microphoneReady) stopMicrophone();\n#endif\n  applyCpuPowerProfile(false);`,
+  'keep microphone alive after normal stream stop');
+
+  out=replaceOnce(out,
+`      setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);\n      vTaskDelay(pdMS_TO_TICKS(90));\n      stopMicrophone();\n      applyCpuPowerProfile(false);\n      updateStatusCharacteristic(true);`,
+`      setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);\n      vTaskDelay(pdMS_TO_TICKS(60));\n      applyCpuPowerProfile(false);\n      updateStatusCharacteristic(true);`,
+  'keep microphone alive after explicit stop');
+
+  out=replaceOnce(out,
+`#if USE_REAL_I2S_MIC\n  microphoneValidated=startMicrophone();\n  if (microphoneValidated) stopMicrophone();\n#endif\n  applyCpuPowerProfile(false);`,
+`#if USE_REAL_I2S_MIC\n  microphoneValidated=startMicrophone();\n#endif\n  applyCpuPowerProfile(false);`,
+  'keep microphone alive after boot validation');
+
   // One scheduler/I2S timeout is not evidence that the microphone failed. Allow a
   // bounded read window and one controlled driver restart before surfacing failure.
   out=replaceOnce(out,`  size_t received=0;\n  while (received < sizeof(raw)) {\n    if (!streamingEnabled.load() || frame.generation != streamGeneration.load()) return false;\n    const size_t count = microphoneI2S.readBytes(\n      reinterpret_cast<char*>(raw)+received, sizeof(raw)-received);\n    if (!count) return false;\n    received += count;\n  }`,`  size_t received=0;\n  uint8_t emptyReads=0;\n  bool microphoneRecoveryUsed=false;\n  while (received < sizeof(raw)) {\n    if (!streamingEnabled.load() || frame.generation != streamGeneration.load()) return false;\n    const size_t count = microphoneI2S.readBytes(\n      reinterpret_cast<char*>(raw)+received, sizeof(raw)-received);\n    if (!count) {\n      if (++emptyReads < 3) continue;\n      if (!microphoneRecoveryUsed) {\n        microphoneRecoveryUsed=true;\n        Serial.println("[MIC] empty I2S reads; restarting capture driver");\n        stopMicrophone();\n        vTaskDelay(pdMS_TO_TICKS(35));\n        if (!streamingEnabled.load() || frame.generation != streamGeneration.load()) return false;\n        if (startMicrophone()) { received=0; emptyReads=0; continue; }\n      }\n      return false;\n    }\n    emptyReads=0;\n    received += count;\n  }`,'I2S transient timeout recovery');

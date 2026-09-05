@@ -19,6 +19,12 @@ test('final production S3 source matches the shipped audio, touch, power and OTA
   assert.match(s3,/MIN_CHUNKS_PER_FRAME = 1/);assert.match(s3,/MIN_REQUIRED_MTU = 32/);assert.match(s3,/MAX_AUDIO_PAYLOAD_BYTES = 500/);
   assert.match(s3,/MIC_START_ATTEMPTS=3[\s\S]*?attempt<=MIC_START_ATTEMPTS/,'I2S initialization must retry after OTA or wake reinitialization');
   assert.match(s3,/bool microphoneRecoveryUsed=false[\s\S]*?empty I2S reads; restarting capture driver[\s\S]*?stopMicrophone\(\)[\s\S]*?startMicrophone\(\)/,'live capture must self-heal one stalled I2S driver before failing');
+  assert.match(s3,/microphoneValidated=startMicrophone\(\);\n#endif\n  applyCpuPowerProfile\(false\);/,'awake boot must leave the microphone clocked instead of immediately tearing I2S down');
+  assert.match(s3,/reason==ErrorCode::AUDIO_SOURCE_FAILED && microphoneReady\) stopMicrophone\(\)/,'only a genuine audio-source failure should tear down I2S during an awake session');
+  assert.doesNotMatch(s3,/microphoneValidated=startMicrophone\(\);[\s\S]{0,80}if \(microphoneValidated\) stopMicrophone\(\)/,'boot validation must not power-cycle I2S');
+  const stopCase=s3.slice(s3.indexOf('case CMD_STOP:'),s3.indexOf('break;',s3.indexOf('case CMD_STOP:'))+6);
+  assert.doesNotMatch(stopCase,/stopMicrophone\(\)/,'normal STOP must keep I2S alive for the next take');
+  assert.match(s3,/enterDeepSleep[\s\S]*?stopMicrophone\(\)/,'deep sleep must still shut the microphone down');
   assert.match(s3,/uint8_t emptyReads=0[\s\S]*?\+\+emptyReads < 3/,'transient I2S timeouts must not kill a take immediately');
   assert.match(s3,/uint16_t liveMtu=bleServer->getPeerMTU[\s\S]*?liveCapacity < uint16_t\(AUDIO_HEADER_BYTES\+audioPayloadBytes\.load\(\)\)[\s\S]*?peerMtu=liveMtu/,'compatible asynchronous MTU changes must stay live');
   assert.doesNotMatch(s3,/getPeerMTU\(bleServer->getConnId\(\)\) != peerMtu[\s\S]*?stopStreaming\(ErrorCode::TRANSPORT_CHANGED\)/);
@@ -37,6 +43,7 @@ test('C3 materialization preserves the same recording protocol with target-safe 
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);assert.match(c3,/#define SYNAP_BATTERY_ADC_PIN 1/);assert.doesNotMatch(c3,/GPIO8/);
   assert.match(c3,/AUDIO_PROTOCOL_VERSION = 3/);assert.match(c3,/MIN_CHUNKS_PER_FRAME = 1/);assert.match(c3,/MIN_REQUIRED_MTU = 32/);
   assert.match(c3,/MIC_START_ATTEMPTS=3/);assert.match(c3,/microphoneRecoveryUsed=false/);
+  assert.match(c3,/microphoneValidated=startMicrophone\(\);\n#endif\n  applyCpuPowerProfile\(false\);/);
   assert.match(c3,/TOUCH_START_HOLD_MS = 2000/);assert.match(c3,/TOUCH_SLEEP_HOLD_MS = 5000/);
   assert.match(c3,/xTaskCreate\(transmitterTask, "transmit", 8192/);assert.doesNotMatch(c3,/xTaskCreatePinnedToCore/);
   assert.match(c3,/SYNAP_BATTERY_MONITOR_ENABLE 0/,'C3 battery monitor stays disabled until its divider is physically audited');
