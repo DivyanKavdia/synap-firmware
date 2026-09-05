@@ -79,13 +79,15 @@ Expected module configuration:
 - VCC: 3.3 V
 - GND: common ground
 
-Current interaction model:
+Current interaction model is intentionally asymmetric to prevent accidental recording starts from clothing or handling:
 
-- short press while idle: start listening
-- double short press while recording: stop listening
-- long press while recording (approximately 1.2 seconds): Remember This
+- while connected and idle: press and release for approximately 0.55–1.4 seconds to start listening
+- while recording: a deliberate 0.14–0.85 second tap stops listening
+- while recording: long press for approximately 1.2 seconds triggers Remember This
+- while idle: hold for at least 3 seconds to enter deep sleep
+- touches during the short post-connect / post-state-change lockout are ignored
 - Remember This does not interrupt audio capture
-- long press is ignored during OTA
+- touch actions are ignored during OTA
 
 ## RGB status LED
 
@@ -111,7 +113,7 @@ Battery - -> B-
 
 Do not connect the raw LiPo cell to the ESP32 3V3 pin.
 
-The current firmware does not measure battery voltage and does not allocate an ADC pin for battery level. Battery telemetry can be added later after the exact board battery/power circuit is audited and an appropriate measurement point is selected.
+Battery telemetry is implemented in the production S3 firmware using the audited ADC divider and calibrated full-charge reference used by the PWA battery display.
 
 ## Reserved / locked pins
 
