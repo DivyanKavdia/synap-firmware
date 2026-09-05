@@ -33,12 +33,12 @@ function materialize(source,targetId){
   out=replaceOnce(out,
 `  if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
       xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, nullptr, 0) != pdPASS ||
-      xTaskCreatePinnedToCore(transmitterTask, "transmit", 4096, nullptr, 2, nullptr, 1) != pdPASS) {`,
+      xTaskCreatePinnedToCore(transmitterTask, "transmit", 8192, nullptr, 2, nullptr, 1) != pdPASS) {`,
 `  // ESP32-C3 is single-core. Keep the same priority ordering without pinning to
-  // non-existent core 1; the audio queue remains bounded to four 50 ms frames.
+  // non-existent core 1; retain the larger transmitter stack used by ADPCM + BLE.
   if (xTaskCreate(controlTask, "control", 8192, nullptr, 3, nullptr) != pdPASS ||
       xTaskCreate(acquisitionTask, "capture", 4096, nullptr, 2, nullptr) != pdPASS ||
-      xTaskCreate(transmitterTask, "transmit", 4096, nullptr, 2, nullptr) != pdPASS) {`,
+      xTaskCreate(transmitterTask, "transmit", 8192, nullptr, 2, nullptr) != pdPASS) {`,
   'single-core task creation');
 
   if(out.includes(PRIMARY_TARGET))throw Error('C3 source still contains the S3 target identity');
