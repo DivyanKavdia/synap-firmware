@@ -9,16 +9,13 @@ function patch(source){let out=source;
   // A 404-byte ADPCM frame fits one notification at large MTU. Let the negotiated
   // capacity choose 1..20 chunks instead of forcing four and wasting radio events.
   out=replaceOnce(out,'constexpr uint8_t MIN_CHUNKS_PER_FRAME = 4;','constexpr uint8_t MIN_CHUNKS_PER_FRAME = 1;','compressed minimum chunks');
-  // Make an accidental brush less able to stop an already-running recording and
-  // extend the post-state-change quiet period. Remember remains >=1.2 s.
-  out=replaceOnce(out,'constexpr uint16_t TOUCH_STOP_MIN_MS = 140;\n  constexpr uint16_t TOUCH_STOP_MAX_MS = 850;','constexpr uint16_t TOUCH_STOP_MIN_MS = 300;\n  constexpr uint16_t TOUCH_STOP_MAX_MS = 950;','deliberate stop window');
-  out=replaceOnce(out,'constexpr uint16_t TOUCH_STATE_LOCKOUT_MS = 900;','constexpr uint16_t TOUCH_STATE_LOCKOUT_MS = 1500;','touch state lockout');
+  // Touch timing and gesture semantics are fully owned by patch-touch-reliability.cjs.
+  // Keep production hardening focused on cross-cutting power/audio/OTA safeguards.
   // Never enter deep sleep while the active-high TTP223 wake source is already
   // asserted; doing so creates an immediate wake/sleep loop.
   out=replaceOnce(out,'void enterDeepSleep(const char* reason) {\n  if (otaBusy() || streamingEnabled.load()) return;','void enterDeepSleep(const char* reason) {\n  if (otaBusy() || streamingEnabled.load()) return;\n  if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) return;','deep sleep release guard');
   // One scheduler/I2S timeout is not evidence that the microphone failed. Allow a
-  // bounded 3-read recovery window (<=~240 ms with the configured timeout) before
-  // surfacing AUDIO_SOURCE_FAILED.
+  // bounded 3-read recovery window before surfacing AUDIO_SOURCE_FAILED.
   out=replaceOnce(out,`  size_t received=0;\n  while (received < sizeof(raw)) {\n    if (!streamingEnabled.load() || frame.generation != streamGeneration.load()) return false;\n    const size_t count = microphoneI2S.readBytes(\n      reinterpret_cast<char*>(raw)+received, sizeof(raw)-received);\n    if (!count) return false;\n    received += count;\n  }`,`  size_t received=0;\n  uint8_t emptyReads=0;\n  while (received < sizeof(raw)) {\n    if (!streamingEnabled.load() || frame.generation != streamGeneration.load()) return false;\n    const size_t count = microphoneI2S.readBytes(\n      reinterpret_cast<char*>(raw)+received, sizeof(raw)-received);\n    if (!count) {\n      if (++emptyReads < 3) continue;\n      return false;\n    }\n    emptyReads=0;\n    received += count;\n  }`,'I2S transient timeout recovery');
   // Mobile stacks may complete MTU negotiation after START. An increase is always
   // safe for the already-selected packet size. A decrease is also safe while the
