@@ -47,9 +47,6 @@ constexpr uint8_t POWER_STATE_DEEP_SLEEP = 3;`,
 bool remoteStandby = false;`,
   'remote standby state');
 
-  // Replace the old 5-second wake confirmation with a true single-touch wake.
-  // Consume the physical wake touch so it cannot become the first tap of a
-  // double-tap recording gesture after boot.
   out=replaceFunction(out,'bool confirmTouchWakeHold()',`bool confirmTouchWakeHold() {
   const esp_sleep_wakeup_cause_t cause=esp_sleep_get_wakeup_cause();
   bool touchWake=(cause==ESP_SLEEP_WAKEUP_EXT1);
@@ -64,7 +61,6 @@ bool remoteStandby = false;`,
   return true;
 }`,'single-touch deep-sleep wake');
 
-  // Insert the app-visible power-state helpers immediately before deep sleep.
   const sleepSignature='void enterDeepSleep(const char* reason) {';
   const sleepAt=out.indexOf(sleepSignature);
   if(sleepAt<0)throw new Error('Missing power-controls anchor: deep sleep function');
@@ -117,13 +113,6 @@ void enterRemoteStandby() {
 `;
   out=out.slice(0,sleepAt)+helpers+out.slice(sleepAt);
 
-  // Publish the final state while BLE still exists, then allow the notification
-  // a short bounded window to leave before the radio is powered down.
-  out=replaceOnce(out,
-`sleepSignature_PLACEHOLDER`,
-`sleepSignature_PLACEHOLDER`,
-  'placeholder');
-
   const sleepBodyAnchor=`void enterDeepSleep(const char* reason) {
   if (otaBusy() || streamingEnabled.load()) return;
   if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) return;`;
@@ -170,7 +159,6 @@ void enterRemoteStandby() {
   }
 }`,'power-aware command handling');
 
-  // A reconnect must preserve remote standby instead of normalizing it to idle.
   out=replaceOnce(out,
 `        case EventType::CONNECTED:
           restartAdvertising=false;
@@ -191,11 +179,6 @@ void enterRemoteStandby() {
           break;`,
   'standby-preserving reconnect');
 
-  // Unified TTP223 model:
-  // * deep sleep: any single touch wakes (handled at boot above)
-  // * awake: double tap toggles START/STOP
-  // * remote standby: one physical tap wakes
-  // * any awake state: >=5 s hold -> true deep sleep
   out=replaceFunction(out,'void pollTouchControl()',`void pollTouchControl() {
   constexpr uint16_t TOUCH_TAP_MIN_MS = 80;
   constexpr uint16_t TOUCH_TAP_MAX_MS = 450;
