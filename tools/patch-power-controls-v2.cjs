@@ -36,7 +36,8 @@ constexpr uint8_t POWER_STATE_AWAKE = 1;
 constexpr uint8_t POWER_STATE_STANDBY = 2;
 constexpr uint8_t POWER_STATE_DEEP_SLEEP = 3;
 constexpr uint8_t POWER_STATE_WAKE_RECORD = 4;
-constexpr uint16_t DEEP_SLEEP_SECOND_TAP_WINDOW_MS = 900;`,
+constexpr uint16_t DEEP_SLEEP_SECOND_TAP_WINDOW_MS = 900;
+constexpr uint16_t DEEP_SLEEP_TAP_MAX_MS = 450;`,
   'power command constants');
 
   out=replaceOnce(out,
@@ -97,9 +98,9 @@ bool wakeRecordIntent = false;`,
     if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) {
       const uint32_t pressed=millis();
       while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL &&
-             uint32_t(millis()-pressed)<=TOUCH_TAP_MAX_MS) delay(5);
+             uint32_t(millis()-pressed)<=DEEP_SLEEP_TAP_MAX_MS) delay(5);
       const uint32_t held=uint32_t(millis()-pressed);
-      if (held>=80 && held<=TOUCH_TAP_MAX_MS) {
+      if (held>=80 && held<=DEEP_SLEEP_TAP_MAX_MS) {
         wakeRecordIntent=true;
         touchRawState=false;touchStableState=false;touchPressedAt=0;touchFirstTapAt=0;
         touchChangedAt=millis();
