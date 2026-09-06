@@ -29,6 +29,7 @@ test('final production S3 source matches audio, touch, low-power and OTA contrac
   assert.match(s3,/uint16_t liveMtu=bleServer->getPeerMTU[\s\S]*?liveCapacity < uint16_t\(AUDIO_HEADER_BYTES\+audioPayloadBytes\.load\(\)\)[\s\S]*?peerMtu=liveMtu/);
   assert.doesNotMatch(s3,/TOUCH_START_HOLD_MS = 2000/);
   assert.match(s3,/TOUCH_SLEEP_HOLD_MS = 5000/);assert.match(s3,/TOUCH_TAP_MIN_MS = 80/);assert.match(s3,/TOUCH_TAP_MAX_MS = 450/);
+  assert.match(s3,/DEEP_SLEEP_TAP_MAX_MS = 450/);
   assert.match(s3,/deep-sleep double tap -> wake with record intent/);
   assert.match(s3,/deep-sleep single tap -> return to sleep/);
   assert.match(s3,/double tap -> START/);assert.match(s3,/double tap -> STOP \+ POWER SAVER/);
@@ -57,5 +58,6 @@ test('release workflow still compiles the exact final power-controls source',()=
   const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
   assert.match(workflow,/patch-production-hardening\.cjs/);assert.match(workflow,/patch-power-controls-v2\.cjs/);
   const compileLines=workflow.split('\n').filter(line=>line.includes('arduino-cli compile'));
-  assert.equal(compileLines.length,2);assert(compileLines.every(line=>line.includes('-DUSE_REAL_I2S_MIC=1'));
+  assert.equal(compileLines.length,2);
+  assert(compileLines.every(line=>line.includes('-DUSE_REAL_I2S_MIC=1')));
 });
