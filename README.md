@@ -33,8 +33,8 @@ TTP223 is active-HIGH and momentary.
 | Recording | Double tap | Stop recording, then enter BLE standby |
 | Idle or recording | Hold ~5 s | Enter deep sleep; active recording stops first |
 | BLE standby | Double tap | Wake and start recording |
-| Deep sleep | Double tap | Wake with record intent |
-| Deep sleep | Single wake tap only | Return to deep sleep |
+| Deep sleep | Hold continuously ~5 s | Wake and remain awake |
+| Deep sleep | Release before ~5 s | Return immediately to deep sleep |
 
 Touch is ignored during OTA. Short state-transition lockouts prevent one physical interaction from triggering multiple state changes.
 
@@ -151,6 +151,7 @@ Before production release, validate:
 - BLE connect/reconnect;
 - real microphone capture;
 - touch start/stop/standby/deep-sleep behavior;
+- 5-second hold wake from deep sleep;
 - battery telemetry and critical-battery guards;
 - long recording stability;
 - OTA update/resume/reboot;
