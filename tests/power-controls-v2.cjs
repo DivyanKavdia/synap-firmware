@@ -29,6 +29,15 @@ test('deep sleep requires a continuous 5s hold; connected idle uses double tap t
   assert.match(s3,/held>=TOUCH_SLEEP_HOLD_MS/);
 });
 
+test('deep sleep waits for a stable TTP223 release before arming level-triggered wake',()=>{
+  const s3=productionS3();
+  assert.match(s3,/releaseStableAt=millis\(\)/);
+  assert.match(s3,/millis\(\)-releaseStableAt\)<500u/);
+  assert.match(s3,/sleep cancelled: touch line was not stably released/);
+  assert.match(s3,/esp_sleep_disable_wakeup_source\(ESP_SLEEP_WAKEUP_ALL\)/);
+  assert.match(s3,/esp_sleep_enable_ext1_wakeup\(1ULL<<TOUCH_INPUT_PIN, ESP_EXT1_WAKEUP_ANY_HIGH\)/);
+});
+
 test('standby is internal and remains protocol-v2 CONNECTED_IDLE',()=>{
   const s3=productionS3();
   assert.match(s3,/CMD_STANDBY = 0x03/);
@@ -64,6 +73,7 @@ test('C3 gets the same power and gesture contract with its target-safe wake API'
   assert.match(c3,/wake detected; hold for 5 seconds to stay awake/);
   assert.match(c3,/5 second wake hold confirmed/);
   assert.match(c3,/double tap -> STOP \+ POWER SAVER/);
+  assert.match(c3,/esp_sleep_disable_wakeup_source\(ESP_SLEEP_WAKEUP_ALL\)/);
   assert.match(c3,/esp_deep_sleep_enable_gpio_wakeup/);
   assert.doesNotMatch(c3,/esp_sleep_enable_ext1_wakeup/);
 });
