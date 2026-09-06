@@ -2,7 +2,15 @@ name: Build and publish pendant firmware
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'README.md'
+      - 'OTA_RELEASES.md'
+      - 'docs/**'
   pull_request:
+    paths-ignore:
+      - 'README.md'
+      - 'OTA_RELEASES.md'
+      - 'docs/**'
   workflow_dispatch:
 permissions:
   contents: read
