@@ -35,9 +35,7 @@ constexpr uint8_t POWER_EVENT_VERSION = 1;
 constexpr uint8_t POWER_STATE_AWAKE = 1;
 constexpr uint8_t POWER_STATE_STANDBY = 2;
 constexpr uint8_t POWER_STATE_DEEP_SLEEP = 3;
-constexpr uint8_t POWER_STATE_WAKE_RECORD = 4;
-constexpr uint16_t DEEP_SLEEP_SECOND_TAP_WINDOW_MS = 900;
-constexpr uint16_t DEEP_SLEEP_TAP_MAX_MS = 450;`,
+constexpr uint8_t POWER_STATE_WAKE_RECORD = 4;`,
   'power command constants');
 
   out=replaceOnce(out,
@@ -47,17 +45,13 @@ bool remoteStandby = false;
 bool wakeRecordIntent = false;`,
   'power state');
 
-  // The PWA protocol accepts status states 0..3 only. Standby stays an internal
-  // firmware flag and continues to report CONNECTED_IDLE on the control channel.
   out=replaceOnce(out,
 `  } else if (deviceState == DeviceState::CONNECTED_IDLE) {`,
 `  } else if (remoteStandby) {
-    // Mic off + LED off while BLE remains connected for instant wake/start.
+    // BLE stays connected while mic and LED are off.
   } else if (deviceState == DeviceState::CONNECTED_IDLE) {`,
   'standby LED off without new status state');
 
-  // Undo the later production-hardening choice that kept I2S clocked while idle.
-  // The hardened start path still retries I2S initialization on every real START.
   out=replaceOnce(out,
 `#if USE_REAL_I2S_MIC
   if (reason==ErrorCode::AUDIO_SOURCE_FAILED && microphoneReady) stopMicrophone();
@@ -89,34 +83,25 @@ bool wakeRecordIntent = false;`,
 #endif
   if (!touchWake) return true;
 
-  // The first tap is the wake source. Keep BLE/mic off while waiting briefly for
-  // a second deliberate tap; a lone wake tap returns straight to deep sleep.
-  Serial.println("[TOUCH] deep-sleep wake; waiting for second tap");
-  while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) delay(5);
-  const uint32_t deadline=millis()+DEEP_SLEEP_SECOND_TAP_WINDOW_MS;
-  while (static_cast<int32_t>(deadline-millis())>0) {
-    if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) {
-      const uint32_t pressed=millis();
-      while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL &&
-             uint32_t(millis()-pressed)<=DEEP_SLEEP_TAP_MAX_MS) delay(5);
-      const uint32_t held=uint32_t(millis()-pressed);
-      if (held>=80 && held<=DEEP_SLEEP_TAP_MAX_MS) {
-        wakeRecordIntent=true;
-        touchRawState=false;touchStableState=false;touchPressedAt=0;touchFirstTapAt=0;
-        touchChangedAt=millis();
-        Serial.println("[TOUCH] deep-sleep double tap -> wake with record intent");
-        return true;
-      }
-      break;
+  Serial.println("[TOUCH] wake detected; hold for 5 seconds to stay awake");
+  const uint32_t started=millis();
+  while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) {
+    if (uint32_t(millis()-started)>=TOUCH_SLEEP_HOLD_MS) {
+      Serial.println("[TOUCH] 5 second wake hold confirmed");
+      while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) delay(10);
+      touchRawState=false;touchStableState=false;touchPressedAt=0;touchFirstTapAt=0;
+      touchChangedAt=millis();
+      wakeRecordIntent=false;
+      return true;
     }
-    delay(5);
+    delay(10);
   }
 
-  Serial.println("[TOUCH] deep-sleep single tap -> return to sleep");
-  delay(30);
+  Serial.println("[TOUCH] wake hold too short; returning to deep sleep");
+  delay(40);
   armTouchWakeAndSleep();
   return false;
-}`,'double-tap deep-sleep wake');
+}`,'five-second deep-sleep wake hold');
 
   const sleepSignature='void enterDeepSleep(const char* reason) {';
   const sleepAt=out.indexOf(sleepSignature);
@@ -194,7 +179,7 @@ void enterRemoteStandby() {
       break;
     case CMD_GET_STATUS:
       if (remoteStandby) {
-        // Preserve protocol-v2 compatibility: standby is still CONNECTED_IDLE.
+        // Standby remains CONNECTED_IDLE on protocol v2.
         setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);
       } else if (!streamingEnabled.load()) {
         if (configureTransportFromPeerMtu()) setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);
@@ -325,7 +310,7 @@ void enterRemoteStandby() {
       touchFirstTapAt=now;
     }
   }
-}`,'unified double-tap touch controls');
+}`,'unified touch controls');
 
   return out;
 }
@@ -335,6 +320,6 @@ if(require.main===module){
   if(!file)throw new Error('Usage: node tools/patch-power-controls-v2.cjs <sketch>');
   const source=fs.readFileSync(file,'utf8');
   fs.writeFileSync(file,patch(source));
-  console.log('Patched Synap power controls v2: mic-off idle, double-tap wake/start, stop-to-standby');
+  console.log('Patched Synap power controls v2: 5s sleep/wake, double-tap start/stop, standby');
 }
 module.exports={patch,replaceOnce,replaceFunction};
