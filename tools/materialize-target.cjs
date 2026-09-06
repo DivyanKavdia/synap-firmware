@@ -24,8 +24,15 @@ function materialize(source,targetId){
   out=replaceOnce(out,'#define SYNAP_BATTERY_ADC_PIN 8','#define SYNAP_BATTERY_ADC_PIN 1','C3 battery ADC pin');
   out=out.replace(/GPIO8/g,'GPIO1');
 
-  // Deep-sleep wake is selected by CONFIG_IDF_TARGET in the shared final source:
-  // S3 uses single-pin RTC EXT0; C3 uses its deep-sleep GPIO wake API.
+  // Intermediate preparation tests run before the final power patch and still contain
+  // the original S3 EXT1 call. Convert that form. Final production source already has
+  // target-specific compile-time branches: S3 EXT0 and C3 GPIO deep-sleep wake.
+  const legacyExt1=`  esp_sleep_enable_ext1_wakeup(1ULL<<TOUCH_INPUT_PIN, ESP_EXT1_WAKEUP_ANY_HIGH);`;
+  if(out.includes(legacyExt1)){
+    out=replaceOnce(out,legacyExt1,
+`  esp_deep_sleep_enable_gpio_wakeup(1ULL<<TOUCH_INPUT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);`,
+    'C3 pre-power deep-sleep wake');
+  }
 
   const taskPrefix=`  if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
       xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, nullptr, 0) != pdPASS ||
@@ -48,6 +55,7 @@ function materialize(source,targetId){
 
   if(out.includes(PRIMARY_TARGET))throw Error('C3 source still contains the S3 target identity');
   if(out.includes('SYNAP-ESP32S3-OTA-ID-V3'))throw Error('C3 source still contains the S3 product marker');
+  if(out.includes('esp_sleep_enable_ext1_wakeup'))throw Error('C3 source still contains unsupported EXT1 wake');
   if(!out.includes(`SYNAP-FW:${target.id}:1.0.0:`))throw Error('C3 firmware identity was not materialized');
   if(!out.includes(target.productMarker))throw Error('C3 OTA marker was not materialized');
   if(!out.includes('p[21]!=5 || p[22]!=0'))throw Error('C3 chip image check was not materialized');
