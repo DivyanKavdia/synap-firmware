@@ -5,6 +5,9 @@
 #include <esp_mac.h>
 #include <esp_system.h>
 #include <esp_sleep.h>
+#if CONFIG_IDF_TARGET_ESP32S3
+#include <driver/rtc_io.h>
+#endif
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #if defined(CONFIG_BLUEDROID_ENABLED)
@@ -686,21 +689,37 @@ void sampleBattery(bool force) {
 }
 
 void armTouchWakeAndSleep() {
-  // Deep-sleep wake is level-triggered. Clear any previously configured source and
-  // arm only the TTP223 line so a stale wake configuration cannot reboot the device.
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-  // ESP32-C3 has no EXT1 wake controller. Its deep-sleep GPIO wake API keeps
-  // the same active-high touch behavior without depending on RTC EXT1 support.
-  esp_deep_sleep_enable_gpio_wakeup(1ULL<<TOUCH_INPUT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);
+  esp_err_t wakeError=ESP_FAIL;
+#if CONFIG_IDF_TARGET_ESP32S3
+  // One active-high TTP223 is a single RTC wake source. EXT0 keeps RTC IO powered,
+  // so GPIO13 can be held deterministically LOW until a real touch drives it HIGH.
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+  rtc_gpio_pullup_dis(static_cast<gpio_num_t>(TOUCH_INPUT_PIN));
+  rtc_gpio_pulldown_en(static_cast<gpio_num_t>(TOUCH_INPUT_PIN));
+  wakeError=esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(TOUCH_INPUT_PIN),1);
+#elif CONFIG_IDF_TARGET_ESP32C3
+  wakeError=esp_deep_sleep_enable_gpio_wakeup(1ULL<<TOUCH_INPUT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);
+#else
+#error Unsupported Synap sleep target
+#endif
+  if (wakeError!=ESP_OK) {
+    Serial.printf("[POWER] failed to arm touch wake err=%d\n",int(wakeError));
+    return;
+  }
   esp_deep_sleep_start();
 }
 
 bool confirmTouchWakeHold() {
   const esp_sleep_wakeup_cause_t cause=esp_sleep_get_wakeup_cause();
-  bool touchWake=(cause==ESP_SLEEP_WAKEUP_EXT1);
-#if defined(CONFIG_IDF_TARGET_ESP32C3)
-  touchWake=touchWake || (cause==ESP_SLEEP_WAKEUP_GPIO);
+#if CONFIG_IDF_TARGET_ESP32S3
+  const bool touchWake=(cause==ESP_SLEEP_WAKEUP_EXT0);
+#elif CONFIG_IDF_TARGET_ESP32C3
+  const bool touchWake=(cause==ESP_SLEEP_WAKEUP_GPIO);
+#else
+  const bool touchWake=false;
 #endif
+  Serial.printf("[POWER] wake cause=%u touch=%u\n",unsigned(cause),touchWake?1u:0u);
   if (!touchWake) return true;
 
   Serial.println("[TOUCH] wake detected; hold for 5 seconds to stay awake");
@@ -764,9 +783,6 @@ void enterRemoteStandby() {
 void enterDeepSleep(const char* reason) {
   if (otaBusy() || streamingEnabled.load()) return;
   if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) return;
-  // TTP223 release can briefly bounce LOW/HIGH. EXT1 is level-triggered, so entering
-  // sleep on the first LOW can immediately wake the ESP and make the PWA reconnect.
-  // Require a continuous released level before BLE is torn down and wake is armed.
   const uint32_t releaseStableAt=millis();
   while (uint32_t(millis()-releaseStableAt)<500u) {
     if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) {
@@ -1364,6 +1380,11 @@ void setup() {
   Serial.begin(115200);
   delay(400);
   bootResetReason=esp_reset_reason();
+#if CONFIG_IDF_TARGET_ESP32S3
+  if (esp_sleep_get_wakeup_cause()==ESP_SLEEP_WAKEUP_EXT0) {
+    rtc_gpio_deinit(static_cast<gpio_num_t>(TOUCH_INPUT_PIN));
+  }
+#endif
   pinMode(TOUCH_INPUT_PIN, INPUT);
   touchRawState=digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL;
   touchStableState=touchRawState;
