@@ -16,15 +16,17 @@ const {materialize}=require('../tools/materialize-target.cjs');
 const root=path.join(__dirname,'..');
 function productionS3(){let s=fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8');for(const fn of [prepare,runtime,events,battery,audio,codec,touch,harden,power])s=fn(s);return s}
 
-test('deep sleep requires double tap and connected idle double tap toggles recording',()=>{
+test('deep sleep requires a continuous 5s hold; connected idle uses double tap to record',()=>{
   const s3=productionS3();
-  assert.match(s3,/DEEP_SLEEP_SECOND_TAP_WINDOW_MS = 900/);
-  assert.match(s3,/deep-sleep double tap -> wake with record intent/);
-  assert.match(s3,/deep-sleep single tap -> return to sleep/);
+  assert.match(s3,/wake detected; hold for 5 seconds to stay awake/);
+  assert.match(s3,/5 second wake hold confirmed/);
+  assert.match(s3,/wake hold too short; returning to deep sleep/);
+  assert.match(s3,/millis\(\)-started\)>=TOUCH_SLEEP_HOLD_MS/);
+  assert.doesNotMatch(s3,/DEEP_SLEEP_SECOND_TAP_WINDOW_MS/);
+  assert.doesNotMatch(s3,/deep-sleep double tap/);
   assert.match(s3,/double tap -> START/);
   assert.match(s3,/double tap -> STOP \+ POWER SAVER/);
   assert.match(s3,/held>=TOUCH_SLEEP_HOLD_MS/);
-  assert.doesNotMatch(s3,/hold for 5 seconds to stay awake/);
 });
 
 test('standby is internal and remains protocol-v2 CONNECTED_IDLE',()=>{
@@ -59,7 +61,8 @@ test('recording double tap stops into standby; long hold still reaches deep slee
 test('C3 gets the same power and gesture contract with its target-safe wake API',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/CMD_STANDBY = 0x03/);
-  assert.match(c3,/deep-sleep double tap -> wake with record intent/);
+  assert.match(c3,/wake detected; hold for 5 seconds to stay awake/);
+  assert.match(c3,/5 second wake hold confirmed/);
   assert.match(c3,/double tap -> STOP \+ POWER SAVER/);
   assert.match(c3,/esp_deep_sleep_enable_gpio_wakeup/);
   assert.doesNotMatch(c3,/esp_sleep_enable_ext1_wakeup/);
