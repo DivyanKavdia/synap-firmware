@@ -29,9 +29,11 @@ test('final production S3 source matches audio, touch, low-power and OTA contrac
   assert.match(s3,/uint16_t liveMtu=bleServer->getPeerMTU[\s\S]*?liveCapacity < uint16_t\(AUDIO_HEADER_BYTES\+audioPayloadBytes\.load\(\)\)[\s\S]*?peerMtu=liveMtu/);
   assert.doesNotMatch(s3,/TOUCH_START_HOLD_MS = 2000/);
   assert.match(s3,/TOUCH_SLEEP_HOLD_MS = 5000/);assert.match(s3,/TOUCH_TAP_MIN_MS = 80/);assert.match(s3,/TOUCH_TAP_MAX_MS = 450/);
-  assert.match(s3,/DEEP_SLEEP_TAP_MAX_MS = 450/);
-  assert.match(s3,/deep-sleep double tap -> wake with record intent/);
-  assert.match(s3,/deep-sleep single tap -> return to sleep/);
+  assert.match(s3,/wake detected; hold for 5 seconds to stay awake/);
+  assert.match(s3,/5 second wake hold confirmed/);
+  assert.match(s3,/wake hold too short; returning to deep sleep/);
+  assert.doesNotMatch(s3,/DEEP_SLEEP_TAP_MAX_MS/);
+  assert.doesNotMatch(s3,/deep-sleep double tap/);
   assert.match(s3,/double tap -> START/);assert.match(s3,/double tap -> STOP \+ POWER SAVER/);
   assert.match(s3,/CMD_STANDBY = 0x03/);assert.match(s3,/CMD_WAKE = 0x04/);
   assert.match(s3,/POWER_STATE_WAKE_RECORD = 4/);
@@ -48,7 +50,7 @@ test('C3 materialization preserves the same recording and power contract',()=>{
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);assert.match(c3,/#define SYNAP_BATTERY_ADC_PIN 1/);assert.doesNotMatch(c3,/GPIO8/);
   assert.match(c3,/AUDIO_PROTOCOL_VERSION = 3/);assert.match(c3,/MIN_CHUNKS_PER_FRAME = 1/);assert.match(c3,/MIN_REQUIRED_MTU = 32/);
   assert.match(c3,/MIC_START_ATTEMPTS=3/);assert.match(c3,/microphoneValidated=startMicrophone\(\);\n  if \(microphoneValidated\) stopMicrophone\(\);/);
-  assert.match(c3,/deep-sleep double tap -> wake with record intent/);assert.match(c3,/double tap -> STOP \+ POWER SAVER/);
+  assert.match(c3,/wake detected; hold for 5 seconds to stay awake/);assert.match(c3,/double tap -> STOP \+ POWER SAVER/);
   assert.match(c3,/xTaskCreate\(transmitterTask, "transmit", 8192/);assert.doesNotMatch(c3,/xTaskCreatePinnedToCore/);
   assert.match(c3,/SYNAP_BATTERY_MONITOR_ENABLE 0/);
   assert.match(c3,/esp_deep_sleep_enable_gpio_wakeup/);assert.doesNotMatch(c3,/esp_sleep_enable_ext1_wakeup/);
