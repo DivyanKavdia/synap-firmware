@@ -35,7 +35,7 @@ test('standby is internal and remains protocol-v2 CONNECTED_IDLE',()=>{
   assert.match(s3,/CMD_WAKE = 0x04/);
   assert.match(s3,/remoteStandby = false/);
   assert.match(s3,/POWER_STATE_WAKE_RECORD = 4/);
-  assert.match(s3,/standby is still CONNECTED_IDLE/);
+  assert.match(s3,/Standby remains CONNECTED_IDLE on protocol v2/);
   assert.match(s3,/remote standby; BLE available, mic\/I2S off/);
   assert.doesNotMatch(s3,/DeviceState::STANDBY/,'standby must not leak a new status state to the current PWA');
 });
