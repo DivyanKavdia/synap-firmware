@@ -14,56 +14,53 @@ const {patch:harden}=require('../tools/patch-production-hardening.cjs');
 const {patch:power}=require('../tools/patch-power-controls-v2.cjs');
 const {materialize}=require('../tools/materialize-target.cjs');
 const root=path.join(__dirname,'..');
-function productionS3(){
-  let s=fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8');
-  for(const fn of [prepare,runtime,events,battery,audio,codec,touch,harden,power])s=fn(s);
-  return s;
-}
+function productionS3(){let s=fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8');for(const fn of [prepare,runtime,events,battery,audio,codec,touch,harden,power])s=fn(s);return s}
 
-test('production touch model is single-wake, double-toggle and five-second deep sleep',()=>{
+test('deep sleep requires double tap and connected idle double tap toggles recording',()=>{
   const s3=productionS3();
-  assert.match(s3,/TOUCH_TAP_MIN_MS = 80/);
-  assert.match(s3,/TOUCH_TAP_MAX_MS = 450/);
+  assert.match(s3,/DEEP_SLEEP_SECOND_TAP_WINDOW_MS = 900/);
+  assert.match(s3,/deep-sleep double tap -> wake with record intent/);
+  assert.match(s3,/deep-sleep single tap -> return to sleep/);
   assert.match(s3,/double tap -> START/);
-  assert.match(s3,/double tap -> STOP/);
-  assert.match(s3,/single touch wake/);
+  assert.match(s3,/double tap -> STOP \+ POWER SAVER/);
   assert.match(s3,/held>=TOUCH_SLEEP_HOLD_MS/);
-  assert.match(s3,/hold -> DEEP SLEEP/);
-  assert.doesNotMatch(s3,/TOUCH_START_HOLD_MS = 2000/,'2-second start gesture must be removed from final source');
-  assert.doesNotMatch(s3,/hold for 5 seconds to stay awake/,'deep-sleep wake must no longer require a five-second hold');
+  assert.doesNotMatch(s3,/hold for 5 seconds to stay awake/);
 });
 
-test('remote standby is a distinct BLE-wakeable state',()=>{
+test('standby is internal and remains protocol-v2 CONNECTED_IDLE',()=>{
   const s3=productionS3();
   assert.match(s3,/CMD_STANDBY = 0x03/);
   assert.match(s3,/CMD_WAKE = 0x04/);
-  assert.match(s3,/STANDBY=4/);
   assert.match(s3,/remoteStandby = false/);
-  assert.match(s3,/void enterRemoteStandby\(\)/);
-  assert.match(s3,/bool exitRemoteStandby\(\)/);
-  assert.match(s3,/POWER_EVENT_MAGIC = 0xE2/);
-  assert.match(s3,/publishPowerEvent\(POWER_STATE_DEEP_SLEEP\)/);
-  assert.match(s3,/remote standby; BLE remains available/);
-  assert.match(s3,/single tap -> wake from remote standby/);
+  assert.match(s3,/POWER_STATE_WAKE_RECORD = 4/);
+  assert.match(s3,/standby is still CONNECTED_IDLE/);
+  assert.match(s3,/remote standby; BLE available, mic\/I2S off/);
+  assert.doesNotMatch(s3,/DeviceState::STANDBY/,'standby must not leak a new status state to the current PWA');
 });
 
-test('power controls preserve build 1113 microphone reliability contract',()=>{
+test('idle and normal STOP power down the microphone while START keeps hardened retries',()=>{
   const s3=productionS3();
   assert.match(s3,/MIC_START_ATTEMPTS=3/);
   assert.match(s3,/microphoneRecoveryUsed=false/);
-  const stopCase=s3.slice(s3.indexOf('case CMD_STOP:'),s3.indexOf('break;',s3.indexOf('case CMD_STOP:'))+6);
-  assert.doesNotMatch(stopCase,/stopMicrophone\(\)/,'normal recording STOP still must not cycle I2S');
-  assert.match(s3,/enterRemoteStandby[\s\S]*?stopMicrophone\(\)/,'explicit standby may shut I2S down for power saving');
-  assert.match(s3,/exitRemoteStandby[\s\S]*?startMicrophone\(\)/,'remote wake must restart I2S through the hardened retry path');
+  assert.match(s3,/if \(microphoneReady\) \{ vTaskDelay\(pdMS_TO_TICKS\(90\)\); stopMicrophone\(\); \}/);
+  assert.match(s3,/microphoneValidated=startMicrophone\(\);\n  if \(microphoneValidated\) stopMicrophone\(\);/);
+  assert.match(s3,/remote standby -> awake; microphone remains off until START/);
+  assert.match(s3,/startStreaming\(version\)/);
 });
 
-test('C3 gets the same gesture and standby protocol with its audited wake API',()=>{
+test('recording double tap stops into standby; long hold still reaches deep sleep',()=>{
   const s3=productionS3();
-  const c3=materialize(s3,'esp32c3-supermini-4m');
+  assert.match(s3,/standbyAfterStop=true/);
+  assert.match(s3,/enterRemoteStandby\(\)/);
+  assert.match(s3,/deepSleepAfterStop=true/);
+  assert.match(s3,/enterDeepSleep\("touch-hold-after-stop"\)/);
+});
+
+test('C3 gets the same power and gesture contract with its target-safe wake API',()=>{
+  const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/CMD_STANDBY = 0x03/);
-  assert.match(c3,/STANDBY=4/);
-  assert.match(c3,/double tap -> START/);
-  assert.match(c3,/single touch wake/);
+  assert.match(c3,/deep-sleep double tap -> wake with record intent/);
+  assert.match(c3,/double tap -> STOP \+ POWER SAVER/);
   assert.match(c3,/esp_deep_sleep_enable_gpio_wakeup/);
   assert.doesNotMatch(c3,/esp_sleep_enable_ext1_wakeup/);
 });
