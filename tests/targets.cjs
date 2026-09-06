@@ -45,7 +45,10 @@ test('C3 program is generated from the exact final production source with target
   assert.match(c3,/remoteStandby = false/);
   assert.match(c3,/POWER_STATE_STANDBY = 2/);
   assert.doesNotMatch(c3,/DeviceState::STANDBY|STANDBY=4/,'standby must remain internal so PWA protocol-v2 status stays 0..3');
-  assert.match(c3,/deep-sleep double tap -> wake with record intent/);
+  assert.match(c3,/wake detected; hold for 5 seconds to stay awake/);
+  assert.match(c3,/5 second wake hold confirmed/);
+  assert.match(c3,/wake hold too short; returning to deep sleep/);
+  assert.doesNotMatch(c3,/deep-sleep double tap/);
   assert.match(c3,/double tap -> START/);
   assert.match(c3,/double tap -> STOP \+ POWER SAVER/);
   assert.doesNotMatch(c3,/TOUCH_START_HOLD_MS = 2000/);
