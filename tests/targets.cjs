@@ -42,9 +42,12 @@ test('C3 program is generated from the exact final production source with target
   assert.match(c3,/MIN_CHUNKS_PER_FRAME = 1/);
   assert.match(c3,/CMD_STANDBY = 0x03/);
   assert.match(c3,/CMD_WAKE = 0x04/);
-  assert.match(c3,/STANDBY=4/);
+  assert.match(c3,/remoteStandby = false/);
+  assert.match(c3,/POWER_STATE_STANDBY = 2/);
+  assert.doesNotMatch(c3,/DeviceState::STANDBY|STANDBY=4/,'standby must remain internal so PWA protocol-v2 status stays 0..3');
+  assert.match(c3,/deep-sleep double tap -> wake with record intent/);
   assert.match(c3,/double tap -> START/);
-  assert.match(c3,/single touch wake/);
+  assert.match(c3,/double tap -> STOP \+ POWER SAVER/);
   assert.doesNotMatch(c3,/TOUCH_START_HOLD_MS = 2000/);
   assert.match(c3,/900000u/,'mobile OTA resume behavior is shared');
   assert.match(c3,/SYNAP_BATTERY_MONITOR_ENABLE 0/,'battery monitor remains disabled until hardware is audited');
