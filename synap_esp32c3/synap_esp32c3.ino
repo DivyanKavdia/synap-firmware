@@ -686,6 +686,9 @@ void sampleBattery(bool force) {
 }
 
 void armTouchWakeAndSleep() {
+  // Deep-sleep wake is level-triggered. Clear any previously configured source and
+  // arm only the TTP223 line so a stale wake configuration cannot reboot the device.
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
   // ESP32-C3 has no EXT1 wake controller. Its deep-sleep GPIO wake API keeps
   // the same active-high touch behavior without depending on RTC EXT1 support.
   esp_deep_sleep_enable_gpio_wakeup(1ULL<<TOUCH_INPUT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);
@@ -761,6 +764,17 @@ void enterRemoteStandby() {
 void enterDeepSleep(const char* reason) {
   if (otaBusy() || streamingEnabled.load()) return;
   if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) return;
+  // TTP223 release can briefly bounce LOW/HIGH. EXT1 is level-triggered, so entering
+  // sleep on the first LOW can immediately wake the ESP and make the PWA reconnect.
+  // Require a continuous released level before BLE is torn down and wake is armed.
+  const uint32_t releaseStableAt=millis();
+  while (uint32_t(millis()-releaseStableAt)<500u) {
+    if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) {
+      Serial.println("[TOUCH] sleep cancelled: touch line was not stably released");
+      return;
+    }
+    delay(10);
+  }
   remoteStandby=false;
   wakeRecordIntent=false;
   publishPowerEvent(POWER_STATE_DEEP_SLEEP);
