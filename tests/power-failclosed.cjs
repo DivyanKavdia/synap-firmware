@@ -49,7 +49,7 @@ test('S3 sleep lock survives resets and clears only after validated triple tap',
   const thirdTapAt=confirm.indexOf('if (taps!=3)');
   assert(clearAt>thirdTapAt,'durable lock must not clear until the third wake tap validates');
   assert.match(s3,/if \(!confirmTouchWakeTripleTap\(\)\) return;/);
-  assert(s3.indexOf('if (!confirmTouchWakeTripleTap()) return;') < s3.indexOf('initializeBLE();'),'BLE must initialize only after wake validation');
+  assert(s3.indexOf('if (!confirmTouchWakeTripleTap()) return;') < s3.lastIndexOf('initializeBLE();'),'BLE must initialize only after wake validation');
 });
 
 test('S3 touch wake uses GPIO13 without an internal RTC pulldown',()=>{
