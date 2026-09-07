@@ -31,12 +31,14 @@ TTP223 is active-HIGH and momentary.
 | --- | --- | --- |
 | Connected idle | Double tap | Start recording |
 | Recording | Double tap | Stop recording, then enter BLE standby |
-| Idle or recording | Hold ~5 s | Enter deep sleep; active recording stops first |
+| Idle, recording or BLE standby | Triple tap | Enter deep sleep; active recording stops first |
 | BLE standby | Double tap | Wake and start recording |
 | Deep sleep | Triple tap | Wake and continue normal boot |
 | Deep sleep | One or two taps | Return to deep sleep without starting BLE |
 
-The first touch electrically wakes the MCU, but firmware blocks BLE initialization until the triple-tap wake sequence is complete. A retained deep-sleep marker ensures an unexpected immediate reset cannot reconnect to the PWA without the wake gesture.
+Double-tap actions are confirmed after a short wait for a possible third tap. This keeps triple tap reserved as the power gesture without confusing it with Start/Stop.
+
+The first touch electrically wakes the MCU from deep sleep, but firmware blocks BLE initialization until the triple-tap wake sequence is complete. A retained deep-sleep marker ensures an unexpected immediate reset cannot reconnect to the PWA without the wake gesture.
 
 Touch is ignored during OTA. Short state-transition lockouts prevent one physical interaction from triggering multiple state changes.
 
@@ -133,4 +135,4 @@ The first installation is performed over USB with the target-specific board conf
 
 ## Validation
 
-Before production release, validate BLE connect/reconnect, real microphone capture, touch start/stop/standby/deep sleep, triple-tap wake without premature BLE reconnect, battery guards, long recording stability, OTA update/resume/reboot, and reconnect after OTA.
+Before production release, validate BLE connect/reconnect, real microphone capture, double-tap start/stop, triple-tap deep sleep, triple-tap wake without premature BLE reconnect, battery guards, long recording stability, OTA update/resume/reboot, and reconnect after OTA.
