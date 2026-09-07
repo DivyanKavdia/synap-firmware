@@ -55,6 +55,11 @@ constexpr uint8_t POWER_STATE_AWAKE = 1;
 constexpr uint8_t POWER_STATE_STANDBY = 2;
 constexpr uint8_t POWER_STATE_DEEP_SLEEP = 3;
 constexpr uint8_t POWER_STATE_WAKE_RECORD = 4;
+constexpr uint32_t SYNAP_DEEP_SLEEP_MARKER = 0x53594E50u;
+constexpr uint16_t WAKE_TAP_MIN_MS = 60;
+constexpr uint16_t WAKE_TAP_MAX_MS = 500;
+constexpr uint16_t WAKE_TAP_GAP_MS = 550;
+constexpr uint16_t WAKE_TRIPLE_WINDOW_MS = 1600;
 constexpr uint32_t SAMPLE_RATE = 16000;
 constexpr uint16_t FRAME_DURATION_MS = 50;
 constexpr uint16_t SAMPLES_PER_FRAME = 800;
@@ -153,6 +158,7 @@ uint32_t disconnectedAt = 0;
 bool restartAdvertising = false;
 bool remoteStandby = false;
 bool wakeRecordIntent = false;
+RTC_DATA_ATTR uint32_t synapDeepSleepMarker = 0;
 esp_reset_reason_t bootResetReason = ESP_RST_UNKNOWN;
 uint32_t touchFirstTapAt = 0, touchPressedAt = 0, memoryAckUntil = 0, memoryEventCounter = 0;
 uint32_t streamStartedAt = 0;
@@ -692,8 +698,6 @@ void armTouchWakeAndSleep() {
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
   esp_err_t wakeError=ESP_FAIL;
 #if CONFIG_IDF_TARGET_ESP32S3
-  // One active-high TTP223 is a single RTC wake source. EXT0 keeps RTC IO powered,
-  // so GPIO13 can be held deterministically LOW until a real touch drives it HIGH.
   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
   rtc_gpio_pullup_dis(static_cast<gpio_num_t>(TOUCH_INPUT_PIN));
   rtc_gpio_pulldown_en(static_cast<gpio_num_t>(TOUCH_INPUT_PIN));
@@ -704,42 +708,68 @@ void armTouchWakeAndSleep() {
 #error Unsupported Synap sleep target
 #endif
   if (wakeError!=ESP_OK) {
+    synapDeepSleepMarker=0;
     Serial.printf("[POWER] failed to arm touch wake err=%d\n",int(wakeError));
     return;
   }
+  synapDeepSleepMarker=SYNAP_DEEP_SLEEP_MARKER;
   esp_deep_sleep_start();
+  synapDeepSleepMarker=0;
 }
 
-bool confirmTouchWakeHold() {
+bool confirmTouchWakeTripleTap() {
+  const bool sleepResume=(synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER);
   const esp_sleep_wakeup_cause_t cause=esp_sleep_get_wakeup_cause();
-#if CONFIG_IDF_TARGET_ESP32S3
-  const bool touchWake=(cause==ESP_SLEEP_WAKEUP_EXT0);
-#elif CONFIG_IDF_TARGET_ESP32C3
-  const bool touchWake=(cause==ESP_SLEEP_WAKEUP_GPIO);
-#else
-  const bool touchWake=false;
-#endif
-  Serial.printf("[POWER] wake cause=%u touch=%u\n",unsigned(cause),touchWake?1u:0u);
-  if (!touchWake) return true;
+  Serial.printf("[POWER] wake cause=%u sleepResume=%u\n",unsigned(cause),sleepResume?1u:0u);
+  if (!sleepResume) return true;
 
-  Serial.println("[TOUCH] wake detected; hold for 5 seconds to stay awake");
-  const uint32_t started=millis();
+  // The electrical wake itself counts as tap 1. Do not initialize BLE while
+  // validating taps 2 and 3, so incomplete wake gestures stay invisible to the PWA.
+  synapDeepSleepMarker=0;
+  Serial.println("[TOUCH] deep-sleep wake: tap 1/3; waiting for taps 2 and 3");
   while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) {
-    if (uint32_t(millis()-started)>=TOUCH_SLEEP_HOLD_MS) {
-      Serial.println("[TOUCH] 5 second wake hold confirmed");
-      while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) delay(10);
-      touchRawState=false;touchStableState=false;touchPressedAt=0;touchFirstTapAt=0;
-      touchChangedAt=millis();
-      wakeRecordIntent=false;
-      return true;
+    if (millis()>WAKE_TAP_MAX_MS+250u) {
+      Serial.println("[TOUCH] wake tap too long; returning to deep sleep");
+      delay(30);armTouchWakeAndSleep();return false;
     }
-    delay(10);
+    delay(5);
   }
 
-  Serial.println("[TOUCH] wake hold too short; returning to deep sleep");
-  delay(40);
-  armTouchWakeAndSleep();
-  return false;
+  uint8_t taps=1;
+  const uint32_t windowStarted=millis();
+  while (taps<3 && uint32_t(millis()-windowStarted)<WAKE_TRIPLE_WINDOW_MS) {
+    const uint32_t waitStarted=millis();
+    while (digitalRead(TOUCH_INPUT_PIN)!=TOUCH_ACTIVE_LEVEL) {
+      if (uint32_t(millis()-waitStarted)>WAKE_TAP_GAP_MS ||
+          uint32_t(millis()-windowStarted)>=WAKE_TRIPLE_WINDOW_MS) {
+        Serial.printf("[TOUCH] wake sequence incomplete at %u/3; returning to deep sleep\n",unsigned(taps));
+        delay(30);armTouchWakeAndSleep();return false;
+      }
+      delay(5);
+    }
+
+    const uint32_t pressedAt=millis();
+    while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL &&
+        uint32_t(millis()-pressedAt)<=WAKE_TAP_MAX_MS) delay(5);
+    const uint32_t held=uint32_t(millis()-pressedAt);
+    if (held<WAKE_TAP_MIN_MS || held>WAKE_TAP_MAX_MS ||
+        digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) {
+      Serial.println("[TOUCH] invalid wake tap; returning to deep sleep");
+      while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) delay(5);
+      delay(30);armTouchWakeAndSleep();return false;
+    }
+    ++taps;
+    Serial.printf("[TOUCH] wake tap %u/3\n",unsigned(taps));
+  }
+
+  if (taps!=3) {
+    delay(30);armTouchWakeAndSleep();return false;
+  }
+  Serial.println("[TOUCH] triple tap wake confirmed; continuing normal boot");
+  touchRawState=false;touchStableState=false;touchPressedAt=0;touchFirstTapAt=0;
+  touchChangedAt=millis();
+  wakeRecordIntent=false;
+  return true;
 }
 
 void publishPowerEvent(uint8_t powerState) {
@@ -1378,10 +1408,12 @@ void fatalSetup(const char* message) {
 }
 void setup() {
   Serial.begin(115200);
-  delay(400);
+  if (synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER) delay(20);
+  else delay(400);
   bootResetReason=esp_reset_reason();
 #if CONFIG_IDF_TARGET_ESP32S3
-  if (esp_sleep_get_wakeup_cause()==ESP_SLEEP_WAKEUP_EXT0) {
+  if (esp_sleep_get_wakeup_cause()==ESP_SLEEP_WAKEUP_EXT0 ||
+      synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER) {
     rtc_gpio_deinit(static_cast<gpio_num_t>(TOUCH_INPUT_PIN));
   }
 #endif
@@ -1397,7 +1429,7 @@ void setup() {
   statusLed.begin();
   statusLed.clear();
   statusLed.show();
-  if (!confirmTouchWakeHold()) return;
+  if (!confirmTouchWakeTripleTap()) return;
   disconnectedAt=millis();
   setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
   sampleBattery(true);
