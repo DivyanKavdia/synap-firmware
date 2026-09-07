@@ -38,6 +38,7 @@ test('awake triple tap sleeps while double tap remains start-stop',()=>{
   assert.match(s3,/AWAKE_TRIPLE_TAP_GAP_MS = 500/);
   assert.match(s3,/AWAKE_TRIPLE_WINDOW_MS = 1400/);
   assert.match(s3,/pendingDoubleAt/);
+  assert.match(s3,/pendingDoubleAt && !raw && uint32_t\(now-pendingDoubleAt\)>AWAKE_TRIPLE_TAP_GAP_MS/);
   assert.match(s3,/triple tap -> DEEP SLEEP/);
   assert.match(s3,/enterDeepSleep\("touch-triple"\)/);
   assert.match(s3,/enterDeepSleep\("touch-triple-after-stop"\)/);
