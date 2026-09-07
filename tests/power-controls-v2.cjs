@@ -37,6 +37,16 @@ test('deep sleep requires stable release and triple tap before BLE boot',()=>{
   assert.match(s3,/held>=TOUCH_SLEEP_HOLD_MS/);
 });
 
+test('deep-sleep transition locks BLE control commands before disconnect',()=>{
+  const s3=productionS3();
+  assert.match(s3,/bool sleepPending = false/);
+  assert.match(s3,/sleepPending=true;\n  Serial\.println\("\[POWER\] sleep pending; BLE control commands locked"\)/);
+  assert.match(s3,/if \(!deviceConnected\.load\(\) \|\| sleepPending\) return;/);
+  assert.match(s3,/if \(otaBusy\(\) \|\| streamingEnabled\.load\(\) \|\| sleepPending\) return;/);
+  assert.match(s3,/publishPowerEvent\(POWER_STATE_DEEP_SLEEP\);\n  if \(deviceConnected\.load\(\)\) delay\(90\)/);
+  assert.match(s3,/if \(wakeError!=ESP_OK\) \{\n    sleepPending=false;/);
+});
+
 test('standby is internal and remains protocol-v2 CONNECTED_IDLE',()=>{
   const s3=productionS3();
   assert.match(s3,/CMD_STANDBY = 0x03/);
