@@ -28,13 +28,23 @@ test('deep sleep requires stable release and triple tap before BLE boot',()=>{
   assert.match(s3,/triple tap wake confirmed; continuing normal boot/);
   assert.match(s3,/if \(!confirmTouchWakeTripleTap\(\)\) return;/);
   assert.match(s3,/if \(synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER\) delay\(20\)/);
-  assert.doesNotMatch(s3,/wake detected; hold for 5 seconds to stay awake/);
   assert.match(s3,/esp_sleep_enable_ext0_wakeup\(static_cast<gpio_num_t>\(TOUCH_INPUT_PIN\),1\)/);
   assert.match(s3,/rtc_gpio_deinit\(static_cast<gpio_num_t>\(TOUCH_INPUT_PIN\)\)/);
   assert.doesNotMatch(s3,/esp_sleep_enable_ext1_wakeup/);
+});
+
+test('awake triple tap sleeps while double tap remains start-stop',()=>{
+  const s3=productionS3();
+  assert.match(s3,/AWAKE_TRIPLE_TAP_GAP_MS = 500/);
+  assert.match(s3,/AWAKE_TRIPLE_WINDOW_MS = 1400/);
+  assert.match(s3,/pendingDoubleAt/);
+  assert.match(s3,/triple tap -> DEEP SLEEP/);
+  assert.match(s3,/enterDeepSleep\("touch-triple"\)/);
+  assert.match(s3,/enterDeepSleep\("touch-triple-after-stop"\)/);
   assert.match(s3,/double tap -> START/);
   assert.match(s3,/double tap -> STOP \+ POWER SAVER/);
-  assert.match(s3,/held>=TOUCH_SLEEP_HOLD_MS/);
+  assert.doesNotMatch(s3,/held>=TOUCH_SLEEP_HOLD_MS/);
+  assert.doesNotMatch(s3,/touch-hold-after-stop|enterDeepSleep\("touch-hold"\)/);
 });
 
 test('deep-sleep transition locks BLE control commands before disconnect',()=>{
@@ -67,18 +77,11 @@ test('idle and normal STOP power down the microphone while START keeps hardened 
   assert.match(s3,/remote standby -> awake; microphone remains off until START/);
 });
 
-test('recording double tap stops into standby; long hold still reaches deep sleep',()=>{
-  const s3=productionS3();
-  assert.match(s3,/standbyAfterStop=true/);
-  assert.match(s3,/enterRemoteStandby\(\)/);
-  assert.match(s3,/deepSleepAfterStop=true/);
-  assert.match(s3,/enterDeepSleep\("touch-hold-after-stop"\)/);
-});
-
 test('secondary target materialization preserves the same wake validation contract',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/confirmTouchWakeTripleTap\(\)/);
   assert.match(c3,/triple tap wake confirmed; continuing normal boot/);
+  assert.match(c3,/triple tap -> DEEP SLEEP/);
   assert.match(c3,/esp_deep_sleep_enable_gpio_wakeup\(1ULL<<TOUCH_INPUT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH\)/);
   assert.doesNotMatch(c3,/esp_sleep_enable_ext1_wakeup/);
 });
