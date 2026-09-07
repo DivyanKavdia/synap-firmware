@@ -33,8 +33,10 @@ TTP223 is active-HIGH and momentary.
 | Recording | Double tap | Stop recording, then enter BLE standby |
 | Idle or recording | Hold ~5 s | Enter deep sleep; active recording stops first |
 | BLE standby | Double tap | Wake and start recording |
-| Deep sleep | Hold continuously ~5 s | Wake and remain awake |
-| Deep sleep | Release before ~5 s | Return immediately to deep sleep |
+| Deep sleep | Triple tap | Wake and continue normal boot |
+| Deep sleep | One or two taps | Return to deep sleep without starting BLE |
+
+The first touch electrically wakes the MCU, but firmware blocks BLE initialization until the triple-tap wake sequence is complete. A retained deep-sleep marker ensures an unexpected immediate reset cannot reconnect to the PWA without the wake gesture.
 
 Touch is ignored during OTA. Short state-transition lockouts prevent one physical interaction from triggering multiple state changes.
 
@@ -107,14 +109,7 @@ Confirmed critical battery blocks a new OTA and aborts an active OTA before furt
 
 Synap uses application-level BLE OTA; Wi-Fi credentials are not required.
 
-Firmware validates:
-
-- device identity;
-- hardware target;
-- image structure;
-- image size;
-- SHA-256;
-- OTA partition state.
+Firmware validates device identity, hardware target, image structure, image size, SHA-256 and OTA partition state.
 
 OTA v3 supports BEGIN, DATA, VERIFY, COMMIT, ABORT and RESUME. A short GATT interruption can resume the active OTA session from the reported offset. OTA is blocked while recording and when battery is critically low.
 
@@ -122,15 +117,7 @@ After commit, firmware reboots into the updated application.
 
 ## Build and release
 
-`.github/workflows/firmware.yml` is the production build path. It:
-
-1. runs source and regression tests;
-2. prepares the final S3 production source;
-3. materializes the C3 target from the same contract;
-4. compiles both targets with real I2S capture;
-5. creates OTA, factory and source artifacts;
-6. adds GitHub build provenance;
-7. publishes and verifies the signed production feed.
+`.github/workflows/firmware.yml` is the production build path. It runs regression tests, prepares the final S3 source, materializes the secondary target, compiles real-I2S firmware, creates OTA/factory artifacts, adds provenance, and verifies the production feed.
 
 The final prepared source—not an intermediate patch state—is the release contract.
 
@@ -146,13 +133,4 @@ The first installation is performed over USB with the target-specific board conf
 
 ## Validation
 
-Before production release, validate:
-
-- BLE connect/reconnect;
-- real microphone capture;
-- touch start/stop/standby/deep-sleep behavior;
-- 5-second hold wake from deep sleep;
-- battery telemetry and critical-battery guards;
-- long recording stability;
-- OTA update/resume/reboot;
-- reconnect after OTA.
+Before production release, validate BLE connect/reconnect, real microphone capture, touch start/stop/standby/deep sleep, triple-tap wake without premature BLE reconnect, battery guards, long recording stability, OTA update/resume/reboot, and reconnect after OTA.
