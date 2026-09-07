@@ -884,12 +884,18 @@ void pollTouchControl() {
   constexpr uint16_t TOUCH_TAP_MIN_MS = 80;
   constexpr uint16_t TOUCH_TAP_MAX_MS = 450;
   constexpr uint16_t TOUCH_STATE_LOCKOUT_MS = 650;
+  constexpr uint16_t AWAKE_TRIPLE_TAP_GAP_MS = 500;
+  constexpr uint16_t AWAKE_TRIPLE_WINDOW_MS = 1400;
   static uint32_t touchRearmAt = 0;
   static bool lastConnectedState = false;
   static bool lastStreamingState = false;
   static bool lastStandbyState = false;
   static bool standbyAfterStop = false;
   static bool deepSleepAfterStop = false;
+  static uint8_t tapCount = 0;
+  static uint32_t tapSequenceStartedAt = 0;
+  static uint32_t lastTapAt = 0;
+  static uint32_t pendingDoubleAt = 0;
   const uint32_t now=millis();
   const bool connected=deviceConnected.load();
   const bool streaming=streamingEnabled.load();
@@ -898,7 +904,7 @@ void pollTouchControl() {
 
   if (deepSleepAfterStop && !streaming && !raw && !otaBusy()) {
     deepSleepAfterStop=false;
-    enterDeepSleep("touch-hold-after-stop");
+    enterDeepSleep("touch-triple-after-stop");
     return;
   }
   if (standbyAfterStop && !streaming && !raw && !otaBusy()) {
@@ -914,15 +920,41 @@ void pollTouchControl() {
     touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
     touchPressedAt=0;
     touchFirstTapAt=0;
+    tapCount=0;
+    tapSequenceStartedAt=0;
+    lastTapAt=0;
+    pendingDoubleAt=0;
   }
 
-  if (touchFirstTapAt && uint32_t(now-touchFirstTapAt)>TOUCH_DOUBLE_TAP_MS) touchFirstTapAt=0;
+  // A double tap remains START/STOP, but wait briefly for a possible third tap.
+  if (pendingDoubleAt && !raw && uint32_t(now-pendingDoubleAt)>AWAKE_TRIPLE_TAP_GAP_MS) {
+    pendingDoubleAt=0;
+    tapCount=0;
+    tapSequenceStartedAt=0;
+    lastTapAt=0;
+    touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
+    if (streamingEnabled.load()) {
+      standbyAfterStop=true;
+      Serial.println("[TOUCH] double tap -> STOP + POWER SAVER");
+      queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
+    } else if (deviceConnected.load()) {
+      Serial.println(remoteStandby ? "[TOUCH] double tap standby -> START" : "[TOUCH] double tap -> START");
+      queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,streamGeneration.load());
+    }
+    return;
+  }
+
+  if (tapCount==1 && lastTapAt && uint32_t(now-lastTapAt)>AWAKE_TRIPLE_TAP_GAP_MS) {
+    tapCount=0;tapSequenceStartedAt=0;lastTapAt=0;
+  }
+
   if (raw!=touchRawState) { touchRawState=raw; touchChangedAt=now; }
   if (raw!=touchStableState && uint32_t(now-touchChangedAt)>=TOUCH_DEBOUNCE_MS) {
     touchStableState=raw;
     if (touchStableState) {
       if (static_cast<int32_t>(now-touchRearmAt)<0) {
         touchPressedAt=0;touchFirstTapAt=0;
+        tapCount=0;tapSequenceStartedAt=0;lastTapAt=0;pendingDoubleAt=0;
         return;
       }
       touchPressedAt=now;
@@ -933,41 +965,39 @@ void pollTouchControl() {
     touchPressedAt=0;
     if (!held) return;
 
-    if (held>=TOUCH_SLEEP_HOLD_MS && !otaBusy()) {
+    if (held<TOUCH_TAP_MIN_MS || held>TOUCH_TAP_MAX_MS || otaBusy()) {
+      tapCount=0;tapSequenceStartedAt=0;lastTapAt=0;pendingDoubleAt=0;
+      return;
+    }
+
+    if (!tapCount || !lastTapAt ||
+        uint32_t(now-lastTapAt)>AWAKE_TRIPLE_TAP_GAP_MS ||
+        uint32_t(now-tapSequenceStartedAt)>AWAKE_TRIPLE_WINDOW_MS) {
+      tapCount=1;
+      tapSequenceStartedAt=now;
+      lastTapAt=now;
+      pendingDoubleAt=0;
+      return;
+    }
+
+    ++tapCount;
+    lastTapAt=now;
+    if (tapCount==2) {
+      pendingDoubleAt=now;
+      return;
+    }
+
+    if (tapCount>=3 && uint32_t(now-tapSequenceStartedAt)<=AWAKE_TRIPLE_WINDOW_MS) {
+      tapCount=0;tapSequenceStartedAt=0;lastTapAt=0;pendingDoubleAt=0;
       touchFirstTapAt=0;
-      Serial.printf("[TOUCH] %ums hold -> DEEP SLEEP\n",unsigned(held));
+      touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
+      Serial.println("[TOUCH] triple tap -> DEEP SLEEP");
       if (streamingEnabled.load()) {
         deepSleepAfterStop=true;
         queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
       } else {
-        enterDeepSleep("touch-hold");
+        enterDeepSleep("touch-triple");
       }
-      return;
-    }
-
-    if (held<TOUCH_TAP_MIN_MS || held>TOUCH_TAP_MAX_MS || otaBusy()) {
-      touchFirstTapAt=0;
-      return;
-    }
-
-    if (!touchFirstTapAt) {
-      touchFirstTapAt=now;
-      return;
-    }
-
-    if (uint32_t(now-touchFirstTapAt)<=TOUCH_DOUBLE_TAP_MS) {
-      touchFirstTapAt=0;
-      touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
-      if (streamingEnabled.load()) {
-        standbyAfterStop=true;
-        Serial.println("[TOUCH] double tap -> STOP + POWER SAVER");
-        queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
-      } else if (connected) {
-        Serial.println(remoteStandby ? "[TOUCH] double tap standby -> START" : "[TOUCH] double tap -> START");
-        queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,streamGeneration.load());
-      }
-    } else {
-      touchFirstTapAt=now;
     }
   }
 }
