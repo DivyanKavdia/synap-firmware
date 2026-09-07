@@ -158,6 +158,7 @@ uint32_t disconnectedAt = 0;
 bool restartAdvertising = false;
 bool remoteStandby = false;
 bool wakeRecordIntent = false;
+bool sleepPending = false;
 RTC_DATA_ATTR uint32_t synapDeepSleepMarker = 0;
 esp_reset_reason_t bootResetReason = ESP_RST_UNKNOWN;
 uint32_t touchFirstTapAt = 0, touchPressedAt = 0, memoryAckUntil = 0, memoryEventCounter = 0;
@@ -708,12 +709,14 @@ void armTouchWakeAndSleep() {
 #error Unsupported Synap sleep target
 #endif
   if (wakeError!=ESP_OK) {
+    sleepPending=false;
     synapDeepSleepMarker=0;
     Serial.printf("[POWER] failed to arm touch wake err=%d\n",int(wakeError));
     return;
   }
   synapDeepSleepMarker=SYNAP_DEEP_SLEEP_MARKER;
   esp_deep_sleep_start();
+  sleepPending=false;
   synapDeepSleepMarker=0;
 }
 
@@ -783,7 +786,7 @@ void publishPowerEvent(uint8_t powerState) {
 }
 
 bool exitRemoteStandby() {
-  if (!remoteStandby) return true;
+  if (!remoteStandby || sleepPending) return !sleepPending;
   if (otaBusy()) return false;
   remoteStandby=false;
   applyCpuPowerProfile(false);
@@ -796,6 +799,7 @@ bool exitRemoteStandby() {
 }
 
 void enterRemoteStandby() {
+  if (sleepPending) return;
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
   if (streamingEnabled.load()) stopStreaming();
   remoteStandby=true;
@@ -811,7 +815,7 @@ void enterRemoteStandby() {
 }
 
 void enterDeepSleep(const char* reason) {
-  if (otaBusy() || streamingEnabled.load()) return;
+  if (otaBusy() || streamingEnabled.load() || sleepPending) return;
   if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) return;
   const uint32_t releaseStableAt=millis();
   while (uint32_t(millis()-releaseStableAt)<500u) {
@@ -823,8 +827,10 @@ void enterDeepSleep(const char* reason) {
   }
   remoteStandby=false;
   wakeRecordIntent=false;
+  sleepPending=true;
+  Serial.println("[POWER] sleep pending; BLE control commands locked");
   publishPowerEvent(POWER_STATE_DEEP_SLEEP);
-  if (deviceConnected.load()) delay(140);
+  if (deviceConnected.load()) delay(90);
   Serial.printf("[POWER] deep sleep: %s battery=%umV\n", reason?reason:"idle", unsigned(batteryMillivolts));
   stopMicrophone();
   applyCpuPowerProfile(false);
@@ -1100,7 +1106,7 @@ class DiagnosticsCallbacks : public BLECharacteristicCallbacks {
 };
 
 void processCommand(uint8_t command, uint8_t version) {
-  if (!deviceConnected.load()) return;
+  if (!deviceConnected.load() || sleepPending) return;
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
   if (version != PROTOCOL_VERSION) { stopStreaming(ErrorCode::PROTOCOL_MISMATCH); return; }
   switch (command) {
