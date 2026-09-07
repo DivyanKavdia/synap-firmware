@@ -22,12 +22,16 @@ test('final production S3 source matches audio, touch, low-power and OTA contrac
   assert.match(s3,/microphoneValidated=startMicrophone\(\);\n  if \(microphoneValidated\) stopMicrophone\(\);/);
   assert.match(s3,/if \(microphoneReady\) \{ vTaskDelay\(pdMS_TO_TICKS\(90\)\); stopMicrophone\(\); \}/);
   assert.match(s3,/remote standby -> awake; microphone remains off until START/);
-  assert.match(s3,/TOUCH_SLEEP_HOLD_MS = 5000/);assert.match(s3,/TOUCH_TAP_MIN_MS = 80/);assert.match(s3,/TOUCH_TAP_MAX_MS = 450/);
+  assert.match(s3,/TOUCH_TAP_MIN_MS = 80/);assert.match(s3,/TOUCH_TAP_MAX_MS = 450/);
+  assert.match(s3,/AWAKE_TRIPLE_TAP_GAP_MS = 500/);assert.match(s3,/AWAKE_TRIPLE_WINDOW_MS = 1400/);
   assert.match(s3,/RTC_DATA_ATTR uint32_t synapDeepSleepMarker = 0/);
   assert.match(s3,/confirmTouchWakeTripleTap\(\)/);
   assert.match(s3,/tap 1\/3; waiting for taps 2 and 3/);
   assert.match(s3,/triple tap wake confirmed; continuing normal boot/);
-  assert.doesNotMatch(s3,/wake detected; hold for 5 seconds to stay awake/);
+  assert.match(s3,/triple tap -> DEEP SLEEP/);
+  assert.match(s3,/enterDeepSleep\("touch-triple"\)/);
+  assert.match(s3,/enterDeepSleep\("touch-triple-after-stop"\)/);
+  assert.doesNotMatch(s3,/held>=TOUCH_SLEEP_HOLD_MS/);
   assert.match(s3,/double tap -> START/);assert.match(s3,/double tap -> STOP \+ POWER SAVER/);
   assert.match(s3,/CMD_STANDBY = 0x03/);assert.match(s3,/CMD_WAKE = 0x04/);
   assert.match(s3,/POWER_STATE_WAKE_RECORD = 4/);
@@ -42,6 +46,7 @@ test('secondary target materialization preserves recording and wake-validation c
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);assert.match(c3,/#define SYNAP_BATTERY_ADC_PIN 1/);assert.doesNotMatch(c3,/GPIO8/);
   assert.match(c3,/AUDIO_PROTOCOL_VERSION = 3/);assert.match(c3,/MIN_CHUNKS_PER_FRAME = 1/);assert.match(c3,/MIN_REQUIRED_MTU = 32/);
   assert.match(c3,/confirmTouchWakeTripleTap\(\)/);assert.match(c3,/triple tap wake confirmed; continuing normal boot/);
+  assert.match(c3,/triple tap -> DEEP SLEEP/);
   assert.match(c3,/double tap -> STOP \+ POWER SAVER/);
   assert.match(c3,/xTaskCreate\(transmitterTask, "transmit", 8192/);assert.doesNotMatch(c3,/xTaskCreatePinnedToCore/);
   assert.match(c3,/SYNAP_BATTERY_MONITOR_ENABLE 0/);
