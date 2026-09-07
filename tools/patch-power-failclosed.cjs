@@ -93,7 +93,7 @@ bool writeDurableSleepLock(bool locked) {
 #error Unsupported Synap sleep target
 #endif
   if (wakeError!=ESP_OK) {
-    Serial.printf("[POWER] failed to arm touch wake err=%d\n",int(wakeError));
+    Serial.printf("[POWER] failed to arm touch wake err=%d\\n",int(wakeError));
     return false;
   }
   synapLastSleepStage=SLEEP_STAGE_WAKE_ARMED;
@@ -111,7 +111,7 @@ void armTouchWakeAndSleep() {
     return;
   }
   synapLastSleepStage=SLEEP_STAGE_ENTERING;
-  Serial.printf("[POWER] deep sleep now request=%u gpio=%u\n",
+  Serial.printf("[POWER] deep sleep now request=%u gpio=%u\\n",
     unsigned(synapSleepRequestCounter),unsigned(digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL));
   esp_deep_sleep_start();
   Serial.println("[POWER] deep sleep returned unexpectedly; rebooting fail-closed");
@@ -126,7 +126,7 @@ void armTouchWakeAndSleep() {
   bootWakeCause=cause;
   synapLastWakeCause=static_cast<uint8_t>(cause);
   bootSleepWasLocked=sleepResume;
-  Serial.printf("[POWER] wake cause=%u sleepLock=%u rtcMarker=%u stage=%u request=%u\n",
+  Serial.printf("[POWER] wake cause=%u sleepLock=%u rtcMarker=%u stage=%u request=%u\\n",
     unsigned(cause),durableLock?1u:0u,
     synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER?1u:0u,
     unsigned(synapLastSleepStage),unsigned(synapSleepRequestCounter));
@@ -169,7 +169,7 @@ void armTouchWakeAndSleep() {
     while (digitalRead(TOUCH_INPUT_PIN)!=TOUCH_ACTIVE_LEVEL) {
       if (uint32_t(millis()-waitStarted)>WAKE_TAP_GAP_MS ||
           uint32_t(millis()-windowStarted)>=WAKE_TRIPLE_WINDOW_MS) {
-        Serial.printf("[TOUCH] wake sequence incomplete at %u/3; returning to deep sleep\n",unsigned(taps));
+        Serial.printf("[TOUCH] wake sequence incomplete at %u/3; returning to deep sleep\\n",unsigned(taps));
         delay(30);armTouchWakeAndSleep();return false;
       }
       delay(5);
@@ -186,7 +186,7 @@ void armTouchWakeAndSleep() {
       delay(30);armTouchWakeAndSleep();return false;
     }
     ++taps;
-    Serial.printf("[TOUCH] wake tap %u/3\n",unsigned(taps));
+    Serial.printf("[TOUCH] wake tap %u/3\\n",unsigned(taps));
   }
 
   if (taps!=3) {
@@ -235,7 +235,7 @@ void armTouchWakeAndSleep() {
     return;
   }
   synapLastSleepStage=SLEEP_STAGE_LOCKED;
-  Serial.printf("[POWER] sleep lock committed request=%u reason=%s\n",
+  Serial.printf("[POWER] sleep lock committed request=%u reason=%s\\n",
     unsigned(synapSleepRequestCounter),reason?reason:"idle");
 
 #if USE_REAL_I2S_MIC
@@ -277,7 +277,7 @@ void armTouchWakeAndSleep() {
   // Any edge after wake arming is handled fail-closed by the boot gate.
   statusLed.clear();statusLed.show();
   synapLastSleepStage=SLEEP_STAGE_ENTERING;
-  Serial.printf("[POWER] entering deep sleep request=%u battery=%umV\n",
+  Serial.printf("[POWER] entering deep sleep request=%u battery=%umV\\n",
     unsigned(synapSleepRequestCounter),unsigned(batteryMillivolts));
   esp_deep_sleep_start();
 
