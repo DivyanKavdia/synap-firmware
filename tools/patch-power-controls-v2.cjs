@@ -56,6 +56,7 @@ constexpr uint16_t WAKE_TRIPLE_WINDOW_MS = 1600;`,
 `bool restartAdvertising = false;
 bool remoteStandby = false;
 bool wakeRecordIntent = false;
+bool sleepPending = false;
 RTC_DATA_ATTR uint32_t synapDeepSleepMarker = 0;`,
   'power state');
 
@@ -103,12 +104,14 @@ RTC_DATA_ATTR uint32_t synapDeepSleepMarker = 0;`,
 #error Unsupported Synap sleep target
 #endif
   if (wakeError!=ESP_OK) {
+    sleepPending=false;
     synapDeepSleepMarker=0;
     Serial.printf("[POWER] failed to arm touch wake err=%d\\n",int(wakeError));
     return;
   }
   synapDeepSleepMarker=SYNAP_DEEP_SLEEP_MARKER;
   esp_deep_sleep_start();
+  sleepPending=false;
   synapDeepSleepMarker=0;
 }`,'single-pin deep-sleep wake source');
 
@@ -186,7 +189,7 @@ RTC_DATA_ATTR uint32_t synapDeepSleepMarker = 0;`,
 }
 
 bool exitRemoteStandby() {
-  if (!remoteStandby) return true;
+  if (!remoteStandby || sleepPending) return !sleepPending;
   if (otaBusy()) return false;
   remoteStandby=false;
   applyCpuPowerProfile(false);
@@ -199,6 +202,7 @@ bool exitRemoteStandby() {
 }
 
 void enterRemoteStandby() {
+  if (sleepPending) return;
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
   if (streamingEnabled.load()) stopStreaming();
   remoteStandby=true;
@@ -221,7 +225,7 @@ void enterRemoteStandby() {
   if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) return;`;
   out=replaceOnce(out,sleepBodyAnchor,
 `void enterDeepSleep(const char* reason) {
-  if (otaBusy() || streamingEnabled.load()) return;
+  if (otaBusy() || streamingEnabled.load() || sleepPending) return;
   if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) return;
   const uint32_t releaseStableAt=millis();
   while (uint32_t(millis()-releaseStableAt)<500u) {
@@ -233,12 +237,14 @@ void enterRemoteStandby() {
   }
   remoteStandby=false;
   wakeRecordIntent=false;
+  sleepPending=true;
+  Serial.println("[POWER] sleep pending; BLE control commands locked");
   publishPowerEvent(POWER_STATE_DEEP_SLEEP);
-  if (deviceConnected.load()) delay(140);`,
-  'deep sleep stable release and power event');
+  if (deviceConnected.load()) delay(90);`,
+  'deep sleep stable release, command lockout and power event');
 
   out=replaceFunction(out,'void processCommand(uint8_t command, uint8_t version)',`void processCommand(uint8_t command, uint8_t version) {
-  if (!deviceConnected.load()) return;
+  if (!deviceConnected.load() || sleepPending) return;
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
   if (version != PROTOCOL_VERSION) { stopStreaming(ErrorCode::PROTOCOL_MISMATCH); return; }
   switch (command) {
