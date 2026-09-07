@@ -5,6 +5,7 @@
 #include <esp_mac.h>
 #include <esp_system.h>
 #include <esp_sleep.h>
+#include <Preferences.h>
 #if CONFIG_IDF_TARGET_ESP32S3
 #include <driver/rtc_io.h>
 #endif
@@ -160,6 +161,40 @@ bool remoteStandby = false;
 bool wakeRecordIntent = false;
 bool sleepPending = false;
 RTC_DATA_ATTR uint32_t synapDeepSleepMarker = 0;
+RTC_DATA_ATTR uint32_t synapSleepRequestCounter = 0;
+RTC_DATA_ATTR uint8_t synapLastSleepStage = 0;
+RTC_DATA_ATTR uint8_t synapLastWakeCause = 0;
+RTC_DATA_ATTR uint8_t synapLastGpioBeforeSleep = 0;
+bool bootSleepWasLocked = false;
+esp_sleep_wakeup_cause_t bootWakeCause = ESP_SLEEP_WAKEUP_UNDEFINED;
+constexpr char SYNAP_POWER_NAMESPACE[] = "synap-power";
+constexpr char SYNAP_SLEEP_LOCK_KEY[] = "sleep-lock";
+constexpr uint8_t SLEEP_STAGE_NONE = 0;
+constexpr uint8_t SLEEP_STAGE_REQUESTED = 1;
+constexpr uint8_t SLEEP_STAGE_LOCKED = 2;
+constexpr uint8_t SLEEP_STAGE_GPIO_RELEASED = 3;
+constexpr uint8_t SLEEP_STAGE_WAKE_ARMED = 4;
+constexpr uint8_t SLEEP_STAGE_ENTERING = 5;
+constexpr uint8_t SLEEP_STAGE_RESET_RECOVERY = 6;
+constexpr uint8_t SLEEP_STAGE_WAKE_VALIDATING = 7;
+constexpr uint8_t SLEEP_STAGE_WAKE_CONFIRMED = 8;
+constexpr uint8_t SLEEP_STAGE_ABORTED = 9;
+
+bool readDurableSleepLock() {
+  Preferences prefs;
+  if (!prefs.begin(SYNAP_POWER_NAMESPACE,true)) return false;
+  const bool locked=prefs.getBool(SYNAP_SLEEP_LOCK_KEY,false);
+  prefs.end();
+  return locked;
+}
+
+bool writeDurableSleepLock(bool locked) {
+  Preferences prefs;
+  if (!prefs.begin(SYNAP_POWER_NAMESPACE,false)) return false;
+  const bool ok=prefs.putBool(SYNAP_SLEEP_LOCK_KEY,locked)==1u;
+  prefs.end();
+  return ok;
+}
 esp_reset_reason_t bootResetReason = ESP_RST_UNKNOWN;
 uint32_t touchFirstTapAt = 0, touchPressedAt = 0, memoryAckUntil = 0, memoryEventCounter = 0;
 uint32_t streamStartedAt = 0;
@@ -695,13 +730,16 @@ void sampleBattery(bool force) {
 #endif
 }
 
-void armTouchWakeAndSleep() {
+bool armTouchWakeSource() {
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
   esp_err_t wakeError=ESP_FAIL;
 #if CONFIG_IDF_TARGET_ESP32S3
   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+  rtc_gpio_init(static_cast<gpio_num_t>(TOUCH_INPUT_PIN));
+  rtc_gpio_set_direction(static_cast<gpio_num_t>(TOUCH_INPUT_PIN), RTC_GPIO_MODE_INPUT_ONLY);
+  // TTP223 drives GPIO13 push-pull. Do not bias the line from the ESP while asleep.
   rtc_gpio_pullup_dis(static_cast<gpio_num_t>(TOUCH_INPUT_PIN));
-  rtc_gpio_pulldown_en(static_cast<gpio_num_t>(TOUCH_INPUT_PIN));
+  rtc_gpio_pulldown_dis(static_cast<gpio_num_t>(TOUCH_INPUT_PIN));
   wakeError=esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(TOUCH_INPUT_PIN),1);
 #elif CONFIG_IDF_TARGET_ESP32C3
   wakeError=esp_deep_sleep_enable_gpio_wakeup(1ULL<<TOUCH_INPUT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);
@@ -709,29 +747,69 @@ void armTouchWakeAndSleep() {
 #error Unsupported Synap sleep target
 #endif
   if (wakeError!=ESP_OK) {
-    sleepPending=false;
-    synapDeepSleepMarker=0;
     Serial.printf("[POWER] failed to arm touch wake err=%d\n",int(wakeError));
+    return false;
+  }
+  synapLastSleepStage=SLEEP_STAGE_WAKE_ARMED;
+  return true;
+}
+
+void armTouchWakeAndSleep() {
+  synapDeepSleepMarker=SYNAP_DEEP_SLEEP_MARKER;
+  sleepPending=true;
+  if (!armTouchWakeSource()) {
+    synapLastSleepStage=SLEEP_STAGE_ABORTED;
+    Serial.println("[POWER] fail-closed wake arm failed; rebooting with sleep lock retained");
+    delay(250);
+    ESP.restart();
     return;
   }
-  synapDeepSleepMarker=SYNAP_DEEP_SLEEP_MARKER;
+  synapLastSleepStage=SLEEP_STAGE_ENTERING;
+  Serial.printf("[POWER] deep sleep now request=%u gpio=%u\n",
+    unsigned(synapSleepRequestCounter),unsigned(digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL));
   esp_deep_sleep_start();
-  sleepPending=false;
-  synapDeepSleepMarker=0;
+  Serial.println("[POWER] deep sleep returned unexpectedly; rebooting fail-closed");
+  delay(250);
+  ESP.restart();
 }
 
 bool confirmTouchWakeTripleTap() {
-  const bool sleepResume=(synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER);
+  const bool durableLock=readDurableSleepLock();
+  const bool sleepResume=durableLock || (synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER) || bootSleepWasLocked;
   const esp_sleep_wakeup_cause_t cause=esp_sleep_get_wakeup_cause();
-  Serial.printf("[POWER] wake cause=%u sleepResume=%u\n",unsigned(cause),sleepResume?1u:0u);
+  bootWakeCause=cause;
+  synapLastWakeCause=static_cast<uint8_t>(cause);
+  bootSleepWasLocked=sleepResume;
+  Serial.printf("[POWER] wake cause=%u sleepLock=%u rtcMarker=%u stage=%u request=%u\n",
+    unsigned(cause),durableLock?1u:0u,
+    synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER?1u:0u,
+    unsigned(synapLastSleepStage),unsigned(synapSleepRequestCounter));
   if (!sleepResume) return true;
 
-  // The electrical wake itself counts as tap 1. Do not initialize BLE while
-  // validating taps 2 and 3, so incomplete wake gestures stay invisible to the PWA.
-  synapDeepSleepMarker=0;
+  bool touchWake=false;
+#if CONFIG_IDF_TARGET_ESP32S3
+  touchWake=(cause==ESP_SLEEP_WAKEUP_EXT0);
+#elif CONFIG_IDF_TARGET_ESP32C3
+  touchWake=(cause==ESP_SLEEP_WAKEUP_GPIO);
+#endif
+  if (!touchWake) {
+    // A reset/brownout/watchdog during the shutdown path is not permission to boot BLE.
+    synapLastSleepStage=SLEEP_STAGE_RESET_RECOVERY;
+    synapDeepSleepMarker=SYNAP_DEEP_SLEEP_MARKER;
+    sleepPending=true;
+    Serial.println("[POWER] sleep lock survived a non-touch reset; returning to deep sleep before BLE");
+    delay(30);
+    armTouchWakeAndSleep();
+    return false;
+  }
+
+  // The electrical touch wake counts as tap 1. Keep both durable and RTC locks set
+  // until taps 2 and 3 are validated, so any reset during this window still fails closed.
+  synapLastSleepStage=SLEEP_STAGE_WAKE_VALIDATING;
   Serial.println("[TOUCH] deep-sleep wake: tap 1/3; waiting for taps 2 and 3");
+  const uint32_t firstPressedAt=millis();
   while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) {
-    if (millis()>WAKE_TAP_MAX_MS+250u) {
+    if (uint32_t(millis()-firstPressedAt)>WAKE_TAP_MAX_MS+250u) {
       Serial.println("[TOUCH] wake tap too long; returning to deep sleep");
       delay(30);armTouchWakeAndSleep();return false;
     }
@@ -768,7 +846,14 @@ bool confirmTouchWakeTripleTap() {
   if (taps!=3) {
     delay(30);armTouchWakeAndSleep();return false;
   }
-  Serial.println("[TOUCH] triple tap wake confirmed; continuing normal boot");
+  if (!writeDurableSleepLock(false)) {
+    Serial.println("[POWER] could not clear durable sleep lock; refusing BLE boot");
+    delay(30);armTouchWakeAndSleep();return false;
+  }
+  synapDeepSleepMarker=0;
+  sleepPending=false;
+  synapLastSleepStage=SLEEP_STAGE_WAKE_CONFIRMED;
+  Serial.println("[TOUCH] triple tap wake confirmed; sleep lock cleared; continuing normal boot");
   touchRawState=false;touchStableState=false;touchPressedAt=0;touchFirstTapAt=0;
   touchChangedAt=millis();
   wakeRecordIntent=false;
@@ -817,29 +902,82 @@ void enterRemoteStandby() {
 void enterDeepSleep(const char* reason) {
   if (otaBusy() || streamingEnabled.load() || sleepPending) return;
   if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) return;
-  const uint32_t releaseStableAt=millis();
-  while (uint32_t(millis()-releaseStableAt)<500u) {
+
+  const uint32_t initialReleaseAt=millis();
+  while (uint32_t(millis()-initialReleaseAt)<300u) {
     if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) {
-      Serial.println("[TOUCH] sleep cancelled: touch line was not stably released");
+      Serial.println("[TOUCH] sleep cancelled: touch line was not released");
       return;
     }
     delay(10);
   }
+
   remoteStandby=false;
   wakeRecordIntent=false;
   sleepPending=true;
-  Serial.println("[POWER] sleep pending; BLE control commands locked");
+  ++synapSleepRequestCounter;
+  synapLastSleepStage=SLEEP_STAGE_REQUESTED;
+  synapDeepSleepMarker=SYNAP_DEEP_SLEEP_MARKER;
+
+  // The durable lock is committed before any operation that could reset or drop BLE.
+  if (!writeDurableSleepLock(true)) {
+    synapLastSleepStage=SLEEP_STAGE_ABORTED;
+    synapDeepSleepMarker=0;
+    sleepPending=false;
+    Serial.println("[POWER] durable sleep lock write failed; staying awake");
+    return;
+  }
+  synapLastSleepStage=SLEEP_STAGE_LOCKED;
+  Serial.printf("[POWER] sleep lock committed request=%u reason=%s\n",
+    unsigned(synapSleepRequestCounter),reason?reason:"idle");
+
+#if USE_REAL_I2S_MIC
+  if (microphoneReady) stopMicrophone();
+#endif
+  applyCpuPowerProfile(false);
+
+  // Recheck the TTP223 immediately before arming the level wake source.
+  const uint32_t finalReleaseAt=millis();
+  while (uint32_t(millis()-finalReleaseAt)<300u) {
+    if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) {
+      writeDurableSleepLock(false);
+      synapDeepSleepMarker=0;
+      synapLastSleepStage=SLEEP_STAGE_ABORTED;
+      sleepPending=false;
+      Serial.println("[TOUCH] sleep cancelled: GPIO13 changed before wake arm");
+      return;
+    }
+    delay(10);
+  }
+  synapLastGpioBeforeSleep=static_cast<uint8_t>(digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL);
+  synapLastSleepStage=SLEEP_STAGE_GPIO_RELEASED;
+
+  if (!armTouchWakeSource()) {
+    writeDurableSleepLock(false);
+    synapDeepSleepMarker=0;
+    synapLastSleepStage=SLEEP_STAGE_ABORTED;
+    sleepPending=false;
+    Serial.println("[POWER] wake source could not be armed; sleep cancelled");
+    return;
+  }
+
+  // Tell the app only after the durable lock and wake source are ready. No BLE deinit
+  // is performed here; deep sleep itself tears down the radio without a reset window.
+  Serial.println("[POWER] sleep pending; BLE commands locked; wake source armed");
   publishPowerEvent(POWER_STATE_DEEP_SLEEP);
   if (deviceConnected.load()) delay(90);
-  Serial.printf("[POWER] deep sleep: %s battery=%umV\n", reason?reason:"idle", unsigned(batteryMillivolts));
-  stopMicrophone();
-  applyCpuPowerProfile(false);
+
+  // Any edge after wake arming is handled fail-closed by the boot gate.
   statusLed.clear();statusLed.show();
-  delay(25);
-  BLEDevice::deinit(true);
-  // Enter only after TTP223 has been released. Next active-high touch wakes and
-  // restarts the firmware from setup(), restoring advertising automatically.
-  armTouchWakeAndSleep();
+  synapLastSleepStage=SLEEP_STAGE_ENTERING;
+  Serial.printf("[POWER] entering deep sleep request=%u battery=%umV\n",
+    unsigned(synapSleepRequestCounter),unsigned(batteryMillivolts));
+  esp_deep_sleep_start();
+
+  // Deep sleep should not return. If it does, retain fail-closed semantics.
+  Serial.println("[POWER] deep sleep returned unexpectedly; rebooting with sleep lock retained");
+  delay(250);
+  ESP.restart();
 }
 
 void powerTick() {
@@ -1025,6 +1163,12 @@ void updateDiagnosticsCharacteristic() {
   if (deviceConnected.load()) flags|=0x02;
   if (streamingEnabled.load()) flags|=0x04;
   if (otaBusy()) flags|=0x08;
+  if (bootSleepWasLocked) flags|=0x10;
+#if CONFIG_IDF_TARGET_ESP32S3
+  if (bootWakeCause==ESP_SLEEP_WAKEUP_EXT0) flags|=0x20;
+#elif CONFIG_IDF_TARGET_ESP32C3
+  if (bootWakeCause==ESP_SLEEP_WAKEUP_GPIO) flags|=0x20;
+#endif
   value[2]=flags;value[3]=static_cast<uint8_t>(bootResetReason);
   put32le(value+4,capturedFrames.load());
   put32le(value+8,captureDrops.load());
@@ -1444,12 +1588,13 @@ void fatalSetup(const char* message) {
 }
 void setup() {
   Serial.begin(115200);
-  if (synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER) delay(20);
-  else delay(400);
   bootResetReason=esp_reset_reason();
+  bootWakeCause=esp_sleep_get_wakeup_cause();
+  bootSleepWasLocked=readDurableSleepLock() || (synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER);
+  if (bootSleepWasLocked) delay(20);
+  else delay(400);
 #if CONFIG_IDF_TARGET_ESP32S3
-  if (esp_sleep_get_wakeup_cause()==ESP_SLEEP_WAKEUP_EXT0 ||
-      synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER) {
+  if (bootWakeCause==ESP_SLEEP_WAKEUP_EXT0 || bootSleepWasLocked) {
     rtc_gpio_deinit(static_cast<gpio_num_t>(TOUCH_INPUT_PIN));
   }
 #endif
