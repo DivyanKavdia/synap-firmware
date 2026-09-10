@@ -41,17 +41,7 @@ jobs:
       - name: Prepare auditable S3 and C3 production sources
         run: |
           mkdir -p prepared/synap_esp32s3 prepared/synap_esp32c3
-          cp synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32s3/synap_esp32s3.ino
-          node tools/prepare-interactions.cjs prepared/synap_esp32s3/synap_esp32s3.ino
-          node tools/patch-runtime-fixes.cjs prepared/synap_esp32s3/synap_esp32s3.ino
-          node tools/patch-event-channel.cjs prepared/synap_esp32s3/synap_esp32s3.ino
-          node tools/patch-battery-v2.cjs prepared/synap_esp32s3/synap_esp32s3.ino
-          node tools/patch-audio-reliability.cjs prepared/synap_esp32s3/synap_esp32s3.ino
-          node tools/patch-audio-codec-v3.cjs prepared/synap_esp32s3/synap_esp32s3.ino
-          node tools/patch-touch-reliability.cjs prepared/synap_esp32s3/synap_esp32s3.ino
-          node tools/patch-production-hardening.cjs prepared/synap_esp32s3/synap_esp32s3.ino
-          node tools/patch-power-controls-v2.cjs prepared/synap_esp32s3/synap_esp32s3.ino
-          node tools/patch-power-failclosed.cjs prepared/synap_esp32s3/synap_esp32s3.ino
+          node tools/prepare-production.cjs synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32s3/synap_esp32s3.ino
           node tools/materialize-target.cjs --check esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino
           node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3/synap_esp32c3.ino
           test "$(git status --porcelain -- synap_esp32s3)" = ""

@@ -69,6 +69,8 @@ The public `SYNAP-XXXXXXXXXXXX` identity is derived from the factory eFuse MAC a
 
 Capture format is 16 kHz, signed 16-bit, mono. Each 50 ms frame contains 800 PCM samples.
 
+A conservative 70 Hz high-pass filter reduces very low frequency rumble before encoding. The conversion retains unity digital gain, and the filter does not gate quiet speech or change frame timing. It is not a speech-band noise suppression model. See [the audio review](docs/AUDIO_REVIEW.md) for measured filter response, a bypass build and the remaining hardware validation.
+
 For BLE transport, each frame is independently encoded with IMA ADPCM. Independent frames prevent one lost frame from corrupting later audio.
 
 Transport adapts to the negotiated ATT capacity. The firmware requests a large MTU where supported and uses a bounded notification payload. Audio capture and transmission are isolated so transient I2S or BLE issues do not unnecessarily terminate a recording.
@@ -119,7 +121,7 @@ After commit, firmware reboots into the updated application.
 
 ## Build and release
 
-`.github/workflows/firmware.yml` is the production build path. It runs regression tests, prepares the final S3 source, materializes the secondary target, compiles real-I2S firmware, creates OTA/factory artifacts, adds provenance, and verifies the production feed.
+`.github/workflows/firmware.yml` is the production build path. It runs regression tests, uses `tools/prepare-production.cjs` to prepare the final S3 source, materializes the secondary target, compiles real-I2S firmware, creates OTA/factory artifacts, adds provenance, and verifies the production feed.
 
 The final prepared source—not an intermediate patch state—is the release contract.
 

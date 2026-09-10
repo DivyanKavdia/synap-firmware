@@ -90,18 +90,12 @@ constexpr uint8_t TOUCH_INPUT_PIN = SYNAP_TOUCH_PIN;
 constexpr uint8_t TOUCH_ACTIVE_LEVEL = SYNAP_TOUCH_ACTIVE_LEVEL;
 constexpr uint8_t BATTERY_ADC_PIN = SYNAP_BATTERY_ADC_PIN;
 constexpr uint16_t TOUCH_DEBOUNCE_MS = 35;
-constexpr uint16_t TOUCH_DOUBLE_TAP_MS = 500;
-constexpr uint16_t TOUCH_LONG_PRESS_MS = 1200;
-constexpr uint16_t TOUCH_SLEEP_HOLD_MS = 5000;
 constexpr uint32_t AUTO_SLEEP_DISCONNECTED_MS = 300000u;
 constexpr uint32_t BATTERY_SAMPLE_MS = 15000u;
 constexpr uint32_t BATTERY_DIVIDER_TOP_OHMS = 1000000u;
 constexpr uint32_t BATTERY_DIVIDER_BOTTOM_OHMS = 470000u;
 constexpr uint16_t BATTERY_LOW_MV = 3600;
 constexpr uint16_t BATTERY_CRITICAL_MV = 3400;
-constexpr uint8_t MEMORY_EVENT_MAGIC = 0xB6;
-constexpr uint8_t MEMORY_EVENT_VERSION = 1;
-constexpr uint8_t MEMORY_EVENT_REMEMBER = 1;
 constexpr uint8_t BATTERY_EVENT_MAGIC = 0xB7;
 constexpr uint8_t BATTERY_EVENT_VERSION = 2;
 // TTP223 OUT is a digital, active-high push-pull signal by default.
@@ -154,7 +148,9 @@ DeviceState deviceState = DeviceState::DISCONNECTED;
 ErrorCode errorCode = ErrorCode::NONE;
 std::atomic<uint16_t> peerMtu{23}, attValueCapacity{20}, audioPayloadBytes{0};
 std::atomic<uint8_t> chunksPerFrame{0};
+#if !USE_REAL_I2S_MIC
 float tonePhase = 0;
+#endif
 uint32_t disconnectedAt = 0;
 bool restartAdvertising = false;
 bool remoteStandby = false;
@@ -196,9 +192,8 @@ bool writeDurableSleepLock(bool locked) {
   return ok;
 }
 esp_reset_reason_t bootResetReason = ESP_RST_UNKNOWN;
-uint32_t touchFirstTapAt = 0, touchPressedAt = 0, memoryAckUntil = 0, memoryEventCounter = 0;
-uint32_t streamStartedAt = 0;
-bool touchRawState = false, touchStableState = false, touchLongSent = false, touchLongEligible = false, touchIdlePress = false;
+uint32_t touchPressedAt = 0;
+bool touchRawState = false, touchStableState = false;
 uint32_t touchChangedAt = 0;
 uint32_t lastLedPattern = UINT32_MAX;
 uint32_t lastBatterySampleAt = 0, lastBatteryPublishAt = 0;
@@ -209,7 +204,6 @@ bool batteryAvailable = false;
 // Explicit prototypes prevent Arduino's auto-prototyper from duplicating defaults.
 void setDeviceState(DeviceState state, ErrorCode error);
 void updateStatusLed(bool force = false);
-void publishRememberEvent();
 void publishBatteryEvent(bool force = false);
 void sampleBattery(bool force = false);
 bool batteryCritical();
@@ -530,10 +524,7 @@ static void put32le(uint8_t* p, uint32_t value) {
 void updateStatusLed(bool force) {
   const uint32_t now = millis();
   uint8_t r=0,g=0,b=0;
-  if (memoryAckUntil && static_cast<int32_t>(memoryAckUntil-now)>0) {
-    const uint32_t phase=(memoryAckUntil-now)%240u;
-    if (phase>120u) { g=LED_DIM+2; b=LED_DIM+2; }
-  } else if (otaBusy()) {
+  if (otaBusy()) {
     const uint32_t phase=now%1400u;
     if (phase<55u || (phase>=180u && phase<235u)) { r=LED_DIM; g=2; }
   } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {
@@ -854,7 +845,7 @@ bool confirmTouchWakeTripleTap() {
   sleepPending=false;
   synapLastSleepStage=SLEEP_STAGE_WAKE_CONFIRMED;
   Serial.println("[TOUCH] triple tap wake confirmed; sleep lock cleared; continuing normal boot");
-  touchRawState=false;touchStableState=false;touchPressedAt=0;touchFirstTapAt=0;
+  touchRawState=false;touchStableState=false;touchPressedAt=0;
   touchChangedAt=millis();
   wakeRecordIntent=false;
   return true;
@@ -992,31 +983,7 @@ void powerTick() {
   }
 }
 
-void publishRememberEvent() {
-  if (!controlCharacteristic || !deviceConnected.load() || !streamingEnabled.load() || otaBusy()) return;
-  uint8_t value[12] = {MEMORY_EVENT_MAGIC, MEMORY_EVENT_VERSION, MEMORY_EVENT_REMEMBER, 0};
-  value[3] = (streamingEnabled.load()?0x01:0) | (deviceConnected.load()?0x02:0);
-  const uint32_t counter=++memoryEventCounter;
-  // Bit 2 means bytes 8..11 are milliseconds from the start of this stream.
-  // Older PWAs ignore the flag and keep using their local timer, so packet v1
-  // remains backward compatible while newer clients get exact pendant timing.
-  const uint32_t eventTime=streamStartedAt ? uint32_t(millis()-streamStartedAt) : millis();
-  if (streamStartedAt) value[3]|=0x04;
-  put32le(value+4,counter);put32le(value+8,eventTime);
-  if (eventCharacteristic) {
-    eventCharacteristic->setValue(value,sizeof(value));
-    eventCharacteristic->notify();
-  }
-  // Compatibility path for PWA builds that predate EVENT_CHAR_UUID.
-  controlCharacteristic->setValue(value,sizeof(value));
-  controlCharacteristic->notify();
-  // Memory markers share the control characteristic with status packets. Mirror the
-  // battery handoff so the 12-byte event is transmitted before status is restored.
-  vTaskDelay(pdMS_TO_TICKS(20));
-  updateStatusCharacteristic(false);
-  memoryAckUntil=millis()+480u;
-  updateStatusLed(true);
-}
+
 
 void pollTouchControl() {
   constexpr uint16_t TOUCH_TAP_MIN_MS = 80;
@@ -1057,7 +1024,6 @@ void pollTouchControl() {
     lastStandbyState=standby;
     touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
     touchPressedAt=0;
-    touchFirstTapAt=0;
     tapCount=0;
     tapSequenceStartedAt=0;
     lastTapAt=0;
@@ -1091,7 +1057,7 @@ void pollTouchControl() {
     touchStableState=raw;
     if (touchStableState) {
       if (static_cast<int32_t>(now-touchRearmAt)<0) {
-        touchPressedAt=0;touchFirstTapAt=0;
+        touchPressedAt=0;
         tapCount=0;tapSequenceStartedAt=0;lastTapAt=0;pendingDoubleAt=0;
         return;
       }
@@ -1127,7 +1093,6 @@ void pollTouchControl() {
 
     if (tapCount>=3 && uint32_t(now-tapSequenceStartedAt)<=AWAKE_TRIPLE_WINDOW_MS) {
       tapCount=0;tapSequenceStartedAt=0;lastTapAt=0;pendingDoubleAt=0;
-      touchFirstTapAt=0;
       touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
       Serial.println("[TOUCH] triple tap -> DEEP SLEEP");
       if (streamingEnabled.load()) {
@@ -1181,7 +1146,6 @@ void updateDiagnosticsCharacteristic() {
 }
 void stopStreaming(ErrorCode reason) {
   streamingEnabled.store(false);
-  streamStartedAt=0;
   ++streamGeneration; // Invalidates queued AND already-in-flight old task work.
   if (audioFrameQueue) xQueueReset(audioFrameQueue);
 #if USE_REAL_I2S_MIC
@@ -1227,7 +1191,6 @@ void startStreaming(uint8_t version) {
   xQueueReset(audioFrameQueue);
   ++streamGeneration;
   capturedFrames=0; captureDrops=0; notifyAccepted=0; notifyRejected=0;
-  streamStartedAt=millis();
   setDeviceState(DeviceState::STREAMING, ErrorCode::NONE);
   streamingEnabled.store(true);
   updateStatusCharacteristic(true);
@@ -1385,9 +1348,70 @@ void controlTask(void* parameter) {
   }
 }
 
+#ifndef SYNAP_AUDIO_CONDITIONING_H
+#define SYNAP_AUDIO_CONDITIONING_H
+
+#include <stdint.h>
+
+// Set to 0 in a comparison build to retain the original unity-gain PCM path.
+#ifndef SYNAP_MIC_HPF_ENABLE
+#define SYNAP_MIC_HPF_ENABLE 1
+#endif
+
+namespace SynapAudio {
+
+// First-order 70 Hz high-pass at 16 kHz, with unity Nyquist gain.
+// a = exp(-2*pi*70/16000), b = (1+a)/2, quantized to Q15.
+// Q8 state avoids integer limit-cycle noise on quiet signals. Products use
+// int64_t so full-scale steps cannot overflow, including on the ESP32-C3.
+// This removes rumble/DC, not speech-band noise. No gain, gate or VAD is used.
+class SpeechHighPass {
+ public:
+  void reset() { previousInputQ8_=0; previousOutputQ8_=0; initialized_=false; }
+
+  int16_t process(int16_t sample) {
+#if SYNAP_MIC_HPF_ENABLE
+    const int32_t inputQ8=int32_t(sample)*256;
+    if (!initialized_) {
+      previousInputQ8_=inputQ8;
+      initialized_=true;
+      return 0;
+    }
+    const int64_t nextQ8=(int64_t(previousOutputQ8_)*31880 +
+      (int64_t(inputQ8)-previousInputQ8_)*32324)/32768;
+    previousInputQ8_=inputQ8;
+    previousOutputQ8_=static_cast<int32_t>(nextQ8);
+    // Symmetric rounding avoids adding a negative DC bias to quiet audio.
+    int32_t output=static_cast<int32_t>((nextQ8+(nextQ8<0 ? -128 : 128))/256);
+    if (output>32767) output=32767;
+    if (output<-32768) output=-32768;
+    return static_cast<int16_t>(output);
+#else
+    return sample;
+#endif
+  }
+
+ private:
+  int32_t previousInputQ8_=0, previousOutputQ8_=0;
+  bool initialized_=false;
+};
+
+} // namespace SynapAudio
+
+#endif
+
+static_assert(SAMPLE_RATE==16000, "Speech high-pass requires 16 kHz PCM");
+
 bool acquireAudioFrame(AudioFrame& frame) {
 #if USE_REAL_I2S_MIC
   static int32_t raw[SAMPLES_PER_FRAME];
+  // Capture-task ownership avoids sharing filter state with the control task.
+  static SynapAudio::SpeechHighPass highPass;
+  static uint32_t highPassGeneration=0;
+  if (highPassGeneration!=frame.generation) {
+    highPass.reset();
+    highPassGeneration=frame.generation;
+  }
   size_t received=0;
   uint8_t emptyReads=0;
   bool microphoneRecoveryUsed=false;
@@ -1403,7 +1427,7 @@ bool acquireAudioFrame(AudioFrame& frame) {
         stopMicrophone();
         vTaskDelay(pdMS_TO_TICKS(35));
         if (!streamingEnabled.load() || frame.generation != streamGeneration.load()) return false;
-        if (startMicrophone()) { received=0; emptyReads=0; continue; }
+        if (startMicrophone()) { highPass.reset(); received=0; emptyReads=0; continue; }
       }
       return false;
     }
@@ -1412,7 +1436,7 @@ bool acquireAudioFrame(AudioFrame& frame) {
   }
   for (uint16_t i=0; i<SAMPLES_PER_FRAME; ++i) {
     const int32_t sample=raw[i] >> 16;
-    frame.samples[i]=static_cast<int16_t>(sample);
+    frame.samples[i]=highPass.process(static_cast<int16_t>(sample));
   }
 #else
   const float increment=2.0f*PI*440.0f/SAMPLE_RATE;
