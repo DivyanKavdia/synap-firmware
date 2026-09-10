@@ -83,14 +83,12 @@ Expected module configuration:
 
 Current production interaction model:
 
-- while connected and idle: hold for at least 2 seconds but less than 5 seconds, then release, to start recording
-- while recording: double tap to stop recording
-- while recording: a single tap or any other hold shorter than 5 seconds does nothing
-- while connected and idle: single tap and double tap do nothing
-- in any non-OTA state: hold for at least 5 seconds, then release, to enter deep sleep; if recording, capture is stopped cleanly first
-- from deep sleep: keep TTP223 continuously touched for 5 seconds, then release, to wake and remain awake
-- a shorter deep-sleep wake touch returns the device to deep sleep
-- the 2-second START is evaluated on release so a 5-second sleep hold cannot accidentally start recording
+- while connected and idle: double tap to start recording
+- while recording: double tap to stop recording and enter BLE standby
+- in BLE standby: double tap to wake and start recording
+- in any non-OTA state: triple tap to enter deep sleep; active recording stops first
+- from deep sleep: triple tap to wake; one or two taps return to deep sleep without initializing BLE
+- double-tap actions wait briefly for a possible third tap, keeping the sleep gesture separate from recording
 - Remember This is no longer assigned to the touch sensor
 - touch actions are ignored during OTA
 - deep sleep is not entered while TTP223 OUT is still HIGH, preventing an immediate wake loop
@@ -104,7 +102,6 @@ The production power-saving status model uses short dim pulses rather than leavi
 - red pulse: BLE disconnected
 - blue pulse: connected / idle
 - green pulse: recording
-- cyan acknowledgement: asynchronous Remember event from supported non-touch control paths
 - amber pulse pattern: OTA
 - purple pulse pattern: error
 

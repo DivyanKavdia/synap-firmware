@@ -79,10 +79,13 @@ test('secondary target remains materializable after fail-closed patch',()=>{
   assert.doesNotMatch(c3,/esp_sleep_enable_ext1_wakeup/);
 });
 
-test('release workflow applies fail-closed patch after power controls and before materialization',()=>{
+test('production pipeline applies fail-closed patch after power controls and before materialization',()=>{
   const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
-  const powerAt=workflow.indexOf('patch-power-controls-v2.cjs');
-  const closedAt=workflow.indexOf('patch-power-failclosed.cjs');
+  const pipeline=fs.readFileSync(path.join(root,'tools/prepare-production.cjs'),'utf8');
+  const stages=pipeline.slice(pipeline.indexOf('const stages='),pipeline.indexOf('\n];'));
+  const powerAt=stages.indexOf('patch-power-controls-v2.cjs');
+  const closedAt=stages.indexOf('patch-power-failclosed.cjs');
+  const prepareAt=workflow.indexOf('prepare-production.cjs');
   const materializeAt=workflow.indexOf('materialize-target.cjs --check');
-  assert(powerAt>0 && closedAt>powerAt && materializeAt>closedAt);
+  assert(powerAt>0 && closedAt>powerAt && prepareAt>0 && materializeAt>prepareAt);
 });

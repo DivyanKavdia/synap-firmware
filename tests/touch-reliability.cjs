@@ -5,7 +5,7 @@ const {patch:runtime}=require('../tools/patch-runtime-fixes.cjs');
 const {patch:touch}=require('../tools/patch-touch-reliability.cjs');
 const root=path.join(__dirname,'..');
 
-test('TTP223 implements only 2s start, recording double-tap stop and 5s sleep/wake',()=>{
+test('legacy preparation stage retains its anchors before final double/triple-tap controls replace it',()=>{
   const source=fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8');
   const prepared=touch(runtime(prepare(source)));
   assert.match(prepared,/pinMode\(TOUCH_INPUT_PIN, INPUT\);/);
