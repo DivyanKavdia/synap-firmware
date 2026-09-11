@@ -36,8 +36,8 @@ test('secondary C3 target uses long-press power and double-tap recording without
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);assert.match(c3,/#define SYNAP_BATTERY_ADC_PIN 1/);assert.doesNotMatch(c3,/GPIO8/);
   assert.match(c3,/AUDIO_PROTOCOL_VERSION = 3/);assert.match(c3,/MIN_CHUNKS_PER_FRAME = 1/);assert.match(c3,/MIN_REQUIRED_MTU = 32/);
-  assert.match(c3,/C3_WAKE_HOLD_MS = 1500/);
-  assert.match(c3,/C3_SLEEP_HOLD_MS = 1500/);
+  assert.match(c3,/C3_WAKE_HOLD_MS = 4000/);
+  assert.match(c3,/C3_SLEEP_HOLD_MS = 4000/);
   assert.match(c3,/C3_DOUBLE_TAP_GAP_MS = 550/);
   assert.match(c3,/C3 long-press wake confirmed; sleep lock cleared; continuing normal boot/);
   assert.match(c3,/C3 long press -> DEEP SLEEP/);

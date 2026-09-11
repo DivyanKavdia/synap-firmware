@@ -85,8 +85,8 @@ The C3 uses a target-specific gesture model designed for reliable GPIO3 level wa
 - while connected and idle: double tap to start recording
 - while recording: double tap to stop recording and enter BLE standby
 - in BLE standby: double tap to wake and start recording
-- in any awake non-OTA state: hold the TTP223 for about 1.5 seconds to enter deep sleep; active recording stops first
-- from deep sleep: hold the TTP223 for about 1.5 seconds to confirm wake and continue normal boot
+- in any awake non-OTA state: hold the TTP223 for at least four seconds, then release, to enter deep sleep; active recording stops first
+- from deep sleep: hold the TTP223 continuously for four seconds after firmware starts, then release, to confirm wake and continue normal boot; allow brief boot overhead
 - a short deep-sleep touch wakes the silicon electrically but is rejected by firmware and returns to deep sleep before BLE starts
 - a single tap while awake has no action
 - C3 does not use triple tap
