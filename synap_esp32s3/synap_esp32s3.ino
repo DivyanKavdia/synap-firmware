@@ -21,9 +21,21 @@
 #endif
 #if USE_REAL_I2S_MIC
 #include <ESP_I2S.h>
+#include <freertos/semphr.h>
 I2SClass microphoneI2S;
 bool microphoneReady = false;
-bool microphoneValidated = false;
+std::atomic<bool> microphoneValidated{false};
+StaticSemaphore_t microphoneMutexStorage;
+SemaphoreHandle_t microphoneMutex = nullptr;
+
+// Capture recovery calls start/stop while already holding this lock.
+class MicrophoneGuard {
+ public:
+  MicrophoneGuard() { xSemaphoreTakeRecursive(microphoneMutex, portMAX_DELAY); }
+  ~MicrophoneGuard() { xSemaphoreGiveRecursive(microphoneMutex); }
+  MicrophoneGuard(const MicrophoneGuard&) = delete;
+  MicrophoneGuard& operator=(const MicrophoneGuard&) = delete;
+};
 #else
 #include <math.h>
 #endif
@@ -117,7 +129,7 @@ enum class ErrorCode : uint8_t {
   NONE=0, MTU_TOO_SMALL=1, AUDIO_NOT_SUBSCRIBED=2,
   AUDIO_SOURCE_FAILED=3, PROTOCOL_MISMATCH=4, BAD_COMMAND=5, TRANSPORT_CHANGED=6
 };
-enum class EventType : uint8_t { CONNECTED, DISCONNECTED, COMMAND, STREAM_ERROR };
+enum class EventType : uint8_t { COMMAND, STREAM_ERROR };
 struct ControlMessage {
   EventType type;
   uint8_t command, version;
@@ -142,6 +154,7 @@ BLE2902* audioCccd = nullptr;
 QueueHandle_t audioFrameQueue = nullptr, controlQueue = nullptr;
 TaskHandle_t captureTaskHandle = nullptr;
 std::atomic<bool> deviceConnected{false}, streamingEnabled{false};
+std::atomic<bool> connectionEventPending{false}, transmitterActive{false};
 std::atomic<uint32_t> connectionGeneration{0}, streamGeneration{0};
 std::atomic<uint32_t> capturedFrames{0}, captureDrops{0}, notifyRejected{0}, controlDrops{0};
 DeviceState deviceState = DeviceState::DISCONNECTED;
@@ -430,6 +443,7 @@ BLECharacteristic* otaStatusCharacteristic=nullptr;
 QueueHandle_t otaQueue=nullptr;
 struct OtaMessage { uint32_t connection;uint16_t length;uint8_t data[Synap::OtaSession::PACKET_MAX]; };
 std::atomic<bool> otaOverflow{false};
+std::atomic<bool> otaBusySnapshot{false};
 bool otaBusy() { return otaSession.busy(); } // Control task only.
 
 class OtaWriteCallbacks : public BLECharacteristicCallbacks {
@@ -444,6 +458,7 @@ class OtaWriteCallbacks : public BLECharacteristicCallbacks {
 };
 
 void otaPublish(bool notify) {
+  otaBusySnapshot.store(otaSession.busy());
   if (!otaStatusCharacteristic) return;
   uint8_t value[20];otaSession.status(value,SYNAP_FIRMWARE_BUILD);
   otaStatusCharacteristic->setValue(value,sizeof(value));
@@ -505,7 +520,8 @@ void otaTick() {
   if (otaSession.state!=previous) {
     otaPublish(true);
     if (otaBusy()) updateStatusLed(true);
-    else setDeviceState(deviceConnected.load() ? DeviceState::CONNECTED_IDLE : DeviceState::DISCONNECTED,ErrorCode::NONE);
+    else if (!streamingEnabled.load())
+      setDeviceState(deviceConnected.load() ? DeviceState::CONNECTED_IDLE : DeviceState::DISCONNECTED,ErrorCode::NONE);
   }
   if (otaSession.state==Synap::COMMITTED) {
     if (!rebootAt) rebootAt=millis();
@@ -567,6 +583,7 @@ void applyCpuPowerProfile(bool active) {
 
 bool startMicrophone() {
 #if USE_REAL_I2S_MIC
+  MicrophoneGuard guard;
   if (microphoneReady) return true;
   constexpr uint8_t MIC_START_ATTEMPTS=3;
   for (uint8_t attempt=1; attempt<=MIC_START_ATTEMPTS; ++attempt) {
@@ -594,6 +611,7 @@ bool startMicrophone() {
 
 void stopMicrophone() {
 #if USE_REAL_I2S_MIC
+  MicrophoneGuard guard;
   if (!microphoneReady) return;
   microphoneI2S.end();
   microphoneReady=false;
@@ -871,7 +889,7 @@ void enterRemoteStandby() {
   if (streamingEnabled.load()) stopStreaming();
   remoteStandby=true;
 #if USE_REAL_I2S_MIC
-  if (microphoneReady) stopMicrophone();
+  stopMicrophone();
 #endif
   applyCpuPowerProfile(false);
   setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);
@@ -913,7 +931,7 @@ void enterDeepSleep(const char* reason) {
     unsigned(synapSleepRequestCounter),reason?reason:"idle");
 
 #if USE_REAL_I2S_MIC
-  if (microphoneReady) stopMicrophone();
+  stopMicrophone();
 #endif
   applyCpuPowerProfile(false);
 
@@ -1114,7 +1132,8 @@ void updateDiagnosticsCharacteristic() {
 #endif
   if (deviceConnected.load()) flags|=0x02;
   if (streamingEnabled.load()) flags|=0x04;
-  if (otaBusy()) flags|=0x08;
+  // The GATT read callback must not inspect the control task's mutable OTA engine.
+  if (otaBusySnapshot.load()) flags|=0x08;
   if (bootSleepWasLocked) flags|=0x10;
 #if CONFIG_IDF_TARGET_ESP32S3
   if (bootWakeCause==ESP_SLEEP_WAKEUP_EXT0) flags|=0x20;
@@ -1136,8 +1155,10 @@ void stopStreaming(ErrorCode reason) {
   ++streamGeneration; // Invalidates queued AND already-in-flight old task work.
   if (audioFrameQueue) xQueueReset(audioFrameQueue);
 #if USE_REAL_I2S_MIC
-  if (microphoneReady) { vTaskDelay(pdMS_TO_TICKS(90)); stopMicrophone(); }
+  stopMicrophone();
 #endif
+  // Acknowledge STOP only after the final in-flight notification has returned.
+  while (transmitterActive.load()) vTaskDelay(1);
   applyCpuPowerProfile(false);
   if (!deviceConnected.load()) setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
   else if (reason == ErrorCode::NONE) setDeviceState(DeviceState::CONNECTED_IDLE, reason);
@@ -1170,11 +1191,11 @@ void startStreaming(uint8_t version) {
     stopStreaming(ErrorCode::AUDIO_NOT_SUBSCRIBED); return;
   }
 #endif
+  if (!configureTransportFromPeerMtu()) { stopStreaming(ErrorCode::MTU_TOO_SMALL); return; }
   applyCpuPowerProfile(true);
 #if USE_REAL_I2S_MIC
   if (!startMicrophone()) { stopStreaming(ErrorCode::AUDIO_SOURCE_FAILED); return; }
 #endif
-  if (!configureTransportFromPeerMtu()) { stopStreaming(ErrorCode::MTU_TOO_SMALL); return; }
   xQueueReset(audioFrameQueue);
   ++streamGeneration;
   capturedFrames=0; captureDrops=0; notifyRejected=0;
@@ -1197,14 +1218,14 @@ class ServerCallbacks : public BLEServerCallbacks {
     ++connectionGeneration;
     streamingEnabled.store(false);
     deviceConnected.store(true);
-    queueEvent(EventType::CONNECTED, 0, PROTOCOL_VERSION, streamGeneration.load());
+    connectionEventPending.store(true);
   }
   void onDisconnect(BLEServer* server) override {
     (void)server;
     deviceConnected.store(false);
     streamingEnabled.store(false);
     ++connectionGeneration;
-    queueEvent(EventType::DISCONNECTED, 0, PROTOCOL_VERSION, streamGeneration.load());
+    connectionEventPending.store(true);
   }
 };
 class ControlCallbacks : public BLECharacteristicCallbacks {
@@ -1269,31 +1290,32 @@ void processCommand(uint8_t command, uint8_t version) {
       break;
   }
 }
+void reconcileConnection() {
+  // Link transitions cannot be lost when the command queue is full. A newer
+  // transition during this work leaves the flag set for the next control tick.
+  if (!connectionEventPending.exchange(false)) return;
+  if (deviceConnected.load()) {
+    restartAdvertising=false;
+    disconnectedAt=0;
+    peerMtu=23; attValueCapacity=20; chunksPerFrame=0; audioPayloadBytes=0;
+    stopStreaming();
+    publishPowerEvent(remoteStandby ? POWER_STATE_STANDBY : POWER_STATE_AWAKE);
+    sampleBattery(true);
+  } else {
+    stopStreaming();
+    disconnectedAt=millis();
+    restartAdvertising=true;
+  }
+}
+
 void controlTask(void* parameter) {
   (void)parameter;
   ControlMessage message;
   for (;;) {
-    if (xQueueReceive(controlQueue, &message, pdMS_TO_TICKS(10)) == pdTRUE) {
-      if (message.connection != connectionGeneration.load()) continue;
+    const bool received=xQueueReceive(controlQueue, &message, pdMS_TO_TICKS(10)) == pdTRUE;
+    reconcileConnection();
+    if (received && message.connection == connectionGeneration.load()) {
       switch (message.type) {
-        case EventType::CONNECTED:
-          restartAdvertising=false;
-          disconnectedAt=0;
-          peerMtu=23; attValueCapacity=20; chunksPerFrame=0; audioPayloadBytes=0;
-          if (remoteStandby) {
-            setDeviceState(DeviceState::CONNECTED_IDLE, ErrorCode::NONE);
-            updateStatusCharacteristic(true);
-            publishPowerEvent(POWER_STATE_STANDBY);
-          } else {
-            stopStreaming();
-            publishPowerEvent(POWER_STATE_AWAKE);
-          }
-          sampleBattery(true);
-          break;
-        case EventType::DISCONNECTED:
-          stopStreaming();
-          disconnectedAt=millis(); restartAdvertising=true;
-          break;
         case EventType::COMMAND:
           processCommand(message.command, message.version);
           break;
@@ -1303,10 +1325,6 @@ void controlTask(void* parameter) {
           }
           break;
       }
-    }
-    // Recovery even if a disconnect event could not fit in the control queue.
-    if (!deviceConnected.load() && deviceState != DeviceState::DISCONNECTED) {
-      stopStreaming(); disconnectedAt=millis(); restartAdvertising=true;
     }
     if (deviceConnected.load() && streamingEnabled.load()) {
       uint16_t liveMtu=bleServer->getPeerMTU(bleServer->getConnId());
@@ -1391,6 +1409,7 @@ static_assert(SAMPLE_RATE==16000, "Speech high-pass requires 16 kHz PCM");
 
 bool acquireAudioFrame(AudioFrame& frame) {
 #if USE_REAL_I2S_MIC
+  MicrophoneGuard guard;
   static int32_t raw[SAMPLES_PER_FRAME];
   // Capture-task ownership avoids sharing filter state with the control task.
   static SynapAudio::SpeechHighPass highPass;
@@ -1543,12 +1562,16 @@ void transmitterTask(void* parameter) {
   uint32_t generation=0;
   for (;;) {
     if (xQueueReceive(audioFrameQueue, &frame, pdMS_TO_TICKS(100)) != pdTRUE) continue;
-    if (!streamingEnabled.load() || frame.generation != streamGeneration.load()) continue;
-    generation=frame.generation;
-    if (!sendAudioFrame(frame, frame.sequence) &&
-        streamingEnabled.load() && generation == streamGeneration.load()) {
-      requestStreamError(ErrorCode::TRANSPORT_CHANGED, generation);
+    // Claim activity before checking the session so STOP cannot miss a pending send.
+    transmitterActive.store(true);
+    if (streamingEnabled.load() && frame.generation == streamGeneration.load()) {
+      generation=frame.generation;
+      if (!sendAudioFrame(frame, frame.sequence) &&
+          streamingEnabled.load() && generation == streamGeneration.load()) {
+        requestStreamError(ErrorCode::TRANSPORT_CHANGED, generation);
+      }
     }
+    transmitterActive.store(false);
   }
 }
 
@@ -1603,6 +1626,10 @@ void fatalSetup(const char* message) {
 }
 void setup() {
   Serial.begin(115200);
+#if USE_REAL_I2S_MIC
+  microphoneMutex=xSemaphoreCreateRecursiveMutexStatic(&microphoneMutexStorage);
+  if (!microphoneMutex) fatalSetup("[FATAL] microphone lock unavailable");
+#endif
   bootResetReason=esp_reset_reason();
   bootWakeCause=esp_sleep_get_wakeup_cause();
   bootSleepWasLocked=readDurableSleepLock() || (synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER);

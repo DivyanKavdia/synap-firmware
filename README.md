@@ -73,7 +73,7 @@ A conservative 70 Hz high-pass filter reduces very low frequency rumble before e
 
 For BLE transport, each frame is independently encoded with IMA ADPCM. Independent frames prevent one lost frame from corrupting later audio.
 
-Transport adapts to the negotiated ATT capacity. The firmware requests a large MTU where supported and uses a bounded notification payload. Audio capture and transmission are isolated so transient I2S or BLE issues do not unnecessarily terminate a recording.
+Transport adapts to the negotiated ATT capacity. The firmware requests a large MTU where supported and uses a bounded notification payload. Audio capture and transmission are isolated so transient I2S or BLE issues do not unnecessarily terminate a recording. Microphone access is synchronized across tasks, and STOP waits for capture and notification submission to finish before reporting idle. BLE link changes are handled independently of command-queue capacity. See the [runtime review](docs/RUNTIME_REVIEW.md) for the fixes and validation.
 
 The pendant streams audio while connected and does not store recordings locally. If BLE disconnects, capture stops and the queued audio is discarded.
 

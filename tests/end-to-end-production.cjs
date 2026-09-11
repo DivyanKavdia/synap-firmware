@@ -12,7 +12,7 @@ test('final production S3 source matches audio, touch, low-power and OTA contrac
   assert.match(s3,/MIN_CHUNKS_PER_FRAME = 1/);assert.match(s3,/MIN_REQUIRED_MTU = 32/);assert.match(s3,/MAX_AUDIO_PAYLOAD_BYTES = 500/);
   assert.match(s3,/MIC_START_ATTEMPTS=3[\s\S]*?attempt<=MIC_START_ATTEMPTS/);
   assert.match(s3,/microphoneValidated=startMicrophone\(\);\n  if \(microphoneValidated\) stopMicrophone\(\);/);
-  assert.match(s3,/if \(microphoneReady\) \{ vTaskDelay\(pdMS_TO_TICKS\(90\)\); stopMicrophone\(\); \}/);
+  assert.match(s3,/void stopStreaming\(ErrorCode reason\)[\s\S]*?#if USE_REAL_I2S_MIC\s*stopMicrophone\(\);/);
   assert.match(s3,/remote standby -> awake; microphone remains off until START/);
   assert.match(s3,/TOUCH_TAP_MIN_MS = 80/);assert.match(s3,/TOUCH_TAP_MAX_MS = 450/);
   assert.match(s3,/AWAKE_TRIPLE_TAP_GAP_MS = 500/);assert.match(s3,/AWAKE_TRIPLE_WINDOW_MS = 1400/);

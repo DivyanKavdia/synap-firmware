@@ -5,7 +5,7 @@ const root=path.join(__dirname,'..');
 test('production audio powers microphone and CPU only when needed',()=>{
   const source=fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8');
   const prepared=source;
-  assert.match(prepared,/bool microphoneValidated = false/);
+  assert.match(prepared,/std::atomic<bool> microphoneValidated\{false\}/);
   assert.match(prepared,/bool startMicrophone\(\)/);
   assert.match(prepared,/void stopMicrophone\(\)/);
   assert.match(prepared,/microphoneI2S\.end\(\)/,'I2S clocks must stop while idle');
