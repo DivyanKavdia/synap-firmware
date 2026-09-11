@@ -12,7 +12,7 @@ test('production audio powers microphone and CPU only when needed',()=>{
   assert.match(source,/microphoneValidated=startMicrophone\(\);[\s\S]*stopMicrophone\(\)/,'boot should probe then power down the microphone');
   assert.match(source,/&& microphoneValidated/,'OTA rollback validation must not require I2S to remain running');
   assert.match(source,/IDLE_CPU_MHZ = 80, ACTIVE_CPU_MHZ = 240/,'S3 idle and active CPU profiles must be explicit');
-  assert.match(source,/applyCpuPowerProfile\(streamingEnabled\.load\(\) \|\| otaBusy\(\)\)/,'recording and OTA must restore the active CPU profile');
+  assert.match(source,/applyCpuPowerProfile\(streamingEnabled\.load\(\) \|\| otaNeedsActiveCpu\(\)\)/,'recording and active OTA work must retain the active CPU profile');
   assert.match(source,/ulTaskNotifyTake\(pdTRUE, portMAX_DELAY\)/,'idle capture blocks until START');
   assert.match(source,/streamingEnabled.store\(true\);\s*if \(captureTaskHandle\) xTaskNotifyGive\(captureTaskHandle\)/,'START wakes capture immediately');
 });

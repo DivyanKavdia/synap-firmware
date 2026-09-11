@@ -37,6 +37,7 @@ struct BLEServerCallbacks {
 uint32_t millis(){return clockNow;}
 int pdMS_TO_TICKS(int ms){return ms;}
 bool otaBusy(){return busy;}
+bool otaNeedsActiveCpu(){return busy;}
 void updateStatusCharacteristic(bool){}
 void setDeviceState(DeviceState state,ErrorCode error){deviceState=state;lastError=error;}
 void stopStreaming(ErrorCode reason=ErrorCode::NONE){
