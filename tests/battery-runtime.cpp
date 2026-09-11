@@ -39,18 +39,21 @@ void updateStatusLed(bool){}
 // INSERT BATTERY
 uint16_t word(size_t offset){return event.value[offset]|uint16_t(event.value[offset+1])<<8;}
 int main(){
+  assert(batteryPercentFromMillivolts(CONFIG_IDF_TARGET_ESP32C3?4149:4129)==99);
+  assert(batteryPercentFromMillivolts(CONFIG_IDF_TARGET_ESP32C3?4150:4130)==100);
   configureBatteryAdc();
   assert(configuredAttenuation==(CONFIG_IDF_TARGET_ESP32C3?ADC_11db:ADC_6db));
-  adcMv=CONFIG_IDF_TARGET_ESP32C3?2100:1320;
+  adcMv=CONFIG_IDF_TARGET_ESP32C3?2750:1320;
 #if !SYNAP_BATTERY_MONITOR_ENABLE
   sampleBattery(true);
   assert(rawReads==0 && !batteryAvailable && !batteryCritical());
 #else
+  // Synthetic ADC input checks the conversion, not physical ADC accuracy.
   varying=true;
   sampleBattery(true);
   assert(rawReads==17 && mvReads==16 && delayUs==5200);
   assert(batteryAvailable && batteryPercent==100 && !batteryCritical());
-  assert(batteryMillivolts==(CONFIG_IDF_TARGET_ESP32C3?4200:4130));
+  assert(batteryMillivolts==(CONFIG_IDF_TARGET_ESP32C3?4150:4130));
   assert(batteryAdcMillivolts==adcMv && batteryAdcRaw==3000);
   assert(event.value.size()==12 && event.value==control.value);
   assert(event.value[0]==0xB7 && event.value[1]==2 && event.value[3]==1);
@@ -61,18 +64,18 @@ int main(){
   streamingEnabled=true;sampleBattery(true);
   assert(rawReads==51 && event.notifications==notifications);
   streamingEnabled=false;
-  varying=false;adcMv=CONFIG_IDF_TARGET_ESP32C3?1650:1050;
+  varying=false;adcMv=CONFIG_IDF_TARGET_ESP32C3?2200:1050;
   for(int i=0;i<3;++i)sampleBattery(true);
   assert(batteryAvailable && batteryMillivolts<=BATTERY_CRITICAL_MV);
   assert(bool(event.value[3]&2));
   assert(batteryCritical()==!bool(CONFIG_IDF_TARGET_ESP32C3));
   assert(bool(event.value[3]&4)==!bool(CONFIG_IDF_TARGET_ESP32C3));
-  for(const uint32_t invalid : {0u,2500u}){
+  for(const uint32_t invalid : {0u,3000u}){
     adcMv=invalid;sampleBattery(true);
     assert(!batteryAvailable && !batteryCritical() && batteryPercent==0);
     assert(batteryValidSamples==0 && batteryCriticalSamples==0 && event.value[3]==0);
   }
-  adcMv=CONFIG_IDF_TARGET_ESP32C3?1900:1215;sampleBattery(true);
+  adcMv=CONFIG_IDF_TARGET_ESP32C3?2520:1215;sampleBattery(true);
   assert(batteryAvailable && batteryPercent>50 && batteryPercent<80);
   // Check periodic sampling through timer wrap, retaining the forced status path.
   clockMs=0xfffffff0u;sampleBattery(true);const auto before=rawReads;
