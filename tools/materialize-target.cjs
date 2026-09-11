@@ -23,6 +23,7 @@ function materialize(source,targetId){
   if(target.id===PRIMARY_TARGET)return source;
   if(target.family!=='esp32c3')throw Error(`No materializer for ${target.id}`);
 
+  // C3 release contract: preserve S3 source byte-for-byte and apply only target-specific substitutions below.
   let out=source;
   out=out.replace(/ESP32-S3FH4R2/g,'ESP32-C3 SuperMini');
   out=out.split(PRIMARY_TARGET).join(target.id);
