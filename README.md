@@ -75,7 +75,7 @@ For BLE transport, each frame is independently encoded with IMA ADPCM. Independe
 
 Transport adapts to the negotiated ATT capacity. The firmware requests a large MTU where supported and uses a bounded notification payload. Audio capture and transmission are isolated so transient I2S or BLE issues do not unnecessarily terminate a recording.
 
-The pendant currently does not store recordings locally. If BLE disconnects, capture stops and the queued audio is discarded. See the [PSRAM reconnect-buffer proposal](docs/OFFLINE_RECORDING.md) for bridging brief disconnections during an active recording, then sending and clearing the queued audio when the PWA reconnects. The proposal excludes standalone offline recording and persistent audio storage.
+The pendant streams audio while connected and does not store recordings locally. If BLE disconnects, capture stops and the queued audio is discarded.
 
 ## Battery
 
