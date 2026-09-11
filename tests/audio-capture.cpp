@@ -11,6 +11,8 @@ constexpr uint16_t SAMPLES_PER_FRAME=800;
 struct AudioFrame { uint32_t generation; uint16_t sequence; int16_t samples[SAMPLES_PER_FRAME]; };
 std::atomic<bool> streamingEnabled{true};
 std::atomic<uint32_t> streamGeneration{1};
+int microphoneLockDepth=0;
+struct MicrophoneGuard { MicrophoneGuard(){++microphoneLockDepth;} ~MicrophoneGuard(){--microphoneLockDepth;} };
 struct SerialStub { void println(const char*) {} } Serial;
 static void vTaskDelay(int) {}
 static int pdMS_TO_TICKS(int ms) { return ms; }
@@ -28,6 +30,7 @@ struct FakeI2S {
     }
   }
   size_t readBytes(char* dest,size_t count) {
+    assert(microphoneLockDepth==1);
     if(cancelOnNextRead){streamingEnabled.store(false);cancelOnNextRead=false;}
     if(readIndex<readSizes.size())count=std::min(count,readSizes[readIndex++]);
     count=std::min(count,data.size()-position);
