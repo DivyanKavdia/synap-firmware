@@ -29,7 +29,9 @@ The microphone pins are shared. Touch, battery sense and RGB require different p
 
 ## Touch and power
 
-TTP223 is active-HIGH and momentary.
+TTP223 is active-HIGH and momentary. The two hardware targets intentionally use different power gestures. S3 keeps the existing deployed interaction model; C3 uses a simpler long-press power gesture while retaining double tap for recording.
+
+### ESP32-S3 SuperMini
 
 | State | Gesture | Result |
 | --- | --- | --- |
@@ -40,9 +42,23 @@ TTP223 is active-HIGH and momentary.
 | Deep sleep | Triple tap | Wake and continue normal boot |
 | Deep sleep | One or two taps | Return to deep sleep without starting BLE |
 
-Double-tap actions are confirmed after a short wait for a possible third tap. This keeps triple tap reserved as the power gesture without confusing it with Start/Stop.
+On S3, double-tap actions are confirmed after a short wait for a possible third tap. This keeps triple tap reserved as the power gesture without confusing it with Start/Stop.
 
-The first touch electrically wakes the MCU from deep sleep, but firmware blocks BLE initialization until the triple-tap wake sequence is complete. A retained deep-sleep marker ensures an unexpected immediate reset cannot reconnect to the PWA without the wake gesture.
+### ESP32-C3 SuperMini
+
+| State | Gesture | Result |
+| --- | --- | --- |
+| Connected idle | Double tap | Start recording immediately on the second valid tap |
+| Recording | Double tap | Stop recording, then enter BLE standby |
+| BLE standby | Double tap | Wake and start recording |
+| Any awake non-OTA state | Long press (~1.5 s) | Enter deep sleep; active recording stops first |
+| Deep sleep | Long press (~1.5 s) | Wake and continue normal boot |
+| Deep sleep | Short touch | Return to deep sleep without starting BLE |
+| Any awake state | Single tap | No action |
+
+On C3, triple tap is not used. The second valid tap acts immediately because there is no need to wait for a possible third tap. A long press is used for both sleep and wake. The firmware waits for the touch line to be released before completing the sleep transition so the level-sensitive GPIO3 wake source cannot immediately wake the device again.
+
+For both targets, the first touch electrically wakes the MCU from deep sleep, but firmware validates the target-specific wake gesture before allowing BLE initialization. A retained deep-sleep marker and durable sleep lock prevent an unexpected reset from reconnecting to the PWA without a valid wake gesture.
 
 Touch is ignored during OTA. Short state-transition lockouts prevent one physical interaction from triggering multiple state changes.
 
@@ -128,7 +144,7 @@ After commit, firmware reboots into the updated application.
 
 ## Build and release
 
-`synap_esp32s3/synap_esp32s3.ino` is the production source of truth. CI copies it byte for byte. C3 source is generated from that sketch; both exact target sources are retained with build artifacts and releases.
+`synap_esp32s3/synap_esp32s3.ino` is the production source of truth. CI copies it byte for byte. C3 source is generated from that sketch; both exact target sources are retained with build artifacts and releases. C3-specific pin, single-core and touch/power behavior is applied only during C3 target materialization, so the S3 source remains unchanged.
 
 `.github/workflows/firmware.yml` runs regression tests, compiles both targets, creates OTA/factory artifacts, adds GitHub provenance and verifies the production feed. Successful eligible main builds publish automatically. See [release details](OTA_RELEASES.md).
 
@@ -153,4 +169,4 @@ The first installation is performed over USB with the target-specific board conf
 
 ## Validation
 
-Before production release, validate BLE connect/reconnect, real microphone capture, double-tap start/stop, triple-tap deep sleep, triple-tap wake without premature BLE reconnect, battery guards, long recording stability, OTA update/resume/reboot, and reconnect after OTA.
+Before production release, validate BLE connect/reconnect, real microphone capture, double-tap start/stop, battery guards, long recording stability, OTA update/resume/reboot, and reconnect after OTA. Additionally validate S3 triple-tap sleep/wake behavior and C3 long-press sleep/wake behavior independently so a change to one target cannot silently alter the other.
