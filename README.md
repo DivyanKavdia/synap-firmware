@@ -105,9 +105,12 @@ Confirmed critical battery blocks a new OTA and aborts an active OTA before furt
 - microphone/I2S starts only when needed;
 - S3 CPU: 80 MHz idle / 240 MHz active;
 - C3 CPU: 80 MHz idle / 160 MHz active;
+- paused OTA returns to 80 MHz after one second without commands and boosts before resumed flash work;
 - disconnected devices can enter deep sleep automatically;
 - status LED uses low-duty indication;
 - battery notification traffic is reduced while audio is streaming.
+
+Non-OTA standby stays dark, including at low battery. The housekeeping loop wakes once per second after boot validation; audio and touch tasks keep their own timing. See the [power review](docs/POWER_REVIEW.md) for further CPU/BLE experiments and battery-life measurements.
 
 ## OTA
 

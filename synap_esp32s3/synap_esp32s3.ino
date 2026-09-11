@@ -214,6 +214,7 @@ void powerTick();
 void pollTouchControl();
 void updateStatusCharacteristic(bool notify);
 void updateDiagnosticsCharacteristic();
+void applyCpuPowerProfile(bool active);
 void stopStreaming(ErrorCode reason = ErrorCode::NONE);
 bool configureTransportFromPeerMtu();
 void startStreaming(uint8_t version);
@@ -432,7 +433,13 @@ QueueHandle_t otaQueue=nullptr;
 struct OtaMessage { uint32_t connection;uint16_t length;uint8_t data[Synap::OtaSession::PACKET_MAX]; };
 std::atomic<bool> otaOverflow{false};
 std::atomic<bool> otaBusySnapshot{false};
+uint32_t otaLastActivityAt=0;
 bool otaBusy() { return otaSession.busy(); } // Control task only.
+
+bool otaNeedsActiveCpu() {
+  // Keep transfer bursts fast, then release the boost while the phone is paused or absent.
+  return otaBusy() && deviceConnected.load() && uint32_t(millis()-otaLastActivityAt)<1000u;
+}
 
 class OtaWriteCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* characteristic) override {
@@ -500,6 +507,8 @@ void otaTick() {
   // spend most of their time waiting in RAM. Flash writes remain strictly ordered.
   for (uint8_t drained=0;drained<4 && xQueueReceive(otaQueue,&message,0)==pdTRUE;drained++) {
     if (!connected || message.connection!=generation) continue;
+    applyCpuPowerProfile(true);
+    otaLastActivityAt=millis();
     // Treat a confirmed critically-low battery like another busy condition: never
     // start or continue a new flash transaction when brownout margin is inadequate.
     otaSession.packet(message.data,message.length,millis(),generation,
@@ -528,13 +537,13 @@ void updateStatusLed(bool force) {
   if (otaBusy()) {
     const uint32_t phase=now%1400u;
     if (phase<55u || (phase>=180u && phase<235u)) { r=LED_DIM; g=2; }
+  } else if (remoteStandby) {
+    // Standby stays dark; battery telemetry remains available over BLE.
   } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {
     const uint32_t phase=now%5000u;
     if (phase<40u || (phase>=180u && phase<220u)) r=LED_DIM;
   } else if (deviceState == DeviceState::DISCONNECTED) {
     if (now%5000u<35u) r=LED_DIM;
-  } else if (remoteStandby) {
-    // BLE stays connected while mic and LED are off.
   } else if (deviceState == DeviceState::CONNECTED_IDLE) {
     if (now%6000u<30u) b=LED_DIM;
   } else if (deviceState == DeviceState::STREAMING) {
@@ -1330,7 +1339,7 @@ void controlTask(void* parameter) {
     pollTouchControl();
     otaTick();
     powerTick();
-    applyCpuPowerProfile(streamingEnabled.load() || otaBusy());
+    applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu());
     updateStatusLed();
   }
 }
@@ -1661,6 +1670,8 @@ void loop() {
     if (result==ESP_OK || result==ESP_ERR_NOT_FOUND) bootValidated=true;
     Serial.printf("[OTA] delayed boot validation result=%d\n",int(result));
   }
+  if (!bootValidated) { delay(20); return; }
 #endif
-  delay(20);
+  // Recording, BLE and touch run in their own tasks; this loop only validates boot.
+  delay(1000);
 }

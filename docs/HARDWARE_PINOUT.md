@@ -105,6 +105,8 @@ The production power-saving status model uses short dim pulses rather than leavi
 - amber pulse pattern: OTA
 - purple pulse pattern: error
 
+Standby is dark even when battery is low; OTA keeps its amber indication. Turning the RGB output off does not remove the LED's supply current.
+
 ## Battery
 
 Connect a single-cell LiPo/Li-ion battery to the rear battery pads. Battery telemetry uses an external high-value divider:
