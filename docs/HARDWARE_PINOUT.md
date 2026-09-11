@@ -28,7 +28,7 @@ The ESP32-C3 SuperMini target uses 4 MB flash and no PSRAM. Its RGB status outpu
 | TTP223 OUT | GPIO13 | GPIO3 | Active-HIGH touch input and deep-sleep wake |
 | TTP223 VCC | 3V3 | 3V3 | Touch sensor power |
 | TTP223 GND | GND | GND | Common ground |
-| Battery divider midpoint | GPIO8 | GPIO1 reserved; monitoring disabled | Battery ADC sense |
+| Battery divider midpoint | GPIO8, 1 MΩ / 470 kΩ | GPIO1, 1 MΩ / 1 MΩ | Battery ADC sense |
 | NeoPixel DATA / DIN | GPIO48, onboard | GPIO8, external NeoPixel | Synap RGB status |
 
 All peripheral grounds are common.
@@ -38,7 +38,7 @@ All peripheral grounds are common.
 The existing mapping already shares every compatible same-purpose GPIO while keeping S3 wiring intact:
 
 - Touch: C3 GPIO13 belongs to the flash interface and cannot wake from deep sleep. C3 deep-sleep wake requires GPIO0–5, so TTP223 stays on GPIO3.
-- Battery: C3 GPIO8 has no ADC. GPIO1 is reserved for a separately validated battery-sense circuit.
+- Battery: C3 GPIO8 has no ADC. GPIO1 reads the C3's equal-resistor battery divider.
 - RGB: C3 has GPIO0–21, so S3's onboard LED pin GPIO48 cannot be copied. The external C3 NeoPixel uses GPIO8.
 
 These restrictions follow the [Espressif C3 GPIO reference](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32c3/api-reference/peripherals/gpio.html). Matching more pins would require changing S3 hardware connections.
@@ -127,13 +127,21 @@ GPIO8 ---- 100 nF ---------- GND
 
 Do not connect the raw LiPo cell to the ESP32 3V3 pin. The current S3 calibration uses the measured full-charge point of 4.13 V cell / 1.32 V ADC (raw 1544).
 
-C3 battery monitoring remains disabled until its physical battery-sense path is separately audited. GPIO1 is reserved in firmware, not an enabled battery input. The S3 battery-pad and charging arrangement does not apply to the C3 board.
+C3 battery telemetry uses the installed divider:
+
+| Connection | Component |
+| --- | --- |
+| Battery positive to GPIO1 | 1 MΩ |
+| GPIO1 to common ground | 1 MΩ |
+| GPIO1 to common ground | 104 capacitor (100 nF) |
+
+The divider halves the cell voltage: 4.2 V becomes 2.1 V at GPIO1. C3 uses 11 dB attenuation (up to 2.5 V input per the [Arduino-ESP32 ADC reference](https://docs.espressif.com/projects/arduino-esp32/en/latest/api/adc.html)), calibrated ADC millivolts and a ×2 conversion. Its 16-sample averaging and 15-second sampling interval match the existing telemetry path. Percentage is a voltage-based estimate pending a multimeter comparison. This trial keeps C3's automatic battery-triggered sleep and OTA lockout inactive; touch and timeout sleep still work. The S3 battery-pad and charging arrangement does not apply to the C3 board.
 
 ## Reserved / locked pins
 
 | Board | Reserved GPIOs |
 | --- | --- |
 | S3 | 4, 5, 6, 8, 13, 48 |
-| C3 | 1 (battery reservation), 3, 4, 5, 6, 8 |
+| C3 | 1 (battery sense), 3, 4, 5, 6, 8 |
 
 Assign future peripherals to other audited GPIOs so microphone capture, battery telemetry, touch interaction and status indication remain compatible with deployed firmware.

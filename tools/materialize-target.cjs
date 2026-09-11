@@ -34,6 +34,35 @@ function materialize(source,targetId){
   out=replaceOnce(out,'#define SYNAP_BATTERY_ADC_PIN 8','#define SYNAP_BATTERY_ADC_PIN 1','C3 battery ADC pin');
   out=out.replace(/GPIO8/g,'GPIO1');
 
+  out=replaceOnce(out,`#if CONFIG_IDF_TARGET_ESP32S3
+#define SYNAP_BATTERY_MONITOR_ENABLE 1
+#else
+#define SYNAP_BATTERY_MONITOR_ENABLE 0
+#endif`, '#define SYNAP_BATTERY_MONITOR_ENABLE 1', 'C3 battery telemetry');
+  out=replaceOnce(out,`  // Measured calibration for the 1M/470k divider: 1.32 V ADC = 4.13 V cell (raw 1544).
+  constexpr uint32_t BATTERY_CAL_ADC_MV = 1320u;
+  constexpr uint32_t BATTERY_CAL_CELL_MV = 4130u;
+  const uint32_t cellMv=(adcMv*BATTERY_CAL_CELL_MV + BATTERY_CAL_ADC_MV/2u)/BATTERY_CAL_ADC_MV;`,
+  `  // Equal 1M resistors halve the cell voltage; use calibrated ADC millivolts.
+  const uint32_t cellMv=adcMv*2u;`, 'C3 equal-resistor divider');
+  out=replaceOnce(out,`  // GPIO1 is calibrated at 1.32 V ADC for a 4.13 V cell on the 1M/470k divider.
+  // 6 dB attenuation comfortably covers the expected range while retaining resolution.
+  analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_6db);`,
+  `  // The 1M/1M divider with 100nF to ground presents 2.1 V at a 4.2 V cell.
+  // C3 needs 11 dB attenuation to measure this range without clipping.
+  analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);`, 'C3 ADC input range');
+  out=replaceOnce(out,'  // Production calibration: DMM 4.13 V, ADC 1.32 V, raw 1544 = full charge.',
+    '  // Voltage-based LiPo estimate; verify the C3 divider reading against a meter.', 'C3 percentage estimate');
+  out=replaceFunctionBlock(out,'bool batteryCritical() {','void publishBatteryEvent',`bool batteryCritical() {
+  // Keep automatic sleep/OTA lockout off while validating the new C3 divider.
+  return false;
+}
+
+`, 'C3 telemetry-only battery trial');
+  out=replaceOnce(out,`    // A single averaged conversion is sufficient for UI availability. Critical
+    // actions still require multiple corroborating samples via batteryCritical().`,
+    '    // Expose valid readings immediately; this C3 trial does not enforce cutoff.', 'C3 battery availability');
+
   const c3Wake=`bool confirmTouchWakeTripleTap() {
   const bool durableLock=readDurableSleepLock();
   const bool sleepResume=durableLock || (synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER) || bootSleepWasLocked;

@@ -48,7 +48,7 @@ test('secondary C3 target uses long-press power and double-tap recording without
   assert.doesNotMatch(c3,/triple tap -> DEEP SLEEP/);
   assert.doesNotMatch(c3,/tap 1\/3; waiting for taps 2 and 3/);
   assert.match(c3,/xTaskCreate\(transmitterTask, "transmit", 8192/);assert.doesNotMatch(c3,/xTaskCreatePinnedToCore/);
-  assert.match(c3,/SYNAP_BATTERY_MONITOR_ENABLE 0/);
+  assert.match(c3,/SYNAP_BATTERY_MONITOR_ENABLE 1/);
   assert.match(c3,/esp_deep_sleep_enable_gpio_wakeup/);assert.doesNotMatch(c3,/esp_sleep_enable_ext1_wakeup/);
 });
 

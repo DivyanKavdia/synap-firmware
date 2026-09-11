@@ -29,5 +29,5 @@ test('secondary generated target preserves the production interaction contract',
   assert.match(c3,/double tap -> START/);
   assert.match(c3,/double tap -> STOP \+ POWER SAVER/);
   assert.match(c3,/900000u/);
-  assert.match(c3,/SYNAP_BATTERY_MONITOR_ENABLE 0/);
+  assert.match(c3,/SYNAP_BATTERY_MONITOR_ENABLE 1/);
 });

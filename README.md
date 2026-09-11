@@ -9,7 +9,7 @@ Production firmware for the Synap pendant. Product version is **1.0.0**. The Git
 | `esp32s3-fh4r2-qspi-4m` | ESP32-S3FH4R2 SuperMini | 4 MB | 2 MB | real I2S microphone |
 | `esp32c3-supermini-4m` | ESP32-C3 SuperMini | 4 MB | none | real I2S microphone |
 
-The S3 target is the primary physically validated pendant. The C3 target is built from the same production source contract; battery telemetry remains disabled until its hardware divider is validated.
+The S3 target is the primary physically validated pendant. The C3 target is built from the same production source contract; battery telemetry is enabled for a 1 MΩ / 1 MΩ divider on GPIO1 with a 100 nF capacitor to ground. C3 voltage calibration is being validated against hardware.
 
 ## Wiring
 
@@ -20,7 +20,7 @@ The S3 target is the primary physically validated pendant. The C3 target is buil
 | I2S microphone DATA / SD | GPIO6 | GPIO6 |
 | TTP223 OUT / SIG | GPIO13 | GPIO3 |
 | RGB status NeoPixel | GPIO48, onboard | GPIO8, external NeoPixel DIN |
-| Battery ADC sense | GPIO8 | GPIO1 reserved; monitoring disabled |
+| Battery ADC sense | GPIO8, 1 MΩ / 470 kΩ | GPIO1, 1 MΩ / 1 MΩ |
 | INMP44x / INMP441 L/R | GND / left channel | GND / left channel |
 | Microphone VDD / TTP223 VCC | 3V3 | 3V3 |
 | Peripheral ground | GND | GND |
@@ -111,14 +111,16 @@ Battery - / GND -----------+---- GND
 GPIO8 ---- 100 nF ---------- GND
 ```
 
-Calibration reference: **4.13 V cell / 1.32 V ADC / raw 1544**.
+S3 calibration reference: **4.13 V cell / 1.32 V ADC / raw 1544**.
+
+C3 wiring: battery positive through 1 MΩ to GPIO1, then 1 MΩ from GPIO1 to ground. Connect the 104 capacitor (100 nF) between GPIO1 and ground. C3 uses calibrated ADC millivolts at 11 dB attenuation and multiplies by two: 2.10 V at GPIO1 represents 4.20 V at the cell. The nominal divider draws 2.1 µA at 4.2 V. Compare the displayed voltage with a multimeter before treating percentage as calibrated.
 
 Firmware averages ADC readings, publishes battery telemetry and estimates percentage from LiPo discharge anchors.
 
 - low: 3.60 V
 - critical: 3.40 V
 
-Confirmed critical battery blocks a new OTA and aborts an active OTA before further flash writes.
+On S3, confirmed critical battery blocks a new OTA and aborts an active OTA before further flash writes. The C3 trial reports voltage, estimated percentage and low-battery status, while automatic battery-triggered sleep and OTA lockout remain inactive pending voltage validation. C3 retains its four-second touch sleep/wake and disconnected-timeout sleep.
 
 ## Runtime power behavior
 
