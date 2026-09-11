@@ -1,6 +1,6 @@
 # Synap Hardware Pinout
 
-This is the locked hardware mapping for the current Synap pendant firmware and prototype PCB.
+This is the hardware mapping for both production firmware targets. Shared signals use the same GPIO wherever compatible with the deployed S3 wiring.
 
 ## Controller
 
@@ -13,49 +13,35 @@ MakerBazaar ESP32-S3 SuperMini variant used by Synap:
 - onboard addressable RGB LED on GPIO48
 - rear B+ / B- pads for the board's 1-cell battery interface
 
+The ESP32-C3 SuperMini target uses 4 MB flash and no PSRAM. Its RGB status output requires a separate external NeoPixel; the board's ordinary blue LED is not an addressable RGB LED.
+
 ## Pin mapping
 
-| ESP32-S3 SuperMini | Device | Device pin | Firmware purpose |
+| Device / signal | ESP32-S3 SuperMini | ESP32-C3 SuperMini | Firmware purpose |
 | --- | --- | --- | --- |
-| GPIO4 | INMP441 / INMP44x | SCK / BCLK | I2S bit clock |
-| GPIO5 | INMP441 / INMP44x | WS / LRCLK | I2S word-select clock |
-| GPIO6 | INMP441 / INMP44x | SD | I2S microphone data input |
-| GND | INMP441 / INMP44x | L/R | Select left I2S channel |
-| 3V3 | INMP441 / INMP44x | VDD | Microphone power |
-| GND | INMP441 / INMP44x | GND | Common ground |
-| GPIO13 | TTP223 | OUT | Digital touch input, active HIGH |
-| 3V3 | TTP223 | VCC | Touch sensor power |
-| GND | TTP223 | GND | Common ground |
-| GPIO8 | 1 MOhm / 470 kOhm divider | midpoint | Battery ADC sense |
-| GPIO48 | onboard RGB | DATA | Synap status indication; no external connection |
-| B+ | 1S LiPo/Li-ion | + | Battery positive |
-| B- | 1S LiPo/Li-ion | - | Battery negative |
-
-## Wiring
-
-```text
-                    ESP32-S3 SuperMini
-                  +---------------------+
-INMP441 SCK ------| GPIO4               |
-INMP441 WS  ------| GPIO5               |
-INMP441 SD  ------| GPIO6               |
-TTP223 OUT  ------| GPIO13              |
-Battery sense ----| GPIO8               |
-                  |                     |
-                  | GPIO48 -> onboard RGB
-                  |                     |
-INMP441 VDD --+---| 3V3                 |
-TTP223 VCC ---+   |                     |
-                  |                     |
-INMP441 GND --+---| GND                 |
-TTP223 GND ---+   +---------------------+
-INMP441 L/R ---+
-
-1S LiPo + ---------------- B+
-1S LiPo - ---------------- B-
-```
+| INMP441 SCK / BCLK | GPIO4 | GPIO4 | I2S bit clock |
+| INMP441 WS / LRCLK | GPIO5 | GPIO5 | I2S word-select clock |
+| INMP441 SD | GPIO6 | GPIO6 | I2S microphone data input |
+| INMP441 L/R | GND | GND | Select left I2S channel |
+| INMP441 VDD | 3V3 | 3V3 | Microphone power |
+| INMP441 GND | GND | GND | Common ground |
+| TTP223 OUT | GPIO13 | GPIO3 | Active-HIGH touch input and deep-sleep wake |
+| TTP223 VCC | 3V3 | 3V3 | Touch sensor power |
+| TTP223 GND | GND | GND | Common ground |
+| Battery divider midpoint | GPIO8 | GPIO1 reserved; monitoring disabled | Battery ADC sense |
+| NeoPixel DATA / DIN | GPIO48, onboard | GPIO8, external NeoPixel | Synap RGB status |
 
 All peripheral grounds are common.
+
+## Why three GPIO assignments differ
+
+The existing mapping already shares every compatible same-purpose GPIO while keeping S3 wiring intact:
+
+- Touch: C3 GPIO13 belongs to the flash interface and cannot wake from deep sleep. C3 deep-sleep wake requires GPIO0–5, so TTP223 stays on GPIO3.
+- Battery: C3 GPIO8 has no ADC. GPIO1 is reserved for a separately validated battery-sense circuit.
+- RGB: C3 has GPIO0–21, so S3's onboard LED pin GPIO48 cannot be copied. The external C3 NeoPixel uses GPIO8.
+
+These restrictions follow the [Espressif C3 GPIO reference](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32c3/api-reference/peripherals/gpio.html). Matching more pins would require changing S3 hardware connections.
 
 ## INMP441 / INMP44x configuration
 
@@ -77,7 +63,7 @@ Expected module configuration:
 - idle: LOW
 - touched: HIGH
 - momentary/non-latching mode
-- OUT: GPIO13
+- OUT: GPIO13 on S3; GPIO3 on C3
 - VCC: 3.3 V
 - GND: common ground
 
@@ -89,13 +75,14 @@ Current production interaction model:
 - in any non-OTA state: triple tap to enter deep sleep; active recording stops first
 - from deep sleep: triple tap to wake; one or two taps return to deep sleep without initializing BLE
 - double-tap actions wait briefly for a possible third tap, keeping the sleep gesture separate from recording
-- Remember This is no longer assigned to the touch sensor
 - touch actions are ignored during OTA
 - deep sleep is not entered while TTP223 OUT is still HIGH, preventing an immediate wake loop
 
 ## RGB status LED
 
-GPIO48 drives the onboard addressable RGB LED. It is reserved by Synap and should not be used for another peripheral.
+S3 uses its onboard addressable RGB LED on GPIO48; no external data connection is needed. C3 uses a separate external NeoPixel with DIN connected to GPIO8 and ground connected to the board's ground. Choose the LED supply and any data-level conversion for the specific NeoPixel module.
+
+The [C3 SuperMini's blue LED](https://makerbazar.in/products/esp32-c3-supermini-iot-development-board) also uses GPIO8. It can respond to the data signal but does not provide the firmware's RGB status. GPIO8 is also a boot-strapping pin; the external circuit must preserve its required reset level. Reserve each board's RGB pin for this use.
 
 The production power-saving status model uses short dim pulses rather than leaving the LED continuously illuminated:
 
@@ -109,7 +96,7 @@ Standby is dark even when battery is low; OTA keeps its amber indication. Turnin
 
 ## Battery
 
-Connect a single-cell LiPo/Li-ion battery to the rear battery pads. Battery telemetry uses an external high-value divider:
+On the specified S3 board, connect a single-cell LiPo/Li-ion battery to the rear B+ / B- pads. S3 battery telemetry uses an external high-value divider:
 
 ```text
 Battery + ---- 1 MOhm ----+---- GPIO8
@@ -121,8 +108,15 @@ Battery - / GND -----------+---- GND
 GPIO8 ---- 100 nF ---------- GND
 ```
 
-Do not connect the raw LiPo cell to the ESP32 3V3 pin. The current S3 calibration uses the measured full-charge point of 4.13 V cell / 1.32 V ADC (raw 1544). ESP32-C3 battery monitoring remains disabled until its physical battery-sense path is separately audited.
+Do not connect the raw LiPo cell to the ESP32 3V3 pin. The current S3 calibration uses the measured full-charge point of 4.13 V cell / 1.32 V ADC (raw 1544).
+
+C3 battery monitoring remains disabled until its physical battery-sense path is separately audited. GPIO1 is reserved in firmware, not an enabled battery input. The S3 battery-pad and charging arrangement does not apply to the C3 board.
 
 ## Reserved / locked pins
 
-For the current S3 hardware design, treat GPIO4, GPIO5, GPIO6, GPIO8, GPIO13 and GPIO48 as reserved. Any future PCB additions should be assigned to other audited GPIOs so microphone capture, battery telemetry, physical interaction and status indication remain compatible with deployed firmware.
+| Board | Reserved GPIOs |
+| --- | --- |
+| S3 | 4, 5, 6, 8, 13, 48 |
+| C3 | 1 (battery reservation), 3, 4, 5, 6, 8 |
+
+Assign future peripherals to other audited GPIOs so microphone capture, battery telemetry, touch interaction and status indication remain compatible with deployed firmware.

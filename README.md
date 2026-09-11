@@ -11,17 +11,21 @@ Production firmware for the Synap pendant. Product version is **1.0.0**. The Git
 
 The S3 target is the primary physically validated pendant. The C3 target is built from the same production source contract; battery telemetry remains disabled until its hardware divider is validated.
 
-## ESP32-S3 wiring
+## Wiring
 
-| Function | GPIO / connection |
-| --- | --- |
-| RGB status NeoPixel | GPIO48 |
-| I2S BCLK / SCK | GPIO4 |
-| I2S WS / LRCLK | GPIO5 |
-| I2S microphone DATA / SD | GPIO6 |
-| TTP223 OUT / SIG | GPIO13 |
-| Battery ADC sense | GPIO8 |
-| INMP44x / INMP441 L/R | GND / left channel |
+| Function | ESP32-S3 SuperMini | ESP32-C3 SuperMini |
+| --- | --- | --- |
+| I2S BCLK / SCK | GPIO4 | GPIO4 |
+| I2S WS / LRCLK | GPIO5 | GPIO5 |
+| I2S microphone DATA / SD | GPIO6 | GPIO6 |
+| TTP223 OUT / SIG | GPIO13 | GPIO3 |
+| RGB status NeoPixel | GPIO48, onboard | GPIO8, external NeoPixel DIN |
+| Battery ADC sense | GPIO8 | GPIO1 reserved; monitoring disabled |
+| INMP44x / INMP441 L/R | GND / left channel | GND / left channel |
+| Microphone VDD / TTP223 VCC | 3V3 | 3V3 |
+| Peripheral ground | GND | GND |
+
+The microphone pins are shared. Touch, battery sense and RGB require different pins to preserve the S3 wiring and C3 hardware compatibility. The C3 needs a separate NeoPixel for RGB status. See [hardware pinout](docs/HARDWARE_PINOUT.md) for the constraints and wiring details.
 
 ## Touch and power
 
