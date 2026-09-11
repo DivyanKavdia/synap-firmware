@@ -9,12 +9,14 @@
 #include <driver/rtc_io.h>
 #endif
 #include <BLEServer.h>
-#include <BLEUtils.h>
 #if defined(CONFIG_BLUEDROID_ENABLED)
 #include <BLE2902.h>
 #endif
 #include <Adafruit_NeoPixel.h>
 #include <atomic>
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
 
 #ifndef USE_REAL_I2S_MIC
 #define USE_REAL_I2S_MIC 1
@@ -78,7 +80,6 @@ constexpr uint16_t SAMPLES_PER_FRAME = 800;
 constexpr uint16_t AUDIO_BYTES_PER_FRAME = 1600;
 constexpr uint16_t ADPCM_HEADER_BYTES = 4;
 constexpr uint16_t ADPCM_BYTES_PER_FRAME = ADPCM_HEADER_BYTES + (SAMPLES_PER_FRAME / 2);
-constexpr uint16_t TRANSPORT_BYTES_PER_FRAME = ADPCM_BYTES_PER_FRAME;
 constexpr uint8_t AUDIO_HEADER_BYTES = 8;
 static_assert(SAMPLES_PER_FRAME % 2 == 0, "ADPCM frame requires an even PCM sample count");
 static_assert(ADPCM_BYTES_PER_FRAME == 404, "Synap protocol-v3 ADPCM frame size");
@@ -103,23 +104,15 @@ constexpr uint8_t BATTERY_ADC_PIN = SYNAP_BATTERY_ADC_PIN;
 constexpr uint16_t TOUCH_DEBOUNCE_MS = 35;
 constexpr uint32_t AUTO_SLEEP_DISCONNECTED_MS = 300000u;
 constexpr uint32_t BATTERY_SAMPLE_MS = 15000u;
-constexpr uint32_t BATTERY_DIVIDER_TOP_OHMS = 1000000u;
-constexpr uint32_t BATTERY_DIVIDER_BOTTOM_OHMS = 470000u;
 constexpr uint16_t BATTERY_LOW_MV = 3600;
 constexpr uint16_t BATTERY_CRITICAL_MV = 3400;
 constexpr uint8_t BATTERY_EVENT_MAGIC = 0xB7;
 constexpr uint8_t BATTERY_EVENT_VERSION = 2;
-// TTP223 OUT is a digital, active-high push-pull signal by default.
-// Battery sensing assumes B+ -> 1 MOhm -> GPIO8 -> 470 kOhm -> GND, with
-// 100 nF from GPIO8 to GND. Implausible readings are reported but marked unavailable.
-// Status LED is intentionally off most of the time. Short, dim pulses make the
-// state visible without turning the onboard WS2812 into a material battery load.
+// Short, dim status pulses limit the onboard WS2812's battery load.
 constexpr uint8_t LED_DIM = 4;
 constexpr int8_t I2S_BCLK_PIN = 4, I2S_WS_PIN = 5, I2S_DATA_IN_PIN = 6;
 #if CONFIG_IDF_TARGET_ESP32S3
 constexpr uint32_t IDLE_CPU_MHZ = 80, ACTIVE_CPU_MHZ = 240;
-#elif CONFIG_IDF_TARGET_ESP32C3
-constexpr uint32_t IDLE_CPU_MHZ = 80, ACTIVE_CPU_MHZ = 160;
 #else
 constexpr uint32_t IDLE_CPU_MHZ = 80, ACTIVE_CPU_MHZ = 160;
 #endif
@@ -205,7 +198,7 @@ uint32_t touchPressedAt = 0;
 bool touchRawState = false, touchStableState = false;
 uint32_t touchChangedAt = 0;
 uint32_t lastLedPattern = UINT32_MAX;
-uint32_t lastBatterySampleAt = 0, lastBatteryPublishAt = 0;
+uint32_t lastBatterySampleAt = 0;
 uint16_t batteryMillivolts = 0, batteryAdcMillivolts = 0, batteryAdcRaw = 0;
 uint8_t batteryPercent = 0, batteryValidSamples = 0, batteryCriticalSamples = 0;
 bool batteryAvailable = false;
@@ -213,7 +206,7 @@ bool batteryAvailable = false;
 // Explicit prototypes prevent Arduino's auto-prototyper from duplicating defaults.
 void setDeviceState(DeviceState state, ErrorCode error);
 void updateStatusLed(bool force = false);
-void publishBatteryEvent(bool force = false);
+void publishBatteryEvent();
 void sampleBattery(bool force = false);
 bool batteryCritical();
 void enterDeepSleep(const char* reason);
@@ -231,20 +224,18 @@ void controlTask(void* parameter);
 void acquisitionTask(void* parameter);
 void transmitterTask(void* parameter);
 bool acquireAudioFrame(AudioFrame& frame);
-bool sendAudioFrame(const AudioFrame& frame, uint16_t sequence);
+bool sendAudioFrame(const AudioFrame& frame);
 void initializeBLE();
 void fatalSetup(const char* message);
 
-// Explicit OTA prototypes for Arduino sketch preprocessing.
 bool otaBusy();
 void otaPublish(bool notify);
 void otaInitialize(BLEService* service);
 void otaTick();
 
-// BEGIN EMBEDDED OtaSession.h
-#include <stdint.h>
-#include <stddef.h>
-#include <string.h>
+static void put32le(uint8_t* p, uint32_t value) {
+  p[0]=value&255;p[1]=(value>>8)&255;p[2]=(value>>16)&255;p[3]=(value>>24)&255;
+}
 
 // Transport-independent protocol engine; only the control task calls these methods.
 namespace Synap {
@@ -271,7 +262,6 @@ class OtaSession {
   static uint32_t u32(const uint8_t* p) {
     return uint32_t(p[0]) | (uint32_t(p[1])<<8) | (uint32_t(p[2])<<16) | (uint32_t(p[3])<<24);
   }
-  static void put32(uint8_t* p, uint32_t n) { for (int i=0;i<4;++i) p[i]=uint8_t(n>>(8*i)); }
   bool busy() const { return state==RECEIVING || state==READY || state==COMMITTED; }
   void configure(uint32_t bytes, uint16_t data) {
     capacity=bytes;maxData=data;
@@ -301,7 +291,7 @@ class OtaSession {
     if (!p || n<5 || n>PACKET_MAX) { if (busy()) fail(BAD_PACKET);return; }
     const uint8_t command=p[0];const uint32_t id=u32(p+1);
     if (command==6) { // RESUME: same envelope as BEGIN; never erases or restarts flash.
-      if (n!=59 || !busy() || state==COMMITTED || !id || id!=session ||
+      if (n!=59 || !busy() || !id || id!=session ||
           u32(p+5)!=size || memcmp(p+9,expectedHash,32)!=0 ||
           !backend.matchesDevice(p+41)) return;
       owner=connection;last=now;orphanedAt=0;error=OK;return;
@@ -315,7 +305,7 @@ class OtaSession {
       const uint32_t bytes=u32(p+5);
       if (bytes<36 || bytes>capacity) { error=BAD_SIZE;return; }
       if (!backend.matchesDevice(p+41)) { state=AVAILABLE;error=DEVICE_MISMATCH;return; }
-      session=id;offset=0;size=bytes;error=OK;lastLength=0;
+      size=bytes;error=OK;lastLength=0;
       memcpy(expectedHash,p+9,32);owner=connection;orphanedAt=0;
       if (!backend.begin(bytes,p+9)) { fail(FLASH_ERROR);return; }
       state=RECEIVING;last=now;return;
@@ -347,7 +337,7 @@ class OtaSession {
   }
   void status(uint8_t* p, uint16_t build) const {
     memset(p,0,20);p[0]=0xD7;p[1]=3;p[2]=state;p[3]=error;
-    put32(p+4,session);put32(p+8,offset);put32(p+12,capacity);
+    put32le(p+4,session);put32le(p+8,offset);put32le(p+12,capacity);
     p[16]=maxData&255;p[17]=maxData>>8;p[18]=build&255;p[19]=build>>8;
   }
  private:
@@ -358,9 +348,7 @@ class OtaSession {
   uint8_t lastData[PACKET_MAX-9]{};
 };
 }
-// END EMBEDDED OtaSession.h
 
-// BEGIN EMBEDDED SynapOTA.h
 #include <esp_ota_ops.h>
 #include <mbedtls/sha256.h>
 
@@ -489,6 +477,7 @@ void otaTick() {
   if (batteryCritical() && otaBusy() && otaSession.state!=Synap::COMMITTED) {
     otaSession.fail(Synap::BUSY);
   }
+  bool statusPending=otaSession.state!=previous;
   if (connected && !otaBusy()) {
     const uint16_t mtu=bleServer->getPeerMTU(bleServer->getConnId());
     const uint16_t packet=mtu>515 ? 512 : (mtu>=23 ? mtu-3 : 20);
@@ -500,10 +489,12 @@ void otaTick() {
       const auto* slot1=esp_partition_find_first(ESP_PARTITION_TYPE_APP,ESP_PARTITION_SUBTYPE_APP_OTA_1,nullptr);
       otaSession.configure(metadata && slot0 && slot1 && partition &&
         partition->address!=esp_ota_get_running_partition()->address ? partition->size : 0,data);
-      configuredConnection=generation;otaPublish(true);
+      configuredConnection=generation;statusPending=true;
     }
   }
-  if (otaOverflow.exchange(false) && otaBusy() && otaSession.state!=Synap::COMMITTED) otaSession.fail(Synap::BAD_PACKET);
+  if (otaOverflow.exchange(false) && otaBusy() && otaSession.state!=Synap::COMMITTED) {
+    otaSession.fail(Synap::BAD_PACKET);statusPending=true;
+  }
   OtaMessage message;
   // Drain a short burst each control-loop iteration so cumulative-ACK windows do not
   // spend most of their time waiting in RAM. Flash writes remain strictly ordered.
@@ -514,11 +505,13 @@ void otaTick() {
     otaSession.packet(message.data,message.length,millis(),generation,
       streamingEnabled.load() || batteryCritical());
     otaSession.tick(millis(),connectionGeneration.load(),deviceConnected.load());
+    // Every command, including a retry, needs an ACK; it also carries capability/state changes.
     otaPublish(true);
+    statusPending=false;
     if (otaSession.state==Synap::FAILED || otaSession.state==Synap::COMMITTED) break;
   }
+  if (statusPending) otaPublish(true);
   if (otaSession.state!=previous) {
-    otaPublish(true);
     if (otaBusy()) updateStatusLed(true);
     else if (!streamingEnabled.load())
       setDeviceState(deviceConnected.load() ? DeviceState::CONNECTED_IDLE : DeviceState::DISCONNECTED,ErrorCode::NONE);
@@ -527,11 +520,6 @@ void otaTick() {
     if (!rebootAt) rebootAt=millis();
     if (uint32_t(millis()-rebootAt)>1500) ESP.restart();
   }
-}
-// END EMBEDDED SynapOTA.h
-
-static void put32le(uint8_t* p, uint32_t value) {
-  p[0]=value&255;p[1]=(value>>8)&255;p[2]=(value>>16)&255;p[3]=(value>>24)&255;
 }
 
 void updateStatusLed(bool force) {
@@ -652,10 +640,8 @@ bool batteryCritical() {
 #endif
 }
 
-void publishBatteryEvent(bool force) {
+void publishBatteryEvent() {
   if (!controlCharacteristic || !deviceConnected.load()) return;
-  const uint32_t now=millis();
-  if (!force && uint32_t(now-lastBatteryPublishAt)<BATTERY_SAMPLE_MS) return;
   // Include raw ADC measurements even when cell voltage is outside the trusted range.
   uint8_t value[12] = {BATTERY_EVENT_MAGIC, BATTERY_EVENT_VERSION, batteryPercent, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   if (batteryAvailable) value[3]|=0x01;
@@ -675,7 +661,6 @@ void publishBatteryEvent(bool force) {
   // Let the 12-byte battery notification leave before restoring the status value.
   vTaskDelay(pdMS_TO_TICKS(20));
   updateStatusCharacteristic(false);
-  lastBatteryPublishAt=now;
 }
 
 void sampleBattery(bool force) {
@@ -702,9 +687,7 @@ void sampleBattery(bool force) {
   const uint32_t adcRaw=rawTotal/16u;
   batteryAdcMillivolts=uint16_t(adcMv>65535u?65535u:adcMv);
   batteryAdcRaw=uint16_t(adcRaw>65535u?65535u:adcRaw);
-  // Calibrate the divider from the measured full-charge point: 1.32 V ADC =
-  // 4.13 V cell (raw 1544). This is only a 0.04% correction versus the ideal
-  // 1M/470k divider ratio, but makes the real hardware full point exact.
+  // Measured calibration for the 1M/470k divider: 1.32 V ADC = 4.13 V cell (raw 1544).
   constexpr uint32_t BATTERY_CAL_ADC_MV = 1320u;
   constexpr uint32_t BATTERY_CAL_CELL_MV = 4130u;
   const uint32_t cellMv=(adcMv*BATTERY_CAL_CELL_MV + BATTERY_CAL_ADC_MV/2u)/BATTERY_CAL_ADC_MV;
@@ -727,7 +710,7 @@ void sampleBattery(bool force) {
   Serial.printf("[BATTERY] gpio=%u raw=%u adc=%umV cell=%umV available=%u percent=%u\n",
     static_cast<unsigned>(BATTERY_ADC_PIN),static_cast<unsigned>(batteryAdcRaw),static_cast<unsigned>(batteryAdcMillivolts),
     static_cast<unsigned>(batteryMillivolts),batteryAvailable?1u:0u,static_cast<unsigned>(batteryPercent));
-  if (!streamingEnabled.load()) publishBatteryEvent(true);
+  if (!streamingEnabled.load()) publishBatteryEvent();
   updateStatusLed(true);
 #endif
 }
@@ -1174,10 +1157,9 @@ bool configureTransportFromPeerMtu() {
   if (peerMtu < MIN_REQUIRED_MTU) return false;
   const uint16_t available = attValueCapacity - AUDIO_HEADER_BYTES;
   const uint16_t bounded = available < MAX_AUDIO_PAYLOAD_BYTES ? available : MAX_AUDIO_PAYLOAD_BYTES;
-  chunksPerFrame = (TRANSPORT_BYTES_PER_FRAME + bounded - 1) / bounded;
-  if (chunksPerFrame < MIN_CHUNKS_PER_FRAME) chunksPerFrame = MIN_CHUNKS_PER_FRAME;
+  chunksPerFrame = (ADPCM_BYTES_PER_FRAME + bounded - 1) / bounded;
   if (chunksPerFrame > MAX_CHUNKS_PER_FRAME) return false;
-  audioPayloadBytes = (TRANSPORT_BYTES_PER_FRAME + chunksPerFrame - 1) / chunksPerFrame;
+  audioPayloadBytes = (ADPCM_BYTES_PER_FRAME + chunksPerFrame - 1) / chunksPerFrame;
   return audioPayloadBytes + AUDIO_HEADER_BYTES <= attValueCapacity;
 }
 void startStreaming(uint8_t version) {
@@ -1353,11 +1335,6 @@ void controlTask(void* parameter) {
   }
 }
 
-#ifndef SYNAP_AUDIO_CONDITIONING_H
-#define SYNAP_AUDIO_CONDITIONING_H
-
-#include <stdint.h>
-
 // Set to 0 for an unfiltered PCM comparison build.
 #ifndef SYNAP_MIC_HPF_ENABLE
 #define SYNAP_MIC_HPF_ENABLE 1
@@ -1402,8 +1379,6 @@ class SpeechHighPass {
 };
 
 } // namespace SynapAudio
-
-#endif
 
 static_assert(SAMPLE_RATE==16000, "Speech high-pass requires 16 kHz PCM");
 
@@ -1494,7 +1469,7 @@ static const uint16_t IMA_STEP_TABLE[89] = {
 };
 static const int8_t IMA_INDEX_TABLE[8] = {-1,-1,-1,-1,2,4,6,8};
 
-uint16_t encodeImaAdpcm(const int16_t* samples, uint8_t* output) {
+void encodeImaAdpcm(const int16_t* samples, uint8_t* output) {
   int32_t predictor=samples[0];
   int32_t index=0;
   output[0]=uint8_t(predictor&255);output[1]=uint8_t((predictor>>8)&255);
@@ -1519,28 +1494,26 @@ uint16_t encodeImaAdpcm(const int16_t* samples, uint8_t* output) {
     if ((sampleIndex-1)&1) output[packedIndex]|=uint8_t((code&15)<<4);
     else output[packedIndex]=uint8_t(code&15);
   }
-  return ADPCM_BYTES_PER_FRAME;
 }
 
-bool sendAudioFrame(const AudioFrame& frame, uint16_t sequence) {
+bool sendAudioFrame(const AudioFrame& frame) {
   const uint8_t chunks=chunksPerFrame;
   const uint16_t payload=audioPayloadBytes, capacity=attValueCapacity;
   if (chunks < MIN_CHUNKS_PER_FRAME || chunks > MAX_CHUNKS_PER_FRAME ||
       !payload || payload > MAX_AUDIO_PAYLOAD_BYTES) return false;
   static uint8_t packet[AUDIO_HEADER_BYTES+MAX_AUDIO_PAYLOAD_BYTES];
   static uint8_t encoded[ADPCM_BYTES_PER_FRAME];
-  const uint16_t encodedBytes=encodeImaAdpcm(frame.samples,encoded);
-  if (encodedBytes!=TRANSPORT_BYTES_PER_FRAME) return false;
+  encodeImaAdpcm(frame.samples,encoded);
   const uint32_t started=micros();
   for (uint8_t index=0; index<chunks; ++index) {
     if (!streamingEnabled.load() || !deviceConnected.load() ||
         frame.generation != streamGeneration.load()) return false;
     const uint16_t offset=index*payload;
-    const uint16_t remaining=encodedBytes-offset;
+    const uint16_t remaining=ADPCM_BYTES_PER_FRAME-offset;
     const uint16_t length=remaining < payload ? remaining : payload;
     if (AUDIO_HEADER_BYTES+length > capacity) return false;
     packet[0]=AUDIO_PACKET_MAGIC; packet[1]=AUDIO_PROTOCOL_VERSION;
-    packet[2]=sequence & 255; packet[3]=sequence >> 8;
+    packet[2]=frame.sequence & 255; packet[3]=frame.sequence >> 8;
     packet[4]=index; packet[5]=chunks; packet[6]=length & 255; packet[7]=length >> 8;
     memcpy(packet+AUDIO_HEADER_BYTES, encoded+offset, length);
     audioCharacteristic->setValue(packet, AUDIO_HEADER_BYTES+length);
@@ -1559,16 +1532,14 @@ bool sendAudioFrame(const AudioFrame& frame, uint16_t sequence) {
 void transmitterTask(void* parameter) {
   (void)parameter;
   AudioFrame frame;
-  uint32_t generation=0;
   for (;;) {
-    if (xQueueReceive(audioFrameQueue, &frame, pdMS_TO_TICKS(100)) != pdTRUE) continue;
+    if (xQueueReceive(audioFrameQueue, &frame, portMAX_DELAY) != pdTRUE) continue;
     // Claim activity before checking the session so STOP cannot miss a pending send.
     transmitterActive.store(true);
     if (streamingEnabled.load() && frame.generation == streamGeneration.load()) {
-      generation=frame.generation;
-      if (!sendAudioFrame(frame, frame.sequence) &&
-          streamingEnabled.load() && generation == streamGeneration.load()) {
-        requestStreamError(ErrorCode::TRANSPORT_CHANGED, generation);
+      if (!sendAudioFrame(frame) &&
+          streamingEnabled.load() && frame.generation == streamGeneration.load()) {
+        requestStreamError(ErrorCode::TRANSPORT_CHANGED, frame.generation);
       }
     }
     transmitterActive.store(false);

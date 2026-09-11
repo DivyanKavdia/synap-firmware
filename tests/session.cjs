@@ -1,15 +1,10 @@
-// Compile the exact prepared transport-independent firmware engine with a fake flash backend.
+// Compile the production protocol engine with a fake flash backend.
 const {test}=require('node:test'),assert=require('node:assert/strict');
-const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),{execFileSync}=require('node:child_process');
+const fs=require('node:fs'),path=require('node:path');
+const {nativeTest}=require('./support/native.cjs');
 test('native firmware engine rejects mismatched targets and preserves resumable OTA across phone suspension',()=>{
-  const raw=fs.readFileSync(path.join(__dirname,'../synap_esp32s3/synap_esp32s3.ino'),'utf8');
-  const source=raw;
-  const engine=source.split('// BEGIN EMBEDDED OtaSession.h')[1].split('// END EMBEDDED OtaSession.h')[0];
+  const source=fs.readFileSync(path.join(__dirname,'../synap_esp32s3/synap_esp32s3.ino'),'utf8');
+  const engine=source.slice(source.indexOf('static void put32le('),source.indexOf('#include <esp_ota_ops.h>'));
   const fixture=fs.readFileSync(path.join(__dirname,'session.cpp'),'utf8');
-  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'synap-ota-engine-'));
-  try{
-    fs.writeFileSync(path.join(dir,'session.cpp'),engine+'\n'+fixture);
-    execFileSync('g++',['-std=c++17','-Wall','-Wextra','-Werror',path.join(dir,'session.cpp'),'-o',path.join(dir,'session')]);
-    assert.match(execFileSync(path.join(dir,'session'),{encoding:'utf8'}),/PASS/);
-  }finally{fs.rmSync(dir,{recursive:true,force:true});}
+  assert.match(nativeTest('#include <cstdint>\n#include <cstddef>\n#include <cstring>\n'+engine+'\n'+fixture),/PASS/);
 });

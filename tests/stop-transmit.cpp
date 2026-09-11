@@ -6,7 +6,7 @@
 #include <mutex>
 #include <thread>
 #define USE_REAL_I2S_MIC 1
-constexpr int pdTRUE=1;
+constexpr int pdTRUE=1,portMAX_DELAY=-1;
 enum class DeviceState{DISCONNECTED,CONNECTED_IDLE,ERROR};
 enum class ErrorCode{NONE,AUDIO_SOURCE_FAILED,TRANSPORT_CHANGED};
 struct AudioFrame{uint32_t generation;uint16_t sequence;int16_t samples[800];};
@@ -19,7 +19,6 @@ std::condition_variable gate;
 bool sending=false,releaseSend=false;
 unsigned received=0,errors=0;
 struct Done{};
-int pdMS_TO_TICKS(int n){return n;}
 void vTaskDelay(int ticks){
   assert(ticks==1);stopWaiting=true;gate.notify_all();std::this_thread::yield();
 }
@@ -29,11 +28,11 @@ void applyCpuPowerProfile(bool active){assert(!active);}
 void setDeviceState(DeviceState,ErrorCode){}
 void updateStatusCharacteristic(bool notify){assert(notify && !transmitterActive);acknowledged=true;}
 int xQueueReceive(int,AudioFrame* frame,int timeout){
-  assert(timeout==100);
+  assert(timeout==portMAX_DELAY);
   if(received++)throw Done{};
   *frame={1,0,{}};return pdTRUE;
 }
-bool sendAudioFrame(const AudioFrame&,uint16_t){
+bool sendAudioFrame(const AudioFrame&){
   assert(transmitterActive && streamingEnabled);
   std::unique_lock<std::mutex> guard(gateMutex);sending=true;gate.notify_all();
   gate.wait(guard,[]{return releaseSend;});
