@@ -32,13 +32,21 @@ test('final production S3 source matches audio, touch, low-power and OTA contrac
   assert.match(s3,/xTaskCreatePinnedToCore\(transmitterTask, "transmit", 8192/);
 });
 
-test('secondary target materialization preserves recording and wake-validation contract',()=>{
+test('secondary C3 target uses long-press power and double-tap recording without changing S3 gestures',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);assert.match(c3,/#define SYNAP_BATTERY_ADC_PIN 1/);assert.doesNotMatch(c3,/GPIO8/);
   assert.match(c3,/AUDIO_PROTOCOL_VERSION = 3/);assert.match(c3,/MIN_CHUNKS_PER_FRAME = 1/);assert.match(c3,/MIN_REQUIRED_MTU = 32/);
-  assert.match(c3,/confirmTouchWakeTripleTap\(\)/);assert.match(c3,/triple tap wake confirmed; sleep lock cleared; continuing normal boot/);
-  assert.match(c3,/triple tap -> DEEP SLEEP/);
-  assert.match(c3,/double tap -> STOP \+ POWER SAVER/);
+  assert.match(c3,/C3_WAKE_HOLD_MS = 1500/);
+  assert.match(c3,/C3_SLEEP_HOLD_MS = 1500/);
+  assert.match(c3,/C3_DOUBLE_TAP_GAP_MS = 550/);
+  assert.match(c3,/C3 long-press wake confirmed; sleep lock cleared; continuing normal boot/);
+  assert.match(c3,/C3 long press -> DEEP SLEEP/);
+  assert.match(c3,/C3 double tap -> START/);
+  assert.match(c3,/C3 double tap -> STOP \+ POWER SAVER/);
+  assert.match(c3,/enterDeepSleep\("c3-touch-hold"\)/);
+  assert.match(c3,/enterDeepSleep\("c3-touch-hold-after-stop"\)/);
+  assert.doesNotMatch(c3,/triple tap -> DEEP SLEEP/);
+  assert.doesNotMatch(c3,/tap 1\/3; waiting for taps 2 and 3/);
   assert.match(c3,/xTaskCreate\(transmitterTask, "transmit", 8192/);assert.doesNotMatch(c3,/xTaskCreatePinnedToCore/);
   assert.match(c3,/SYNAP_BATTERY_MONITOR_ENABLE 0/);
   assert.match(c3,/esp_deep_sleep_enable_gpio_wakeup/);assert.doesNotMatch(c3,/esp_sleep_enable_ext1_wakeup/);
