@@ -13,16 +13,16 @@ struct Flash : OtaBackend {
   void abort() override {++aborts;}
 };
 std::vector<uint8_t> packet(uint8_t command,size_t n=5){
-  std::vector<uint8_t> p(n);p[0]=command;OtaSession::put32(p.data()+1,7);return p;
+  std::vector<uint8_t> p(n);p[0]=command;put32le(p.data()+1,7);return p;
 }
 std::vector<uint8_t> begin(const char* id=ID){
-  auto p=packet(1,59);OtaSession::put32(p.data()+5,64);memcpy(p.data()+41,id,18);return p;
+  auto p=packet(1,59);put32le(p.data()+5,64);memcpy(p.data()+41,id,18);return p;
 }
 std::vector<uint8_t> resume(const char* id=ID){
-  auto p=packet(6,59);OtaSession::put32(p.data()+5,64);memcpy(p.data()+41,id,18);return p;
+  auto p=packet(6,59);put32le(p.data()+5,64);memcpy(p.data()+41,id,18);return p;
 }
 std::vector<uint8_t> data(){
-  auto p=packet(2,73);p[9]=0xe9;p[21]=9;OtaSession::put32(p.data()+9+32,0xabcd5432);return p;
+  auto p=packet(2,73);p[9]=0xe9;p[21]=9;put32le(p.data()+9+32,0xabcd5432);return p;
 }
 void sendAt(OtaSession& s,const std::vector<uint8_t>& p,uint32_t now,uint32_t connection=1,bool recording=false){s.packet(p.data(),p.size(),now,connection,recording);}
 void send(OtaSession& s,const std::vector<uint8_t>& p,uint32_t connection=1,bool recording=false){sendAt(s,p,100,connection,recording);}
@@ -41,7 +41,7 @@ int main(){
   s.tick(50000,2,false);send(s,packet(5));assert(s.state==COMMITTED); // Never cancel a committed image.
 
   Flash g;OtaSession t(g);t.configure(2048,173);send(t,begin());
-  auto outOfOrder=data();OtaSession::put32(outOfOrder.data()+5,1);send(t,outOfOrder);assert(t.error==BAD_OFFSET&&g.commits==0);
+  auto outOfOrder=data();put32le(outOfOrder.data()+5,1);send(t,outOfOrder);assert(t.error==BAD_OFFSET&&g.commits==0);
   send(t,begin());send(t,data());g.result=HASH_MISMATCH;send(t,packet(3));assert(t.state==FAILED&&t.error==HASH_MISMATCH&&g.commits==0);
 
   // A phone can suspend the browser while BLE remains logically connected. The

@@ -6,14 +6,17 @@
 #include <vector>
 #include <algorithm>
 constexpr uint16_t SAMPLES_PER_FRAME=800, ADPCM_HEADER_BYTES=4, ADPCM_BYTES_PER_FRAME=404;
-constexpr uint16_t TRANSPORT_BYTES_PER_FRAME=404, MAX_AUDIO_PAYLOAD_BYTES=500;
+constexpr uint16_t MAX_AUDIO_PAYLOAD_BYTES=500,MIN_REQUIRED_MTU=32;
 constexpr uint8_t AUDIO_CODEC_IMA_ADPCM=1, AUDIO_HEADER_BYTES=8, AUDIO_PACKET_MAGIC=0xA5;
 constexpr uint8_t AUDIO_PROTOCOL_VERSION=3, MIN_CHUNKS_PER_FRAME=1, MAX_CHUNKS_PER_FRAME=20;
 struct AudioFrame { uint32_t generation; uint16_t sequence; int16_t samples[800]; };
 std::atomic<bool> streamingEnabled{true},deviceConnected{true};
 std::atomic<uint32_t> streamGeneration{1};
 std::atomic<uint16_t> audioPayloadBytes{404},attValueCapacity{514};
+std::atomic<uint16_t> peerMtu{23};
 std::atomic<uint8_t> chunksPerFrame{1};
+struct Server {uint16_t mtu=517;uint16_t getPeerMTU(int){return mtu;} int getConnId(){return 0;}} server;
+auto* bleServer=&server;
 uint32_t clockNow=0,spinMicros=0;
 bool cancelOnNotify=false;
 uint32_t micros(){return clockNow;}
@@ -29,6 +32,13 @@ struct Characteristic {
 auto* audioCharacteristic=&characteristic;
 // INSERT CODEC AND TRANSPORT
 int main(){
+  for(uint32_t mtu=0;mtu<=65535;++mtu){
+    server.mtu=mtu;
+    assert(configureTransportFromPeerMtu()==(mtu>=32));
+    if(mtu<32){assert(audioPayloadBytes==0 && chunksPerFrame==0);continue;}
+    assert(chunksPerFrame>=1 && chunksPerFrame<=20 && audioPayloadBytes+8<=attValueCapacity);
+    assert((chunksPerFrame-1)*audioPayloadBytes<404 && chunksPerFrame*audioPayloadBytes>=404);
+  }
   uint32_t random=0x579AB13Cu;
   uint64_t hash=14695981039346656037ull;
   AudioFrame frame{};frame.generation=1;frame.sequence=65535;
@@ -39,20 +49,17 @@ int main(){
       frame.samples[i]=test==0?0:test==1?32767:test==2?-32768:test==3?(i&1?-32768:32767):static_cast<int16_t>(sample);
     }
     uint8_t a[406],b[406];memset(a,0xAA,sizeof(a));memset(b,0x55,sizeof(b));
-    assert(encodeImaAdpcm(frame.samples,a+1)==404);
-    assert(encodeImaAdpcm(frame.samples,b+1)==404);
+    encodeImaAdpcm(frame.samples,a+1);
+    encodeImaAdpcm(frame.samples,b+1);
     assert(a[0]==0xAA && a[405]==0xAA && b[0]==0x55 && b[405]==0x55);
     assert(memcmp(a+1,b+1,404)==0 && (a[404]&0xF0)==0);
     for(unsigned i=1;i<=404;++i){hash^=a[i];hash*=1099511628211ull;}
   }
   for(uint16_t mtu: {32,64,100,185,247,517}){
-    attValueCapacity=mtu-3;
-    const unsigned bounded=std::min<unsigned>(attValueCapacity-8,500);
-    chunksPerFrame=(404+bounded-1)/bounded;
-    audioPayloadBytes=(404+chunksPerFrame-1)/chunksPerFrame;
+    server.mtu=mtu;assert(configureTransportFromPeerMtu());
     for(uint32_t initial: {0u,0xFFFFF000u}){
       clockNow=initial;spinMicros=0;characteristic.packets.clear();
-      assert(sendAudioFrame(frame,frame.sequence));
+      assert(sendAudioFrame(frame));
       const uint32_t duration=clockNow-initial;
       assert(duration>=45000 && duration<46000);
       assert(characteristic.packets.size()==chunksPerFrame);
@@ -70,12 +77,12 @@ int main(){
       }
       assert(received==404);
       // A queued frame must not burst out before the previous frame's pacing window.
-      assert(sendAudioFrame(frame,frame.sequence));
+      assert(sendAudioFrame(frame));
       assert(uint32_t(characteristic.packets[chunksPerFrame].time-initial)>=45000);
     }
   }
   chunksPerFrame=20;audioPayloadBytes=21;attValueCapacity=29;
   characteristic.packets.clear();cancelOnNotify=true;
-  assert(!sendAudioFrame(frame,frame.sequence));assert(characteristic.packets.size()==1);
+  assert(!sendAudioFrame(frame));assert(characteristic.packets.size()==1);
   std::cout<<"PASS runtime; codec golden="<<std::hex<<hash<<"\n";
 }

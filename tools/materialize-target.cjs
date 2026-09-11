@@ -24,23 +24,13 @@ function materialize(source,targetId){
   out=replaceOnce(out,'#define SYNAP_BATTERY_ADC_PIN 8','#define SYNAP_BATTERY_ADC_PIN 1','C3 battery ADC pin');
   out=out.replace(/GPIO8/g,'GPIO1');
 
-  const taskPrefix=`  if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
+  const taskBefore=`  if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
       xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, &captureTaskHandle, 0) != pdPASS ||
-      xTaskCreatePinnedToCore(transmitterTask, "transmit", `;
-  const taskSuffix=`, nullptr, 2, nullptr, 1) != pdPASS) {`;
-  const taskStart=out.indexOf(taskPrefix);
-  if(taskStart<0)throw Error('Missing target materialization anchor: single-core task creation');
-  if(out.indexOf(taskPrefix,taskStart+taskPrefix.length)>=0)throw Error('Ambiguous target materialization anchor: single-core task creation');
-  const stackStart=taskStart+taskPrefix.length,stackEnd=out.indexOf(taskSuffix,stackStart);
-  if(stackEnd<0)throw Error('Missing transmitter stack value in task creation');
-  const transmitterStack=out.slice(stackStart,stackEnd);
-  if(transmitterStack!=='8192')throw Error(`Unsupported transmitter stack ${transmitterStack}`);
-  const taskBefore=taskPrefix+transmitterStack+taskSuffix;
-  const taskAfter=`  // ESP32-C3 is single-core. Keep the same priority ordering without pinning to
-  // non-existent core 1; preserve the validated transmitter stack.
+      xTaskCreatePinnedToCore(transmitterTask, "transmit", 8192, nullptr, 2, nullptr, 1) != pdPASS) {`;
+  const taskAfter=`  // ESP32-C3 has one core; retain task priorities and stack sizes without pinning.
   if (xTaskCreate(controlTask, "control", 8192, nullptr, 3, nullptr) != pdPASS ||
       xTaskCreate(acquisitionTask, "capture", 4096, nullptr, 2, &captureTaskHandle) != pdPASS ||
-      xTaskCreate(transmitterTask, "transmit", ${transmitterStack}, nullptr, 2, nullptr) != pdPASS) {`;
+      xTaskCreate(transmitterTask, "transmit", 8192, nullptr, 2, nullptr) != pdPASS) {`;
   out=replaceOnce(out,taskBefore,taskAfter,'single-core task creation');
 
   if(out.includes(PRIMARY_TARGET))throw Error('C3 source still contains the S3 target identity');

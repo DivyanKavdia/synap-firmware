@@ -7,10 +7,10 @@
 // INSERT ENGINE
 constexpr uint16_t SYNAP_FIRMWARE_BUILD=1200;
 struct FakeFlash:Synap::OtaBackend {
-  unsigned begins=0;
+  unsigned begins=0,writes=0;
   bool matchesDevice(const uint8_t*)override{return true;}
   bool begin(uint32_t,const uint8_t*)override{++begins;return true;}
-  bool write(const uint8_t*,size_t)override{return true;}
+  bool write(const uint8_t*,size_t)override{++writes;return true;}
   Synap::OtaError finish()override{return Synap::OK;}
   bool commit()override{return true;}
   void abort()override{}
@@ -28,7 +28,12 @@ void updateStatusLed(bool){}
 uint32_t millis(){return clockNow;}
 bool batteryCritical(){return critical;}
 bool otaBusy(){return otaSession.busy();}
-struct Characteristic {void setValue(const uint8_t*,size_t){} void notify(){}} status;
+struct Characteristic {
+  std::vector<uint8_t> value;
+  std::vector<std::vector<uint8_t>> notifications;
+  void setValue(const uint8_t* data,size_t size){value.assign(data,data+size);}
+  void notify(){notifications.push_back(value);}
+} status;
 auto* otaStatusCharacteristic=&status;
 struct Server {uint16_t mtu=185;uint16_t getPeerMTU(int){return mtu;} int getConnId(){return 0;}} server;
 auto* bleServer=&server;
@@ -49,8 +54,12 @@ int xQueueReceive(int,OtaMessage* message,int){
 }
 void enqueueBegin(){
   OtaMessage m{};m.connection=connectionGeneration;m.length=59;
-  m.data[0]=1;Synap::OtaSession::put32(m.data+1,7);Synap::OtaSession::put32(m.data+5,64);
+  m.data[0]=1;put32le(m.data+1,7);put32le(m.data+5,64);
   messages.push_back(m);
+}
+void enqueueCommand(uint8_t command){
+  OtaMessage m{};m.connection=connectionGeneration;m.length=5;
+  m.data[0]=command;put32le(m.data+1,7);messages.push_back(m);
 }
 // INSERT PUBLISH
 // INSERT TICK
@@ -59,13 +68,40 @@ int main(){
   enqueueBegin();otaTick();
   assert(deviceState==DeviceState::STREAMING && streamingEnabled);
   assert(otaSession.error==Synap::BUSY && backend.begins==0 && !otaBusySnapshot);
+  assert(status.notifications.size()==1 && status.value[3]==Synap::BUSY);
+  otaTick();assert(status.notifications.size()==1); // Unchanged idle ticks publish nothing.
   // Refresh from unsupported OTA MTU to supported OTA MTU while audio is active.
   server.mtu=32;otaTick();assert(deviceState==DeviceState::STREAMING);
   server.mtu=185;otaTick();assert(deviceState==DeviceState::STREAMING);
+  assert(status.notifications.size()==3);
   streamingEnabled=false;deviceState=DeviceState::CONNECTED_IDLE;
   enqueueBegin();otaTick();assert(otaBusySnapshot && backend.begins==1);
+  assert(status.notifications.size()==4);
   critical=true;otaTick();
   assert(!otaBusySnapshot && otaSession.state==Synap::FAILED && deviceState==DeviceState::CONNECTED_IDLE);
+  assert(status.notifications.size()==5 && status.value[2]==Synap::FAILED);
+  critical=false;
+  enqueueBegin();otaTick();
+  otaOverflow=true;otaTick();
+  assert(status.notifications.size()==7 && otaSession.error==Synap::BAD_PACKET && !otaBusySnapshot);
+  enqueueBegin();otaTick();
+  clockNow+=900001;otaTick();
+  assert(status.notifications.size()==9 && otaSession.error==Synap::TIMED_OUT);
+
+  // Burst ACKs remain ordered, and repeated DATA is acknowledged without another flash write.
+  enqueueBegin();
+  OtaMessage data{};data.connection=connectionGeneration;data.length=73;
+  data.data[0]=2;put32le(data.data+1,7);data.data[9]=0xe9;data.data[21]=9;
+  put32le(data.data+41,0xabcd5432);
+  messages.push_back(data);messages.push_back(data);enqueueCommand(3);
+  otaTick();
+  assert(status.notifications.size()==13 && backend.writes==1 && otaSession.state==Synap::READY);
+  for(size_t i=10;i<=12;++i)assert(Synap::OtaSession::u32(status.notifications[i].data()+8)==64);
+  ++connectionGeneration;enqueueBegin();messages.back().data[0]=6;otaTick();
+  assert(status.notifications.size()==14 && otaSession.state==Synap::READY && otaBusySnapshot);
+  enqueueCommand(4);otaTick();
+  assert(status.notifications.size()==15 && otaSession.state==Synap::COMMITTED);
   assert(ESP.restarts==0);
-  std::cout<<"PASS OTA refresh and refusal preserve recording; diagnostics snapshot follows OTA state\n";
+  clockNow+=1501;otaTick();assert(ESP.restarts==1 && status.notifications.size()==15);
+  std::cout<<"PASS OTA refresh and refusal preserve recording; command/retry ACKs survive status coalescing\n";
 }

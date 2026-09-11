@@ -1,31 +1,30 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path');
-const {prepareProduction}=require('../tools/prepare-production.cjs');
 const {materialize}=require('../tools/materialize-target.cjs');
 const root=path.join(__dirname,'..');
-const source=()=>prepareProduction(fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8'));
+const source=()=>fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8');
 
 const {nativeTest}=require('./support/native.cjs');
 
 test('production DSP has measured rumble rejection, speech-band preservation and saturating PCM',()=>{
   const prepared=source();
-  const embedded=prepared.slice(prepared.indexOf('#ifndef SYNAP_AUDIO_CONDITIONING_H'),prepared.indexOf('static_assert(SAMPLE_RATE==16000'));
+  const embedded=prepared.slice(prepared.indexOf('#ifndef SYNAP_MIC_HPF_ENABLE'),prepared.indexOf('static_assert(SAMPLE_RATE==16000'));
   const fixture=fs.readFileSync(path.join(__dirname,'audio-conditioning.cpp'),'utf8');
-  const result=nativeTest(embedded+'\n'+fixture);
+  const result=nativeTest('#include <cstdint>\n'+embedded+'\n'+fixture);
   assert.match(result,/PASS: filter bytes=12/);
   console.log(result.trim());
 });
 
 test('comparison build bypass preserves all 65536 PCM values exactly',()=>{
-  const header='#ifndef SYNAP_AUDIO_CONDITIONING_H'+source().split('#ifndef SYNAP_AUDIO_CONDITIONING_H')[1].split('static_assert(SAMPLE_RATE==16000')[0];
+  const header='#ifndef SYNAP_MIC_HPF_ENABLE'+source().split('#ifndef SYNAP_MIC_HPF_ENABLE')[1].split('static_assert(SAMPLE_RATE==16000')[0];
   const fixture=fs.readFileSync(path.join(__dirname,'audio-conditioning.cpp'),'utf8');
-  assert.match(nativeTest(header+'\n'+fixture,['-DSYNAP_MIC_HPF_ENABLE=0']),/PASS: bypass/);
+  assert.match(nativeTest('#include <cstdint>\n'+header+'\n'+fixture,['-DSYNAP_MIC_HPF_ENABLE=0']),/PASS: bypass/);
 });
 
 test('exact production capture handles partial reads, frame boundaries, recording changes and I2S recovery',()=>{
   const prepared=source();
-  const start=prepared.indexOf('#ifndef SYNAP_AUDIO_CONDITIONING_H');
+  const start=prepared.indexOf('#ifndef SYNAP_MIC_HPF_ENABLE');
   const end=prepared.indexOf('void acquisitionTask(void* parameter) {',start);
   const capture=prepared.slice(start,end).replace('static_assert(SAMPLE_RATE==16000, "Speech high-pass requires 16 kHz PCM");','');
   const fixture=fs.readFileSync(path.join(__dirname,'audio-capture.cpp'),'utf8');

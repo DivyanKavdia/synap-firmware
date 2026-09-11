@@ -121,17 +121,18 @@ After commit, firmware reboots into the updated application.
 
 ## Build and release
 
-`synap_esp32s3/synap_esp32s3.ino` is the production source of truth. `tools/prepare-production.cjs` copies it byte for byte. C3 source is generated from that sketch; both exact target sources are retained with build artifacts and releases.
+`synap_esp32s3/synap_esp32s3.ino` is the production source of truth. CI copies it byte for byte. C3 source is generated from that sketch; both exact target sources are retained with build artifacts and releases.
 
 `.github/workflows/firmware.yml` runs regression tests, compiles both targets, creates OTA/factory artifacts, adds GitHub provenance and verifies the production feed. Successful eligible main builds publish automatically. See [release details](OTA_RELEASES.md).
 
 ```sh
 node --test tests/*.cjs
-node tools/prepare-production.cjs synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32s3/synap_esp32s3.ino
+mkdir -p prepared/synap_esp32s3
+cp synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32s3/synap_esp32s3.ino
 node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3/synap_esp32c3.ino
 ```
 
-Capture uses real I2S by default. `-DUSE_REAL_I2S_MIC=0` selects a diagnostic test tone. Local USB builds identify as build 0; CI supplies the release build number. The capture task blocks while idle and wakes on START, avoiding a periodic 40 ms polling delay.
+Capture uses real I2S by default. `-DUSE_REAL_I2S_MIC=0` selects a diagnostic test tone. Local USB builds identify as build 0; CI supplies the release build number. The capture task blocks while idle and wakes on START. The transmitter blocks until a frame is queued.
 
 ## Initial flash
 

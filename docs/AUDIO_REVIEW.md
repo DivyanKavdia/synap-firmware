@@ -53,7 +53,8 @@ Run `node --test tests/*.cjs`. Native C++ tests compile with warnings as errors 
 Prepare the exact production sketches with:
 
 ```sh
-node tools/prepare-production.cjs synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32s3/synap_esp32s3.ino
+mkdir -p prepared/synap_esp32s3
+cp synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32s3/synap_esp32s3.ino
 node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3/synap_esp32c3.ino
 ```
 

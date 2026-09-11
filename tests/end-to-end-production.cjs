@@ -1,9 +1,8 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
-const {prepareProduction}=require('../tools/prepare-production.cjs');
 const {materialize}=require('../tools/materialize-target.cjs');
 const root=path.join(__dirname,'..');
-function productionS3(){return prepareProduction(fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8'))}
+function productionS3(){return fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8')}
 
 test('final production S3 source matches audio, touch, low-power and OTA contract',()=>{
   const s3=productionS3();
@@ -47,7 +46,7 @@ test('secondary target materialization preserves recording and wake-validation c
 
 test('release workflow compiles the shared complete production pipeline',()=>{
   const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
-  assert.match(workflow,/node tools\/prepare-production\.cjs synap_esp32s3\/synap_esp32s3\.ino prepared\/synap_esp32s3\/synap_esp32s3\.ino/);
+  assert.match(workflow,/cp synap_esp32s3\/synap_esp32s3\.ino prepared\/synap_esp32s3\/synap_esp32s3\.ino/);
   const compileLines=workflow.split('\n').filter(line=>line.includes('arduino-cli compile'));
   assert.equal(compileLines.length,2);
   assert(compileLines.every(line=>line.includes('-DUSE_REAL_I2S_MIC=1')));
