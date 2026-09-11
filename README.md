@@ -51,12 +51,12 @@ On S3, double-tap actions are confirmed after a short wait for a possible third 
 | Connected idle | Double tap | Start recording immediately on the second valid tap |
 | Recording | Double tap | Stop recording, then enter BLE standby |
 | BLE standby | Double tap | Wake and start recording |
-| Any awake non-OTA state | Long press (~1.5 s) | Enter deep sleep; active recording stops first |
-| Deep sleep | Long press (~1.5 s) | Wake and continue normal boot |
+| Any awake non-OTA state | Hold at least 4 seconds, then release | Enter deep sleep; active recording stops first |
+| Deep sleep | Hold at least 4 seconds through wake validation, then release | Wake and continue normal boot |
 | Deep sleep | Short touch | Return to deep sleep without starting BLE |
 | Any awake state | Single tap | No action |
 
-On C3, triple tap is not used. The second valid tap acts immediately because there is no need to wait for a possible third tap. A long press is used for both sleep and wake. The firmware waits for the touch line to be released before completing the sleep transition so the level-sensitive GPIO3 wake source cannot immediately wake the device again.
+On C3, triple tap is not used. The second valid tap acts immediately because there is no need to wait for a possible third tap. A four-second hold is used for both sleep and wake. The firmware waits for release before completing sleep so the GPIO3 HIGH-level wake source cannot immediately wake the device again. Wake validation measures four continuous seconds after firmware starts, so allow brief boot overhead. Release is consumed before normal boot, and waking does not automatically start recording. A press interrupted by OTA is discarded.
 
 For both targets, the first touch electrically wakes the MCU from deep sleep, but firmware validates the target-specific wake gesture before allowing BLE initialization. A retained deep-sleep marker and durable sleep lock prevent an unexpected reset from reconnecting to the PWA without a valid wake gesture.
 

@@ -56,7 +56,7 @@ function materialize(source,targetId){
 
   // C3-only interaction: deliberate long press wakes the pendant. The TTP223
   // high level performs the hardware wake; firmware then confirms the hold.
-  constexpr uint16_t C3_WAKE_HOLD_MS = 1500;
+  constexpr uint16_t C3_WAKE_HOLD_MS = 4000;
   synapLastSleepStage=SLEEP_STAGE_WAKE_VALIDATING;
   const uint32_t pressedAt=millis();
   Serial.println("[TOUCH] C3 wake touch detected; hold to power on");
@@ -69,8 +69,11 @@ function materialize(source,targetId){
   }
 
   // Do not continue into normal touch handling until the wake press is released.
-  while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) delay(5);
-  delay(TOUCH_DEBOUNCE_MS);
+  uint32_t releasedAt=millis();
+  while (uint32_t(millis()-releasedAt)<TOUCH_DEBOUNCE_MS) {
+    if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) releasedAt=millis();
+    delay(5);
+  }
   if (!writeDurableSleepLock(false)) {
     Serial.println("[POWER] could not clear durable sleep lock; refusing BLE boot");
     delay(30);armTouchWakeAndSleep();return false;
@@ -91,7 +94,7 @@ function materialize(source,targetId){
   constexpr uint16_t C3_TAP_MIN_MS = 60;
   constexpr uint16_t C3_TAP_MAX_MS = 500;
   constexpr uint16_t C3_DOUBLE_TAP_GAP_MS = 550;
-  constexpr uint16_t C3_SLEEP_HOLD_MS = 1500;
+  constexpr uint16_t C3_SLEEP_HOLD_MS = 4000;
   constexpr uint16_t C3_STATE_LOCKOUT_MS = 250;
   static uint32_t touchRearmAt = 0;
   static bool lastConnectedState = false;
@@ -106,6 +109,12 @@ function materialize(source,targetId){
   const bool streaming=streamingEnabled.load();
   const bool standby=remoteStandby;
   const bool raw=digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL;
+
+  // An OTA-interrupted press must not become a power gesture when OTA finishes.
+  if (otaBusy() || sleepPending) {
+    touchPressedAt=0;tapCount=0;lastTapAt=0;
+    deepSleepAfterStop=false;standbyAfterStop=false;
+  }
 
   if (deepSleepAfterStop && !streaming && !raw && !otaBusy()) {
     deepSleepAfterStop=false;
@@ -138,7 +147,7 @@ function materialize(source,targetId){
   if (raw!=touchStableState && uint32_t(now-touchChangedAt)>=TOUCH_DEBOUNCE_MS) {
     touchStableState=raw;
     if (touchStableState) {
-      if (static_cast<int32_t>(now-touchRearmAt)<0) {
+      if (otaBusy() || sleepPending || static_cast<int32_t>(now-touchRearmAt)<0) {
         touchPressedAt=0;
         tapCount=0;
         lastTapAt=0;

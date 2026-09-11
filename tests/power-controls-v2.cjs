@@ -59,11 +59,12 @@ test('idle and normal STOP power down the microphone while START keeps hardened 
   assert.match(s3,/remote standby -> awake; microphone remains off until START/);
 });
 
-test('secondary target materialization preserves the same wake validation contract',()=>{
+test('secondary target materialization preserves C3 hold validation and GPIO wake',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/confirmTouchWakeTripleTap\(\)/);
-  assert.match(c3,/triple tap wake confirmed; sleep lock cleared; continuing normal boot/);
-  assert.match(c3,/triple tap -> DEEP SLEEP/);
+  assert.match(c3,/C3 long-press wake confirmed; sleep lock cleared; continuing normal boot/);
+  assert.match(c3,/C3_WAKE_HOLD_MS = 4000/);
+  assert.match(c3,/C3_SLEEP_HOLD_MS = 4000/);
   assert.match(c3,/esp_deep_sleep_enable_gpio_wakeup\(1ULL<<TOUCH_INPUT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH\)/);
   assert.doesNotMatch(c3,/esp_sleep_enable_ext1_wakeup/);
 });

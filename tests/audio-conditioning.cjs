@@ -37,7 +37,8 @@ test('both final targets share capture-owned filter history and retain transport
     assert.match(prepared,/if \(highPassGeneration!=frame.generation\) \{\s*highPass.reset\(\)/);
     assert.match(prepared,/if \(startMicrophone\(\)\) \{ highPass.reset\(\); received=0; emptyReads=0; continue; \}/);
     assert.match(prepared,/ADPCM_BYTES_PER_FRAME == 404/);
-    assert.match(prepared,/triple tap -> DEEP SLEEP/);
+    if (prepared.includes('C3_SLEEP_HOLD_MS')) assert.match(prepared,/C3_SLEEP_HOLD_MS = 4000/);
+    else assert.match(prepared,/triple tap -> DEEP SLEEP/);
     assert.match(prepared,/double tap -> STOP \+ POWER SAVER/);
     assert.match(prepared,/writeDurableSleepLock\(true\)/);
     assert.doesNotMatch(prepared,/\b(?:TOUCH_DOUBLE_TAP_MS|TOUCH_LONG_PRESS_MS|TOUCH_SLEEP_HOLD_MS|touchLongSent|touchLongEligible|touchIdlePress|touchFirstTapAt|publishRememberEvent|memoryAckUntil|memoryEventCounter|streamStartedAt)\b/);

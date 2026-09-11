@@ -25,7 +25,7 @@ test('secondary generated target preserves the production interaction contract',
   assert.match(c3,/esp_deep_sleep_enable_gpio_wakeup\(1ULL<<TOUCH_INPUT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH\)/);
   assert.doesNotMatch(c3,/esp_sleep_enable_ext1_wakeup/);
   assert.match(c3,/confirmTouchWakeTripleTap\(\)/);
-  assert.match(c3,/triple tap wake confirmed; sleep lock cleared; continuing normal boot/);
+  assert.match(c3,/C3 long-press wake confirmed; sleep lock cleared; continuing normal boot/);
   assert.match(c3,/double tap -> START/);
   assert.match(c3,/double tap -> STOP \+ POWER SAVER/);
   assert.match(c3,/900000u/);
