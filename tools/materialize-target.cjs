@@ -24,18 +24,8 @@ function materialize(source,targetId){
   out=replaceOnce(out,'#define SYNAP_BATTERY_ADC_PIN 8','#define SYNAP_BATTERY_ADC_PIN 1','C3 battery ADC pin');
   out=out.replace(/GPIO8/g,'GPIO1');
 
-  // Intermediate preparation tests run before the final power patch and still contain
-  // the original S3 EXT1 call. Convert that form. Final production source already has
-  // target-specific compile-time branches: S3 EXT0 and C3 GPIO deep-sleep wake.
-  const legacyExt1=`  esp_sleep_enable_ext1_wakeup(1ULL<<TOUCH_INPUT_PIN, ESP_EXT1_WAKEUP_ANY_HIGH);`;
-  if(out.includes(legacyExt1)){
-    out=replaceOnce(out,legacyExt1,
-`  esp_deep_sleep_enable_gpio_wakeup(1ULL<<TOUCH_INPUT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);`,
-    'C3 pre-power deep-sleep wake');
-  }
-
   const taskPrefix=`  if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
-      xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, nullptr, 0) != pdPASS ||
+      xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, &captureTaskHandle, 0) != pdPASS ||
       xTaskCreatePinnedToCore(transmitterTask, "transmit", `;
   const taskSuffix=`, nullptr, 2, nullptr, 1) != pdPASS) {`;
   const taskStart=out.indexOf(taskPrefix);
@@ -44,12 +34,12 @@ function materialize(source,targetId){
   const stackStart=taskStart+taskPrefix.length,stackEnd=out.indexOf(taskSuffix,stackStart);
   if(stackEnd<0)throw Error('Missing transmitter stack value in task creation');
   const transmitterStack=out.slice(stackStart,stackEnd);
-  if(!['4096','8192'].includes(transmitterStack))throw Error(`Unsupported transmitter stack ${transmitterStack}`);
+  if(transmitterStack!=='8192')throw Error(`Unsupported transmitter stack ${transmitterStack}`);
   const taskBefore=taskPrefix+transmitterStack+taskSuffix;
   const taskAfter=`  // ESP32-C3 is single-core. Keep the same priority ordering without pinning to
   // non-existent core 1; preserve the validated transmitter stack.
   if (xTaskCreate(controlTask, "control", 8192, nullptr, 3, nullptr) != pdPASS ||
-      xTaskCreate(acquisitionTask, "capture", 4096, nullptr, 2, nullptr) != pdPASS ||
+      xTaskCreate(acquisitionTask, "capture", 4096, nullptr, 2, &captureTaskHandle) != pdPASS ||
       xTaskCreate(transmitterTask, "transmit", ${transmitterStack}, nullptr, 2, nullptr) != pdPASS) {`;
   out=replaceOnce(out,taskBefore,taskAfter,'single-core task creation');
 

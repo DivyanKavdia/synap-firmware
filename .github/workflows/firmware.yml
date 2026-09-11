@@ -34,9 +34,8 @@ jobs:
           arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli core install esp32:esp32@3.3.5 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli lib install "Adafruit NeoPixel@1.15.2"
-      - name: Test release, OTA and hardware interaction preparation
+      - name: Test production source, audio, OTA and hardware contracts
         run: |
-          node tools/prepare-interactions.cjs --check synap_esp32s3/synap_esp32s3.ino
           node --test tests/*.cjs
       - name: Prepare auditable S3 and C3 production sources
         run: |
@@ -45,10 +44,6 @@ jobs:
           node tools/materialize-target.cjs --check esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino
           node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3/synap_esp32c3.ino
           test "$(git status --porcelain -- synap_esp32s3)" = ""
-          if [ -f synap_esp32c3/synap_esp32c3.ino ]; then
-            cmp -s synap_esp32c3/synap_esp32c3.ino prepared/synap_esp32c3/synap_esp32c3.ino || \
-              echo "C3 checked-in source differs from generated target and will be synchronized after publish."
-          fi
       - name: Compile S3 and C3 application targets with one build number
         env:
           RUN_NUMBER: ${{ github.run_number }}
@@ -124,17 +119,3 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node tools/check-feed.cjs
-      - name: Synchronize explicit ESP32-C3 source into main
-        if: steps.publish_result.outputs.published == 'true'
-        run: |
-          mkdir -p synap_esp32c3
-          cp bundle/source-sync/synap_esp32c3.ino synap_esp32c3/synap_esp32c3.ino
-          if git diff --quiet -- synap_esp32c3/synap_esp32c3.ino && git ls-files --error-unmatch synap_esp32c3/synap_esp32c3.ino >/dev/null 2>&1; then
-            echo "ESP32-C3 source already synchronized."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add synap_esp32c3/synap_esp32c3.ino
-          git commit -m "Sync explicit ESP32-C3 firmware source [skip ci]"
-          git push origin HEAD:main

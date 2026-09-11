@@ -1,19 +1,11 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
-const {prepare}=require('../tools/prepare-interactions.cjs');
-const {patch:runtime}=require('../tools/patch-runtime-fixes.cjs');
-const {patch:eventChannel}=require('../tools/patch-event-channel.cjs');
-const {patch:battery}=require('../tools/patch-battery-v2.cjs');
-const {patch:audio}=require('../tools/patch-audio-reliability.cjs');
-const {patch:codec}=require('../tools/patch-audio-codec-v3.cjs');
-const {patch:touch}=require('../tools/patch-touch-reliability.cjs');
-const {patch:harden}=require('../tools/patch-production-hardening.cjs');
 const {materialize}=require('../tools/materialize-target.cjs');
 const root=path.join(__dirname,'..');
 
 test('production audio uses independent-frame IMA ADPCM protocol v3 with runtime stack headroom',()=>{
   const source=fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8');
-  const prepared=harden(touch(codec(audio(battery(eventChannel(runtime(prepare(source))))))));
+  const prepared=source;
   assert.match(prepared,/AUDIO_PROTOCOL_VERSION = 3/);
   assert.match(prepared,/AUDIO_CODEC_IMA_ADPCM = 1/);
   assert.match(prepared,/ADPCM_BYTES_PER_FRAME == 404/);

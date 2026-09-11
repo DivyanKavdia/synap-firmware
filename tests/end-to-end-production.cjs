@@ -26,7 +26,7 @@ test('final production S3 source matches audio, touch, low-power and OTA contrac
   assert.doesNotMatch(s3,/held>=TOUCH_SLEEP_HOLD_MS/);
   assert.match(s3,/double tap -> START/);assert.match(s3,/double tap -> STOP \+ POWER SAVER/);
   assert.match(s3,/CMD_STANDBY = 0x03/);assert.match(s3,/CMD_WAKE = 0x04/);
-  assert.match(s3,/POWER_STATE_WAKE_RECORD = 4/);
+  assert.match(s3,/POWER_STATE_AWAKE = 1/);
   assert.doesNotMatch(s3,/DeviceState::STANDBY/);
   assert.match(s3,/publishPowerEvent\(POWER_STATE_DEEP_SLEEP\)/);
   assert.match(s3,/batteryCritical\(\) && otaBusy\(\)[\s\S]*?otaSession\.fail\(Synap::BUSY\)/);

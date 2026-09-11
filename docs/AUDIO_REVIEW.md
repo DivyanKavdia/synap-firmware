@@ -1,10 +1,8 @@
 # Audio conditioning and firmware cleanup
 
-Review baseline: `f048358983f87bf490a340b6d68e139ba2ba3e95`.
-
 ## Findings and choice
 
-The release build already converts signed, left-aligned I2S slots to PCM16 using `raw >> 16`; an earlier hidden 12 dB digital gain is only present in the base sketch and is replaced during production preparation. Do not restore that gain: software amplification cannot recover microphone signal-to-noise ratio and reduces clipping headroom.
+The microphone path converts signed, left-aligned I2S slots to PCM16 using `raw >> 16` at unity digital gain. Software amplification cannot recover microphone signal-to-noise ratio and reduces clipping headroom.
 
 The INMP441 specifies 24-bit I2S words in 32-bit slots, a natural acoustic high-pass corner around 60 Hz, and an additional internal digital high-pass whose 3.7 Hz corner at 48 kHz scales with sample rate. These built-in filters do not provide speech-band noise suppression. [TDK INMP441 datasheet, pages 10–14](https://product.tdk.com/system/files/dam/doc/product/sw_piezo/mic/mems-mic/data_sheet/inmp441.pdf).
 
@@ -14,7 +12,7 @@ Stronger enhancement belongs initially in an optional local PWA processing path 
 
 ## Exact processing and measured response
 
-`tools/audio-conditioning.h` contains the tested implementation. At 16 kHz:
+The `SynapAudio::SpeechHighPass` class in the production sketch contains the tested implementation. At 16 kHz:
 
 ```text
 a = 31880 / 32768
@@ -42,13 +40,11 @@ The filter needs 12 bytes of state plus a 4-byte generation counter, no heap all
 
 The hardware acceptance budget is less than 1 ms of added processing per 50 ms frame on each target, with no increase in capture drops or notification rejections during a sustained recording. This budget has not been measured on a pendant. Host throughput is printed by the native test only as a regression aid and must not be presented as ESP32 timing.
 
-## Cleanup with retained behavior
+## Runtime and source structure
 
-The complete production preparation now has one entry point, `tools/prepare-production.cjs`, shared by CI and the end-to-end source tests. The previous end-to-end tests stopped before the final durable sleep-lock stage; they now inspect what the release actually compiles. The earlier patch scripts remain necessary inputs to the base sketch and are retained.
+The production sketch is compiled without logic-rewriting patches. Tests inspect that source directly, and the C3 generator changes only hardware-specific configuration. The asynchronous event characteristic carries battery and power events. Diagnostic tone state is excluded from microphone builds.
 
-The final source removes declaration-only legacy double-tap/hold constants, old hold flags and a write-only first-tap timestamp. The final gesture state machine has its own live timing/state and remains double tap for recording on/off, triple tap for sleep/wake.
-
-The old Remember publisher had a declaration and definition but no caller in the final command or gesture paths. Its function, private constants, counter/timestamp and unreachable LED acknowledgement are removed. Cleanup refuses to proceed if a new caller or reader appears. The asynchronous event characteristic and its live battery/power publishers remain. The transport test-tone oscillator remains available in test-audio builds, with its unused state excluded from real-I2S builds.
+Capture blocks on a task notification while idle and wakes on START. ADPCM packing initializes each output byte as it writes the low nibble, avoiding a redundant 400-byte clear per frame. The transmitter preserves its 45 ms pacing window and yields during the final fragment's remaining wait. These changes reduce polling and redundant work; actual device speed and power savings require measurement.
 
 ## Verification and release gate
 
@@ -63,4 +59,4 @@ node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/sy
 
 The pull-request workflow must compile both targets using the pinned production Arduino/ESP32 toolchain. Local native tests do not substitute for those board builds. For an otherwise identical A/B firmware build, add `-DSYNAP_MIC_HPF_ENABLE=0` alongside the existing real-I2S/build flags.
 
-Before firmware release, compare enabled/bypass recordings with low and high voices, quiet speech, a fan, walking/clothing noise and silence. Check onset after boot/standby, long-recording CPU/drop counters, double/triple taps, OTA and reconnect. No device was flashed or recorded during this review, and no actual speech or transcription improvement has been measured.
+Before firmware release, compare enabled/bypass recordings with low and high voices, quiet speech, a fan, walking/clothing noise and silence. Check onset after boot/standby, long-recording CPU/drop counters, double/triple taps, OTA and reconnect. Actual speech quality, transcription improvement and device timing require physical measurements.
