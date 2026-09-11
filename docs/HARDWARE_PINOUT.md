@@ -67,7 +67,9 @@ Expected module configuration:
 - VCC: 3.3 V
 - GND: common ground
 
-Current production interaction model:
+### ESP32-S3 SuperMini interaction
+
+The S3 behavior is intentionally unchanged:
 
 - while connected and idle: double tap to start recording
 - while recording: double tap to stop recording and enter BLE standby
@@ -75,8 +77,23 @@ Current production interaction model:
 - in any non-OTA state: triple tap to enter deep sleep; active recording stops first
 - from deep sleep: triple tap to wake; one or two taps return to deep sleep without initializing BLE
 - double-tap actions wait briefly for a possible third tap, keeping the sleep gesture separate from recording
-- touch actions are ignored during OTA
-- deep sleep is not entered while TTP223 OUT is still HIGH, preventing an immediate wake loop
+
+### ESP32-C3 SuperMini interaction
+
+The C3 uses a target-specific gesture model designed for reliable GPIO3 level wake:
+
+- while connected and idle: double tap to start recording
+- while recording: double tap to stop recording and enter BLE standby
+- in BLE standby: double tap to wake and start recording
+- in any awake non-OTA state: hold the TTP223 for about 1.5 seconds to enter deep sleep; active recording stops first
+- from deep sleep: hold the TTP223 for about 1.5 seconds to confirm wake and continue normal boot
+- a short deep-sleep touch wakes the silicon electrically but is rejected by firmware and returns to deep sleep before BLE starts
+- a single tap while awake has no action
+- C3 does not use triple tap
+- the second valid tap acts immediately; unlike S3 there is no wait for a possible third tap
+- before entering deep sleep, firmware requires the TTP223 line to be released so the GPIO3 HIGH-level wake source cannot immediately wake the C3 again
+
+For both targets, touch actions are ignored during OTA. Deep-sleep state is guarded by retained and durable markers so a reset during shutdown or wake validation does not bypass the intended power gesture.
 
 ## RGB status LED
 
