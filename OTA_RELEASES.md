@@ -1,72 +1,31 @@
-# Synap firmware release process
+# Firmware releases
 
-Public product version remains **1.0.0**; monotonically increasing 16-bit build numbers identify firmware revisions.
+The product version is **1.0.0**. Numeric 16-bit build counters distinguish releases.
 
-## Channels
+## Build and publication
 
-The release pipeline intentionally separates engineering builds from customer firmware:
+`.github/workflows/firmware.yml` tests the reviewed S3 sketch and materializes the C3 target from it. Both targets compile with Arduino-ESP32 3.3.5, Adafruit NeoPixel 1.15.2, real I2S capture and the default dual-OTA partition layout.
 
-- `ota-test`: automatically published by successful `main` pushes. Used for engineering/hardware qualification only.
-- `ota-releases`: production feed consumed by `synap-pwa`. Published only through a manual GitHub Actions dispatch with `channel=production`.
+Pull requests build and validate artifacts. Successful eligible pushes to `main`, or workflow dispatches on `main`, publish to `ota-releases` through the `production` environment. Documentation-only pushes are ignored. Dispatch the workflow to rebuild an unchanged source commit.
 
-Production feed:
+The workflow assigns `1000 + github.run_number`, validates target identity and image size, and retains the exact sources, application images and factory images in the `verified-firmware` workflow artifact. GitHub release assets include application binaries, manifests, source sketches and source hashes for both targets.
 
-`https://raw.githubusercontent.com/DivyanKavdia/synap-firmware/ota-releases/latest.json`
+The publisher verifies that the source commit is still current and that the build advances the existing feed. Both target manifests and `targets.json` move together in one release-branch commit. Feed verification runs only after publication succeeds.
 
-Test feed:
+## Trust and delivery
 
-`https://raw.githubusercontent.com/DivyanKavdia/synap-firmware/ota-test/latest.json`
+Production manifests use schema 3 and declare GitHub Actions provenance. The workflow attests both binaries with GitHub OIDC. Feed checks validate the target, binary SHA-256, GitHub-verified Actions release commit, attestation availability and browser CORS. The PWA consumes the production feed.
 
-A normal source push can therefore never make a firmware build visible to customers by itself.
+- [Primary S3 manifest](https://raw.githubusercontent.com/DivyanKavdia/synap-firmware/ota-releases/latest.json)
+- [Target index](https://raw.githubusercontent.com/DivyanKavdia/synap-firmware/ota-releases/targets.json)
+- [C3 manifest](https://raw.githubusercontent.com/DivyanKavdia/synap-firmware/ota-releases/targets/esp32c3-supermini-4m/latest.json)
 
-## Production signing
+Release utilities also support the explicit `ota-test` channel for engineering use. The configured workflow publishes production; it does not dispatch by channel.
 
-Production schema-2 manifests are signed with ECDSA P-256 / SHA-256 (`ES256`) and key ID `prod-2026-01`.
+The firmware OTA engine validates image structure, target identity, size and SHA-256 and supports transfer resume. Device OTA integrity checks and PWA publisher-authenticity checks serve different purposes. Keep target markers and active protocol versions intact.
 
-The public verification key is committed at `tools/release-public-key.pem` and embedded in the PWA. The private key is not stored in source control. Configure it only in the protected GitHub production environment/repository secret:
+## Local builds
 
-`SYNAP_RELEASE_PRIVATE_KEY_PEM`
+The checked-in sketch defaults to real microphone capture. USB development builds use build 0 unless `-DSYNAP_BUILD=<number>` is supplied; build 0 cannot be packaged by the release validator. Use `-DUSE_REAL_I2S_MIC=0` only for a transport test tone. Generate C3 source with the command in README rather than editing a second copy.
 
-Use a PKCS#8 PEM private key corresponding to the committed public key. Restrict access to repository administrators/release operators and retain an offline backup under your normal key-management process.
-
-If the secret is absent or the generated signature is malformed, the production publish job fails closed.
-
-## Migration from build 1008
-
-The deployed production feed through build **1008** is unsigned. The PWA explicitly allows unsigned schema-1 production manifests only through build 1008. Any build above 1008 must be a valid signed schema-2 production manifest.
-
-The first signed release still uses OTA protocol 3, so build-1008 devices can install it without USB migration.
-
-## Production promotion
-
-1. Merge reviewed firmware changes to `main`.
-2. Let the automatic `ota-test` build complete.
-3. Install/qualify that test binary on representative hardware.
-4. Validate BLE connect/reconnect, real microphone capture if applicable, record/stop, long stream, OTA interruption/resume, reboot and diagnostics.
-5. In GitHub Actions run **Build and publish pendant firmware** manually with `channel=production`.
-6. The production environment signs and publishes the exact `main` commit only if it is still current.
-7. The workflow verifies the public manifest, binary digest, signature policy and browser CORS response.
-
-The production publisher refuses to advertise a source commit that has already been superseded by a newer `main` commit.
-
-## Artifact contract
-
-The manifest records exact target, channel, build, image length, SHA-256, source commit, hardware identity and immutable content-addressed binary URL. The updater transfers only the application image; bootloader and partition table are never changed by BLE OTA.
-
-Target is ESP32-S3FH4R2 / SuperMini with 4 MB flash, 2 MB QSPI PSRAM and the default dual-OTA partition layout. Images larger than the inactive application slot or missing the exact target/build marker are rejected by CI and again by the updater.
-
-## OTA recovery
-
-A live device keeps transfer hash/offset state in RAM for up to two minutes after BLE interruption. RESUME requires matching transfer ID, image size/hash and permanent device ID. Power loss or restart loses that transient state and requires a fresh transfer; this is intentional because no local storage is used on the pendant.
-
-After VERIFY the SHA-256 and image structure must pass before COMMIT can select the inactive boot partition. Where the provisioned bootloader has rollback enabled, the new application delays mark-valid until its early runtime health window passes.
-
-## Tests
-
-Host release/session tests:
-
-```bash
-node --test tests/*.cjs
-```
-
-The GitHub workflow additionally compiles the actual Arduino sketch with the pinned ESP32-S3 board/toolchain configuration. Host/compile checks do not replace the physical production-promotion smoke test above.
+Before releasing runtime changes, pass native regression tests and both target builds. Physical acceptance covers recording, touch gestures, sleep/wake, reconnect, battery guards and OTA. CI compilation does not measure on-device timing or audio quality.

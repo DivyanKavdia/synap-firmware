@@ -1,6 +1,6 @@
 # Synap Firmware
 
-Production firmware for the Synap pendant. Product version is **1.0.0**. The signed `ota-releases` feed is the source of truth for the latest numeric build.
+Production firmware for the Synap pendant. Product version is **1.0.0**. The GitHub-attested `ota-releases` feed is the source of truth for the latest numeric build.
 
 ## Targets
 
@@ -75,7 +75,7 @@ For BLE transport, each frame is independently encoded with IMA ADPCM. Independe
 
 Transport adapts to the negotiated ATT capacity. The firmware requests a large MTU where supported and uses a bounded notification payload. Audio capture and transmission are isolated so transient I2S or BLE issues do not unnecessarily terminate a recording.
 
-The pendant does not store recordings locally. If the BLE connection is lost, audio from the disconnected interval cannot be recovered.
+The pendant currently does not store recordings locally. If BLE disconnects, capture stops and the queued audio is discarded. See the [offline recording proposal](docs/OFFLINE_RECORDING.md) for a two-minute persistent buffer using the existing data partition.
 
 ## Battery
 
@@ -121,9 +121,17 @@ After commit, firmware reboots into the updated application.
 
 ## Build and release
 
-`.github/workflows/firmware.yml` is the production build path. It runs regression tests, uses `tools/prepare-production.cjs` to prepare the final S3 source, materializes the secondary target, compiles real-I2S firmware, creates OTA/factory artifacts, adds provenance, and verifies the production feed.
+`synap_esp32s3/synap_esp32s3.ino` is the production source of truth. `tools/prepare-production.cjs` copies it byte for byte. C3 source is generated from that sketch; both exact target sources are retained with build artifacts and releases.
 
-The final prepared source—not an intermediate patch state—is the release contract.
+`.github/workflows/firmware.yml` runs regression tests, compiles both targets, creates OTA/factory artifacts, adds GitHub provenance and verifies the production feed. Successful eligible main builds publish automatically. See [release details](OTA_RELEASES.md).
+
+```sh
+node --test tests/*.cjs
+node tools/prepare-production.cjs synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32s3/synap_esp32s3.ino
+node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3/synap_esp32c3.ino
+```
+
+Capture uses real I2S by default. `-DUSE_REAL_I2S_MIC=0` selects a diagnostic test tone. Local USB builds identify as build 0; CI supplies the release build number. The capture task blocks while idle and wakes on START, avoiding a periodic 40 ms polling delay.
 
 ## Initial flash
 
@@ -131,7 +139,7 @@ The first installation is performed over USB with the target-specific board conf
 
 ## Release rules
 
-- Use the signed production feed to determine the latest deployed build.
+- Use the production feed to determine the latest deployed build.
 - Never flash an S3 binary onto a C3 or vice versa.
 - Changes to BLE protocols, OTA format, pins, gestures, battery hardware, partitions or the PWA transport contract must update the corresponding regression tests.
 

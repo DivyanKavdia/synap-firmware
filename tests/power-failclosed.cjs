@@ -3,23 +3,9 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
-const {prepare}=require('../tools/prepare-interactions.cjs');
-const {patch:runtime}=require('../tools/patch-runtime-fixes.cjs');
-const {patch:events}=require('../tools/patch-event-channel.cjs');
-const {patch:battery}=require('../tools/patch-battery-v2.cjs');
-const {patch:audio}=require('../tools/patch-audio-reliability.cjs');
-const {patch:codec}=require('../tools/patch-audio-codec-v3.cjs');
-const {patch:touch}=require('../tools/patch-touch-reliability.cjs');
-const {patch:harden}=require('../tools/patch-production-hardening.cjs');
-const {patch:power}=require('../tools/patch-power-controls-v2.cjs');
-const {patch:failClosed}=require('../tools/patch-power-failclosed.cjs');
 const {materialize}=require('../tools/materialize-target.cjs');
 const root=path.join(__dirname,'..');
-function productionS3(){
-  let s=fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8');
-  for(const fn of [prepare,runtime,events,battery,audio,codec,touch,harden,power,failClosed])s=fn(s);
-  return s;
-}
+function productionS3(){return fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8')}
 
 test('S3 deep sleep is fail-closed before BLE teardown',()=>{
   const s3=productionS3();
@@ -66,26 +52,14 @@ test('diagnostics retain reset and power-transition evidence',()=>{
   const s3=productionS3();
   assert.match(s3,/RTC_DATA_ATTR uint32_t synapSleepRequestCounter = 0/);
   assert.match(s3,/RTC_DATA_ATTR uint8_t synapLastSleepStage = 0/);
-  assert.match(s3,/RTC_DATA_ATTR uint8_t synapLastWakeCause = 0/);
   assert.match(s3,/bootWakeCause=esp_sleep_get_wakeup_cause\(\)/);
   assert.match(s3,/if \(bootSleepWasLocked\) flags\|=0x10/);
   assert.match(s3,/if \(bootWakeCause==ESP_SLEEP_WAKEUP_EXT0\) flags\|=0x20/);
 });
 
-test('secondary target remains materializable after fail-closed patch',()=>{
+test('secondary target preserves fail-closed power control',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/writeDurableSleepLock\(true\)/);
   assert.match(c3,/esp_deep_sleep_enable_gpio_wakeup\(1ULL<<TOUCH_INPUT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH\)/);
   assert.doesNotMatch(c3,/esp_sleep_enable_ext1_wakeup/);
-});
-
-test('production pipeline applies fail-closed patch after power controls and before materialization',()=>{
-  const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
-  const pipeline=fs.readFileSync(path.join(root,'tools/prepare-production.cjs'),'utf8');
-  const stages=pipeline.slice(pipeline.indexOf('const stages='),pipeline.indexOf('\n];'));
-  const powerAt=stages.indexOf('patch-power-controls-v2.cjs');
-  const closedAt=stages.indexOf('patch-power-failclosed.cjs');
-  const prepareAt=workflow.indexOf('prepare-production.cjs');
-  const materializeAt=workflow.indexOf('materialize-target.cjs --check');
-  assert(powerAt>0 && closedAt>powerAt && prepareAt>0 && materializeAt>prepareAt);
 });

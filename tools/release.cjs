@@ -17,12 +17,6 @@ function validate(bytes,build,targetId=PRIMARY_TARGET) {
   return crypto.createHash('sha256').update(bytes).digest('hex');
 }
 
-function canonicalManifest(m) {
-  return JSON.stringify({schema:m.schema,version:m.version,build:m.build,target:m.target,protocol:m.protocol,chip:m.chip,
-    flashBytes:m.flashBytes,psramBytes:m.psramBytes,partition:m.partition,size:m.size,sha256:m.sha256,
-    commit:m.commit,identity:m.identity,url:m.url,channel:m.channel});
-}
-
 function createManifest(bytes,build,commit,branch='ota-test',targetId=PRIMARY_TARGET) {
   const config=getTarget(targetId);
   if(!allowedBranches.has(branch)) throw Error('Invalid release branch');
@@ -51,4 +45,4 @@ if(require.main===module) {
   console.log(`Validated synap ${version} build ${build} for ${config.id}/${manifest.channel}: ${bytes.length}/${config.slotSize} bytes; ${manifest.sha256}`);
 }
 
-module.exports={validate,createManifest,canonicalManifest,target,version,slotSize,allowedBranches,repository,workflow,PRIMARY_TARGET,TARGETS,getTarget};
+module.exports={validate,createManifest,target,version,slotSize,allowedBranches,repository,workflow,PRIMARY_TARGET,TARGETS,getTarget};
