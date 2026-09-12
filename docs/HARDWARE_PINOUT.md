@@ -13,7 +13,7 @@ MakerBazaar ESP32-S3 SuperMini variant used by Synap:
 - onboard addressable RGB LED on GPIO48
 - rear B+ / B- pads for the board's 1-cell battery interface
 
-The ESP32-C3 SuperMini target uses 4 MB flash and no PSRAM. Its RGB status output requires a separate external NeoPixel; the board's ordinary blue LED is not an addressable RGB LED.
+The ESP32-C3 SuperMini target uses 4 MB flash and no PSRAM. It uses the onboard active-low blue LED, not an external NeoPixel.
 
 ## Pin mapping
 
@@ -29,7 +29,7 @@ The ESP32-C3 SuperMini target uses 4 MB flash and no PSRAM. Its RGB status outpu
 | TTP223 VCC | 3V3 | 3V3 | Touch sensor power |
 | TTP223 GND | GND | GND | Common ground |
 | Battery divider midpoint | GPIO8, 1 MΩ / 470 kΩ | GPIO1, 1 MΩ / 1 MΩ | Battery ADC sense |
-| NeoPixel DATA / DIN | GPIO48, onboard | GPIO8, external NeoPixel | Synap RGB status |
+| Status LED | GPIO48, onboard RGB | GPIO8, onboard blue | Synap status |
 
 All peripheral grounds are common.
 
@@ -39,7 +39,7 @@ The existing mapping already shares every compatible same-purpose GPIO while kee
 
 - Touch: C3 GPIO13 belongs to the flash interface and cannot wake from deep sleep. C3 deep-sleep wake requires GPIO0–5, so TTP223 stays on GPIO3.
 - Battery: C3 GPIO8 has no ADC. GPIO1 reads the C3's equal-resistor battery divider.
-- RGB: C3 has GPIO0–21, so S3's onboard LED pin GPIO48 cannot be copied. The external C3 NeoPixel uses GPIO8.
+- LED: C3 uses its onboard blue LED on GPIO8; S3 keeps its onboard RGB LED on GPIO48.
 
 These restrictions follow the [Espressif C3 GPIO reference](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32c3/api-reference/peripherals/gpio.html). Matching more pins would require changing S3 hardware connections.
 
@@ -95,13 +95,21 @@ The C3 uses a target-specific gesture model designed for reliable GPIO3 level wa
 
 For both targets, touch actions are ignored during OTA. Deep-sleep state is guarded by retained and durable markers so a reset during shutdown or wake validation does not bypass the intended power gesture.
 
-## RGB status LED
+## Status LED
 
-S3 uses its onboard addressable RGB LED on GPIO48; no external data connection is needed. C3 uses a separate external NeoPixel with DIN connected to GPIO8 and ground connected to the board's ground. Choose the LED supply and any data-level conversion for the specific NeoPixel module.
+S3 uses its onboard addressable RGB LED on GPIO48; no external data connection is needed. C3 uses the onboard blue LED on GPIO8, driven LOW to illuminate and HIGH to turn off. Do not attach a NeoPixel to this output.
 
-The [C3 SuperMini's blue LED](https://makerbazar.in/products/esp32-c3-supermini-iot-development-board) also uses GPIO8. It can respond to the data signal but does not provide the firmware's RGB status. GPIO8 is also a boot-strapping pin; the external circuit must preserve its required reset level. Reserve each board's RGB pin for this use.
+GPIO8 is also a boot-strapping pin. The C3 firmware holds its inactive HIGH output during deep sleep and releases the hold during initialization. Status pulses are non-blocking and use the existing control task:
 
-The production power-saving status model uses short dim pulses rather than leaving the LED continuously illuminated:
+| C3 state | Blue LED |
+| --- | --- |
+| Disconnected | 50 ms every 3 seconds |
+| Connected / idle | 30 ms every 8 seconds |
+| Recording | 100 ms every second |
+| OTA | Two short pulses every 1.4 seconds |
+| Standby / deep sleep | Off |
+
+The unchanged S3 status model uses short dim pulses:
 
 - red pulse: BLE disconnected
 - blue pulse: connected / idle
