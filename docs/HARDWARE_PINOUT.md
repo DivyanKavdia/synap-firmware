@@ -143,7 +143,7 @@ C3 battery telemetry uses the installed divider:
 | GPIO1 to common ground | 1 MΩ |
 | GPIO1 to common ground | 104 capacitor (100 nF) |
 
-The equal divider halves the cell voltage. The selected reference is 4.15 V at the cell and 2.075 V at GPIO1, giving calibrated ADC millivolts × 2 and a 4.15 V full-charge anchor. C3 uses 11 dB attenuation for this input. This replaces the earlier provisional ratio; actual percentage accuracy still needs hardware validation. The existing 16-sample averaging and 15-second interval are unchanged. Automatic battery-triggered sleep and OTA lockout remain inactive; touch and timeout sleep still work. The S3 battery-pad and charging arrangement does not apply to C3.
+The nominal equal divider halves the cell voltage, but the owner's latest meter readings are 3.99 V at the cell and 1.36 V at the junction. C3 provisionally uses calibrated ADC millivolts × 3990 / 1360 (approximately 2.933824), retaining the 4.15 V full-charge anchor and 11 dB attenuation. This reference assumes the ADC agrees with the meter; the earlier 340 mV ADC report would remain invalid. Actual accuracy and the divider wiring still need validation. The existing 16-sample averaging and 15-second interval are unchanged. Automatic battery-triggered sleep and OTA lockout remain inactive; touch and timeout sleep still work. S3 calibration, battery pads and charging arrangement are unchanged.
 
 ## Reserved / locked pins
 
