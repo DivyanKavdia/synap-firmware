@@ -13,6 +13,13 @@ std::atomic<uint32_t> connectionGeneration{0},streamGeneration{0};
 std::atomic<uint32_t> capturedFrames{0},captureDrops{0},notifyRejected{0};
 std::atomic<uint16_t> peerMtu{23},attValueCapacity{20},audioPayloadBytes{0};
 std::atomic<uint8_t> chunksPerFrame{0};
+std::atomic<bool> recoveryEnabled{false},recoveryWaiting{false},recoveryFinishing{false};
+std::atomic<uint32_t> recoveryWaitingAt{0};
+uint32_t recoveryFinishAt=0;
+std::atomic<bool> transmitterActive{false};
+void resetRecovery(){recoveryWaiting=false;recoveryWaitingAt=0;}
+void processRecoveryRequest(){}
+bool recoveryCanSend(){return false;}
 DeviceState deviceState=DeviceState::DISCONNECTED;
 ErrorCode lastError=ErrorCode::NONE;
 bool remoteStandby=false,restartAdvertising=false,transportValid=true,microphoneValid=true,busy=false;
@@ -101,5 +108,10 @@ int main(){
   assert(streamingEnabled && starts==1 && wakes==1);
   startStreaming(PROTOCOL_VERSION);
   assert(streamGeneration==generation && starts==1 && wakes==1);
+  recoveryEnabled=true;
+  const auto stopCount=stops;
+  link->onDisconnect(&server);assert(streamingEnabled && recoveryWaiting);
+  reconcileConnection();assert(streamingEnabled && streamGeneration==generation && stops==stopCount);
+  link->onConnect(&server);reconcileConnection();assert(streamingEnabled && recoveryWaiting && streamGeneration==generation && stops==stopCount);
   std::cout<<"PASS link recovery, stale commands, standby, advertising and START admission\n";
 }

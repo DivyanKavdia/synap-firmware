@@ -3,6 +3,8 @@
 #include <BLEDevice.h>
 #include <esp_mac.h>
 #include <esp_system.h>
+#include <esp_heap_caps.h>
+#include <freertos/semphr.h>
 #include <esp_sleep.h>
 #include <Preferences.h>
 #if CONFIG_IDF_TARGET_ESP32S3
@@ -50,6 +52,7 @@ char synapDeviceId[19] = {};
 #define SERVICE_UUID "4fa12345-0000-1000-8000-00805f9b34fb"
 #define AUDIO_CHAR_UUID "4fa12346-0000-1000-8000-00805f9b34fb"
 #define CONTROL_CHAR_UUID "4fa12347-0000-1000-8000-00805f9b34fb"
+#define RECOVERY_CHAR_UUID "4fa1234f-0000-1000-8000-00805f9b34fb"
 #define EVENT_CHAR_UUID "4fa1234e-0000-1000-8000-00805f9b34fb"
 
 constexpr uint8_t PROTOCOL_VERSION = 2;
@@ -1142,6 +1145,141 @@ void updateDiagnosticsCharacteristic() {
   put32le(value+28,millis()/1000u);
   diagnosticsCharacteristic->setValue(value,sizeof(value));
 }
+// Optional recovery protocol. Buffers are volatile and owned by one app session.
+namespace SynapRecovery {
+struct EncodedFrame { uint32_t generation; uint16_t sequence; uint8_t bytes[404]; };
+class Ring {
+ public:
+  EncodedFrame* frames=nullptr;
+  uint16_t capacity=0,head=0,count=0,cursor=0;
+  void reset() { head=count=cursor=0; }
+  bool push(const EncodedFrame& frame) {
+    if (!capacity) return false;
+    bool lost=false;
+    if (count==capacity) { head=(head+1)%capacity; if(cursor) --cursor; else lost=true; --count; }
+    frames[(head+count)%capacity]=frame; ++count; return lost;
+  }
+  bool peek(EncodedFrame& frame) const { if(cursor>=count) return false; frame=frames[(head+cursor)%capacity]; return true; }
+  void sent(uint16_t sequence) { if(cursor<count && frames[(head+cursor)%capacity].sequence==sequence) ++cursor; }
+  void after(uint16_t sequence) {
+    cursor=0;
+    for(uint16_t i=0;i<count;++i) if(frames[(head+i)%capacity].sequence==sequence) { cursor=i+1; return; }
+  }
+};
+}
+SynapRecovery::Ring recoveryRing;
+SemaphoreHandle_t recoveryMutex=nullptr;
+std::atomic<bool> recoveryEnabled{false}, recoveryWaiting{false}, recoveryFinishing{false};
+uint32_t recoveryFinishAt=0;
+std::atomic<uint32_t> recoveryWaitingAt{0};
+BLECharacteristic* recoveryCharacteristic=nullptr;
+uint8_t recoveryToken[8]={};
+struct RecoveryRequest { uint8_t command=0,token[8]={}; uint16_t sequence=0; uint32_t connection=0; };
+RecoveryRequest recoveryRequest;
+class RecoveryGuard {
+ public:
+  RecoveryGuard() { xSemaphoreTake(recoveryMutex,portMAX_DELAY); }
+  ~RecoveryGuard() { xSemaphoreGive(recoveryMutex); }
+};
+void encodeImaAdpcm(const int16_t* samples, uint8_t* output);
+bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t* encoded,uint32_t paceUs);
+
+void initializeRecovery() {
+  recoveryMutex=xSemaphoreCreateMutex();
+  if(!recoveryMutex)return;
+#if CONFIG_IDF_TARGET_ESP32S3
+  recoveryRing.frames=static_cast<SynapRecovery::EncodedFrame*>(heap_caps_malloc(600*sizeof(SynapRecovery::EncodedFrame),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+  if(recoveryRing.frames)recoveryRing.capacity=600;
+#endif
+  // Keep internal RAM available for I2S, BLE and OTA on a board without PSRAM.
+  if(!recoveryRing.frames && heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)>140000) {
+    recoveryRing.frames=static_cast<SynapRecovery::EncodedFrame*>(heap_caps_malloc(100*sizeof(SynapRecovery::EncodedFrame),MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+    if(recoveryRing.frames)recoveryRing.capacity=100;
+  }
+}
+void resetRecovery(bool disarm=false);
+void resetRecovery(bool disarm) {
+  recoveryWaiting=false; recoveryWaitingAt=0; recoveryFinishing=false; recoveryFinishAt=0;
+  if(disarm)recoveryEnabled=false;
+  if(recoveryMutex) { RecoveryGuard guard; recoveryRing.reset(); if(disarm)memset(recoveryToken,0,sizeof(recoveryToken)); }
+}
+void retainRecoveryFrame(const AudioFrame& frame) {
+  if(!recoveryEnabled.load())return;
+  SynapRecovery::EncodedFrame encoded; encoded.generation=frame.generation; encoded.sequence=frame.sequence;
+  encodeImaAdpcm(frame.samples,encoded.bytes);
+  RecoveryGuard guard;
+  if(streamingEnabled.load() && frame.generation==streamGeneration.load() && recoveryRing.push(encoded)) ++captureDrops;
+}
+bool recoveryCanSend() {
+  if(!recoveryEnabled.load() || recoveryWaiting.load() || !deviceConnected.load())return false;
+  RecoveryGuard guard; return recoveryRing.cursor<recoveryRing.count;
+}
+bool sendRecoveryFrame() {
+  SynapRecovery::EncodedFrame frame; uint16_t pending=0;
+  { RecoveryGuard guard; if(!recoveryRing.peek(frame))return false; pending=recoveryRing.count-recoveryRing.cursor; }
+  if(recoveryWaiting.load() || !streamingEnabled.load() || !deviceConnected.load())return false;
+  const uint32_t pace=pending>4 && chunksPerFrame.load()<=5 ? 30000u : 45000u;
+  const bool sent=sendEncodedFrame(frame.generation,frame.sequence,frame.bytes,pace);
+  if(sent && !recoveryWaiting.load()) { RecoveryGuard guard; recoveryRing.sent(frame.sequence); }
+  else if(!sent && !recoveryWaiting.load() && deviceConnected.load() && streamingEnabled.load() && frame.generation==streamGeneration.load())requestStreamError(ErrorCode::TRANSPORT_CHANGED,frame.generation);
+  return sent;
+}
+void processRecoveryRequest() {
+  if(!recoveryMutex)return;
+  RecoveryRequest request;
+  { RecoveryGuard guard; request=recoveryRequest; recoveryRequest.command=0; }
+  if(!request.command || request.connection!=connectionGeneration.load() || !deviceConnected.load() || otaBusy() || sleepPending)return;
+  if(request.command==1 && !streamingEnabled.load() && recoveryRing.capacity) {
+    RecoveryGuard guard; memcpy(recoveryToken,request.token,8); recoveryEnabled=true; recoveryRing.reset();
+  } else if(request.command==2 && recoveryEnabled.load() && recoveryWaiting.load() && streamingEnabled.load()) {
+    { RecoveryGuard guard; if(memcmp(request.token,recoveryToken,8)!=0)return; }
+#if defined(CONFIG_BLUEDROID_ENABLED)
+    if(!audioCccd || !audioCccd->getNotifications())return;
+#endif
+    if(!configureTransportFromPeerMtu())return;
+    { RecoveryGuard guard; recoveryRing.after(request.sequence); }
+    recoveryWaitingAt=0; recoveryWaiting=false;
+    setDeviceState(DeviceState::STREAMING,ErrorCode::NONE); updateStatusCharacteristic(true);
+  }
+}
+void updateRecoveryStatus(BLECharacteristic* characteristic,bool notify) {
+    uint8_t value[16]={0x52,1,0,0};
+    if(recoveryMutex) {
+      RecoveryGuard guard;
+      value[2]=(recoveryRing.capacity?1:0)|(recoveryEnabled.load()?2:0)|(recoveryWaiting.load()?4:0)|(recoveryFinishing.load()?8:0);
+      value[4]=recoveryRing.capacity&255; value[5]=recoveryRing.capacity>>8;
+      const uint16_t pending=recoveryRing.count-recoveryRing.cursor;
+      value[6]=pending&255; value[7]=pending>>8;
+      const uint32_t generation=streamGeneration.load();
+      for(uint8_t i=0;i<4;++i)value[8+i]=uint8_t(generation>>(8*i));
+      uint32_t tokenHash=2166136261u;
+      for(uint8_t byte:recoveryToken)tokenHash=(tokenHash^byte)*16777619u;
+      for(uint8_t i=0;i<4;++i)value[12+i]=uint8_t(tokenHash>>(8*i));
+    }
+    characteristic->setValue(value,sizeof(value));
+    if(notify && deviceConnected.load())characteristic->notify();
+}
+void finishBufferedRecording() {
+  if(recoveryFinishing.load())return;
+  recoveryFinishing=true;recoveryFinishAt=millis();
+#if USE_REAL_I2S_MIC
+  stopMicrophone();
+#endif
+  updateRecoveryStatus(recoveryCharacteristic,true);
+}
+class RecoveryCallbacks : public BLECharacteristicCallbacks {
+  void onRead(BLECharacteristic* characteristic) override { updateRecoveryStatus(characteristic,false); }
+  void onWrite(BLECharacteristic* characteristic) override {
+    if(!recoveryMutex)return;
+    const uint8_t* data=characteristic->getData();const size_t size=characteristic->getLength();
+    if(!data || !((size==9 && data[0]==1)||(size==11 && data[0]==2)))return;
+    RecoveryGuard guard;
+    recoveryRequest.command=data[0];memcpy(recoveryRequest.token,data+1,8);
+    recoveryRequest.sequence=size==11 ? uint16_t(data[9])|(uint16_t(data[10])<<8) : 0;
+    recoveryRequest.connection=connectionGeneration.load();
+  }
+};
+
 void stopStreaming(ErrorCode reason) {
   streamingEnabled.store(false);
   ++streamGeneration; // Invalidates queued AND already-in-flight old task work.
@@ -1151,6 +1289,7 @@ void stopStreaming(ErrorCode reason) {
 #endif
   // Acknowledge STOP only after the final in-flight notification has returned.
   while (transmitterActive.load()) vTaskDelay(1);
+  resetRecovery(!deviceConnected.load());
   applyCpuPowerProfile(false);
   if (!deviceConnected.load()) setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
   else if (reason == ErrorCode::NONE) setDeviceState(DeviceState::CONNECTED_IDLE, reason);
@@ -1190,6 +1329,7 @@ void startStreaming(uint8_t version) {
   xQueueReset(audioFrameQueue);
   ++streamGeneration;
   capturedFrames=0; captureDrops=0; notifyRejected=0;
+  resetRecovery();
   setDeviceState(DeviceState::STREAMING, ErrorCode::NONE);
   streamingEnabled.store(true);
   if (captureTaskHandle) xTaskNotifyGive(captureTaskHandle);
@@ -1207,14 +1347,16 @@ class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* server) override {
     (void)server;
     ++connectionGeneration;
-    streamingEnabled.store(false);
+    if(!recoveryWaiting.load())streamingEnabled.store(false);
     deviceConnected.store(true);
     connectionEventPending.store(true);
   }
   void onDisconnect(BLEServer* server) override {
     (void)server;
     deviceConnected.store(false);
-    streamingEnabled.store(false);
+    if(recoveryEnabled.load() && streamingEnabled.load()) {
+      recoveryWaiting=true; if(!recoveryWaitingAt.load())recoveryWaitingAt=millis();
+    } else streamingEnabled.store(false);
     ++connectionGeneration;
     connectionEventPending.store(true);
   }
@@ -1243,7 +1385,8 @@ class DiagnosticsCallbacks : public BLECharacteristicCallbacks {
 };
 
 void processCommand(uint8_t command, uint8_t version) {
-  if (!deviceConnected.load() || sleepPending) return;
+  if (sleepPending) return;
+  if (!deviceConnected.load()) { if(command==CMD_STOP && streamingEnabled.load())stopStreaming(); return; }
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
   if (version != PROTOCOL_VERSION) { stopStreaming(ErrorCode::PROTOCOL_MISMATCH); return; }
   switch (command) {
@@ -1256,6 +1399,7 @@ void processCommand(uint8_t command, uint8_t version) {
       break;
     case CMD_STOP:
       if (remoteStandby) updateStatusCharacteristic(true);
+      else if(recoveryEnabled.load() && streamingEnabled.load() && !recoveryWaiting.load())finishBufferedRecording();
       else stopStreaming();
       break;
     case CMD_GET_STATUS:
@@ -1289,11 +1433,11 @@ void reconcileConnection() {
     restartAdvertising=false;
     disconnectedAt=0;
     peerMtu=23; attValueCapacity=20; chunksPerFrame=0; audioPayloadBytes=0;
-    stopStreaming();
+    if(!(recoveryWaiting.load() && streamingEnabled.load()))stopStreaming();
     publishPowerEvent(remoteStandby ? POWER_STATE_STANDBY : POWER_STATE_AWAKE);
     sampleBattery(true);
   } else {
-    stopStreaming();
+    if(!(recoveryWaiting.load() && streamingEnabled.load()))stopStreaming();
     disconnectedAt=millis();
     restartAdvertising=true;
   }
@@ -1305,6 +1449,8 @@ void controlTask(void* parameter) {
   for (;;) {
     const bool received=xQueueReceive(controlQueue, &message, pdMS_TO_TICKS(10)) == pdTRUE;
     reconcileConnection();
+    processRecoveryRequest();
+    if(recoveryWaiting.load() && uint32_t(millis()-recoveryWaitingAt.load())>=60000u)stopStreaming();
     if (received && message.connection == connectionGeneration.load()) {
       switch (message.type) {
         case EventType::COMMAND:
@@ -1317,7 +1463,9 @@ void controlTask(void* parameter) {
           break;
       }
     }
-    if (deviceConnected.load() && streamingEnabled.load()) {
+    if(recoveryFinishing.load() && deviceConnected.load() && (!recoveryCanSend() && !transmitterActive.load() && uint32_t(millis()-recoveryFinishAt)>150u))stopStreaming();
+    if(recoveryFinishing.load() && uint32_t(millis()-recoveryFinishAt)>35000u)stopStreaming(ErrorCode::TRANSPORT_CHANGED);
+    if (deviceConnected.load() && streamingEnabled.load() && !recoveryWaiting.load()) {
       uint16_t liveMtu=bleServer->getPeerMTU(bleServer->getConnId());
       if (liveMtu<23) liveMtu=23;
       if (liveMtu!=peerMtu) {
@@ -1447,7 +1595,7 @@ void acquisitionTask(void* parameter) {
   TickType_t wake=xTaskGetTickCount();
 #endif
   for (;;) {
-    if (!streamingEnabled.load() || !deviceConnected.load()) {
+    if (!streamingEnabled.load() || recoveryFinishing.load() || (!deviceConnected.load() && !recoveryEnabled.load())) {
       // START wakes capture immediately; idle recording needs no periodic polling.
       ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 #if !USE_REAL_I2S_MIC
@@ -1458,11 +1606,12 @@ void acquisitionTask(void* parameter) {
     frame.generation=streamGeneration.load();
     if (generation != frame.generation) { generation=frame.generation; nextSequence=0; }
     const bool acquired=acquireAudioFrame(frame);
-    if (!streamingEnabled.load() || frame.generation != streamGeneration.load()) continue;
+    if (!streamingEnabled.load() || recoveryFinishing.load() || frame.generation != streamGeneration.load()) continue;
     if (!acquired) { requestStreamError(ErrorCode::AUDIO_SOURCE_FAILED, frame.generation); continue; }
     frame.sequence=nextSequence++;
     ++capturedFrames;
-    if (xQueueSend(audioFrameQueue, &frame, 0) != pdTRUE) ++captureDrops;
+    retainRecoveryFrame(frame);
+    if (xQueueSend(audioFrameQueue, &frame, 0) != pdTRUE && !recoveryEnabled.load()) ++captureDrops;
 #if !USE_REAL_I2S_MIC
     vTaskDelayUntil(&wake, pdMS_TO_TICKS(FRAME_DURATION_MS));
 #endif
@@ -1505,29 +1654,27 @@ void encodeImaAdpcm(const int16_t* samples, uint8_t* output) {
   }
 }
 
-bool sendAudioFrame(const AudioFrame& frame) {
+bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t* encoded,uint32_t paceUs) {
   const uint8_t chunks=chunksPerFrame;
   const uint16_t payload=audioPayloadBytes, capacity=attValueCapacity;
   if (chunks < MIN_CHUNKS_PER_FRAME || chunks > MAX_CHUNKS_PER_FRAME ||
       !payload || payload > MAX_AUDIO_PAYLOAD_BYTES) return false;
   static uint8_t packet[AUDIO_HEADER_BYTES+MAX_AUDIO_PAYLOAD_BYTES];
-  static uint8_t encoded[ADPCM_BYTES_PER_FRAME];
-  encodeImaAdpcm(frame.samples,encoded);
   const uint32_t started=micros();
   for (uint8_t index=0; index<chunks; ++index) {
     if (!streamingEnabled.load() || !deviceConnected.load() ||
-        frame.generation != streamGeneration.load()) return false;
+        generation != streamGeneration.load()) return false;
     const uint16_t offset=index*payload;
     const uint16_t remaining=ADPCM_BYTES_PER_FRAME-offset;
     const uint16_t length=remaining < payload ? remaining : payload;
     if (AUDIO_HEADER_BYTES+length > capacity) return false;
     packet[0]=AUDIO_PACKET_MAGIC; packet[1]=AUDIO_PROTOCOL_VERSION;
-    packet[2]=frame.sequence & 255; packet[3]=frame.sequence >> 8;
+    packet[2]=sequence & 255; packet[3]=sequence >> 8;
     packet[4]=index; packet[5]=chunks; packet[6]=length & 255; packet[7]=length >> 8;
     memcpy(packet+AUDIO_HEADER_BYTES, encoded+offset, length);
     audioCharacteristic->setValue(packet, AUDIO_HEADER_BYTES+length);
     audioCharacteristic->notify();
-    const uint32_t target=started+static_cast<uint32_t>(index+1)*45000UL/chunks;
+    const uint32_t target=started+static_cast<uint32_t>(index+1)*paceUs/chunks;
     if (index+1 == chunks) {
       // Keep the frame rate bounded during queue catch-up, yielding all remaining time.
       while (static_cast<int32_t>(target-micros()) > 0) vTaskDelay(1);
@@ -1536,13 +1683,26 @@ bool sendAudioFrame(const AudioFrame& frame) {
       while (static_cast<int32_t>(target-micros()) > 0) delayMicroseconds(50);
     }
   }
-  return frame.generation == streamGeneration.load();
+  return generation == streamGeneration.load();
+}
+bool sendAudioFrame(const AudioFrame& frame) {
+  static uint8_t encoded[ADPCM_BYTES_PER_FRAME];
+  encodeImaAdpcm(frame.samples,encoded);
+  return sendEncodedFrame(frame.generation,frame.sequence,encoded,45000u);
 }
 void transmitterTask(void* parameter) {
   (void)parameter;
   AudioFrame frame;
   for (;;) {
-    if (xQueueReceive(audioFrameQueue, &frame, portMAX_DELAY) != pdTRUE) continue;
+    const bool queued=xQueueReceive(audioFrameQueue, &frame, recoveryCanSend()?0:(recoveryEnabled.load() && streamingEnabled.load()?pdMS_TO_TICKS(20):portMAX_DELAY))==pdTRUE;
+    if(recoveryEnabled.load()) {
+      transmitterActive.store(true);
+      const bool sent=streamingEnabled.load() && recoveryCanSend() && sendRecoveryFrame();
+      transmitterActive.store(false);
+      if(!queued && !sent)vTaskDelay(1);
+      continue;
+    }
+    if(!queued)continue;
     // Claim activity before checking the session so STOP cannot miss a pending send.
     transmitterActive.store(true);
     if (streamingEnabled.load() && frame.generation == streamGeneration.load()) {
@@ -1565,7 +1725,7 @@ void initializeBLE() {
 #endif
   // Audio/control + device ID + OTA/status/build identity + diagnostics exceed
   // Bluedroid's default service reservation. NimBLE accepts this overload as well.
-  BLEService* service=bleServer->createService(BLEUUID(SERVICE_UUID),36);
+  BLEService* service=bleServer->createService(BLEUUID(SERVICE_UUID),48);
   audioCharacteristic=service->createCharacteristic(AUDIO_CHAR_UUID,
     BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
   audioCharacteristic->setCallbacks(new AudioCallbacks());
@@ -1588,6 +1748,11 @@ void initializeBLE() {
   deviceIdentity->setValue(synapDeviceId);
   diagnosticsCharacteristic=service->createCharacteristic(DIAGNOSTICS_UUID,BLECharacteristic::PROPERTY_READ);
   diagnosticsCharacteristic->setCallbacks(new DiagnosticsCallbacks());
+  recoveryCharacteristic=service->createCharacteristic(RECOVERY_CHAR_UUID,BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_WRITE|BLECharacteristic::PROPERTY_NOTIFY);
+#if defined(CONFIG_BLUEDROID_ENABLED)
+  recoveryCharacteristic->addDescriptor(new BLE2902());
+#endif
+  recoveryCharacteristic->setCallbacks(new RecoveryCallbacks());
   updateDiagnosticsCharacteristic();
   updateStatusCharacteristic(false);
   otaInitialize(service);
@@ -1650,6 +1815,7 @@ void setup() {
     factoryMac[0], factoryMac[1], factoryMac[2], factoryMac[3], factoryMac[4], factoryMac[5]);
   Serial.printf("Synap %u %s reset=%u\n", SYNAP_FIRMWARE_BUILD, synapDeviceId, unsigned(bootResetReason));
   initializeBLE();
+  initializeRecovery();
   if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
       xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, &captureTaskHandle, 0) != pdPASS ||
       xTaskCreatePinnedToCore(transmitterTask, "transmit", 8192, nullptr, 2, nullptr, 1) != pdPASS) {

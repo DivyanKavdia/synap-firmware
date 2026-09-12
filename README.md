@@ -95,7 +95,11 @@ For BLE transport, each frame is independently encoded with IMA ADPCM. Independe
 
 Transport adapts to the negotiated ATT capacity. The firmware requests a large MTU where supported and uses a bounded notification payload. Audio capture and transmission are isolated so transient I2S or BLE issues do not unnecessarily terminate a recording. Microphone access is synchronized across tasks, and STOP waits for capture and notification submission to finish before reporting idle. BLE link changes are handled independently of command-queue capacity. See the [runtime review](docs/RUNTIME_REVIEW.md) for the fixes and validation.
 
-The pendant streams audio while connected and does not store recordings locally. If BLE disconnects, capture stops and the queued audio is discarded.
+With a compatible PWA, the pendant can retain a bounded window of encoded audio in RAM and replay it after a brief disconnect. The app explicitly arms this extension using a per-page session token; clients without it keep the existing stop-on-disconnect behavior. No audio is written to flash.
+
+S3 reserves up to 600 frames (30 seconds) in PSRAM. A board without available PSRAM can reserve 100 frames (5 seconds) only when internal free heap exceeds 140 KB after BLE initialization. Allocation failure disables buffering without disabling normal capture. Actual capacity is reported to the app. Recording expires after 60 seconds without a successful recovery. Older frames beyond capacity, reset/power loss, manual sleep, and a closed/reloaded app cannot be recovered by this extension. A user-requested stop while disconnected saves the audio already on the phone.
+
+Recovered frames retain their original sequence and timestamps. Catch-up is paced; on a stop the microphone stops first and queued frames drain before idle is acknowledged, with a 35-second failure bound. The optional characteristic is `4fa1234f-0000-1000-8000-00805f9b34fb` (recovery protocol v1); audio v3 and control v2 are unchanged. See [the recovery contract](docs/DISCONNECT_RECOVERY.md) for packet details and validation limits.
 
 ## Battery
 

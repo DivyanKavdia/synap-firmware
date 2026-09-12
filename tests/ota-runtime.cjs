@@ -12,7 +12,7 @@ test('OTA capability refresh and rejected BEGIN preserve an active recording',()
   assert.match(nativeTest(fixture.replace('// INSERT ENGINE',engine).replace('// INSERT POWER',power).replace('// INSERT PUBLISH',publish).replace('// INSERT TICK',tick)),/PASS OTA refresh and refusal/);
 });
 test('GATT diagnostics reads use the atomic OTA snapshot',()=>{
-  const diagnostics=source.slice(source.indexOf('void updateDiagnosticsCharacteristic() {'),source.indexOf('void stopStreaming(ErrorCode reason) {'));
+  const diagnostics=source.slice(source.indexOf('void updateDiagnosticsCharacteristic() {'),source.indexOf('// Optional recovery protocol.'));
   assert.match(diagnostics,/otaBusySnapshot.load\(\)/);
   assert.doesNotMatch(diagnostics,/otaBusy\(\)|otaSession\./);
 });
