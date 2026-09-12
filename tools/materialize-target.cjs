@@ -34,6 +34,39 @@ function materialize(source,targetId){
   out=replaceOnce(out,'#define SYNAP_BATTERY_ADC_PIN 8','#define SYNAP_BATTERY_ADC_PIN 1','C3 battery ADC pin');
   out=out.replace(/GPIO8/g,'GPIO1');
 
+  out=replaceOnce(out,'#include <Adafruit_NeoPixel.h>','#include <driver/gpio.h>', 'C3 has a discrete LED');
+  out=replaceOnce(out,'Adafruit_NeoPixel statusLed(1, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);','', 'C3 removes NeoPixel driver');
+  out=replaceFunctionBlock(out,'void updateStatusLed(bool force) {','void setDeviceState(',`void updateStatusLed(bool force) {
+  const uint32_t now=millis();
+  bool on=false;
+  if (otaBusy()) {
+    const uint32_t phase=now%1400u;
+    on=phase<55u || (phase>=180u && phase<235u);
+  } else if (!remoteStandby && !sleepPending) {
+    if (deviceState==DeviceState::STREAMING) on=now%1000u<100u;
+    else if (deviceState==DeviceState::CONNECTED_IDLE) on=now%8000u<30u;
+    else if (deviceState==DeviceState::DISCONNECTED) on=now%3000u<50u;
+    else on=now%1200u<70u;
+  }
+  const uint32_t pattern=on?1u:0u;
+  if (!force && pattern==lastLedPattern) return;
+  lastLedPattern=pattern;
+  digitalWrite(RGB_LED_PIN,on?LOW:HIGH); // Onboard blue LED is active-low.
+}
+
+`, 'C3 onboard LED patterns');
+  out=replaceOnce(out,`  statusLed.begin();
+  statusLed.clear();
+  statusLed.show();`, `  gpio_set_level(static_cast<gpio_num_t>(RGB_LED_PIN),HIGH);
+  pinMode(RGB_LED_PIN,OUTPUT);
+  gpio_hold_dis(static_cast<gpio_num_t>(RGB_LED_PIN));`, 'C3 LED initialization');
+  out=out.split('statusLed.clear();statusLed.show();').join('digitalWrite(RGB_LED_PIN,HIGH);lastLedPattern=0;');
+  // Hold the inactive level through both normal and fail-closed deep-sleep paths.
+  out=out.split('  esp_deep_sleep_start();').join(`  digitalWrite(RGB_LED_PIN,HIGH);
+  gpio_hold_en(static_cast<gpio_num_t>(RGB_LED_PIN));
+  gpio_deep_sleep_hold_en();
+  esp_deep_sleep_start();`);
+
   out=replaceOnce(out,`#if CONFIG_IDF_TARGET_ESP32S3
 #define SYNAP_BATTERY_MONITOR_ENABLE 1
 #else

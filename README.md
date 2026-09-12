@@ -19,13 +19,13 @@ The S3 target is the primary physically validated pendant. The C3 target is buil
 | I2S WS / LRCLK | GPIO5 | GPIO5 |
 | I2S microphone DATA / SD | GPIO6 | GPIO6 |
 | TTP223 OUT / SIG | GPIO13 | GPIO3 |
-| RGB status NeoPixel | GPIO48, onboard | GPIO8, external NeoPixel DIN |
+| Status LED | GPIO48, onboard RGB | GPIO8, onboard blue (active-low) |
 | Battery ADC sense | GPIO8, 1 MΩ / 470 kΩ | GPIO1, 1 MΩ / 1 MΩ |
 | INMP44x / INMP441 L/R | GND / left channel | GND / left channel |
 | Microphone VDD / TTP223 VCC | 3V3 | 3V3 |
 | Peripheral ground | GND | GND |
 
-The microphone pins are shared. Touch, battery sense and RGB require different pins to preserve the S3 wiring and C3 hardware compatibility. The C3 needs a separate NeoPixel for RGB status. See [hardware pinout](docs/HARDWARE_PINOUT.md) for the constraints and wiring details.
+The microphone pins are shared. Touch, battery sense and status LED require different pins to preserve the S3 wiring and C3 hardware compatibility. C3 uses only its onboard blue LED; no external NeoPixel is needed. See [hardware pinout](docs/HARDWARE_PINOUT.md) for the constraints and wiring details.
 
 ## Touch and power
 
