@@ -1,7 +1,7 @@
 {
   "schema": 3,
   "version": "1.0.0",
-  "build": 1177,
+  "build": 1179,
   "target": "esp32c3-supermini-4m",
   "protocol": 3,
   "chip": 5,
@@ -9,10 +9,10 @@
   "psramBytes": 0,
   "partition": "default",
   "size": 729840,
-  "sha256": "e47df0541dea84517e369457305c51e4482541059bb7d671715e1d93f621ea73",
-  "commit": "644e639511e0dd00d6bc3d48ae01676404b665ec",
-  "identity": "SYNAP-FW:esp32c3-supermini-4m:1.0.0:1177",
-  "url": "https://raw.githubusercontent.com/DivyanKavdia/synap-firmware/ota-releases/targets/esp32c3-supermini-4m/builds/1177-e47df0541dea84517e369457305c51e4482541059bb7d671715e1d93f621ea73.bin",
+  "sha256": "e97193f214bd401d92d18eb4b6ed1ccc6044d86954f982f423be3b2f42669460",
+  "commit": "a91b28f448e08e3833257c55a8f0b4aa8b9ba712",
+  "identity": "SYNAP-FW:esp32c3-supermini-4m:1.0.0:1179",
+  "url": "https://raw.githubusercontent.com/DivyanKavdia/synap-firmware/ota-releases/targets/esp32c3-supermini-4m/builds/1179-e97193f214bd401d92d18eb4b6ed1ccc6044d86954f982f423be3b2f42669460.bin",
   "channel": "production",
   "provenance": {
     "provider": "github-actions",
