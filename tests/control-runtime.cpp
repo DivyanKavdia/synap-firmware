@@ -22,7 +22,7 @@ void processRecoveryRequest(){}
 bool recoveryCanSend(){return false;}
 DeviceState deviceState=DeviceState::DISCONNECTED;
 ErrorCode lastError=ErrorCode::NONE;
-bool remoteStandby=false,restartAdvertising=false,transportValid=true,microphoneValid=true,busy=false;
+bool remoteStandby=false,restartAdvertising=false,transportValid=true,microphoneValid=true,busy=false,drainHandshake=false;
 uint32_t disconnectedAt=0,clockNow=100;
 unsigned stops=0,powerEvents=0,batterySamples=0,starts=0,cpuActive=0,wakes=0,commands=0,maintenance=0,loops=0;
 uint8_t lastPower=0;
@@ -49,6 +49,7 @@ void updateStatusCharacteristic(bool){}
 void setDeviceState(DeviceState state,ErrorCode error){deviceState=state;lastError=error;}
 void stopStreaming(ErrorCode reason=ErrorCode::NONE){
   ++stops;streamingEnabled=false;++streamGeneration;lastError=reason;
+  recoveryFinishing=false;recoveryWaiting=false;
   deviceState=deviceConnected?(reason==ErrorCode::NONE?DeviceState::CONNECTED_IDLE:DeviceState::ERROR):DeviceState::DISCONNECTED;
 }
 void publishPowerEvent(uint8_t state){++powerEvents;lastPower=state;}
@@ -73,6 +74,7 @@ struct Done{};
 void updateStatusLed(){if(loops==4)throw Done{};}
 int xQueueReceive(int,ControlMessage* message,int timeout){
   assert(timeout==10);++loops;clockNow=501;
+  if(drainHandshake)return 0;
   *message={EventType::COMMAND,CMD_START,PROTOCOL_VERSION,0,0};
   if(loops==2){link->onConnect(&server);message->connection=connectionGeneration;}
   if(loops==3){
@@ -113,5 +115,12 @@ int main(){
   link->onDisconnect(&server);assert(streamingEnabled && recoveryWaiting);
   reconcileConnection();assert(streamingEnabled && streamGeneration==generation && stops==stopCount);
   link->onConnect(&server);reconcileConnection();assert(streamingEnabled && recoveryWaiting && streamGeneration==generation && stops==stopCount);
+  // A connected link is not ready to drain until the same journal sends RESUME.
+  recoveryFinishing=true;recoveryFinishAt=100;drainHandshake=true;loops=0;
+  try{controlTask(nullptr);}catch(const Done&){}
+  assert(streamingEnabled && recoveryWaiting && recoveryFinishing && stops==stopCount);
+  recoveryWaiting=false;loops=0;
+  try{controlTask(nullptr);}catch(const Done&){}
+  assert(!streamingEnabled && !recoveryFinishing && stops==stopCount+1);
   std::cout<<"PASS link recovery, stale commands, standby, advertising and START admission\n";
 }

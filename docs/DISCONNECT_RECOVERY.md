@@ -12,4 +12,6 @@ The ring retains independently encoded ADPCM frames with their original uint16 s
 
 STOP freezes microphone capture, drains the remaining buffer and then acknowledges idle. Disconnection recovery is bounded at 60 seconds; stop drain is bounded at 35 seconds and reports a transport error if it expires. Audio is volatile: nothing survives reboot, power removal or sleep. This is not standalone recording or background iOS support.
 
+If the link drops during STOP drain, a restored connection must still complete RESUME before the buffer can be considered drained. Waiting for that handshake is not an empty buffer. The existing absolute drain deadline continues to apply during the interruption.
+
 Native tests run the production ring/request code for rollover, bounded overflow, token mismatch, stale connection writes, subscription/MTU refusal, stop drain and allocation fallback. Existing codec golden bytes, all ATT capacities, capture/STOP concurrency, C3/S3 gestures and OTA tests still run. PWA browser tests exercise recovery into one journal and stopping before catch-up finishes. Real S3/C3 free heap, long recordings, RF interruptions, Bluefy and battery life must be checked on devices before claiming a measured reliability improvement.
