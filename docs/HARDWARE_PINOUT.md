@@ -135,7 +135,7 @@ C3 battery telemetry uses the installed divider:
 | GPIO1 to common ground | 1 MΩ |
 | GPIO1 to common ground | 104 capacitor (100 nF) |
 
-The nominal divider would halve the cell voltage. The installed circuit instead measured 4.15 V at the cell and 2.75 V at GPIO1. At the owner’s request, C3 provisionally uses ADC millivolts × 4150 / 2750 and a 4.15 V full-charge anchor. Its 11 dB attenuation supports calibrated inputs only up to 2.5 V per the [Arduino-ESP32 ADC reference](https://docs.espressif.com/projects/arduino-esp32/en/latest/api/adc.html); this reference exceeds that range and cannot compensate for clipping or nonlinearity. Percentage accuracy remains unverified. The existing 16-sample averaging and 15-second interval are unchanged. Automatic battery-triggered sleep and OTA lockout remain inactive; touch and timeout sleep still work. The S3 battery-pad and charging arrangement does not apply to C3.
+The equal divider halves the cell voltage. The selected reference is 4.15 V at the cell and 2.075 V at GPIO1, giving calibrated ADC millivolts × 2 and a 4.15 V full-charge anchor. C3 uses 11 dB attenuation for this input. This replaces the earlier provisional ratio; actual percentage accuracy still needs hardware validation. The existing 16-sample averaging and 15-second interval are unchanged. Automatic battery-triggered sleep and OTA lockout remain inactive; touch and timeout sleep still work. The S3 battery-pad and charging arrangement does not apply to C3.
 
 ## Reserved / locked pins
 

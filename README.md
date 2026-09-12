@@ -113,7 +113,7 @@ GPIO8 ---- 100 nF ---------- GND
 
 S3 calibration reference: **4.13 V cell / 1.32 V ADC / raw 1544**.
 
-C3 wiring: battery positive through 1 MΩ to GPIO1, then 1 MΩ from GPIO1 to ground, with the 104 capacitor (100 nF) between GPIO1 and ground. The provisional meter reference is 4.15 V at the cell and 2.75 V at GPIO1: cell millivolts = ADC millivolts × 4150 / 2750, rounded to the nearest millivolt. C3 estimates 100% at 4.15 V. These measurements disagree with the nominal equal-resistor divider and exceed the C3 calibrated ADC range of 2.5 V even at 11 dB attenuation; scaling cannot correct clipping. Percentage accuracy remains unverified on hardware. The app shows percentage, with electrical readings retained for diagnostics.
+C3 wiring: battery positive through 1 MΩ to GPIO1, then 1 MΩ from GPIO1 to ground, with the 104 capacitor (100 nF) between GPIO1 and ground. The selected reference is 4.15 V at the cell and 2.075 V at GPIO1: cell millivolts = calibrated ADC millivolts × 2. C3 estimates 100% at 4.15 V. This matches the nominal equal-resistor divider; 11 dB attenuation covers this input. Percentage accuracy still needs hardware validation. The app shows percentage for valid readings, with electrical readings retained for diagnostics.
 
 Firmware averages ADC readings, publishes battery telemetry and estimates percentage from LiPo discharge anchors.
 
