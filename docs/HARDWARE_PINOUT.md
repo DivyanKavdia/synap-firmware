@@ -103,11 +103,11 @@ GPIO8 is also a boot-strapping pin. The C3 firmware holds its inactive HIGH outp
 
 | C3 state | Blue LED |
 | --- | --- |
-| Disconnected | 50 ms every 3 seconds |
-| Connected / idle | 30 ms every 8 seconds |
+| Disconnected | One 100 ms flash every 6 seconds |
+| Connected / idle / connected standby | Two 80 ms flashes every 3 seconds, separated by 160 ms off |
 | Recording | 100 ms every second |
 | OTA | Two short pulses every 1.4 seconds |
-| Standby / deep sleep | Off |
+| Sleep entry / deep sleep | Off |
 
 The unchanged S3 status model uses short dim pulses:
 
@@ -117,7 +117,7 @@ The unchanged S3 status model uses short dim pulses:
 - amber pulse pattern: OTA
 - purple pulse pattern: error
 
-Standby is dark even when battery is low; OTA keeps its amber indication. Turning the RGB output off does not remove the LED's supply current.
+S3 standby is dark even when battery is low; OTA keeps its amber indication. Turning the S3 RGB output off does not remove the LED's supply current. C3 connected standby retains the sparse blue heartbeat above; its microphone, CPU and BLE power policies are unchanged.
 
 ## Battery
 

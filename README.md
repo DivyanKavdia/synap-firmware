@@ -132,7 +132,7 @@ On S3, confirmed critical battery blocks a new OTA and aborts an active OTA befo
 - status LED uses low-duty indication;
 - battery notification traffic is reduced while audio is streaming.
 
-Non-OTA standby stays dark, including at low battery. The housekeeping loop wakes once per second after boot validation; audio and touch tasks keep their own timing. See the [power review](docs/POWER_REVIEW.md) for further CPU/BLE experiments and battery-life measurements.
+S3 non-OTA standby stays dark, including at low battery. C3 connected standby retains two 80 ms blue flashes every 3 seconds; disconnected C3 uses one 100 ms flash every 6 seconds, and recording keeps one 100 ms blink per second. Deep sleep stays dark on both targets. The housekeeping loop wakes once per second after boot validation; audio and touch tasks keep their own timing. See the [power review](docs/POWER_REVIEW.md) for further CPU/BLE experiments and battery-life measurements.
 
 ## OTA
 
