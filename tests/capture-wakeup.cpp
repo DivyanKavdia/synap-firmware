@@ -10,6 +10,8 @@ struct AudioFrame {uint32_t generation;uint16_t sequence;int16_t samples[800];};
 enum class ErrorCode {AUDIO_SOURCE_FAILED};
 std::atomic<bool> streamingEnabled{false},deviceConnected{true};
 std::atomic<uint32_t> streamGeneration{0},capturedFrames{0},captureDrops{0};
+std::atomic<bool> recoveryEnabled{false},recoveryFinishing{false};
+void retainRecoveryFrame(const AudioFrame&){}
 int audioFrameQueue=1;
 int notifications=0,waits=0,captures=0,errors=0;
 std::vector<AudioFrame> queued;

@@ -12,6 +12,11 @@ enum class ErrorCode{NONE,AUDIO_SOURCE_FAILED,TRANSPORT_CHANGED};
 struct AudioFrame{uint32_t generation;uint16_t sequence;int16_t samples[800];};
 std::atomic<bool> streamingEnabled{true},deviceConnected{true},transmitterActive{false};
 std::atomic<uint32_t> streamGeneration{1};
+std::atomic<bool> recoveryEnabled{false};
+void resetRecovery(bool){}
+int pdMS_TO_TICKS(int ms){return ms;}
+bool recoveryCanSend(){return false;}
+bool sendRecoveryFrame(){return false;}
 int audioFrameQueue=1;
 std::atomic<bool> acknowledged{false},stopWaiting{false},micStopped{false};
 std::mutex gateMutex;
