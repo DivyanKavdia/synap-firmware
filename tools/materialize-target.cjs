@@ -76,12 +76,13 @@ function materialize(source,targetId){
   constexpr uint32_t BATTERY_CAL_ADC_MV = 1320u;
   constexpr uint32_t BATTERY_CAL_CELL_MV = 4130u;
   const uint32_t cellMv=(adcMv*BATTERY_CAL_CELL_MV + BATTERY_CAL_ADC_MV/2u)/BATTERY_CAL_ADC_MV;`,
-  `  // Selected reference: 2.075 V at GPIO1 = 4.15 V cell for the equal 1M divider.
-  const uint32_t cellMv=adcMv*2u;`, 'C3 equal-divider reference');
+  `  // Provisional meter reference: 1.36 V at the junction = 3.99 V cell.
+  // Assumes calibrated ADC millivolts match the junction measurement.
+  const uint32_t cellMv=(adcMv*3990u + 680u)/1360u;`, 'C3 measured divider reference');
   out=replaceOnce(out,`  // GPIO1 is calibrated at 1.32 V ADC for a 4.13 V cell on the 1M/470k divider.
   // 6 dB attenuation comfortably covers the expected range while retaining resolution.
   analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_6db);`,
-  `  // 11 dB attenuation covers the equal-divider full-charge input of 2.075 V.
+  `  // Keep the established ADC range while validating the measured divider ratio.
   analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);`, 'C3 ADC input range');
   out=replaceOnce(out,'  // Production calibration: DMM 4.13 V, ADC 1.32 V, raw 1544 = full charge.',
     '  // LiPo estimate with the selected full-charge reference at 4.15 V.', 'C3 percentage estimate');
