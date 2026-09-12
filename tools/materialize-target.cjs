@@ -43,16 +43,15 @@ function materialize(source,targetId){
   constexpr uint32_t BATTERY_CAL_ADC_MV = 1320u;
   constexpr uint32_t BATTERY_CAL_CELL_MV = 4130u;
   const uint32_t cellMv=(adcMv*BATTERY_CAL_CELL_MV + BATTERY_CAL_ADC_MV/2u)/BATTERY_CAL_ADC_MV;`,
-  `  // Provisional meter reference: 2.75 V at GPIO1 with a 4.15 V cell.
-  // This input exceeds the C3 calibrated ADC range; hardware accuracy is unverified.
-  const uint32_t cellMv=(adcMv*4150u + 1375u)/2750u;`, 'C3 measured divider reference');
+  `  // Selected reference: 2.075 V at GPIO1 = 4.15 V cell for the equal 1M divider.
+  const uint32_t cellMv=adcMv*2u;`, 'C3 equal-divider reference');
   out=replaceOnce(out,`  // GPIO1 is calibrated at 1.32 V ADC for a 4.13 V cell on the 1M/470k divider.
   // 6 dB attenuation comfortably covers the expected range while retaining resolution.
   analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_6db);`,
-  `  // Use the widest C3 ADC range; the measured 2.75 V still exceeds its 2.5 V specification.
+  `  // 11 dB attenuation covers the equal-divider full-charge input of 2.075 V.
   analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);`, 'C3 ADC input range');
   out=replaceOnce(out,'  // Production calibration: DMM 4.13 V, ADC 1.32 V, raw 1544 = full charge.',
-    '  // Provisional LiPo estimate with the measured full-charge reference at 4.15 V.', 'C3 percentage estimate');
+    '  // LiPo estimate with the selected full-charge reference at 4.15 V.', 'C3 percentage estimate');
   out=replaceOnce(out,`  if (mv>=4130) return 100;
   if (mv>=4050) return 90 + uint32_t(mv-4050)*10/80;`,
     `  if (mv>=4150) return 100;

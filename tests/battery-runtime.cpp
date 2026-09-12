@@ -43,7 +43,7 @@ int main(){
   assert(batteryPercentFromMillivolts(CONFIG_IDF_TARGET_ESP32C3?4150:4130)==100);
   configureBatteryAdc();
   assert(configuredAttenuation==(CONFIG_IDF_TARGET_ESP32C3?ADC_11db:ADC_6db));
-  adcMv=CONFIG_IDF_TARGET_ESP32C3?2750:1320;
+  adcMv=CONFIG_IDF_TARGET_ESP32C3?2075:1320;
 #if !SYNAP_BATTERY_MONITOR_ENABLE
   sampleBattery(true);
   assert(rawReads==0 && !batteryAvailable && !batteryCritical());
@@ -57,6 +57,7 @@ int main(){
   assert(batteryAdcMillivolts==adcMv && batteryAdcRaw==3000);
   assert(event.value.size()==12 && event.value==control.value);
   assert(event.value[0]==0xB7 && event.value[1]==2 && event.value[3]==1);
+  assert(event.value[2]==100); // PWA consumes this percentage with the available flag.
   assert(word(4)==batteryMillivolts && word(8)==adcMv && word(10)==3000);
   clockMs+=14999;sampleBattery(false);assert(rawReads==17);
   ++clockMs;sampleBattery(false);assert(rawReads==34);
@@ -64,7 +65,7 @@ int main(){
   streamingEnabled=true;sampleBattery(true);
   assert(rawReads==51 && event.notifications==notifications);
   streamingEnabled=false;
-  varying=false;adcMv=CONFIG_IDF_TARGET_ESP32C3?2200:1050;
+  varying=false;adcMv=CONFIG_IDF_TARGET_ESP32C3?1650:1050;
   for(int i=0;i<3;++i)sampleBattery(true);
   assert(batteryAvailable && batteryMillivolts<=BATTERY_CRITICAL_MV);
   assert(bool(event.value[3]&2));
@@ -75,7 +76,7 @@ int main(){
     assert(!batteryAvailable && !batteryCritical() && batteryPercent==0);
     assert(batteryValidSamples==0 && batteryCriticalSamples==0 && event.value[3]==0);
   }
-  adcMv=CONFIG_IDF_TARGET_ESP32C3?2520:1215;sampleBattery(true);
+  adcMv=CONFIG_IDF_TARGET_ESP32C3?1900:1215;sampleBattery(true);
   assert(batteryAvailable && batteryPercent>50 && batteryPercent<80);
   // Check periodic sampling through timer wrap, retaining the forced status path.
   clockMs=0xfffffff0u;sampleBattery(true);const auto before=rawReads;
