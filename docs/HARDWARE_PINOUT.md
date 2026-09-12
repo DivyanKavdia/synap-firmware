@@ -1,155 +1,69 @@
-# Synap Hardware Pinout
+# Hardware and board behavior
 
-This is the hardware mapping for both production firmware targets. Shared signals use the same GPIO wherever compatible with the deployed S3 wiring.
+S3 refers to the deployed ESP32-S3FH4R2 SuperMini variant: 4 MB flash, 2 MB PSRAM, onboard GPIO48 RGB LED and rear battery pads. C3 SuperMini has 4 MB flash, no PSRAM and an onboard active-low blue LED. C3 does not use an external NeoPixel.
 
-## Controller
+## Wiring
 
-MakerBazaar ESP32-S3 SuperMini variant used by Synap:
+| Signal | S3 | C3 |
+| --- | --- | --- |
+| INMP441 SCK / BCLK | GPIO4 | GPIO4 |
+| INMP441 WS / LRCLK | GPIO5 | GPIO5 |
+| INMP441 SD | GPIO6 | GPIO6 |
+| INMP441 L/R | GND, left slot | GND, left slot |
+| INMP441 VDD / TTP223 VCC | 3V3 | 3V3 |
+| Peripheral ground | Common GND | Common GND |
+| TTP223 OUT | GPIO13 | GPIO3 |
+| Battery divider junction | GPIO8 | GPIO1 |
+| Onboard status LED | GPIO48, RGB | GPIO8, blue |
 
-- ESP32-S3FH4R2
-- 4 MB flash
-- 2 MB PSRAM
-- USB-C
-- onboard addressable RGB LED on GPIO48
-- rear B+ / B- pads for the board's 1-cell battery interface
+TTP223 must be active-HIGH and momentary: LOW idle, HIGH touched. Firmware reads its digital output rather than using native capacitive touch. Reserve all assigned GPIOs for these functions.
 
-The ESP32-C3 SuperMini target uses 4 MB flash and no PSRAM. It uses the onboard active-low blue LED, not an external NeoPixel.
+C3 cannot reuse S3's touch pin: GPIO13 belongs to the flash interface, and C3 deep-sleep wake requires GPIO0–5. C3 GPIO8 has no ADC, so its battery input is GPIO1. See [C3 GPIO restrictions](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32c3/api-reference/peripherals/gpio.html).
 
-## Pin mapping
+## Gestures
 
-| Device / signal | ESP32-S3 SuperMini | ESP32-C3 SuperMini | Firmware purpose |
-| --- | --- | --- | --- |
-| INMP441 SCK / BCLK | GPIO4 | GPIO4 | I2S bit clock |
-| INMP441 WS / LRCLK | GPIO5 | GPIO5 | I2S word-select clock |
-| INMP441 SD | GPIO6 | GPIO6 | I2S microphone data input |
-| INMP441 L/R | GND | GND | Select left I2S channel |
-| INMP441 VDD | 3V3 | 3V3 | Microphone power |
-| INMP441 GND | GND | GND | Common ground |
-| TTP223 OUT | GPIO13 | GPIO3 | Active-HIGH touch input and deep-sleep wake |
-| TTP223 VCC | 3V3 | 3V3 | Touch sensor power |
-| TTP223 GND | GND | GND | Common ground |
-| Battery divider midpoint | GPIO8, 1 MΩ / 470 kΩ | GPIO1, 1 MΩ / 1 MΩ | Battery ADC sense |
-| Status LED | GPIO48, onboard RGB | GPIO8, onboard blue | Synap status |
+| State / action | S3 | C3 |
+| --- | --- | --- |
+| Connected idle: start | Double tap | Double tap |
+| Recording: stop, then standby | Double tap | Double tap |
+| BLE standby: start | Double tap | Double tap |
+| Awake: deep sleep | Triple tap | Hold 4 seconds, then release |
+| Deep sleep: wake | Triple tap | Hold through 4-second boot validation, then release |
 
-All peripheral grounds are common.
+S3 waits briefly after a double tap for a possible third tap. C3 acts on the second valid tap. A single C3 tap does nothing. Short or incomplete deep-sleep gestures return to sleep before BLE initializes. C3 wake validation begins after firmware starts, so allow boot overhead. Wake alone does not start recording.
 
-## Why three GPIO assignments differ
+Active recording stops before intentional deep sleep. Release is required to prevent immediate level-triggered wake. OTA interrupts/discards touch gestures. Retained and durable sleep markers prevent unexpected resets from bypassing wake validation.
 
-The existing mapping already shares every compatible same-purpose GPIO while keeping S3 wiring intact:
+## Status LEDs
 
-- Touch: C3 GPIO13 belongs to the flash interface and cannot wake from deep sleep. C3 deep-sleep wake requires GPIO0–5, so TTP223 stays on GPIO3.
-- Battery: C3 GPIO8 has no ADC. GPIO1 reads the C3's equal-resistor battery divider.
-- LED: C3 uses its onboard blue LED on GPIO8; S3 keeps its onboard RGB LED on GPIO48.
+| State | S3 RGB | C3 blue |
+| --- | --- | --- |
+| Disconnected | Brief red pulse | 100 ms flash every 6 seconds |
+| Connected idle | Brief blue pulse | Two 80 ms flashes every 3 seconds, 160 ms off between |
+| Connected standby | Off | Same connected double flash |
+| Recording | Brief green pulse | 100 ms blink every second |
+| OTA | Amber double pulse | Two 55 ms flashes every 1.4 seconds |
+| Error | Purple pulse | 70 ms flash every 1.2 seconds |
+| Deep sleep | Off | Off; GPIO held HIGH |
 
-These restrictions follow the [Espressif C3 GPIO reference](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32c3/api-reference/peripherals/gpio.html). Matching more pins would require changing S3 hardware connections.
+S3 low-battery pulses can override normal state colors, except standby and OTA. C3 uses connection/recording patterns irrespective of battery level. Both indicators use the existing non-blocking control loop. The C3 blue LED is LOW-on/HIGH-off; do not attach NeoPixel DIN to its output. GPIO8 is also a strapping pin, so preserve its reset requirements.
 
-## INMP441 / INMP44x configuration
+## Battery divider and calibration
 
-- VDD: 3.3 V
-- SCK/BCLK: GPIO4
-- WS/LRCLK: GPIO5
-- SD: GPIO6
-- L/R: GND
-- GND: common ground
+Both dividers connect battery+ through an upper resistor to the ADC junction, then a lower resistor from that junction to common GND. The 100 nF capacitor (104) is in parallel with the lower resistor. The junction connects directly to the ADC pad.
 
-The L/R pin is intentionally tied to GND so the microphone transmits in the left I2S slot expected by the current Synap mono capture configuration.
+| Setting | S3 | C3 |
+| --- | --- | --- |
+| Upper resistor | 1 MΩ | Nominally 1 MΩ |
+| Lower resistor | 470 kΩ | Nominally 1 MΩ |
+| Capacitor to GND | 100 nF | 100 nF |
+| ADC attenuation | 6 dB | 11 dB |
+| Cell mV conversion | ADC mV × 4130 / 1320, rounded | ADC mV × 3990 / 1360, rounded |
+| Full-charge percentage anchor | 4.13 V | 4.15 V |
+| Automatic critical-battery protection | Enabled with corroborating samples | Disabled pending validation |
 
-## TTP223 configuration
+S3 calibration reference is 4.13 V cell / 1.32 V ADC / raw 1544. The specified S3 board uses its rear battery pads; do not connect a raw LiPo cell to 3V3 or assume that the S3 charging arrangement applies to C3.
 
-The firmware treats the TTP223 as a digital input, not as an ESP32 native capacitive-touch input.
+**C3 calibration is provisional and charging behavior is unresolved.** The selected meter reference is 3.99 V cell / 1.36 V junction, which differs from a nominal equal-resistor ratio. While charging, diagnostics have reported approximately 2.08 V ADC; the configured ratio reconstructs approximately 6.10 V and correctly reports percentage unavailable. Do not treat this as a full/empty battery or auto-switch calibration based on the reading.
 
-Expected module configuration:
-
-- idle: LOW
-- touched: HIGH
-- momentary/non-latching mode
-- OUT: GPIO13 on S3; GPIO3 on C3
-- VCC: 3.3 V
-- GND: common ground
-
-### ESP32-S3 SuperMini interaction
-
-The S3 behavior is intentionally unchanged:
-
-- while connected and idle: double tap to start recording
-- while recording: double tap to stop recording and enter BLE standby
-- in BLE standby: double tap to wake and start recording
-- in any non-OTA state: triple tap to enter deep sleep; active recording stops first
-- from deep sleep: triple tap to wake; one or two taps return to deep sleep without initializing BLE
-- double-tap actions wait briefly for a possible third tap, keeping the sleep gesture separate from recording
-
-### ESP32-C3 SuperMini interaction
-
-The C3 uses a target-specific gesture model designed for reliable GPIO3 level wake:
-
-- while connected and idle: double tap to start recording
-- while recording: double tap to stop recording and enter BLE standby
-- in BLE standby: double tap to wake and start recording
-- in any awake non-OTA state: hold the TTP223 for at least four seconds, then release, to enter deep sleep; active recording stops first
-- from deep sleep: hold the TTP223 continuously for four seconds after firmware starts, then release, to confirm wake and continue normal boot; allow brief boot overhead
-- a short deep-sleep touch wakes the silicon electrically but is rejected by firmware and returns to deep sleep before BLE starts
-- a single tap while awake has no action
-- C3 does not use triple tap
-- the second valid tap acts immediately; unlike S3 there is no wait for a possible third tap
-- before entering deep sleep, firmware requires the TTP223 line to be released so the GPIO3 HIGH-level wake source cannot immediately wake the C3 again
-
-For both targets, touch actions are ignored during OTA. Deep-sleep state is guarded by retained and durable markers so a reset during shutdown or wake validation does not bypass the intended power gesture.
-
-## Status LED
-
-S3 uses its onboard addressable RGB LED on GPIO48; no external data connection is needed. C3 uses the onboard blue LED on GPIO8, driven LOW to illuminate and HIGH to turn off. Do not attach a NeoPixel to this output.
-
-GPIO8 is also a boot-strapping pin. The C3 firmware holds its inactive HIGH output during deep sleep and releases the hold during initialization. Status pulses are non-blocking and use the existing control task:
-
-| C3 state | Blue LED |
-| --- | --- |
-| Disconnected | One 100 ms flash every 6 seconds |
-| Connected / idle / connected standby | Two 80 ms flashes every 3 seconds, separated by 160 ms off |
-| Recording | 100 ms every second |
-| OTA | Two short pulses every 1.4 seconds |
-| Sleep entry / deep sleep | Off |
-
-The unchanged S3 status model uses short dim pulses:
-
-- red pulse: BLE disconnected
-- blue pulse: connected / idle
-- green pulse: recording
-- amber pulse pattern: OTA
-- purple pulse pattern: error
-
-S3 standby is dark even when battery is low; OTA keeps its amber indication. Turning the S3 RGB output off does not remove the LED's supply current. C3 connected standby retains the sparse blue heartbeat above; its microphone, CPU and BLE power policies are unchanged.
-
-## Battery
-
-On the specified S3 board, connect a single-cell LiPo/Li-ion battery to the rear B+ / B- pads. S3 battery telemetry uses an external high-value divider:
-
-```text
-Battery + ---- 1 MOhm ----+---- GPIO8
-                           |
-                         470 kOhm
-                           |
-Battery - / GND -----------+---- GND
-
-GPIO8 ---- 100 nF ---------- GND
-```
-
-Do not connect the raw LiPo cell to the ESP32 3V3 pin. The current S3 calibration uses the measured full-charge point of 4.13 V cell / 1.32 V ADC (raw 1544).
-
-C3 battery telemetry uses the installed divider:
-
-| Connection | Component |
-| --- | --- |
-| Battery positive to GPIO1 | 1 MΩ |
-| GPIO1 to common ground | 1 MΩ |
-| GPIO1 to common ground | 104 capacitor (100 nF) |
-
-The nominal equal divider halves the cell voltage, but the owner's latest meter readings are 3.99 V at the cell and 1.36 V at the junction. C3 provisionally uses calibrated ADC millivolts × 3990 / 1360 (approximately 2.933824), retaining the 4.15 V full-charge anchor and 11 dB attenuation. This reference assumes the ADC agrees with the meter; the earlier 340 mV ADC report would remain invalid. Actual accuracy and the divider wiring still need validation. The existing 16-sample averaging and 15-second interval are unchanged. Automatic battery-triggered sleep and OTA lockout remain inactive; touch and timeout sleep still work. S3 calibration, battery pads and charging arrangement are unchanged.
-
-## Reserved / locked pins
-
-| Board | Reserved GPIOs |
-| --- | --- |
-| S3 | 4, 5, 6, 8, 13, 48 |
-| C3 | 1 (battery sense), 3, 4, 5, 6, 8 |
-
-Assign future peripherals to other audited GPIOs so microphone capture, battery telemetry, touch interaction and status indication remain compatible with deployed firmware.
+Confirm battery+ and junction voltages against the same C3 GND, charging and unplugged, before changing this ratio. The resistor junction, capacitor signal terminal and GPIO1 must be the same electrical point. Diagnostics preserve ADC millivolts, raw counts and reconstructed cell voltage. The PWA displays valid percentages and “—” for unavailable readings.
