@@ -43,7 +43,7 @@ int main(){
   assert(batteryPercentFromMillivolts(CONFIG_IDF_TARGET_ESP32C3?4150:4130)==100);
   configureBatteryAdc();
   assert(configuredAttenuation==(CONFIG_IDF_TARGET_ESP32C3?ADC_11db:ADC_6db));
-  adcMv=CONFIG_IDF_TARGET_ESP32C3?1360:1320;
+  adcMv=CONFIG_IDF_TARGET_ESP32C3?1995:1320;
 #if !SYNAP_BATTERY_MONITOR_ENABLE
   sampleBattery(true);
   assert(rawReads==0 && !batteryAvailable && !batteryCritical());
@@ -65,7 +65,7 @@ int main(){
   streamingEnabled=true;sampleBattery(true);
   assert(rawReads==51 && event.notifications==notifications);
   streamingEnabled=false;
-  varying=false;adcMv=CONFIG_IDF_TARGET_ESP32C3?1125:1050;
+  varying=false;adcMv=CONFIG_IDF_TARGET_ESP32C3?1650:1050;
   for(int i=0;i<3;++i)sampleBattery(true);
   assert(batteryAvailable && batteryMillivolts<=BATTERY_CRITICAL_MV);
   assert(bool(event.value[3]&2));
@@ -76,15 +76,23 @@ int main(){
     assert(!batteryAvailable && !batteryCritical() && batteryPercent==0);
     assert(batteryValidSamples==0 && batteryCriticalSamples==0 && event.value[3]==0);
   }
-  adcMv=CONFIG_IDF_TARGET_ESP32C3?1295:1215;sampleBattery(true);
+  adcMv=CONFIG_IDF_TARGET_ESP32C3?1900:1215;sampleBattery(true);
   assert(batteryAvailable && batteryPercent>50 && batteryPercent<80);
   // Check periodic sampling through timer wrap, retaining the forced status path.
   clockMs=0xfffffff0u;sampleBattery(true);const auto before=rawReads;
   clockMs+=14999;sampleBattery(false);assert(rawReads==before);
   ++clockMs;sampleBattery(false);assert(rawReads==before+17);
-  adcMv=CONFIG_IDF_TARGET_ESP32C3?1415:1320;sampleBattery(true);
+  adcMv=CONFIG_IDF_TARGET_ESP32C3?2075:1320;sampleBattery(true);
   assert(batteryAvailable && batteryPercent==100 && event.value[2]==100);
-  assert(batteryMillivolts==(CONFIG_IDF_TARGET_ESP32C3?4151:4130));
+  assert(batteryMillivolts==(CONFIG_IDF_TARGET_ESP32C3?4150:4130));
+#if CONFIG_IDF_TARGET_ESP32C3
+  // Report the charging samples at 100%, without exceeding the percentage cap.
+  for (const uint32_t chargingMv : {2079u,2080u,2100u}) {
+    adcMv=chargingMv;sampleBattery(true);
+    assert(batteryAvailable && batteryMillivolts==chargingMv*2);
+    assert(batteryPercent==100 && event.value[2]==100 && (event.value[3]&1));
+  }
+#endif
 #endif
   std::puts("PASS battery conversion, telemetry, range, cadence and target-specific critical policy");
 }

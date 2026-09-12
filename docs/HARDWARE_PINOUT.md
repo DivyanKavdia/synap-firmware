@@ -58,12 +58,12 @@ Both dividers connect battery+ through an upper resistor to the ADC junction, th
 | Lower resistor | 470 kΩ | Nominally 1 MΩ |
 | Capacitor to GND | 100 nF | 100 nF |
 | ADC attenuation | 6 dB | 11 dB |
-| Cell mV conversion | ADC mV × 4130 / 1320, rounded | ADC mV × 3990 / 1360, rounded |
+| Cell mV conversion | ADC mV × 4130 / 1320, rounded | ADC mV × 2 |
 | Full-charge percentage anchor | 4.13 V | 4.15 V |
 | Automatic critical-battery protection | Enabled with corroborating samples | Disabled pending validation |
 
 S3 calibration reference is 4.13 V cell / 1.32 V ADC / raw 1544. The specified S3 board uses its rear battery pads; do not connect a raw LiPo cell to 3V3 or assume that the S3 charging arrangement applies to C3.
 
-**C3 calibration is provisional and charging behavior is unresolved.** The selected meter reference is 3.99 V cell / 1.36 V junction, which differs from a nominal equal-resistor ratio. While charging, diagnostics have reported approximately 2.08 V ADC; the configured ratio reconstructs approximately 6.10 V and correctly reports percentage unavailable. Do not treat this as a full/empty battery or auto-switch calibration based on the reading.
+C3 uses the nominal equal-resistor ratio: cell voltage = GPIO1 ADC voltage × 2. The 4.15 V full-charge anchor corresponds to 2.075 V at GPIO1; valid readings at or above that anchor report 100%. For example, a charging sample of 2.080 V reports 4.160 V and 100%. The existing 2.80–4.35 V validity range still rejects implausible readings.
 
-Confirm battery+ and junction voltages against the same C3 GND, charging and unplugged, before changing this ratio. The resistor junction, capacitor signal terminal and GPIO1 must be the same electrical point. Diagnostics preserve ADC millivolts, raw counts and reconstructed cell voltage. The PWA displays valid percentages and “—” for unavailable readings.
+The resistor junction, capacitor signal terminal and GPIO1 must be the same electrical point, measured against C3 GND. Diagnostics preserve ADC millivolts, raw counts and reconstructed cell voltage. The PWA displays valid percentages and “—” for unavailable readings.
