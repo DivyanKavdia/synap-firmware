@@ -1463,7 +1463,8 @@ void controlTask(void* parameter) {
           break;
       }
     }
-    if(recoveryFinishing.load() && deviceConnected.load() && (!recoveryCanSend() && !transmitterActive.load() && uint32_t(millis()-recoveryFinishAt)>150u))stopStreaming();
+    // A restored link cannot transmit until RESUME binds it to the app journal.
+    if(recoveryFinishing.load() && deviceConnected.load() && !recoveryWaiting.load() && (!recoveryCanSend() && !transmitterActive.load() && uint32_t(millis()-recoveryFinishAt)>150u))stopStreaming();
     if(recoveryFinishing.load() && uint32_t(millis()-recoveryFinishAt)>35000u)stopStreaming(ErrorCode::TRANSPORT_CHANGED);
     if (deviceConnected.load() && streamingEnabled.load() && !recoveryWaiting.load()) {
       uint16_t liveMtu=bleServer->getPeerMTU(bleServer->getConnId());
