@@ -1,7 +1,8 @@
 'use strict';
 // Runs only in the repository publish job with this repository's GITHUB_TOKEN.
 const fs=require('node:fs'),path=require('node:path'),{execFileSync}=require('node:child_process');
-const {validate,repository,workflow,PRIMARY_TARGET,TARGETS}=require('./release.cjs');
+const {isDeepStrictEqual}=require('node:util');
+const {createManifest,repository,workflow,PRIMARY_TARGET,TARGETS}=require('./release.cjs');
 const repo=repository,branch=process.env.SYNAP_RELEASE_BRANCH||'ota-test';
 if(!['ota-test','ota-releases'].includes(branch))throw Error('Invalid release branch');
 
@@ -17,7 +18,8 @@ const artifacts=Object.values(TARGETS).map(config=>{
   const dir=path.join('bundle',config.id),manifest=JSON.parse(fs.readFileSync(path.join(dir,'latest.json'),'utf8'));
   const binary=fs.readFileSync(path.join(dir,'firmware.bin'));
   if(manifest.target!==config.id)throw Error(`Bundle target mismatch for ${config.id}`);
-  if(validate(binary,manifest.build,config.id)!==manifest.sha256)throw Error(`Artifact hash mismatch for ${config.id}`);
+  const expected=createManifest(binary,manifest.build,manifest.commit,branch,config.id);
+  if(!isDeepStrictEqual(manifest,expected))throw Error(`Artifact manifest mismatch for ${config.id}`);
   return {config,dir,manifest,binary};
 });
 const primary=artifacts.find(x=>x.config.id===PRIMARY_TARGET);
@@ -44,7 +46,7 @@ if(existing){
 }
 
 if(production){
-  const tag=`v${version}-build.${build}`,releases=api('releases?per_page=100');
+  const tag=version,releases=api('releases?per_page=100');
   if(!releases.some(r=>r.tag_name===tag)){
     const assetDir=path.join('bundle','release-assets');fs.mkdirSync(assetDir,{recursive:true});
     const assets=[];
@@ -56,7 +58,7 @@ if(production){
       assets.push(binaryOut,manifestOut,sourceOut,hashOut);
     }
     execFileSync('gh',['release','create',tag,...assets,'--repo',repo,'--target',commit,
-      '--title',`synap ${version} · build ${build}`,
+      '--title',version,
       '--notes','Production-qualified multi-target pendant firmware. Includes ESP32-S3 SuperMini and ESP32-C3 SuperMini artifacts with exact prepared source, GitHub OIDC provenance, target-bound manifests, resumable BLE OTA and default dual OTA slots.'],{stdio:'inherit'});
   }
 }

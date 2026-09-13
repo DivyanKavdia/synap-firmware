@@ -4,7 +4,7 @@ const root=path.join(__dirname,'..');
 const source=fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8');
 
 test('production battery, identity and OTA contracts remain in the reviewed source',()=>{
-  assert.match(source,/SYNAP-FW:esp32s3-fh4r2-qspi-4m:1\.0\.0:/);
+  assert.match(source,/SYNAP-FW:esp32s3-fh4r2-qspi-4m:" SYNAP_VERSION/);
   assert.match(source,/900000u/,'OTA resume survives mobile background suspension');
   assert.match(source,/#if CONFIG_IDF_TARGET_ESP32S3\s*\n#define SYNAP_BATTERY_MONITOR_ENABLE 1\s*\n#else\s*\n#define SYNAP_BATTERY_MONITOR_ENABLE 0/);
   assert.match(source,/BATTERY_CAL_ADC_MV = 1320u/);

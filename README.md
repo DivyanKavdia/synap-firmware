@@ -1,6 +1,6 @@
 # Synap Firmware
 
-Firmware for ESP32-S3 SuperMini and ESP32-C3 SuperMini pendants. Product version is **1.0.0**; the [production target index](https://raw.githubusercontent.com/DivyanKavdia/synap-firmware/ota-releases/targets.json) identifies the latest numeric build.
+Firmware for ESP32-S3 SuperMini and ESP32-C3 SuperMini pendants. Firmware versions use **synap-os1-build#**, with `#` replaced by the numeric build counter; the [production target index](https://raw.githubusercontent.com/DivyanKavdia/synap-firmware/ota-releases/targets.json) identifies the latest numeric build.
 
 ## Shared and board-specific code
 

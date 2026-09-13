@@ -57,12 +57,12 @@ async function verifyGitHubProvenance(feed,tip){
 (async()=>{
   const index=await authoritativeJson('targets.json');
   const expectedTargets=Object.keys(TARGETS).sort();
-  if(index.schema!==1||index.build!==primary.manifest.build||index.channel!==primary.manifest.channel||index.primary!==PRIMARY_TARGET||
+  if(index.schema!==1||index.version!==primary.manifest.version||index.build!==primary.manifest.build||index.channel!==primary.manifest.channel||index.primary!==PRIMARY_TARGET||
       JSON.stringify(Object.keys(index.targets||{}).sort())!==JSON.stringify(expectedTargets))throw Error('Authoritative target index is invalid');
   const tip=branch==='ota-releases'?await releaseTip():null;
   for(const {config,manifest} of local){
     const feed=await authoritativeJson(config.manifestPath);
-    if(feed.build!==manifest.build||feed.sha256!==manifest.sha256||feed.commit!==manifest.commit||feed.target!==config.id)
+    if(feed.version!==manifest.version||feed.identity!==manifest.identity||feed.build!==manifest.build||feed.sha256!==manifest.sha256||feed.commit!==manifest.commit||feed.target!==config.id)
       throw Error(`Authoritative feed differs from compiled artifact for ${config.id}`);
     if(feed.channel!==manifest.channel)throw Error(`Public feed channel mismatch for ${config.id}`);
     if(branch==='ota-releases')await verifyGitHubProvenance(feed,tip);

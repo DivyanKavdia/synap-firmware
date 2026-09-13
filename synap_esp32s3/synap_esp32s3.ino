@@ -368,9 +368,10 @@ static_assert(SYNAP_BUILD >= 0 && SYNAP_BUILD <= 65535, "OTA build must fit the 
 constexpr uint16_t SYNAP_FIRMWARE_BUILD = SYNAP_BUILD;
 #define SYNAP_STRING_INNER(x) #x
 #define SYNAP_STRING(x) SYNAP_STRING_INNER(x)
+#define SYNAP_VERSION "synap-os1-build" SYNAP_STRING(SYNAP_BUILD)
 // Kept in the image and exposed over BLE for release/board verification.
 static const char SYNAP_FIRMWARE_ID[] =
-  "SYNAP-FW:esp32s3-fh4r2-qspi-4m:1.0.0:" SYNAP_STRING(SYNAP_BUILD);
+  "SYNAP-FW:esp32s3-fh4r2-qspi-4m:" SYNAP_VERSION ":" SYNAP_STRING(SYNAP_BUILD);
 // Target marker; the PWA verifies publisher authenticity using GitHub provenance.
 static const char SYNAP_PRODUCT[] = "SYNAP-ESP32S3-OTA-ID-V3";
 static const char SYNAP_TARGET_MARKER[] = "SYNAP-FW:esp32s3-fh4r2-qspi-4m:";

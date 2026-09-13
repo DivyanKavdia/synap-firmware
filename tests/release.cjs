@@ -1,7 +1,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
-const {validate,createManifest,target,version,slotSize,repository,workflow,TARGETS}=require('../tools/release.cjs');
+const {validate,createManifest,target,versionForBuild,slotSize,repository,workflow,TARGETS}=require('../tools/release.cjs');
 function image(targetId=target,build=1001){const config=TARGETS[targetId],b=Buffer.alloc(512);b[0]=0xe9;b.writeUInt16LE(config.chip,12);b.writeUInt32LE(0xabcd5432,32);
-  b.write(config.productMarker,80);b.write(`SYNAP-FW:${targetId}:${version}:${build}\0`,160);return b;}
+  b.write(config.productMarker,80);b.write(`SYNAP-FW:${targetId}:${versionForBuild(build)}:${build}\0`,160);return b;}
 
 test('S3 and C3 images are exact-target bound and fit default OTA slots',()=>{
   for(const targetId of Object.keys(TARGETS)){
@@ -21,6 +21,8 @@ test('production publishes one build with target-specific URLs and GitHub proven
     const prod=createManifest(image(targetId),1001,commit,'ota-releases',targetId);
     manifests[targetId]=prod;
     assert.equal(testManifest.channel,'test');assert.equal(testManifest.schema,2);
+    assert.equal(prod.version,'synap-os1-build1001');
+    assert.equal(prod.identity,`SYNAP-FW:${targetId}:synap-os1-build1001:1001`);
     assert.equal(prod.channel,'production');assert.equal(prod.schema,3);assert.equal(prod.target,targetId);
     assert.deepEqual(prod.provenance,{provider:'github-actions',repository,workflow});assert.equal(prod.signing,undefined);
     assert.notDeepEqual(testManifest,prod);

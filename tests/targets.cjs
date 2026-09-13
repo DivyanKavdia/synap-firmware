@@ -15,11 +15,11 @@ test('target catalog keeps S3 SuperMini as primary',()=>{
 
 test('secondary generated target preserves the production interaction contract',()=>{
   const s3=prepared(),c3=materialize(s3,'esp32c3-supermini-4m');
-  assert.match(s3,/SYNAP-FW:esp32s3-fh4r2-qspi-4m:1\.0\.0:/);
+  assert.match(s3,/SYNAP-FW:esp32s3-fh4r2-qspi-4m:" SYNAP_VERSION/);
   assert.match(s3,/#define SYNAP_TOUCH_PIN 13/);
   assert.match(s3,/confirmTouchWakeGesture\(\)/);
   assert.match(s3,/long-press wake confirmed; sleep lock cleared; continuing normal boot/);
-  assert.match(c3,/SYNAP-FW:esp32c3-supermini-4m:1\.0\.0:/);
+  assert.match(c3,/SYNAP-FW:esp32c3-supermini-4m:" SYNAP_VERSION/);
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);
   assert.match(c3,/SYNAP-ESP32C3-OTA-ID-V3/);
   assert.match(c3,/esp_deep_sleep_enable_gpio_wakeup\(1ULL<<TOUCH_INPUT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH\)/);

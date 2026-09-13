@@ -1,13 +1,17 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {PRIMARY_TARGET,TARGETS,getTarget}=require('./targets.cjs');
-const target=PRIMARY_TARGET,version='1.0.0',slotSize=getTarget(PRIMARY_TARGET).slotSize;
+const target=PRIMARY_TARGET,slotSize=getTarget(PRIMARY_TARGET).slotSize;
 const repository='DivyanKavdia/synap-firmware',workflow='.github/workflows/firmware.yml';
 const allowedBranches=new Set(['ota-test','ota-releases']);
 
-function validate(bytes,build,targetId=PRIMARY_TARGET) {
-  const config=getTarget(targetId);
+function versionForBuild(build) {
   if(!Number.isInteger(build)||build<=503||build>65535) throw Error('Invalid build counter');
+  return `synap-os1-build${build}`;
+}
+
+function validate(bytes,build,targetId=PRIMARY_TARGET) {
+  const config=getTarget(targetId),version=versionForBuild(build);
   if(bytes.length<288||bytes.length>config.slotSize) throw Error('Application exceeds default OTA slot or is truncated');
   if(bytes[0]!==0xe9||bytes.readUInt16LE(12)!==config.chip||bytes.readUInt32LE(32)!==0xabcd5432)
     throw Error(`Not a ${config.board} application image`);
@@ -23,6 +27,7 @@ function createManifest(bytes,build,commit,branch='ota-test',targetId=PRIMARY_TA
   if(!/^[0-9a-f]{40}$/.test(commit)) throw Error('Invalid source commit');
   const sha256=validate(bytes,build,targetId),production=branch==='ota-releases',channel=production?'production':'test';
   const artifact=`${config.releasePrefix}builds/${build}-${sha256}.bin`;
+  const version=versionForBuild(build);
   const manifest={schema:production?3:2,version,build,target:config.id,protocol:3,chip:config.chip,
     flashBytes:config.flashBytes,psramBytes:config.psramBytes,partition:config.partition,size:bytes.length,sha256,commit,
     identity:`SYNAP-FW:${config.id}:${version}:${build}`,
@@ -42,7 +47,7 @@ if(require.main===module) {
   const source=fs.readFileSync(sourcePath,'utf8').replace(/^#define SYNAP_BUILD \d+$/m,`#define SYNAP_BUILD ${build}`);
   fs.writeFileSync(path.join(out,config.sourceName),source);
   fs.writeFileSync(path.join(out,'source.sha256'),crypto.createHash('sha256').update(source).digest('hex')+`  ${config.sourceName}\n`);
-  console.log(`Validated synap ${version} build ${build} for ${config.id}/${manifest.channel}: ${bytes.length}/${config.slotSize} bytes; ${manifest.sha256}`);
+  console.log(`Validated ${manifest.version} for ${config.id}/${manifest.channel}: ${bytes.length}/${config.slotSize} bytes; ${manifest.sha256}`);
 }
 
-module.exports={validate,createManifest,target,version,slotSize,allowedBranches,repository,workflow,PRIMARY_TARGET,TARGETS,getTarget};
+module.exports={validate,createManifest,target,versionForBuild,slotSize,allowedBranches,repository,workflow,PRIMARY_TARGET,TARGETS,getTarget};

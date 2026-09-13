@@ -1,6 +1,13 @@
 # Firmware releases
 
-The product version is **1.0.0**. Numeric 16-bit build counters distinguish releases.
+Firmware versions use **synap-os1-build#** (for example, `synap-os1-build1194`).
+The same name appears in the BLE identity, manifests and GitHub release tag/title.
+The numeric 16-bit OTA counter continues increasing across the naming reset, so
+previously installed `1.0.0` firmware can update without a USB reinstall.
+
+Deploy the compatible PWA before publishing an OS1 release: it accepts both the
+legacy semantic versions and the new name, verifies that the OS1 suffix matches
+the numeric counter, and continues comparing counters to prevent downgrades.
 
 ## Build and publication
 
