@@ -27,10 +27,16 @@ C3 cannot reuse S3's touch pin: GPIO13 belongs to the flash interface, and C3 de
 | Connected idle: start | Double tap | Double tap |
 | Recording: stop, then standby | Double tap | Double tap |
 | BLE standby: start | Double tap | Double tap |
-| Awake: deep sleep | Triple tap | Hold 4 seconds, then release |
-| Deep sleep: wake | Triple tap | Hold through 4-second boot validation, then release |
+| Awake: deep sleep | Hold 4 seconds, then release | Hold 4 seconds, then release |
+| Deep sleep: wake | Hold through 4-second boot validation, then release | Hold through 4-second boot validation, then release |
 
-S3 waits briefly after a double tap for a possible third tap. C3 acts on the second valid tap. A single C3 tap does nothing. Short or incomplete deep-sleep gestures return to sleep before BLE initializes. C3 wake validation begins after firmware starts, so allow boot overhead. Wake alone does not start recording.
+Both boards act on the second valid tap immediately; a single tap does nothing.
+A valid tap lasts 60–500 ms and the double-tap gap is at most 550 ms. The firmware
+uses 35 ms debounce and a 250 ms lockout after connection/recording state changes.
+Short wake holds return to sleep before BLE initializes. Wake validation begins
+after firmware starts, so allow boot overhead before releasing. Wake alone does
+not start recording. Older S3 firmware used triple tap for sleep/wake; update it
+to use the shared four-second hold gesture. GPIO assignments are unchanged.
 
 Active recording stops before intentional deep sleep. Release is required to prevent immediate level-triggered wake. OTA interrupts/discards touch gestures. Retained and durable sleep markers prevent unexpected resets from bypassing wake validation.
 

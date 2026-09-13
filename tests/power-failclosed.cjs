@@ -24,18 +24,19 @@ test('S3 deep sleep is fail-closed before BLE teardown',()=>{
   assert(lockAt>0 && eventAt>lockAt && sleepAt>eventAt,'durable lock must precede app notification and deep sleep');
 });
 
-test('S3 sleep lock survives resets and clears only after validated triple tap',()=>{
+test('S3 sleep lock survives resets and clears only after a validated hold and release',()=>{
   const s3=productionS3();
   assert.match(s3,/sleep lock survived a non-touch reset; returning to deep sleep before BLE/);
   assert.match(s3,/const bool sleepResume=durableLock \|\| \(synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER\) \|\| bootSleepWasLocked/);
   assert.match(s3,/if \(!touchWake\) \{[\s\S]*armTouchWakeAndSleep\(\);[\s\S]*return false;/);
   assert.match(s3,/could not clear durable sleep lock; refusing BLE boot/);
-  const confirm=s3.slice(s3.indexOf('bool confirmTouchWakeTripleTap()'),s3.indexOf('void publishPowerEvent'));
+  const confirm=s3.slice(s3.indexOf('bool confirmTouchWakeGesture()'),s3.indexOf('void publishPowerEvent'));
   const clearAt=confirm.indexOf('writeDurableSleepLock(false)');
-  const thirdTapAt=confirm.indexOf('if (taps!=3)');
-  assert(clearAt>thirdTapAt,'durable lock must not clear until the third wake tap validates');
-  assert.match(s3,/if \(!confirmTouchWakeTripleTap\(\)\) return;/);
-  assert(s3.indexOf('if (!confirmTouchWakeTripleTap()) return;') < s3.lastIndexOf('initializeBLE();'),'BLE must initialize only after wake validation');
+  const holdAt=confirm.indexOf('if (uint32_t(millis()-pressedAt)<TOUCH_WAKE_HOLD_MS)');
+  const releaseAt=confirm.indexOf('while (uint32_t(millis()-releasedAt)<TOUCH_DEBOUNCE_MS)');
+  assert(holdAt>=0 && releaseAt>holdAt && clearAt>releaseAt,'durable lock must not clear until hold and release validate');
+  assert.match(s3,/if \(!confirmTouchWakeGesture\(\)\) return;/);
+  assert(s3.indexOf('if (!confirmTouchWakeGesture()) return;') < s3.lastIndexOf('initializeBLE();'),'BLE must initialize only after wake validation');
 });
 
 test('S3 touch wake uses GPIO13 without an internal RTC pulldown',()=>{

@@ -1,7 +1,7 @@
 'use strict';
 const {PRIMARY_TARGET}=require('../../targets.cjs');
 const {replaceOnce}=require('../../target-source.cjs');
-const led=require('./led.cjs'),battery=require('./battery.cjs'),touch=require('./touch.cjs');
+const led=require('./led.cjs'),battery=require('./battery.cjs');
 
 function materializeC3(source,target){
   let out=source;
@@ -16,7 +16,6 @@ function materializeC3(source,target){
 
   out=led.apply(out);
   out=battery.apply(out);
-  out=touch.apply(out);
 
   const taskBefore=`  if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
       xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, &captureTaskHandle, 0) != pdPASS ||
@@ -34,9 +33,8 @@ function materializeC3(source,target){
   if(!out.includes(target.productMarker))throw Error('C3 OTA marker was not materialized');
   if(!out.includes('p[21]!=5 || p[22]!=0'))throw Error('C3 chip image check was not materialized');
   if(!out.includes('esp_deep_sleep_enable_gpio_wakeup'))throw Error('C3 GPIO deep-sleep wake is unavailable');
-  if(!out.includes('C3 long press -> DEEP SLEEP'))throw Error('C3 long-press power gesture was not materialized');
-  if(!out.includes('C3 double tap -> START'))throw Error('C3 double-tap recording gesture was not materialized');
-  if(out.includes('triple tap -> DEEP SLEEP'))throw Error('C3 source still contains the S3 triple-tap power gesture');
+  if(!out.includes('long press -> DEEP SLEEP'))throw Error('C3 long-press power gesture was not materialized');
+  if(!out.includes('double tap -> START'))throw Error('C3 double-tap recording gesture was not materialized');
   return out;
 }
 

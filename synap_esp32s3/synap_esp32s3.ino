@@ -73,10 +73,6 @@ constexpr uint8_t POWER_STATE_AWAKE = 1;
 constexpr uint8_t POWER_STATE_STANDBY = 2;
 constexpr uint8_t POWER_STATE_DEEP_SLEEP = 3;
 constexpr uint32_t SYNAP_DEEP_SLEEP_MARKER = 0x53594E50u;
-constexpr uint16_t WAKE_TAP_MIN_MS = 60;
-constexpr uint16_t WAKE_TAP_MAX_MS = 500;
-constexpr uint16_t WAKE_TAP_GAP_MS = 550;
-constexpr uint16_t WAKE_TRIPLE_WINDOW_MS = 1600;
 constexpr uint32_t SAMPLE_RATE = 16000;
 constexpr uint16_t FRAME_DURATION_MS = 50;
 constexpr uint16_t SAMPLES_PER_FRAME = 800;
@@ -776,7 +772,7 @@ void armTouchWakeAndSleep() {
   ESP.restart();
 }
 
-bool confirmTouchWakeTripleTap() {
+bool confirmTouchWakeGesture() {
   const bool durableLock=readDurableSleepLock();
   const bool sleepResume=durableLock || (synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER) || bootSleepWasLocked;
   const esp_sleep_wakeup_cause_t cause=esp_sleep_get_wakeup_cause();
@@ -795,58 +791,32 @@ bool confirmTouchWakeTripleTap() {
   touchWake=(cause==ESP_SLEEP_WAKEUP_GPIO);
 #endif
   if (!touchWake) {
-    // A reset/brownout/watchdog during the shutdown path is not permission to boot BLE.
     synapLastSleepStage=SLEEP_STAGE_RESET_RECOVERY;
     synapDeepSleepMarker=SYNAP_DEEP_SLEEP_MARKER;
     sleepPending=true;
     Serial.println("[POWER] sleep lock survived a non-touch reset; returning to deep sleep before BLE");
-    delay(30);
-    armTouchWakeAndSleep();
-    return false;
-  }
-
-  // The electrical touch wake counts as tap 1. Keep both durable and RTC locks set
-  // until taps 2 and 3 are validated, so any reset during this window still fails closed.
-  synapLastSleepStage=SLEEP_STAGE_WAKE_VALIDATING;
-  Serial.println("[TOUCH] deep-sleep wake: tap 1/3; waiting for taps 2 and 3");
-  const uint32_t firstPressedAt=millis();
-  while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) {
-    if (uint32_t(millis()-firstPressedAt)>WAKE_TAP_MAX_MS+250u) {
-      Serial.println("[TOUCH] wake tap too long; returning to deep sleep");
-      delay(30);armTouchWakeAndSleep();return false;
-    }
-    delay(5);
-  }
-
-  uint8_t taps=1;
-  const uint32_t windowStarted=millis();
-  while (taps<3 && uint32_t(millis()-windowStarted)<WAKE_TRIPLE_WINDOW_MS) {
-    const uint32_t waitStarted=millis();
-    while (digitalRead(TOUCH_INPUT_PIN)!=TOUCH_ACTIVE_LEVEL) {
-      if (uint32_t(millis()-waitStarted)>WAKE_TAP_GAP_MS ||
-          uint32_t(millis()-windowStarted)>=WAKE_TRIPLE_WINDOW_MS) {
-        Serial.printf("[TOUCH] wake sequence incomplete at %u/3; returning to deep sleep\n",unsigned(taps));
-        delay(30);armTouchWakeAndSleep();return false;
-      }
-      delay(5);
-    }
-
-    const uint32_t pressedAt=millis();
-    while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL &&
-        uint32_t(millis()-pressedAt)<=WAKE_TAP_MAX_MS) delay(5);
-    const uint32_t held=uint32_t(millis()-pressedAt);
-    if (held<WAKE_TAP_MIN_MS || held>WAKE_TAP_MAX_MS ||
-        digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) {
-      Serial.println("[TOUCH] invalid wake tap; returning to deep sleep");
-      while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) delay(5);
-      delay(30);armTouchWakeAndSleep();return false;
-    }
-    ++taps;
-    Serial.printf("[TOUCH] wake tap %u/3\n",unsigned(taps));
-  }
-
-  if (taps!=3) {
     delay(30);armTouchWakeAndSleep();return false;
+  }
+
+  // Both boards confirm a deliberate hold after hardware wake. The TTP223
+  // high level performs the hardware wake; firmware then confirms the hold.
+  constexpr uint16_t TOUCH_WAKE_HOLD_MS = 4000;
+  synapLastSleepStage=SLEEP_STAGE_WAKE_VALIDATING;
+  const uint32_t pressedAt=millis();
+  Serial.println("[TOUCH] wake touch detected; hold to power on");
+  while (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL &&
+      uint32_t(millis()-pressedAt)<TOUCH_WAKE_HOLD_MS) delay(5);
+
+  if (uint32_t(millis()-pressedAt)<TOUCH_WAKE_HOLD_MS) {
+    Serial.println("[TOUCH] wake press too short; returning to deep sleep");
+    delay(30);armTouchWakeAndSleep();return false;
+  }
+
+  // Do not continue into normal touch handling until the wake press is released.
+  uint32_t releasedAt=millis();
+  while (uint32_t(millis()-releasedAt)<TOUCH_DEBOUNCE_MS) {
+    if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) releasedAt=millis();
+    delay(5);
   }
   if (!writeDurableSleepLock(false)) {
     Serial.println("[POWER] could not clear durable sleep lock; refusing BLE boot");
@@ -855,7 +825,7 @@ bool confirmTouchWakeTripleTap() {
   synapDeepSleepMarker=0;
   sleepPending=false;
   synapLastSleepStage=SLEEP_STAGE_WAKE_CONFIRMED;
-  Serial.println("[TOUCH] triple tap wake confirmed; sleep lock cleared; continuing normal boot");
+  Serial.println("[TOUCH] long-press wake confirmed; sleep lock cleared; continuing normal boot");
   touchRawState=false;touchStableState=false;touchPressedAt=0;
   touchChangedAt=millis();
   return true;
@@ -992,11 +962,11 @@ void powerTick() {
 }
 
 void pollTouchControl() {
-  constexpr uint16_t TOUCH_TAP_MIN_MS = 80;
-  constexpr uint16_t TOUCH_TAP_MAX_MS = 450;
-  constexpr uint16_t TOUCH_STATE_LOCKOUT_MS = 650;
-  constexpr uint16_t AWAKE_TRIPLE_TAP_GAP_MS = 500;
-  constexpr uint16_t AWAKE_TRIPLE_WINDOW_MS = 1400;
+  constexpr uint16_t TOUCH_TAP_MIN_MS = 60;
+  constexpr uint16_t TOUCH_TAP_MAX_MS = 500;
+  constexpr uint16_t TOUCH_DOUBLE_TAP_GAP_MS = 550;
+  constexpr uint16_t TOUCH_SLEEP_HOLD_MS = 4000;
+  constexpr uint16_t TOUCH_STATE_LOCKOUT_MS = 250;
   static uint32_t touchRearmAt = 0;
   static bool lastConnectedState = false;
   static bool lastStreamingState = false;
@@ -1004,18 +974,22 @@ void pollTouchControl() {
   static bool standbyAfterStop = false;
   static bool deepSleepAfterStop = false;
   static uint8_t tapCount = 0;
-  static uint32_t tapSequenceStartedAt = 0;
   static uint32_t lastTapAt = 0;
-  static uint32_t pendingDoubleAt = 0;
   const uint32_t now=millis();
   const bool connected=deviceConnected.load();
   const bool streaming=streamingEnabled.load();
   const bool standby=remoteStandby;
   const bool raw=digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL;
 
+  // An OTA-interrupted press must not become a power gesture when OTA finishes.
+  if (otaBusy() || sleepPending) {
+    touchPressedAt=0;tapCount=0;lastTapAt=0;
+    deepSleepAfterStop=false;standbyAfterStop=false;
+  }
+
   if (deepSleepAfterStop && !streaming && !raw && !otaBusy()) {
     deepSleepAfterStop=false;
-    enterDeepSleep("touch-triple-after-stop");
+    enterDeepSleep("touch-hold-after-stop");
     return;
   }
   if (standbyAfterStop && !streaming && !raw && !otaBusy()) {
@@ -1031,17 +1005,63 @@ void pollTouchControl() {
     touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
     touchPressedAt=0;
     tapCount=0;
-    tapSequenceStartedAt=0;
     lastTapAt=0;
-    pendingDoubleAt=0;
   }
 
-  // A double tap remains START/STOP, but wait briefly for a possible third tap.
-  if (pendingDoubleAt && !raw && uint32_t(now-pendingDoubleAt)>AWAKE_TRIPLE_TAP_GAP_MS) {
-    pendingDoubleAt=0;
+  // A lone tap intentionally does nothing. Expire it after the double-tap window.
+  if (tapCount==1 && lastTapAt && uint32_t(now-lastTapAt)>TOUCH_DOUBLE_TAP_GAP_MS) {
     tapCount=0;
-    tapSequenceStartedAt=0;
     lastTapAt=0;
+  }
+
+  if (raw!=touchRawState) { touchRawState=raw; touchChangedAt=now; }
+  if (raw!=touchStableState && uint32_t(now-touchChangedAt)>=TOUCH_DEBOUNCE_MS) {
+    touchStableState=raw;
+    if (touchStableState) {
+      if (otaBusy() || sleepPending || static_cast<int32_t>(now-touchRearmAt)<0) {
+        touchPressedAt=0;
+        tapCount=0;
+        lastTapAt=0;
+        return;
+      }
+      touchPressedAt=now;
+      return;
+    }
+
+    const uint32_t held=touchPressedAt ? uint32_t(now-touchPressedAt) : 0;
+    touchPressedAt=0;
+    if (!held || otaBusy()) {
+      tapCount=0;lastTapAt=0;return;
+    }
+
+    // Sleep is requested only after release, preventing the level-sensitive
+    // wake source from immediately waking again on either board.
+    if (held>=TOUCH_SLEEP_HOLD_MS) {
+      tapCount=0;lastTapAt=0;
+      touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
+      Serial.println("[TOUCH] long press -> DEEP SLEEP");
+      if (streamingEnabled.load()) {
+        deepSleepAfterStop=true;
+        queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
+      } else {
+        enterDeepSleep("touch-hold");
+      }
+      return;
+    }
+
+    if (held<TOUCH_TAP_MIN_MS || held>TOUCH_TAP_MAX_MS) {
+      tapCount=0;lastTapAt=0;
+      return;
+    }
+
+    if (!tapCount || !lastTapAt || uint32_t(now-lastTapAt)>TOUCH_DOUBLE_TAP_GAP_MS) {
+      tapCount=1;
+      lastTapAt=now;
+      return;
+    }
+
+    // Second valid tap acts immediately; a third tap has no power action.
+    tapCount=0;lastTapAt=0;
     touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
     if (streamingEnabled.load()) {
       standbyAfterStop=true;
@@ -1051,65 +1071,9 @@ void pollTouchControl() {
       Serial.println(remoteStandby ? "[TOUCH] double tap standby -> START" : "[TOUCH] double tap -> START");
       queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,streamGeneration.load());
     }
-    return;
-  }
-
-  if (tapCount==1 && lastTapAt && uint32_t(now-lastTapAt)>AWAKE_TRIPLE_TAP_GAP_MS) {
-    tapCount=0;tapSequenceStartedAt=0;lastTapAt=0;
-  }
-
-  if (raw!=touchRawState) { touchRawState=raw; touchChangedAt=now; }
-  if (raw!=touchStableState && uint32_t(now-touchChangedAt)>=TOUCH_DEBOUNCE_MS) {
-    touchStableState=raw;
-    if (touchStableState) {
-      if (static_cast<int32_t>(now-touchRearmAt)<0) {
-        touchPressedAt=0;
-        tapCount=0;tapSequenceStartedAt=0;lastTapAt=0;pendingDoubleAt=0;
-        return;
-      }
-      touchPressedAt=now;
-      return;
-    }
-
-    const uint32_t held=touchPressedAt ? uint32_t(now-touchPressedAt) : 0;
-    touchPressedAt=0;
-    if (!held) return;
-
-    if (held<TOUCH_TAP_MIN_MS || held>TOUCH_TAP_MAX_MS || otaBusy()) {
-      tapCount=0;tapSequenceStartedAt=0;lastTapAt=0;pendingDoubleAt=0;
-      return;
-    }
-
-    if (!tapCount || !lastTapAt ||
-        uint32_t(now-lastTapAt)>AWAKE_TRIPLE_TAP_GAP_MS ||
-        uint32_t(now-tapSequenceStartedAt)>AWAKE_TRIPLE_WINDOW_MS) {
-      tapCount=1;
-      tapSequenceStartedAt=now;
-      lastTapAt=now;
-      pendingDoubleAt=0;
-      return;
-    }
-
-    ++tapCount;
-    lastTapAt=now;
-    if (tapCount==2) {
-      pendingDoubleAt=now;
-      return;
-    }
-
-    if (tapCount>=3 && uint32_t(now-tapSequenceStartedAt)<=AWAKE_TRIPLE_WINDOW_MS) {
-      tapCount=0;tapSequenceStartedAt=0;lastTapAt=0;pendingDoubleAt=0;
-      touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
-      Serial.println("[TOUCH] triple tap -> DEEP SLEEP");
-      if (streamingEnabled.load()) {
-        deepSleepAfterStop=true;
-        queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
-      } else {
-        enterDeepSleep("touch-triple");
-      }
-    }
   }
 }
+
 void updateStatusCharacteristic(bool notify) {
   if (!controlCharacteristic) return;
   uint8_t value[16] = { STATUS_PACKET_MAGIC, PROTOCOL_VERSION,
@@ -1860,7 +1824,7 @@ void setup() {
   statusLed.begin();
   statusLed.clear();
   statusLed.show();
-  if (!confirmTouchWakeTripleTap()) return;
+  if (!confirmTouchWakeGesture()) return;
   disconnectedAt=millis();
   setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
   sampleBattery(true);

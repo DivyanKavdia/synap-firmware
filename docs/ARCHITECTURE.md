@@ -4,21 +4,25 @@
 
 One runtime supplies audio capture, encoding, BLE transport, OTA, optional recovery, battery sampling and task coordination for both boards. It remains in the established Arduino sketch path, `synap_esp32s3/synap_esp32s3.ino`, with S3 defaults and SDK target guards.
 
-`tools/materialize-target.cjs` selects the board. S3 is a byte-for-byte passthrough. The C3 adapter in `tools/boards/esp32c3/index.cjs` applies identity/pin mapping, LED, battery, touch and single-core task overrides in that order. `tools/target-source.cjs` provides shared checked source edits and template loading. Missing or ambiguous single-replacement anchors abort generation.
+`tools/materialize-target.cjs` selects the board. S3 is a byte-for-byte passthrough. The C3 adapter in `tools/boards/esp32c3/index.cjs` applies identity/pin mapping, LED, battery and single-core task overrides in that order. Touch handling is shared without source replacement. `tools/target-source.cjs` provides shared checked source edits and template loading. Missing or ambiguous single-replacement anchors abort generation.
 
 | Change | Edit location |
 | --- | --- |
 | Shared audio, transport, recovery or OTA behavior | Production sketch |
-| S3 LED, battery or gesture defaults | Production sketch; review C3 integration anchors |
+| Shared awake gestures / boot wake confirmation | `pollTouchControl` / `confirmTouchWakeGesture` in the production sketch |
+| S3 LED or battery defaults | Production sketch; review C3 integration anchors |
 | C3 battery ratio, ADC range, full-charge anchor or cutoff policy | `tools/boards/esp32c3/battery.cjs` |
 | C3 LED pulse behavior | `firmware/esp32c3/status-led.cpp` |
 | C3 LED setup, off state and deep-sleep hold | `tools/boards/esp32c3/led.cjs` |
-| C3 awake gestures / boot wake confirmation | `firmware/esp32c3/touch.cpp` / `wake.cpp` |
-| C3 function insertion boundaries | `tools/boards/esp32c3/touch.cjs` |
 | C3 pins and task creation | `tools/boards/esp32c3/index.cjs` |
 | Binary identity, capacity and release paths | `tools/targets.cjs`; coordinate source identity changes |
 
-The C3 templates inherit runtime types and globals when inserted; compiling them separately is unsupported. The retained name `confirmTouchWakeTripleTap` is the shared insertion/call boundary; its C3 implementation validates a hold, not a triple tap.
+The C3 LED template inherits runtime types and globals when inserted; compiling it
+separately is unsupported. Both boards share the former C3 gesture behavior:
+immediate double-tap recording control and a four-second hold with release for
+sleep/wake. Only electrical wake arming and wake-cause validation vary: EXT0 on
+S3 GPIO13, GPIO wake on C3 GPIO3. The C3 touch/wake templates and integration
+adapter were removed so gestures cannot drift between targets.
 
 Shared changes must be exercised on both generated targets. Target-specific changes must preserve the other target's behavior. Keep release identities, protocol versions and materialization anchors explicit. Comments should explain ownership, timing constraints or hardware reasons.
 
@@ -43,7 +47,7 @@ Shared changes must be exercised on both generated targets. Target-specific chan
 
 CPU profiles are manual: 80 MHz idle, S3 240 MHz active, C3 160 MHz active. Paused OTA releases its boost after one second without commands and boosts before resumed flash work. The Arduino housekeeping loop waits one second after boot validation; control, capture, transmit and radio retain their own timing.
 
-Standby stops microphone/I2S but keeps BLE available. C3 retains its connected LED heartbeat; S3 stays dark outside OTA. A disconnected, non-recording, non-OTA pendant can sleep after five minutes. Deep sleep is guarded by retained and durable markers; the board-specific wake gesture is checked before BLE starts. Touch gestures are ignored during OTA.
+Standby stops microphone/I2S but keeps BLE available. C3 retains its connected LED heartbeat; S3 stays dark outside OTA. A disconnected, non-recording, non-OTA pendant can sleep after five minutes. Deep sleep is guarded by retained and durable markers; the shared four-second wake hold and stable release are checked before BLE starts. Touch gestures are ignored during OTA.
 
 Battery sampling averages 16 readings every 15 seconds, with forced status samples. Notifications are suppressed during recording. Valid reconstructed cell range is 2.8–4.35 V; readings outside it remain diagnostic data and report unavailable. Low/critical thresholds are 3.60/3.40 V. Only S3 enforces confirmed critical-battery sleep/OTA guards. Wiring, calibration and the unresolved C3 charging discrepancy are documented in [hardware](HARDWARE_PINOUT.md).
 
@@ -78,7 +82,7 @@ For a C3 disconnect retest, update firmware and the PWA, keep the app foreground
 
 ## Validation
 
-`node --test tests/*.cjs` compiles actual firmware functions with warnings as errors and undefined-behavior sanitization. Tests cover codec bytes, all MTU values, filtering, partial I2S reads, concurrent STOP/recovery, connection races, battery policies, LED timing, both gesture models, recovery limits, OTA resume and release identity.
+`node --test tests/*.cjs` compiles actual firmware functions with warnings as errors and undefined-behavior sanitization. Tests cover codec bytes, all MTU values, filtering, partial I2S reads, concurrent STOP/recovery, connection races, battery policies, LED timing, shared gestures under both board configurations, recovery limits, OTA resume and release identity. Gesture regressions include delayed STOP completion, short holds, stable wake release, OTA interruption, reconnect, timer wrap and rejection of the wrong board's wake cause.
 
 Source-generation tests also exercise the CLI outside the repository working directory and reject changed/ambiguous anchors. CI compiles both pinned Arduino targets and validates release artifacts.
 

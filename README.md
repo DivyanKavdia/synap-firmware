@@ -8,14 +8,14 @@ The shared runtime and S3 defaults live in `synap_esp32s3/synap_esp32s3.ino`. S3
 
 | Responsibility | Source |
 | --- | --- |
-| Audio, BLE, OTA, recovery, task coordination and common power logic | `synap_esp32s3/synap_esp32s3.ino` |
+| Audio, BLE, OTA, recovery, gestures, task coordination and common power logic | `synap_esp32s3/synap_esp32s3.ino` |
 | Target identity and release metadata | `tools/targets.cjs` |
 | Target selection and source-generation CLI | `tools/materialize-target.cjs` |
 | C3 pins, image validation and single-core task creation | `tools/boards/esp32c3/index.cjs` |
-| C3 battery, LED and touch integration | `tools/boards/esp32c3/{battery,led,touch}.cjs` |
-| C3 LED and gesture implementations | `firmware/esp32c3/{status-led,touch,wake}.cpp` |
+| C3 battery and LED integration | `tools/boards/esp32c3/{battery,led}.cjs` |
+| C3 LED implementation | `firmware/esp32c3/status-led.cpp` |
 
-The C3 C++ files are function templates inserted into the generated sketch, not standalone compilation units. Do not edit generated sketches. See [architecture and feature boundaries](docs/ARCHITECTURE.md) for the extension rules and runtime contracts.
+The C3 LED C++ file is a function template inserted into the generated sketch, not a standalone compilation unit. Touch and wake gestures use the shared runtime on both boards. Do not edit generated sketches. See [architecture and feature boundaries](docs/ARCHITECTURE.md) for the extension rules and runtime contracts.
 
 ## Board differences
 
@@ -23,14 +23,20 @@ The C3 C++ files are function templates inserted into the generated sketch, not 
 | --- | --- | --- |
 | Flash / PSRAM | 4 MB / 2 MB | 4 MB / none |
 | Touch input | GPIO13 | GPIO3 |
-| Recording gesture | Double tap; waits for possible third tap | Double tap; acts on second tap |
-| Sleep / wake gesture | Triple tap | Hold 4 seconds, then release |
+| Recording gesture | Double tap; acts on second tap | Double tap; acts on second tap |
+| Sleep / wake gesture | Hold 4 seconds, then release | Hold 4 seconds, then release |
 | LED | Onboard RGB, GPIO48 | Onboard blue, GPIO8 |
 | Battery sense | GPIO8 | GPIO1 |
 | Battery protection | Confirmed critical battery blocks OTA and requests idle sleep | Telemetry only; automatic cutoff inactive |
 | CPU idle / active | 80 / 240 MHz | 80 / 160 MHz |
 
 Both use microphone GPIO4/5/6, 16 kHz mono audio, the same BLE protocols and optional negotiated disconnect recovery.
+
+One tap does nothing. Double tap starts recording, or stops an active recording
+and enters BLE standby. Sleep waits for active recording to stop. Wake requires
+four seconds of hold validation after boot, followed by release; allow a little
+extra time for boot. Wake alone does not start recording. Update older S3 firmware
+to replace its previous triple-tap sleep/wake gesture.
 
 - [Hardware, wiring, LED patterns and battery calibration](docs/HARDWARE_PINOUT.md)
 - [Runtime contracts and validation](docs/ARCHITECTURE.md)
