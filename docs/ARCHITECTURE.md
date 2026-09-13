@@ -32,6 +32,8 @@ Shared changes must be exercised on both generated targets. Target-specific chan
 - Filter history belongs to capture and resets on recording generation or successful I2S recovery. Synthetic tests verify response and bypass; hardware timing and speech quality require measurement.
 - Encoding: independent 404-byte IMA ADPCM frames, so a lost frame does not corrupt the following frame.
 - Transport adapts to ATT capacity; normal fragment pacing uses a 45 ms window.
+- Connection preferences and the one-time request on each connection use 15–30 ms intervals, zero peripheral latency and a 6-second supervision timeout. These are requests; the phone controls the negotiated parameters.
+- Audio notifications retry local stack rejection up to four attempts with 15/30/45 ms yielding backoff. A congested recovery frame retains its cursor for a later retry; a legacy session counts the lost frame and keeps capturing. Pacing restarts after each accepted notification, so a delayed callback cannot burst overdue fragments. Connection generations invalidate old sends even when a reconnect preserves the recording generation.
 - Capture blocks while idle. Transmit blocks on its queue. A recursive microphone mutex serializes I2S reads, startup, shutdown and recovery.
 - STOP waits for capture ownership and in-flight notification submission before acknowledging idle. Submission is not proof of phone persistence.
 - BLE transitions use an atomic pending flag independent of command queue capacity. Stale commands do not skip control-loop maintenance.
@@ -64,11 +66,15 @@ Primary service: `4fa12345-0000-1000-8000-00805f9b34fb`. Characteristic suffixes
 | 48 / 49 | OTA write / status | v3 |
 | 4b | Firmware identity | Target and build |
 | 4c | Public device ID | Factory eFuse-derived identity |
-| 4d | Diagnostics | v1 |
+| 4d | Diagnostics | v2 (48 bytes; v1 fields retain their offsets) |
 | 4e | Battery, touch and power events | Per-event version |
 | 4f | Optional disconnect recovery | v1 |
 
 The public device ID is not a secret. OTA validates target identity, image structure, size and SHA-256, and supports resume. Recording blocks OTA; confirmed critical battery additionally blocks it on S3. The PWA verifies publisher provenance separately; see [release trust](../OTA_RELEASES.md).
+
+Diagnostics v2 retains the first 32-byte layout from v1, with version byte 2. Additional little-endian fields are disconnect reason (`u16`, offset 32), last rejected notification status (`u16`, 34), disconnect count since boot (`u32`, 36), last disconnect uptime in milliseconds (`u32`, 40), and last notification error (`u32`, 44). Link/error evidence survives START and reconnect. `0xFFFF` means the reason was unavailable; the pinned NimBLE server callback omits it. Bluedroid supplies the raw reason (for example, `0x08` for supervision timeout). Reboot is distinguishable through reset reason, uptime and reset counters; these diagnostics are volatile.
+
+For a C3 disconnect retest, update firmware and the PWA, keep the app foregrounded, record for 10–15 minutes, then stop and inspect Settings diagnostics. Include the `GATT disconnected` and `Pendant diagnostics` entries. Repeat on battery and USB power if disconnects persist. Software regression checks cannot establish radio or power stability on physical hardware.
 
 ## Validation
 
@@ -82,4 +88,6 @@ Before claiming a runtime improvement, validate both physical boards: long recor
 
 - [Pinned Arduino I2S implementation](https://github.com/espressif/arduino-esp32/blob/3.3.5/libraries/ESP_I2S/src/ESP_I2S.cpp)
 - [Pinned BLE notification implementation](https://github.com/espressif/arduino-esp32/blob/3.3.5/libraries/BLE/src/BLECharacteristic.cpp)
+- [Apple connection parameter guidance](https://developer.apple.com/library/archive/qa/qa1931/_index.html)
+- [Pinned BLE server callbacks and connection requests](https://github.com/espressif/arduino-esp32/blob/3.3.5/libraries/BLE/src/BLEServer.cpp)
 - [INMP441 format and response](https://product.tdk.com/system/files/dam/doc/product/sw_piezo/mic/mems-mic/data_sheet/inmp441.pdf)

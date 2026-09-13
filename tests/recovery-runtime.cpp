@@ -19,6 +19,10 @@ struct AudioFrame{uint32_t generation;uint16_t sequence;int16_t samples[800];};
 enum class DeviceState{STREAMING};enum class ErrorCode{NONE,TRANSPORT_CHANGED};
 std::atomic<bool> streamingEnabled{false},deviceConnected{true};
 std::atomic<uint32_t> streamGeneration{1},connectionGeneration{1},captureDrops{0};
+std::atomic<uint32_t> notifyRejected{0};
+unsigned congestionWaits=0;
+unsigned pdMS_TO_TICKS(unsigned ms){return ms;}
+void vTaskDelay(unsigned ticks){assert(ticks==30);++congestionWaits;}
 std::atomic<uint8_t> chunksPerFrame{1};
 bool sleepPending=false,busy=false,transport=true;
 uint32_t now=100;
@@ -37,7 +41,12 @@ struct BLECharacteristicCallbacks{virtual ~BLECharacteristicCallbacks()=default;
 // INSERT RECOVERY
 void encodeImaAdpcm(const int16_t* samples,uint8_t* output){memset(output,uint8_t(samples[0]),404);}
 uint16_t emitted=0;uint32_t lastPace=0;
-bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t*,uint32_t pace){assert(generation==streamGeneration);emitted=sequence;lastPace=pace;return true;}
+bool rejectNotification=false;
+bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t*,uint32_t pace){
+  assert(generation==streamGeneration);
+  if(rejectNotification){++notifyRejected;return false;}
+  emitted=sequence;lastPace=pace;return true;
+}
 int main(){
   initializeRecovery();assert(recoveryRing.capacity==600);
   BLECharacteristic characteristic;recoveryCharacteristic=&characteristic;
@@ -53,6 +62,9 @@ int main(){
   transport=false;request(2,7,65530);assert(recoveryWaiting);transport=true;
   cccd.enabled=false;request(2,7,65530);assert(recoveryWaiting);cccd.enabled=true;
   request(2,7,65530);assert(!recoveryWaiting && recoveryRing.cursor==11);
+  rejectNotification=true;
+  assert(!sendRecoveryFrame());assert(recoveryRing.cursor==11 && congestionWaits==1 && streamingEnabled);
+  rejectNotification=false;
   assert(sendRecoveryFrame() && emitted==65531 && lastPace==30000);
   for(unsigned i=0;i<5;i++){assert(sendRecoveryFrame());}
   assert(emitted==0);

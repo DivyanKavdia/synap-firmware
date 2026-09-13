@@ -7,10 +7,13 @@
 constexpr int pdTRUE=1;
 constexpr uint8_t PROTOCOL_VERSION=2,CMD_START=1,AUDIO_HEADER_BYTES=8;
 constexpr uint8_t POWER_STATE_AWAKE=1,POWER_STATE_STANDBY=2;
+// INSERT LINK CONSTANTS
 // INSERT CONTROL TYPES
 std::atomic<bool> deviceConnected{false},streamingEnabled{false},connectionEventPending{false};
 std::atomic<uint32_t> connectionGeneration{0},streamGeneration{0};
 std::atomic<uint32_t> capturedFrames{0},captureDrops{0},notifyRejected{0};
+std::atomic<uint32_t> linkDisconnects{0},lastDisconnectAt{0};
+std::atomic<uint16_t> lastDisconnectReason{0xFFFF};
 std::atomic<uint16_t> peerMtu{23},attValueCapacity{20},audioPayloadBytes{0};
 std::atomic<uint8_t> chunksPerFrame{0};
 std::atomic<bool> recoveryEnabled{false},recoveryWaiting{false},recoveryFinishing{false};
@@ -29,8 +32,19 @@ uint8_t lastPower=0;
 int controlQueue=1,audioFrameQueue=2,captureTaskHandle=3;
 struct Cccd {bool subscribed=true;bool getNotifications(){return subscribed;}} cccd;
 auto* audioCccd=&cccd;
+struct esp_ble_gatts_cb_param_t {
+  struct {uint8_t remote_bda[6]={};} connect;
+  struct {uint16_t reason=8;} disconnect;
+};
 struct BLEServer {
   unsigned advertisements=0;
+  unsigned parameterRequests=0;
+  void updateConnParams(uint8_t*,uint16_t minimum,uint16_t maximum,uint16_t latency,uint16_t timeout){
+    ++parameterRequests;
+    assert(minimum==12 && maximum==24 && latency==0 && timeout==600);
+    assert(minimum*1250>=15000 && (maximum-minimum)*1250>=15000);
+    assert(uint32_t(maximum)*1250*(latency+1)*3<uint32_t(timeout)*10000);
+  }
   uint16_t getPeerMTU(int){return 23;}
   int getConnId(){return 0;}
   void startAdvertising(){++advertisements;}
@@ -40,7 +54,11 @@ struct BLEServerCallbacks {
   virtual ~BLEServerCallbacks()=default;
   virtual void onConnect(BLEServer*){}
   virtual void onDisconnect(BLEServer*){}
+  virtual void onConnect(BLEServer*,esp_ble_gatts_cb_param_t*){}
+  virtual void onDisconnect(BLEServer*,esp_ble_gatts_cb_param_t*){}
 };
+struct {unsigned getFreeHeap(){return 120000;}} ESP;
+struct {template<typename... T> void printf(const char*,T...) {}} Serial;
 uint32_t millis(){return clockNow;}
 int pdMS_TO_TICKS(int ms){return ms;}
 bool otaBusy(){return busy;}
@@ -122,5 +140,14 @@ int main(){
   recoveryWaiting=false;loops=0;
   try{controlTask(nullptr);}catch(const Done&){}
   assert(!streamingEnabled && !recoveryFinishing && stops==stopCount+1);
+  // The pinned library invokes both overloads. Link accounting must run once.
+  const auto disconnectCount=linkDisconnects.load(),generationBefore=connectionGeneration.load();
+  esp_ble_gatts_cb_param_t parameters;
+  link->onDisconnect(&server);link->onDisconnect(&server,&parameters);
+  assert(linkDisconnects==disconnectCount+1 && connectionGeneration==generationBefore+1);
+  assert(lastDisconnectReason==8 && lastDisconnectAt==clockNow);
+  link->onConnect(&server);link->onConnect(&server,&parameters);
+  assert(connectionGeneration==generationBefore+2 && server.parameterRequests==1);
+  assert(lastDisconnectReason==8 && linkDisconnects==disconnectCount+1);
   std::cout<<"PASS link recovery, stale commands, standby, advertising and START admission\n";
 }

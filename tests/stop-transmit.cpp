@@ -12,6 +12,7 @@ enum class ErrorCode{NONE,AUDIO_SOURCE_FAILED,TRANSPORT_CHANGED};
 struct AudioFrame{uint32_t generation;uint16_t sequence;int16_t samples[800];};
 std::atomic<bool> streamingEnabled{true},deviceConnected{true},transmitterActive{false};
 std::atomic<uint32_t> streamGeneration{1};
+std::atomic<uint32_t> notifyRejected{0},captureDrops{0};
 std::atomic<bool> recoveryEnabled{false};
 void resetRecovery(bool){}
 int pdMS_TO_TICKS(int ms){return ms;}
@@ -22,6 +23,7 @@ std::atomic<bool> acknowledged{false},stopWaiting{false},micStopped{false};
 std::mutex gateMutex;
 std::condition_variable gate;
 bool sending=false,releaseSend=false;
+bool rejectNotification=false;
 unsigned received=0,errors=0;
 struct Done{};
 void vTaskDelay(int ticks){
@@ -39,6 +41,7 @@ int xQueueReceive(int,AudioFrame* frame,int timeout){
 }
 bool sendAudioFrame(const AudioFrame&){
   assert(transmitterActive && streamingEnabled);
+  if(rejectNotification){++notifyRejected;return false;}
   std::unique_lock<std::mutex> guard(gateMutex);sending=true;gate.notify_all();
   gate.wait(guard,[]{return releaseSend;});
   assert(!acknowledged);return true;
@@ -61,5 +64,9 @@ int main(){
   received=0;acknowledged=false;
   try{transmitterTask(nullptr);}catch(const Done&){}
   assert(!transmitterActive && errors==0);
+  // Legacy recording has no ring; a rejected frame is counted without aborting the take.
+  received=0;streamingEnabled=true;streamGeneration=1;rejectNotification=true;
+  try{transmitterTask(nullptr);}catch(const Done&){}
+  assert(streamingEnabled && captureDrops==1 && errors==0 && !transmitterActive);
   std::cout<<"PASS STOP waits for transmit completion and stale frames never send\n";
 }
