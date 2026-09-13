@@ -57,7 +57,7 @@ if(production){
       fs.copyFileSync(path.join(dir,config.sourceName),sourceOut);fs.copyFileSync(path.join(dir,'source.sha256'),hashOut);
       assets.push(binaryOut,manifestOut,sourceOut,hashOut);
     }
-    execFileSync('gh',['release','create',tag,...assets,'--repo',repo,'--target',commit,
+    execFileSync('gh',['release','create',tag,...assets,'--repo',repo,'--target',commit,'--latest',
       '--title',version,
       '--notes','Production-qualified multi-target pendant firmware. Includes ESP32-S3 SuperMini and ESP32-C3 SuperMini artifacts with exact prepared source, GitHub OIDC provenance, target-bound manifests, resumable BLE OTA and default dual OTA slots.'],{stdio:'inherit'});
   }
