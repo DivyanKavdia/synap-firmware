@@ -1227,14 +1227,15 @@ bool recoveryCanSend() {
   RecoveryGuard guard; return recoveryRing.cursor<recoveryRing.count;
 }
 bool sendRecoveryFrame() {
+  const uint32_t connection=connectionGeneration.load();
   SynapRecovery::EncodedFrame frame; uint16_t pending=0;
   { RecoveryGuard guard; if(!recoveryRing.peek(frame))return false; pending=recoveryRing.count-recoveryRing.cursor; }
   if(recoveryWaiting.load() || !streamingEnabled.load() || !deviceConnected.load())return false;
   const uint32_t pace=pending>4 && chunksPerFrame.load()<=5 ? 30000u : 45000u;
   const uint32_t rejectedBefore=notifyRejected.load();
   const bool sent=sendEncodedFrame(frame.generation,frame.sequence,frame.bytes,pace);
-  if(sent && !recoveryWaiting.load()) { RecoveryGuard guard; recoveryRing.sent(frame.sequence); }
-  else if(!sent && !recoveryWaiting.load() && deviceConnected.load() && streamingEnabled.load() && frame.generation==streamGeneration.load()) {
+  if(sent && !recoveryWaiting.load() && connection==connectionGeneration.load()) { RecoveryGuard guard; recoveryRing.sent(frame.sequence); }
+  else if(!sent && !recoveryWaiting.load() && deviceConnected.load() && streamingEnabled.load() && frame.generation==streamGeneration.load() && connection==connectionGeneration.load()) {
     // A full controller queue is temporary. Retain this frame for a later send;
     // advancing the cursor here would discard audio the BLE stack never accepted.
     if(notifyRejected.load()!=rejectedBefore)vTaskDelay(pdMS_TO_TICKS(30));

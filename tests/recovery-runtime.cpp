@@ -42,8 +42,10 @@ struct BLECharacteristicCallbacks{virtual ~BLECharacteristicCallbacks()=default;
 void encodeImaAdpcm(const int16_t* samples,uint8_t* output){memset(output,uint8_t(samples[0]),404);}
 uint16_t emitted=0;uint32_t lastPace=0;
 bool rejectNotification=false;
+bool reconnectDuringSend=false;
 bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t*,uint32_t pace){
   assert(generation==streamGeneration);
+  if(reconnectDuringSend){++connectionGeneration;return false;}
   if(rejectNotification){++notifyRejected;return false;}
   emitted=sequence;lastPace=pace;return true;
 }
@@ -65,6 +67,10 @@ int main(){
   rejectNotification=true;
   assert(!sendRecoveryFrame());assert(recoveryRing.cursor==11 && congestionWaits==1 && streamingEnabled);
   rejectNotification=false;
+  // A delayed send on the replaced connection cannot error-stop the resumed take.
+  reconnectDuringSend=true;
+  assert(!sendRecoveryFrame());assert(recoveryRing.cursor==11 && streamingEnabled);
+  reconnectDuringSend=false;
   assert(sendRecoveryFrame() && emitted==65531 && lastPace==30000);
   for(unsigned i=0;i<5;i++){assert(sendRecoveryFrame());}
   assert(emitted==0);
