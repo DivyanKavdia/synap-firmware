@@ -12,6 +12,7 @@ constexpr uint8_t AUDIO_PROTOCOL_VERSION=3, MIN_CHUNKS_PER_FRAME=1, MAX_CHUNKS_P
 struct AudioFrame { uint32_t generation; uint16_t sequence; int16_t samples[800]; };
 std::atomic<bool> streamingEnabled{true},deviceConnected{true};
 std::atomic<uint32_t> streamGeneration{1};
+std::atomic<uint32_t> connectionGeneration{1},notifyRejected{0};
 std::atomic<uint16_t> audioPayloadBytes{404},attValueCapacity{514};
 std::atomic<uint16_t> peerMtu{23};
 std::atomic<uint8_t> chunksPerFrame{1};
@@ -19,7 +20,10 @@ struct Server {uint16_t mtu=517;uint16_t getPeerMTU(int){return mtu;} int getCon
 auto* bleServer=&server;
 uint32_t clockNow=0,spinMicros=0;
 bool cancelOnNotify=false;
+bool reconnectOnNotify=false;
+unsigned rejectRemaining=0,notifyCalls=0,notifyDelayUs=0;
 uint32_t micros(){return clockNow;}
+unsigned pdMS_TO_TICKS(unsigned ms){return ms;}
 void vTaskDelay(unsigned ticks){clockNow+=ticks*1000;}
 void delayMicroseconds(unsigned us){clockNow+=us;spinMicros+=us;}
 struct Packet { uint32_t time;std::vector<uint8_t> bytes; };
@@ -27,7 +31,13 @@ struct Characteristic {
   std::vector<uint8_t> pending;
   std::vector<Packet> packets;
   void setValue(const uint8_t* p,unsigned n){pending.assign(p,p+n);}
-  void notify(){packets.push_back({clockNow,pending});if(cancelOnNotify)++streamGeneration;}
+  void notify(){
+    ++notifyCalls;
+    if(rejectRemaining){--rejectRemaining;++notifyRejected;return;}
+    packets.push_back({clockNow,pending});clockNow+=notifyDelayUs;
+    if(cancelOnNotify)++streamGeneration;
+    if(reconnectOnNotify)++connectionGeneration;
+  }
 } characteristic;
 auto* audioCharacteristic=&characteristic;
 // INSERT CODEC AND TRANSPORT
@@ -83,6 +93,26 @@ int main(){
   }
   chunksPerFrame=20;audioPayloadBytes=21;attValueCapacity=29;
   characteristic.packets.clear();cancelOnNotify=true;
+  assert(!sendAudioFrame(frame));assert(characteristic.packets.size()==1);
+  cancelOnNotify=false;streamGeneration=frame.generation;
+  server.mtu=185;assert(configureTransportFromPeerMtu());
+  // Queue pressure retries the rejected fragment, preserving bytes and sequence.
+  characteristic.packets.clear();notifyCalls=0;rejectRemaining=2;
+  assert(sendAudioFrame(frame));
+  assert(notifyCalls==unsigned(chunksPerFrame)+2 && characteristic.packets.size()==chunksPerFrame);
+  assert(characteristic.packets[0].bytes[4]==0 && characteristic.packets.back().bytes[4]==chunksPerFrame-1);
+  // Permanent congestion has a bounded retry budget and does not itself stop capture.
+  characteristic.packets.clear();notifyCalls=0;rejectRemaining=100;
+  assert(!sendAudioFrame(frame));assert(notifyCalls==4 && characteristic.packets.empty() && streamingEnabled);
+  rejectRemaining=0;
+  // A delayed native notification must not compress the next fragment's spacing.
+  for(uint32_t initial: {0u,0xFFFFF000u}){
+    clockNow=initial;notifyDelayUs=80000;characteristic.packets.clear();
+    assert(sendAudioFrame(frame));
+    for(unsigned i=1;i<characteristic.packets.size();++i)
+      assert(uint32_t(characteristic.packets[i].time-characteristic.packets[i-1].time)>=80000+45000u/chunksPerFrame);
+  }
+  notifyDelayUs=0;reconnectOnNotify=true;characteristic.packets.clear();
   assert(!sendAudioFrame(frame));assert(characteristic.packets.size()==1);
   std::cout<<"PASS runtime; codec golden="<<std::hex<<hash<<"\n";
 }

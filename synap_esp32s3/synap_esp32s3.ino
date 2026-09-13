@@ -61,7 +61,7 @@ constexpr uint8_t AUDIO_PROTOCOL_VERSION = 3;
 constexpr uint8_t AUDIO_CODEC_IMA_ADPCM = 1;
 constexpr uint8_t STATUS_PACKET_MAGIC = 0x5A;
 constexpr uint8_t DIAGNOSTICS_MAGIC = 0xD6;
-constexpr uint8_t DIAGNOSTICS_VERSION = 1;
+constexpr uint8_t DIAGNOSTICS_VERSION = 2;
 constexpr uint8_t CMD_STOP = 0x00;
 constexpr uint8_t CMD_START = 0x01;
 constexpr uint8_t CMD_GET_STATUS = 0x02;
@@ -90,6 +90,9 @@ constexpr uint8_t MIN_CHUNKS_PER_FRAME = 1;
 constexpr uint8_t MAX_CHUNKS_PER_FRAME = 20;
 constexpr uint16_t MIN_REQUIRED_MTU = 32;
 constexpr uint16_t REQUESTED_MTU = 517;
+// 1.25 ms interval units; 10 ms timeout units. These also satisfy Apple QA1931.
+constexpr uint16_t BLE_MIN_INTERVAL = 12, BLE_MAX_INTERVAL = 24; // 15–30 ms
+constexpr uint16_t BLE_SLAVE_LATENCY = 0, BLE_SUPERVISION_TIMEOUT = 600; // 6 s
 constexpr uint16_t MAX_AUDIO_PAYLOAD_BYTES = 500;
 constexpr uint8_t RGB_LED_PIN = 48;
 #ifndef SYNAP_TOUCH_PIN
@@ -153,6 +156,9 @@ std::atomic<bool> deviceConnected{false}, streamingEnabled{false};
 std::atomic<bool> connectionEventPending{false}, transmitterActive{false};
 std::atomic<uint32_t> connectionGeneration{0}, streamGeneration{0};
 std::atomic<uint32_t> capturedFrames{0}, captureDrops{0}, notifyRejected{0}, controlDrops{0};
+// Retained across recording starts/reconnects, cleared only by a device reboot.
+std::atomic<uint32_t> linkDisconnects{0}, lastDisconnectAt{0}, lastNotifyError{0};
+std::atomic<uint16_t> lastDisconnectReason{0xFFFF}, lastNotifyStatus{0};
 DeviceState deviceState = DeviceState::DISCONNECTED;
 ErrorCode errorCode = ErrorCode::NONE;
 std::atomic<uint16_t> peerMtu{23}, attValueCapacity{20}, audioPayloadBytes{0};
@@ -1119,7 +1125,7 @@ void updateStatusCharacteristic(bool notify) {
 }
 void updateDiagnosticsCharacteristic() {
   if (!diagnosticsCharacteristic) return;
-  uint8_t value[32] = {};
+  uint8_t value[48] = {};
   value[0]=DIAGNOSTICS_MAGIC;value[1]=DIAGNOSTICS_VERSION;
   uint8_t flags=0;
 #if USE_REAL_I2S_MIC
@@ -1143,6 +1149,12 @@ void updateDiagnosticsCharacteristic() {
   put32le(value+20,ESP.getFreeHeap());
   put32le(value+24,ESP.getMinFreeHeap());
   put32le(value+28,millis()/1000u);
+  const uint16_t reason=lastDisconnectReason.load(), status=lastNotifyStatus.load();
+  value[32]=reason&255;value[33]=reason>>8;
+  value[34]=status&255;value[35]=status>>8;
+  put32le(value+36,linkDisconnects.load());
+  put32le(value+40,lastDisconnectAt.load());
+  put32le(value+44,lastNotifyError.load());
   diagnosticsCharacteristic->setValue(value,sizeof(value));
 }
 // Optional recovery protocol. Buffers are volatile and owned by one app session.
@@ -1215,13 +1227,20 @@ bool recoveryCanSend() {
   RecoveryGuard guard; return recoveryRing.cursor<recoveryRing.count;
 }
 bool sendRecoveryFrame() {
+  const uint32_t connection=connectionGeneration.load();
   SynapRecovery::EncodedFrame frame; uint16_t pending=0;
   { RecoveryGuard guard; if(!recoveryRing.peek(frame))return false; pending=recoveryRing.count-recoveryRing.cursor; }
   if(recoveryWaiting.load() || !streamingEnabled.load() || !deviceConnected.load())return false;
   const uint32_t pace=pending>4 && chunksPerFrame.load()<=5 ? 30000u : 45000u;
+  const uint32_t rejectedBefore=notifyRejected.load();
   const bool sent=sendEncodedFrame(frame.generation,frame.sequence,frame.bytes,pace);
-  if(sent && !recoveryWaiting.load()) { RecoveryGuard guard; recoveryRing.sent(frame.sequence); }
-  else if(!sent && !recoveryWaiting.load() && deviceConnected.load() && streamingEnabled.load() && frame.generation==streamGeneration.load())requestStreamError(ErrorCode::TRANSPORT_CHANGED,frame.generation);
+  if(sent && !recoveryWaiting.load() && connection==connectionGeneration.load()) { RecoveryGuard guard; recoveryRing.sent(frame.sequence); }
+  else if(!sent && !recoveryWaiting.load() && deviceConnected.load() && streamingEnabled.load() && frame.generation==streamGeneration.load() && connection==connectionGeneration.load()) {
+    // A full controller queue is temporary. Retain this frame for a later send;
+    // advancing the cursor here would discard audio the BLE stack never accepted.
+    if(notifyRejected.load()!=rejectedBefore)vTaskDelay(pdMS_TO_TICKS(30));
+    else requestStreamError(ErrorCode::TRANSPORT_CHANGED,frame.generation);
+  }
   return sent;
 }
 void processRecoveryRequest() {
@@ -1354,12 +1373,30 @@ class ServerCallbacks : public BLEServerCallbacks {
   void onDisconnect(BLEServer* server) override {
     (void)server;
     deviceConnected.store(false);
+    ++linkDisconnects;lastDisconnectAt=millis();lastDisconnectReason=0xFFFF;
     if(recoveryEnabled.load() && streamingEnabled.load()) {
       recoveryWaiting=true; if(!recoveryWaitingAt.load())recoveryWaitingAt=millis();
     } else streamingEnabled.store(false);
     ++connectionGeneration;
     connectionEventPending.store(true);
   }
+#if defined(CONFIG_BLUEDROID_ENABLED)
+  // Arduino 3.3.5 calls BOTH overloads; the common overload owns state changes.
+  void onConnect(BLEServer* server, esp_ble_gatts_cb_param_t* param) override {
+    if(param)server->updateConnParams(param->connect.remote_bda, BLE_MIN_INTERVAL,
+      BLE_MAX_INTERVAL, BLE_SLAVE_LATENCY, BLE_SUPERVISION_TIMEOUT);
+  }
+  void onDisconnect(BLEServer* server, esp_ble_gatts_cb_param_t* param) override {
+    (void)server;
+    if(param)lastDisconnectReason=static_cast<uint16_t>(param->disconnect.reason);
+  }
+#elif defined(CONFIG_NIMBLE_ENABLED)
+  void onConnect(BLEServer* server, ble_gap_conn_desc* desc) override {
+    if(desc)server->updateConnParams(desc->conn_handle, BLE_MIN_INTERVAL,
+      BLE_MAX_INTERVAL, BLE_SLAVE_LATENCY, BLE_SUPERVISION_TIMEOUT);
+  }
+  // This Arduino NimBLE callback omits the reason; retain 0xFFFF (unavailable).
+#endif
 };
 class ControlCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* characteristic) override {
@@ -1373,8 +1410,11 @@ class ControlCallbacks : public BLECharacteristicCallbacks {
 };
 class AudioCallbacks : public BLECharacteristicCallbacks {
   void onStatus(BLECharacteristic* characteristic, Status status, uint32_t code) override {
-    (void)characteristic; (void)code;
-    if (status != SUCCESS_NOTIFY) ++notifyRejected;
+    (void)characteristic;
+    if (status != SUCCESS_NOTIFY) {
+      lastNotifyStatus=static_cast<uint16_t>(status);lastNotifyError=code;
+      ++notifyRejected;
+    }
   }
 };
 class DiagnosticsCallbacks : public BLECharacteristicCallbacks {
@@ -1440,6 +1480,10 @@ void reconcileConnection() {
     if(!(recoveryWaiting.load() && streamingEnabled.load()))stopStreaming();
     disconnectedAt=millis();
     restartAdvertising=true;
+    Serial.printf("[BLE] disconnected count=%lu reason=0x%04X uptime=%lus heap=%u rejected=%lu recovery=%u\n",
+      static_cast<unsigned long>(linkDisconnects.load()),unsigned(lastDisconnectReason.load()),
+      static_cast<unsigned long>(millis()/1000u),unsigned(ESP.getFreeHeap()),
+      static_cast<unsigned long>(notifyRejected.load()),unsigned(recoveryWaiting.load()));
   }
 }
 
@@ -1661,10 +1705,10 @@ bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t* encod
   if (chunks < MIN_CHUNKS_PER_FRAME || chunks > MAX_CHUNKS_PER_FRAME ||
       !payload || payload > MAX_AUDIO_PAYLOAD_BYTES) return false;
   static uint8_t packet[AUDIO_HEADER_BYTES+MAX_AUDIO_PAYLOAD_BYTES];
-  const uint32_t started=micros();
+  const uint32_t connection=connectionGeneration.load();
   for (uint8_t index=0; index<chunks; ++index) {
     if (!streamingEnabled.load() || !deviceConnected.load() ||
-        generation != streamGeneration.load()) return false;
+        generation != streamGeneration.load() || connection != connectionGeneration.load()) return false;
     const uint16_t offset=index*payload;
     const uint16_t remaining=ADPCM_BYTES_PER_FRAME-offset;
     const uint16_t length=remaining < payload ? remaining : payload;
@@ -1674,8 +1718,22 @@ bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t* encod
     packet[4]=index; packet[5]=chunks; packet[6]=length & 255; packet[7]=length >> 8;
     memcpy(packet+AUDIO_HEADER_BYTES, encoded+offset, length);
     audioCharacteristic->setValue(packet, AUDIO_HEADER_BYTES+length);
-    audioCharacteristic->notify();
-    const uint32_t target=started+static_cast<uint32_t>(index+1)*paceUs/chunks;
+    bool accepted=false;
+    for(uint8_t attempt=0;attempt<4;++attempt) {
+      if(attempt)vTaskDelay(pdMS_TO_TICKS(15u*attempt));
+      if(!streamingEnabled.load() || !deviceConnected.load() ||
+          generation!=streamGeneration.load() || connection!=connectionGeneration.load())return false;
+      const uint32_t rejectedBefore=notifyRejected.load();
+      // In the pinned Arduino BLE library, onStatus runs before notify returns.
+      // SUCCESS_NOTIFY means queued locally, not persisted by the phone.
+      audioCharacteristic->notify();
+      if(notifyRejected.load()==rejectedBefore) { accepted=true;break; }
+    }
+    if(!accepted)return false;
+    // Pace from the completed attempt. An overdue notification must never cause
+    // the remaining fragments to burst into the controller's congested queue.
+    const uint32_t slot=static_cast<uint32_t>(index+1)*paceUs/chunks-static_cast<uint32_t>(index)*paceUs/chunks;
+    const uint32_t target=micros()+slot;
     if (index+1 == chunks) {
       // Keep the frame rate bounded during queue catch-up, yielding all remaining time.
       while (static_cast<int32_t>(target-micros()) > 0) vTaskDelay(1);
@@ -1684,7 +1742,7 @@ bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t* encod
       while (static_cast<int32_t>(target-micros()) > 0) delayMicroseconds(50);
     }
   }
-  return generation == streamGeneration.load();
+  return generation == streamGeneration.load() && deviceConnected.load() && connection == connectionGeneration.load();
 }
 bool sendAudioFrame(const AudioFrame& frame) {
   static uint8_t encoded[ADPCM_BYTES_PER_FRAME];
@@ -1707,9 +1765,13 @@ void transmitterTask(void* parameter) {
     // Claim activity before checking the session so STOP cannot miss a pending send.
     transmitterActive.store(true);
     if (streamingEnabled.load() && frame.generation == streamGeneration.load()) {
+      const uint32_t rejectedBefore=notifyRejected.load();
       if (!sendAudioFrame(frame) &&
-          streamingEnabled.load() && frame.generation == streamGeneration.load()) {
-        requestStreamError(ErrorCode::TRANSPORT_CHANGED, frame.generation);
+          deviceConnected.load() && streamingEnabled.load() && frame.generation == streamGeneration.load()) {
+        // Legacy sessions lack a recovery ring: account for the lost frame but
+        // keep recording through transient queue pressure.
+        if(notifyRejected.load()!=rejectedBefore)++captureDrops;
+        else requestStreamError(ErrorCode::TRANSPORT_CHANGED, frame.generation);
       }
     }
     transmitterActive.store(false);
@@ -1761,8 +1823,8 @@ void initializeBLE() {
   BLEAdvertising* advertising=BLEDevice::getAdvertising();
   advertising->addServiceUUID(SERVICE_UUID);
   advertising->setScanResponse(true);
-  advertising->setMinPreferred(0x06);
-  advertising->setMaxPreferred(0x12);
+  advertising->setMinPreferred(BLE_MIN_INTERVAL);
+  advertising->setMaxPreferred(BLE_MAX_INTERVAL);
   advertising->start();
 }
 void fatalSetup(const char* message) {
