@@ -155,6 +155,10 @@ std::atomic<uint32_t> capturedFrames{0}, captureDrops{0}, notifyRejected{0}, con
 // Retained across recording starts/reconnects, cleared only by a device reboot.
 std::atomic<uint32_t> linkDisconnects{0}, lastDisconnectAt{0}, lastNotifyError{0};
 std::atomic<uint16_t> lastDisconnectReason{0xFFFF}, lastNotifyStatus{0};
+// Capture/transmit faults must survive command queue pressure and reconnects.
+portMUX_TYPE streamErrorMux = portMUX_INITIALIZER_UNLOCKED;
+ErrorCode pendingStreamError = ErrorCode::NONE;
+uint32_t pendingStreamErrorGeneration = 0;
 DeviceState deviceState = DeviceState::DISCONNECTED;
 ErrorCode errorCode = ErrorCode::NONE;
 std::atomic<uint16_t> peerMtu{23}, attValueCapacity{20}, audioPayloadBytes{0};
@@ -1324,7 +1328,23 @@ void queueEvent(EventType type, uint8_t command, uint8_t version, uint32_t strea
   if (xQueueSend(controlQueue, &message, 0) != pdTRUE) ++controlDrops;
 }
 void requestStreamError(ErrorCode error, uint32_t generation) {
-  queueEvent(EventType::STREAM_ERROR, static_cast<uint8_t>(error), PROTOCOL_VERSION, generation);
+  portENTER_CRITICAL(&streamErrorMux);
+  if (error != ErrorCode::NONE && streamingEnabled.load() && generation == streamGeneration.load() &&
+      (pendingStreamError == ErrorCode::NONE || pendingStreamErrorGeneration != generation)) {
+    pendingStreamError = error;
+    pendingStreamErrorGeneration = generation;
+  }
+  portEXIT_CRITICAL(&streamErrorMux);
+}
+void processStreamError() {
+  portENTER_CRITICAL(&streamErrorMux);
+  const ErrorCode error = pendingStreamError;
+  const uint32_t generation = pendingStreamErrorGeneration;
+  pendingStreamError = ErrorCode::NONE;
+  portEXIT_CRITICAL(&streamErrorMux);
+  // A fault from a completed take cannot terminate its replacement.
+  if (error != ErrorCode::NONE && streamingEnabled.load() && generation == streamGeneration.load())
+    stopStreaming(error);
 }
 
 class ServerCallbacks : public BLEServerCallbacks {
@@ -1472,6 +1492,7 @@ void controlTask(void* parameter) {
           break;
       }
     }
+    processStreamError();
     // A restored link cannot transmit until RESUME binds it to the app journal.
     if(recoveryFinishing.load() && deviceConnected.load() && !recoveryWaiting.load() && (!recoveryCanSend() && !transmitterActive.load() && uint32_t(millis()-recoveryFinishAt)>150u))stopStreaming();
     if(recoveryFinishing.load() && uint32_t(millis()-recoveryFinishAt)>35000u)stopStreaming(ErrorCode::TRANSPORT_CHANGED);

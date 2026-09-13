@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
+#include <mutex>
 #define USE_REAL_I2S_MIC 1
 #define CONFIG_BLUEDROID_ENABLED 1
 constexpr int pdTRUE=1;
@@ -9,9 +10,14 @@ constexpr uint8_t PROTOCOL_VERSION=2,CMD_START=1,AUDIO_HEADER_BYTES=8;
 constexpr uint8_t POWER_STATE_AWAKE=1,POWER_STATE_STANDBY=2;
 // INSERT LINK CONSTANTS
 // INSERT CONTROL TYPES
+using portMUX_TYPE=std::mutex;
+#define portMUX_INITIALIZER_UNLOCKED {}
+void portENTER_CRITICAL(portMUX_TYPE* mutex){mutex->lock();}
+void portEXIT_CRITICAL(portMUX_TYPE* mutex){mutex->unlock();}
+// INSERT FAULT STATE
 std::atomic<bool> deviceConnected{false},streamingEnabled{false},connectionEventPending{false};
 std::atomic<uint32_t> connectionGeneration{0},streamGeneration{0};
-std::atomic<uint32_t> capturedFrames{0},captureDrops{0},notifyRejected{0};
+std::atomic<uint32_t> capturedFrames{0},captureDrops{0},notifyRejected{0},controlDrops{0};
 std::atomic<uint32_t> linkDisconnects{0},lastDisconnectAt{0};
 std::atomic<uint16_t> lastDisconnectReason{0xFFFF};
 std::atomic<uint16_t> peerMtu{23},attValueCapacity{20},audioPayloadBytes{0};
@@ -77,6 +83,8 @@ bool configureTransportFromPeerMtu(){return transportValid;}
 bool startMicrophone(){++starts;return microphoneValid;}
 void xQueueReset(int){}
 void xTaskNotifyGive(int){++wakes;}
+int xQueueSend(int,const ControlMessage*,int){return 0;} // Permanently saturated.
+// INSERT FAULT FUNCTIONS
 // INSERT START
 // INSERT CALLBACKS
 ServerCallbacks callbacks;
@@ -103,7 +111,7 @@ int xQueueReceive(int,ControlMessage* message,int timeout){
 }
 // INSERT CONTROL TASK
 int main(){
-  // Neither callback depends on queue capacity; no queue sender is supplied here.
+  // Neither callback depends on command queue capacity.
   link->onConnect(&server);assert(connectionEventPending && deviceConnected);
   reconcileConnection();assert(deviceState==DeviceState::CONNECTED_IDLE && stops==1);
   assert(!connectionEventPending && !restartAdvertising && disconnectedAt==0);
@@ -149,5 +157,26 @@ int main(){
   link->onConnect(&server);link->onConnect(&server,&parameters);
   assert(connectionGeneration==generationBefore+2 && server.parameterRequests==1);
   assert(lastDisconnectReason==8 && linkDisconnects==disconnectCount+1);
+  // Fatal capture/transport failures bypass the full command queue, preserve
+  // the first fault and still reach the normal control loop across reconnects.
+  startStreaming(PROTOCOL_VERSION);
+  const auto faultGeneration=streamGeneration.load();
+  queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,faultGeneration);
+  assert(controlDrops==1);
+  requestStreamError(ErrorCode::AUDIO_SOURCE_FAILED,faultGeneration);
+  requestStreamError(ErrorCode::TRANSPORT_CHANGED,faultGeneration);
+  link->onDisconnect(&server);link->onConnect(&server);reconcileConnection();
+  loops=0;const auto beforeFault=stops;
+  try{controlTask(nullptr);}catch(const Done&){}
+  assert(stops==beforeFault+1 && !streamingEnabled && lastError==ErrorCode::AUDIO_SOURCE_FAILED);
+  assert(pendingStreamError==ErrorCode::NONE);
+  startStreaming(PROTOCOL_VERSION);
+  const auto oldGeneration=streamGeneration.load();
+  requestStreamError(ErrorCode::AUDIO_SOURCE_FAILED,oldGeneration);
+  stopStreaming();startStreaming(PROTOCOL_VERSION);
+  processStreamError();assert(streamingEnabled && lastError==ErrorCode::NONE);
+  requestStreamError(ErrorCode::TRANSPORT_CHANGED,streamGeneration);
+  requestStreamError(ErrorCode::AUDIO_SOURCE_FAILED,oldGeneration);
+  processStreamError();assert(!streamingEnabled && lastError==ErrorCode::TRANSPORT_CHANGED);
   std::cout<<"PASS link recovery, stale commands, standby, advertising and START admission\n";
 }
