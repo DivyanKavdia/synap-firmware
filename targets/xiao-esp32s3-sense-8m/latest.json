@@ -1,0 +1,22 @@
+{
+  "schema": 3,
+  "version": "synap-os1-build1212",
+  "build": 1212,
+  "target": "xiao-esp32s3-sense-8m",
+  "protocol": 3,
+  "chip": 9,
+  "flashBytes": 8388608,
+  "psramBytes": 8388608,
+  "partition": "default_8MB",
+  "size": 811984,
+  "sha256": "8820c467b143f3aca6e2a63ffa4f7b5e100003aad4d013d9c5c1060cc16e4cdd",
+  "commit": "e72f9d183efe40650f0d3f379ddc4ef8ae885d4f",
+  "identity": "SYNAP-FW:xiao-esp32s3-sense-8m:synap-os1-build1212:1212",
+  "url": "https://raw.githubusercontent.com/DivyanKavdia/synap-firmware/ota-releases/targets/xiao-esp32s3-sense-8m/builds/1212-8820c467b143f3aca6e2a63ffa4f7b5e100003aad4d013d9c5c1060cc16e4cdd.bin",
+  "channel": "production",
+  "provenance": {
+    "provider": "github-actions",
+    "repository": "DivyanKavdia/synap-firmware",
+    "workflow": ".github/workflows/firmware.yml"
+  }
+}

@@ -1,11 +1,12 @@
 {
   "schema": 1,
-  "version": "synap-os1-build1205",
-  "build": 1205,
+  "version": "synap-os1-build1212",
+  "build": 1212,
   "channel": "production",
   "primary": "esp32s3-fh4r2-qspi-4m",
   "targets": {
     "esp32s3-fh4r2-qspi-4m": "latest.json",
-    "esp32c3-supermini-4m": "targets/esp32c3-supermini-4m/latest.json"
+    "esp32c3-supermini-4m": "targets/esp32c3-supermini-4m/latest.json",
+    "xiao-esp32s3-sense-8m": "targets/xiao-esp32s3-sense-8m/latest.json"
   }
 }
