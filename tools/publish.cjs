@@ -6,8 +6,8 @@ const {createManifest,repository,workflow,PRIMARY_TARGET,TARGETS}=require('./rel
 const repo=repository,branch=process.env.SYNAP_RELEASE_BRANCH||'ota-test';
 if(!['ota-test','ota-releases'].includes(branch))throw Error('Invalid release branch');
 
-function api(endpoint,method='GET',body) {
-  return JSON.parse(execFileSync('gh',['api',`repos/${repo}/${endpoint}`,'--method',method,...(body?['--input','-']:[])],
+function api(endpoint,method='GET',body,query) {
+  return JSON.parse(execFileSync('gh',['api',`repos/${repo}/${endpoint}`,'--method',method,...(body?['--input','-']:[]),...(query?['--jq',query]:[])],
     {input:body?JSON.stringify(body):undefined,encoding:'utf8'}));
 }
 function setPublished(value){
@@ -46,8 +46,10 @@ if(existing){
 }
 
 if(production){
-  const tag=version,releases=api('releases?per_page=100');
-  if(!releases.some(r=>r.tag_name===tag)){
+  // Project tags inside gh: asset metadata for 100 releases exceeds Node's
+  // default subprocess output limit as the release history grows.
+  const tag=version,tags=api('releases?per_page=100','GET',undefined,'[.[].tag_name]');
+  if(!tags.includes(tag)){
     const assetDir=path.join('bundle','release-assets');fs.mkdirSync(assetDir,{recursive:true});
     const assets=[];
     for(const {config,dir} of artifacts){
