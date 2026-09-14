@@ -95,3 +95,49 @@ test('pinned NimBLE handles short reads and consecutive writes with live values'
   const fixture=fs.readFileSync('tests/chakshu-gatt.cpp','utf8').replace('// PINNED GATT HANDLER',handler);
   assert.match(nativeTest(fixture,['-Wno-unused-parameter']),/PASS live GATT values/);
 });
+
+test('Chakshu text characteristics exclude C array terminators and padding with pinned NimBLE overloads',{skip:!process.env.SYNAP_NIMBLE_SRC},()=>{
+  const dir=process.env.SYNAP_NIMBLE_SRC;
+  assert.match(fs.readFileSync(path.join(dir,'../library.properties'),'utf8'),/^version=2\.3\.6$/m);
+  const valueHeader=fs.readFileSync(path.join(dir,'NimBLEAttValue.h'),'utf8').replace('#include "nimconfig.h"','#define CONFIG_BT_ENABLED 1');
+  const localHeader=fs.readFileSync(path.join(dir,'NimBLELocalValueAttribute.h'),'utf8');
+  const methods=localHeader.slice(localHeader.indexOf('    void setValue(const uint8_t*'),localHeader.indexOf('  protected:'));
+  assert(methods.includes('m_value.setValue<T>(val)'));
+  const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
+  // Extract production call sites, allowing the path's explicit byte-pointer cast.
+  const deviceCall=source.match(/deviceIdentity->setValue\([^;]+;/)[0];
+  const firmwareCall=source.match(/identity->setValue\(SYNAP_FIRMWARE_ID[^;]+;|identity->setValue\(reinterpret_cast[^;]+;/)[0];
+  const pathCallback=source.slice(source.indexOf('class PathCallbacks'),source.indexOf('void initialize()',source.indexOf('class PathCallbacks')));
+  const pathCall=pathCallback.match(/characteristic->setValue\([^;]+;/)[0];
+  const fixture=`#include <cassert>
+#include <cstdio>
+${valueHeader}
+std::vector<uint8_t> wire;
+NimBLEAttValue::NimBLEAttValue(uint16_t,uint16_t) {}
+NimBLEAttValue::~NimBLEAttValue() = default;
+bool NimBLEAttValue::setValue(const uint8_t* data,uint16_t length) {wire.assign(data,data+length);return true;}
+struct Characteristic { NimBLEAttValue m_value;
+${methods}
+};
+int main(){
+ Characteristic c;auto* deviceIdentity=&c;auto* identity=&c;auto* characteristic=&c;
+ char synapDeviceId[19]="SYNAP-68EE8F4719A0";
+ const char SYNAP_FIRMWARE_ID[]="SYNAP-FW:xiao-esp32s3-sense-8m:synap-os1-build1227:1227";
+ struct {char path[64]{};} s;
+ // Reproduce 1227 exactly: mutable arrays select the generic sizeof(T) overload.
+ c.setValue(synapDeviceId);assert(wire.size()==19&&wire.back()==0);
+ c.setValue(s.path);assert(wire.size()==64&&wire.front()==0);
+ c.setValue(SYNAP_FIRMWARE_ID);assert(wire.size()==strlen(SYNAP_FIRMWARE_ID));
+ ${deviceCall}
+ assert(wire.size()==18&&std::string(wire.begin(),wire.end())=="SYNAP-68EE8F4719A0");
+ ${firmwareCall}
+ assert(wire.size()==strlen(SYNAP_FIRMWARE_ID)&&wire.back()=='7');
+ ${pathCall}
+ assert(wire.empty());
+ strcpy(s.path,"/synap/abcdef01-00000001.jpg");
+ ${pathCall}
+ assert(std::string(wire.begin(),wire.end())==s.path);
+ puts("PASS exact GATT text bytes");
+}`;
+  assert.match(nativeTest(fixture,['-Wno-unused-parameter']),/PASS exact GATT text bytes/);
+});

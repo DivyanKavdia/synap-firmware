@@ -7,6 +7,14 @@ function materializeBle(source) {
   const replace=(before,after,label)=>out=replaceOnce(out,before,after,label);
   replace('#include <BLEDevice.h>','#include <NimBLEDevice.h>','Chakshu Bluetooth library');
   replace('#include <BLEServer.h>','','NimBLEDevice includes server');
+  // NimBLE's generic overload serializes mutable char arrays with sizeof(T),
+  // including the NUL and unused capacity. GATT text is length-delimited.
+  replace('deviceIdentity->setValue(synapDeviceId);',
+    'deviceIdentity->setValue(reinterpret_cast<const uint8_t*>(synapDeviceId),strlen(synapDeviceId));','Device ID text bytes');
+  replace('identity->setValue(SYNAP_FIRMWARE_ID);',
+    'identity->setValue(reinterpret_cast<const uint8_t*>(SYNAP_FIRMWARE_ID),sizeof(SYNAP_FIRMWARE_ID)-1);','Firmware identity text bytes');
+  replace('characteristic->setValue(s.path);',
+    'characteristic->setValue(reinterpret_cast<const uint8_t*>(s.path),strlen(s.path));','SD path text bytes');
   replace('#include <atomic>','#include <atomic>\nstd::atomic<uint16_t> chakshuConnectionHandle{BLE_HS_CONN_HANDLE_NONE};\nstd::atomic<bool> chakshuAudioSubscribed{false};','Chakshu connection ownership');
   out=replaceFunctionBlock(out,'class ServerCallbacks :','class ControlCallbacks :',readTemplate('xiao-sense','ble-server.cpp')+'\n','Chakshu server callbacks');
   out=replaceFunctionBlock(out,'class AudioCallbacks :','class DiagnosticsCallbacks :',readTemplate('xiao-sense','ble-audio.cpp')+'\n','Chakshu audio notifications');
