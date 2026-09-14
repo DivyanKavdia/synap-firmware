@@ -83,6 +83,10 @@ CI compiles all three board targets. Simulated browser tests exercise account is
 
 ## Local voice commands: Hi Chakshu
 
+Chakshu uses **NimBLE-Arduino 2.3.6** with Arduino ESP32 3.3.5. Install that library when compiling the self-contained Chakshu sketch locally; OTA users do not install any library. C3 and regular S3 keep the core's existing BLE library. The Chakshu adapter keeps service UUIDs, command bytes, PCM audio, firmware identity and OTA partitions unchanged.
+
+This avoids Arduino BLE 3.3.5's NimBLE short-read callback guard, which can return empty/stale voice, recovery and media values. Native callbacks copy each write before acknowledging it. Audio checks the current subscription and the actual host enqueue result, and does not treat delayed notification callbacks as acceptance of a different fragment. Required model state and recording tasks are initialized before advertising.
+
 The Chakshu-only source adds Espressif MultiNet5 Q8 English speech recognition. The activation phrase is **“Hi Chakshu”**. After a pause, say **“take photo”** / **“click photo”**, **“start video”**, **“stop video”**, **“audio on”**, or **“audio off”**. Each command requires a fresh activation within eight seconds, confidence at least 0.90 and a 1.2-second action cooldown. This uses a continuous phoneme recognizer plus an activation gate; no separately trained custom WakeNet model is included. Tune pronunciations/thresholds only after recording false-activation and missed-command measurements on the real pendant.
 
 ### Model installation
