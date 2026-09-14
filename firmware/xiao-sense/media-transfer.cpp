@@ -1,14 +1,16 @@
 // Media extension v1. Small responses share the existing BLE link with audio.
 // Only this worker touches its file/frame buffers. BLE callbacks copy requests/results.
 namespace ChakshuTransfer {
-struct Request { uint32_t connection,id,offset;uint8_t operation;char path[64]; };
+struct Request { uint32_t connection,id,offset;uint8_t operation;char path[64];bool local=false;uint32_t localEpoch=0; };
 QueueHandle_t requests=nullptr;
 portMUX_TYPE mux=portMUX_INITIALIZER_UNLOCKED;
 uint8_t response[496]{};size_t responseSize=16;
 uint8_t* buffer=nullptr;size_t bufferSize=0;
 File selectedFile;
 uint32_t selectedConnection=0;
-std::atomic<bool> offline{false},stopRequested{false};
+std::atomic<bool> offline{false},stopRequested{false},photoRequested{false};
+std::atomic<uint8_t> offlineMode{0};
+std::atomic<uint32_t> localEpoch{0};
 ChakshuMedia::Snapshot offlineStatus;
 
 void reply(uint32_t id,uint8_t error,uint32_t total=0,uint32_t offset=0,const uint8_t* bytes=nullptr,size_t size=0) {
@@ -46,7 +48,7 @@ uint8_t catalogue() {
   String json="[";unsigned count=0;
   for(File entry=directory.openNextFile();entry;entry=directory.openNextFile()) {
     String path=entry.path();
-    if(!entry.isDirectory()&&validPath(path.c_str())&&(path.endsWith(".jpg")||path.endsWith(".mjpeg"))) {
+    if(!entry.isDirectory()&&validPath(path.c_str())&&(path.endsWith(".jpg")||path.endsWith(".mjpeg")||(path.endsWith(".wav")&&!SD.exists(path.substring(0,path.length()-4)+".mjpeg")))) {
       if(count++)json+=",";
       json+="{\"path\":\""+path+"\",\"bytes\":"+String(entry.size())+"}";
     }
@@ -57,15 +59,20 @@ uint8_t catalogue() {
   bufferSize=json.length();memcpy(buffer,json.c_str(),bufferSize);return 0;
 }
 
-void recordOffline() {
+void recordOffline(bool withVideo=true) {
   using namespace ChakshuMedia;
   Snapshot s;{portENTER_CRITICAL(&mux);s=offlineStatus;portEXIT_CRITICAL(&mux);}
   uint8_t error=0;File video,audio,index;uint32_t audioBytes=0,videoBytes=0,frames=0;
   char audioPath[64]{},indexPath[64]{};uint8_t header[44];
   if(!ChakshuStorage::ready)error=NO_SD;
-  else if(!ChakshuCamera::ready)error=NO_CAMERA;
+  else if(withVideo&&!ChakshuCamera::ready)error=NO_CAMERA;
   else if(!startMicrophone())error=NO_MIC;
   if(!error) {
+    if(!withVideo) {
+      audio=ChakshuStorage::create(s.path,sizeof(s.path),"wav");
+      if(!audio)error=IO_ERROR;
+      else {ChakshuStorage::wavHeader(header,0);if(audio.write(header,44)!=44)error=IO_ERROR;}
+    } else {
     video=ChakshuStorage::create(s.path,sizeof(s.path),"mjpeg");
     if(!video)error=IO_ERROR;
     else {
@@ -80,16 +87,18 @@ void recordOffline() {
       }
     }
   }
-  const uint32_t started=millis();uint32_t nextFrame=0;uint8_t pcm[1600];
+  }
+  const uint32_t started=millis();uint32_t nextFrame=0,nextSpaceCheck=0;alignas(int16_t) uint8_t pcm[1600];
   // Finite 60-second takes remain bounded after BLE/phone disconnection.
   {
     MicrophoneGuard guard;
     while(!error&&!stopRequested.load()&&audioBytes<1920000u&&millis()-started<65000u) {
       const size_t count=microphoneI2S.readBytes(reinterpret_cast<char*>(pcm),sizeof(pcm));
       if(!count || (count&1)){error=CAPTURE_ERROR;break;}
+      ChakshuVoice::feed(reinterpret_cast<const int16_t*>(pcm),count/2);
       if(audio.write(pcm,count)!=count){error=IO_ERROR;break;}
       audioBytes+=count;
-      if(audioBytes/32>=nextFrame) {
+      if(withVideo&&audioBytes/32>=nextFrame) {
         camera_fb_t* frame=esp_camera_fb_get();if(frame)esp_camera_fb_return(frame);
         frame=esp_camera_fb_get();
         if(!frame||frame->format!=PIXFORMAT_JPEG){if(frame)esp_camera_fb_return(frame);error=CAPTURE_ERROR;break;}
@@ -97,36 +106,47 @@ void recordOffline() {
         else videoBytes+=frame->len;
         esp_camera_fb_return(frame);
         if(frames++)index.print(',');index.print(audioBytes/32);nextFrame=audioBytes/32+500;
-        ChakshuStorage::refresh();if(ChakshuStorage::freeBytes<ChakshuStorage::RESERVE_BYTES)error=NO_SPACE;
       }
-      s.bytes=videoBytes;s.progress=uint8_t(audioBytes/19200);saveOffline(s);
+      if(photoRequested.exchange(false)) {
+        Snapshot image;image.operation=2;
+        image.error=ChakshuCamera::ready?captureCamera(image,false):NO_CAMERA;
+        image.state=image.error?3:2;refresh(image);save(image);
+      }
+      if(audioBytes>=nextSpaceCheck){ChakshuStorage::refresh();if(ChakshuStorage::freeBytes<ChakshuStorage::RESERVE_BYTES)error=NO_SPACE;nextSpaceCheck=audioBytes+16000;}
+      s.bytes=withVideo?videoBytes:audioBytes;s.progress=uint8_t(audioBytes/19200);saveOffline(s);
       vTaskDelay(1);
     }
   }
   if(audio){ChakshuStorage::wavHeader(header,audioBytes);if(!audio.seek(0)||audio.write(header,44)!=44)error=IO_ERROR;audio.flush();audio.close();}
   if(index){index.printf("],\"durationMs\":%lu,\"audio\":\"%s\"}",static_cast<unsigned long>(audioBytes/32),audioPath);index.flush();index.close();}
   if(video){video.flush();if(video.size()!=videoBytes)error=IO_ERROR;video.close();}
-  if(!error && !frames)error=CAPTURE_ERROR;
-  s.bytes=videoBytes;s.error=error;s.state=error?3:2;s.progress=error?s.progress:100;
-  refresh(s);saveOffline(s);offline.store(false);busy.store(false);
+  if(!error && ((withVideo&&!frames)||!audioBytes))error=CAPTURE_ERROR;
+  s.bytes=withVideo?videoBytes:audioBytes;s.error=error;s.state=error?3:2;s.progress=error?s.progress:100;
+  refresh(s);saveOffline(s);photoRequested.store(false);offline.store(false);offlineMode.store(0);busy.store(false);
 }
 void worker(void*) {
   Request request{};
   for(;;) {
     if(xQueueReceive(requests,&request,portMAX_DELAY)!=pdTRUE)continue;
-    if(request.connection!=connectionGeneration.load()||!deviceConnected.load())continue;
+    if(request.local&&request.localEpoch!=localEpoch.load())continue;
+    if(!request.local&&(request.connection!=connectionGeneration.load()||!deviceConnected.load()))continue;
     if(selectedConnection!=request.connection){clearSelection();selectedConnection=request.connection;}
     bool expected=false;
     if(otaBusy()||!ChakshuMedia::busy.compare_exchange_strong(expected,true)) {reply(request.id,1);continue;}
-    if(request.operation==5) {
+    if(request.operation==5||request.operation==10) {
       if(streamingEnabled.load()||remoteStandby){reply(request.id,1);ChakshuMedia::busy.store(false);continue;}
-      clearSelection();stopRequested.store(false);offline.store(true);
-      ChakshuMedia::Snapshot s;s.state=1;s.operation=4;saveOffline(s);
-      reply(request.id,0);recordOffline();continue;
+      clearSelection();stopRequested.store(false);photoRequested.store(false);offlineMode.store(request.operation);offline.store(true);
+      ChakshuMedia::Snapshot s;s.state=1;s.operation=request.operation==5?4:3;saveOffline(s);
+      reply(request.id,0);recordOffline(request.operation==5);continue;
     }
     uint8_t error=0;uint32_t total=0;size_t size=0;uint8_t bytes[480];
     switch(request.operation) {
       case 1:error=captureFrame();total=bufferSize;break;
+      case 11: {
+        ChakshuMedia::Snapshot s;
+        error=!ChakshuStorage::ready?ChakshuMedia::NO_SD:!ChakshuCamera::ready?ChakshuMedia::NO_CAMERA:ChakshuMedia::captureCamera(s,false);
+        s.operation=2;s.state=error?3:2;s.error=error;ChakshuMedia::refresh(s);ChakshuMedia::save(s);break;
+      }
       case 2:case 4:
         total=selectedFile?selectedFile.size():bufferSize;
         if(request.offset>=total){error=7;break;}

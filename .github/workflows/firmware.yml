@@ -45,6 +45,8 @@ jobs:
           node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3/synap_esp32c3.ino
           node tools/materialize-target.cjs xiao-esp32s3-sense-8m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_chakshu/synap_chakshu.ino
           test "$(git status --porcelain -- synap_esp32s3)" = ""
+      - name: Prepare pinned Chakshu SD voice model
+        run: python3 tools/prepare-voice-model.py bundle/voice-model
       - name: Compile S3, C3 and Chakshu application targets with one build number
         env:
           RUN_NUMBER: ${{ github.run_number }}

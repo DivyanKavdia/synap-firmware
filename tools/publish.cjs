@@ -51,7 +51,7 @@ if(production){
   const tag=version,tags=api('releases?per_page=100','GET',undefined,'[.[].tag_name]');
   if(!tags.includes(tag)){
     const assetDir=path.join('bundle','release-assets');fs.mkdirSync(assetDir,{recursive:true});
-    const assets=[];
+    const assets=[path.join('bundle','voice-model','chakshu-voice-model.zip')];
     for(const {config,dir} of artifacts){
       const stem=config.assetStem||config.family;
       const binaryOut=path.join(assetDir,`firmware-${stem}.bin`),manifestOut=path.join(assetDir,`latest-${stem}.json`),sourceOut=path.join(assetDir,config.sourceName),hashOut=path.join(assetDir,`source-${stem}.sha256`);
