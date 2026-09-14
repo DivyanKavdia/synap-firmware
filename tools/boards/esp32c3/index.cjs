@@ -4,7 +4,7 @@ const {replaceOnce}=require('../../target-source.cjs');
 const led=require('./led.cjs'),battery=require('./battery.cjs');
 
 function materializeC3(source,target){
-  let out=source;
+  let out=replaceOnce(source,'#define SYNAP_MODULE_ID 1','#define SYNAP_MODULE_ID 2','C3 module identity');
   out=out.replace(/ESP32-S3FH4R2/g,'ESP32-C3 SuperMini');
   out=out.split(PRIMARY_TARGET).join(target.id);
   out=out.split('SYNAP-ESP32S3-OTA-ID-V3').join(target.productMarker);

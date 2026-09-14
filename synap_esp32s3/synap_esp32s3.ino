@@ -1,4 +1,9 @@
 // Synap pendant firmware for ESP32-S3FH4R2. Wiring and build settings: README.md.
+// Built from firmware/shared; regenerate with node tools/assemble-source.cjs.
+#ifndef SYNAP_CHAKSHU
+#define SYNAP_CHAKSHU 0
+#endif
+#define SYNAP_MODULE_ID 1
 #include <Arduino.h>
 #include <BLEDevice.h>
 #include <esp_mac.h>
@@ -242,10 +247,15 @@ bool sendCapturedFrame(const AudioFrame& frame, uint32_t paceUs);
 void initializeBLE();
 void fatalSetup(const char* message);
 
+bool startMicrophone();
+void stopMicrophone();
 bool otaBusy();
 void otaPublish(bool notify);
 void otaInitialize(BLEService* service);
 void otaTick();
+#if SYNAP_CHAKSHU
+bool mediaBusy();
+#endif
 
 static void put32le(uint8_t* p, uint32_t value) {
   p[0]=value&255;p[1]=(value>>8)&255;p[2]=(value>>16)&255;p[3]=(value>>24)&255;
@@ -526,7 +536,11 @@ void otaTick() {
     // Treat a confirmed critically-low battery like another busy condition: never
     // start or continue a new flash transaction when brownout margin is inadequate.
     otaSession.packet(message.data,message.length,millis(),generation,
-      streamingEnabled.load() || batteryCritical());
+      streamingEnabled.load() || batteryCritical()
+#if SYNAP_CHAKSHU
+      || mediaBusy()
+#endif
+    );
     otaSession.tick(millis(),connectionGeneration.load(),deviceConnected.load());
     // Every command, including a retry, needs an ACK; it also carries capability/state changes.
     otaPublish(true);
@@ -543,6 +557,38 @@ void otaTick() {
     if (!rebootAt) rebootAt=millis();
     if (uint32_t(millis()-rebootAt)>1500) ESP.restart();
   }
+}
+
+// SYNAP_BOARD_FEATURES
+// Versioned 20-byte descriptor fits the default ATT payload; names are display-only.
+// Bits: audio, camera, SD, flash settings, touch, battery, standby, MJPEG, SD WAV, photo.
+void encodeModuleCapabilities(uint8_t* p) {
+  memset(p,0,20);p[0]=0xC7;p[1]=1;p[2]=SYNAP_MODULE_ID;p[3]=1;
+  uint16_t supported=1|8|16|32|64,ready=8|16|64;
+  uint16_t sensor=0;
+  if (microphoneValidated.load()) ready|=1;
+  if (batteryAvailable) ready|=32;
+#if SYNAP_CHAKSHU
+  ChakshuMedia::Snapshot status;ChakshuMedia::copy(status);
+  supported=1|2|4|8|128|256|512;ready=8|status.ready;
+  if (status.ready&2) ready|=128|512;
+  if ((status.ready&5)==5) ready|=256;
+  sensor=status.sensor;
+#endif
+  p[4]=supported&255;p[5]=supported>>8;p[6]=ready&255;p[7]=ready>>8;
+  p[8]=sensor&255;p[9]=sensor>>8;p[10]=SAMPLE_RATE&255;p[11]=SAMPLE_RATE>>8;
+  p[12]=uint8_t(ESP.getFlashChipSize()/(1024u*1024u));
+  p[13]=uint8_t(ESP.getPsramSize()/(1024u*1024u));
+}
+class ModuleCapabilitiesCallbacks : public BLECharacteristicCallbacks {
+  void onRead(BLECharacteristic* characteristic) override {
+    uint8_t value[20];encodeModuleCapabilities(value);characteristic->setValue(value,sizeof(value));
+  }
+};
+void initializeModuleCapabilities(BLEService* service) {
+  auto* capability=service->createCharacteristic("4fa12350-0000-1000-8000-00805f9b34fb",BLECharacteristic::PROPERTY_READ);
+  capability->setCallbacks(new ModuleCapabilitiesCallbacks());
+  uint8_t value[20];encodeModuleCapabilities(value);capability->setValue(value,sizeof(value));
 }
 
 void updateStatusLed(bool force) {
@@ -579,6 +625,9 @@ void setDeviceState(DeviceState state, ErrorCode error) {
 }
 
 void applyCpuPowerProfile(bool active) {
+#if SYNAP_CHAKSHU
+  active=true; // Stable clocks during Sense hardware bring-up.
+#endif
   static uint32_t appliedMHz = 0;
   const uint32_t targetMHz = active ? ACTIVE_CPU_MHZ : IDLE_CPU_MHZ;
   if (appliedMHz == targetMHz) return;
@@ -1294,7 +1343,11 @@ void stopStreaming(ErrorCode reason) {
   ++streamGeneration; // Invalidates queued AND already-in-flight old task work.
   if (audioFrameQueue) xQueueReset(audioFrameQueue);
 #if USE_REAL_I2S_MIC
+#if SYNAP_CHAKSHU
+  if (!mediaBusy()) stopMicrophone();
+#else
   stopMicrophone();
+#endif
 #endif
   // Acknowledge STOP only after the final in-flight notification has returned.
   while (transmitterActive.load()) vTaskDelay(1);
@@ -1327,6 +1380,9 @@ bool configureTransportFromPeerMtu() {
   return audioPayloadBytes + AUDIO_HEADER_BYTES <= attValueCapacity;
 }
 void startStreaming(uint8_t version) {
+#if SYNAP_CHAKSHU
+  if (mediaBusy()) { updateStatusCharacteristic(true);return; }
+#endif
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
   if (!deviceConnected.load()) return;
   if (version != PROTOCOL_VERSION) { stopStreaming(ErrorCode::PROTOCOL_MISMATCH); return; }
@@ -1438,6 +1494,9 @@ class DiagnosticsCallbacks : public BLECharacteristicCallbacks {
 };
 
 void processCommand(uint8_t command, uint8_t version) {
+#if SYNAP_CHAKSHU
+  if (command==CMD_STANDBY) { publishPowerEvent(POWER_STATE_AWAKE);updateStatusCharacteristic(true);return; }
+#endif
   if (sleepPending) return;
   if (!deviceConnected.load()) { if(command==CMD_STOP && streamingEnabled.load())stopStreaming(); return; }
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
@@ -1545,6 +1604,9 @@ void controlTask(void* parameter) {
 #endif
     pollTouchControl();
     otaTick();
+#if SYNAP_CHAKSHU
+    ChakshuMedia::tick();
+#endif
     powerTick();
     applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu());
     updateStatusLed();
@@ -1762,7 +1824,7 @@ void initializeBLE() {
 #endif
   // Audio/control + device ID + OTA/status/build identity + diagnostics exceed
   // Bluedroid's default service reservation. NimBLE accepts this overload as well.
-  BLEService* service=bleServer->createService(BLEUUID(SERVICE_UUID),48);
+  BLEService* service=bleServer->createService(BLEUUID(SERVICE_UUID),64);
   audioCharacteristic=service->createCharacteristic(AUDIO_CHAR_UUID,
     BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
   audioCharacteristic->setCallbacks(new AudioCallbacks());
@@ -1793,6 +1855,10 @@ void initializeBLE() {
   updateDiagnosticsCharacteristic();
   updateStatusCharacteristic(false);
   otaInitialize(service);
+  initializeModuleCapabilities(service);
+#if SYNAP_CHAKSHU
+  ChakshuMedia::ble(service);
+#endif
   service->start();
   BLEAdvertising* advertising=BLEDevice::getAdvertising();
   advertising->addServiceUUID(SERVICE_UUID);
@@ -1840,7 +1906,9 @@ void setup() {
   sampleBattery(true);
 #if USE_REAL_I2S_MIC
   microphoneValidated=startMicrophone();
+#if !SYNAP_CHAKSHU
   if (microphoneValidated) stopMicrophone();
+#endif
 #endif
   applyCpuPowerProfile(false);
   audioFrameQueue=xQueueCreate(20, sizeof(AudioFrame));
@@ -1851,6 +1919,9 @@ void setup() {
   snprintf(synapDeviceId, sizeof(synapDeviceId), "SYNAP-%02X%02X%02X%02X%02X%02X",
     factoryMac[0], factoryMac[1], factoryMac[2], factoryMac[3], factoryMac[4], factoryMac[5]);
   Serial.printf("Synap %u %s reset=%u\n", SYNAP_FIRMWARE_BUILD, synapDeviceId, unsigned(bootResetReason));
+#if SYNAP_CHAKSHU
+  ChakshuMedia::initialize();
+#endif
   initializeBLE();
   initializeRecovery();
   if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||

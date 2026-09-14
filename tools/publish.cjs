@@ -53,7 +53,7 @@ if(production){
     const assetDir=path.join('bundle','release-assets');fs.mkdirSync(assetDir,{recursive:true});
     const assets=[];
     for(const {config,dir} of artifacts){
-      const stem=config.family;
+      const stem=config.assetStem||config.family;
       const binaryOut=path.join(assetDir,`firmware-${stem}.bin`),manifestOut=path.join(assetDir,`latest-${stem}.json`),sourceOut=path.join(assetDir,config.sourceName),hashOut=path.join(assetDir,`source-${stem}.sha256`);
       fs.copyFileSync(path.join(dir,'firmware.bin'),binaryOut);fs.copyFileSync(path.join(dir,'latest.json'),manifestOut);
       fs.copyFileSync(path.join(dir,config.sourceName),sourceOut);fs.copyFileSync(path.join(dir,'source.sha256'),hashOut);
@@ -61,7 +61,7 @@ if(production){
     }
     execFileSync('gh',['release','create',tag,...assets,'--repo',repo,'--target',commit,'--latest',
       '--title',version,
-      '--notes','Production-qualified multi-target pendant firmware. Includes ESP32-S3 SuperMini and ESP32-C3 SuperMini artifacts with exact prepared source, GitHub OIDC provenance, target-bound manifests, resumable BLE OTA and default dual OTA slots.'],{stdio:'inherit'});
+      '--notes','Production-qualified multi-target pendant firmware. Includes ESP32-S3 SuperMini, ESP32-C3 SuperMini and Chakshu XIAO Sense artifacts with exact prepared source, GitHub OIDC provenance, target-bound manifests, resumable BLE OTA and default dual OTA slots.'],{stdio:'inherit'});
   }
 }
 
