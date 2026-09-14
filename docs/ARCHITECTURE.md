@@ -32,7 +32,7 @@ sleep/wake. Only electrical wake arming and wake-cause validation vary: EXT0 on
 S3 GPIO13, GPIO wake on C3 GPIO3. The C3 touch/wake templates and integration
 adapter were removed so gestures cannot drift between targets.
 
-Shared changes must be exercised on both generated targets. Target-specific changes must preserve the other target's behavior. Keep release identities, protocol versions and materialization anchors explicit. Comments should explain ownership, timing constraints or hardware reasons.
+Shared changes must be exercised on all three generated targets. Target-specific changes must preserve the other targets' behavior. Keep release identities, protocol versions and materialization anchors explicit. Comments should explain ownership, timing constraints or hardware reasons.
 
 ## Shared runtime contracts
 
@@ -91,9 +91,9 @@ For a C3 disconnect retest, update firmware and the PWA, keep the app foreground
 
 `node --test tests/*.cjs` compiles actual firmware functions with warnings as errors and undefined-behavior sanitization. Tests cover codec bytes, all MTU values, all 65,536 PCM16 values, partial I2S reads, concurrent STOP/recovery, connection races, battery policies, LED timing, shared gestures under both board configurations, recovery limits, OTA resume and release identity. Gesture regressions include delayed STOP completion, short holds, stable wake release, OTA interruption, reconnect, timer wrap and rejection of the wrong board's wake cause.
 
-Source-generation tests also exercise the CLI outside the repository working directory and reject changed/ambiguous anchors. CI compiles both pinned Arduino targets and validates release artifacts.
+Source-generation tests also exercise the CLI outside the repository working directory and reject changed/ambiguous anchors. CI compiles all three pinned Arduino targets and validates release artifacts.
 
-Before claiming a runtime improvement, validate both physical boards: long recordings and drop counters, START/STOP latency, repeated RF interruptions, touch gestures, sleep/wake, battery readings while charging/unplugged, OTA resume and battery-side current. The PWA preserves decoded PCM for playback and new cloud uploads. Enhancement is an explicit preview/export action; cloud transcription receives the stored upload without automatic trimming. Summaries and speaker identification remain outside this repository.
+Before claiming a runtime improvement, validate all affected physical boards (and the Chakshu checklist): long recordings and drop counters, START/STOP latency, repeated RF interruptions, touch gestures, sleep/wake, battery readings while charging/unplugged, OTA resume and battery-side current. The PWA preserves decoded PCM for playback and new cloud uploads. Enhancement is an explicit preview/export action; cloud transcription receives the stored upload without automatic trimming. Summaries and speaker identification remain outside this repository.
 
 ## Implementation references
 

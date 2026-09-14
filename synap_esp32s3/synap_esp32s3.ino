@@ -28,6 +28,9 @@
 #ifndef USE_REAL_I2S_MIC
 #define USE_REAL_I2S_MIC 1
 #endif
+#if SYNAP_CHAKSHU && !USE_REAL_I2S_MIC
+#error Chakshu hardware checks require the real onboard microphone
+#endif
 #if USE_REAL_I2S_MIC
 #include <ESP_I2S.h>
 #include <freertos/semphr.h>
@@ -218,7 +221,7 @@ uint32_t lastLedPattern = UINT32_MAX;
 uint32_t lastBatterySampleAt = 0;
 uint16_t batteryMillivolts = 0, batteryAdcMillivolts = 0, batteryAdcRaw = 0;
 uint8_t batteryPercent = 0, batteryValidSamples = 0, batteryCriticalSamples = 0;
-bool batteryAvailable = false;
+std::atomic<bool> batteryAvailable{false};
 
 // Explicit prototypes prevent Arduino's auto-prototyper from duplicating defaults.
 void setDeviceState(DeviceState state, ErrorCode error);
@@ -566,7 +569,9 @@ void encodeModuleCapabilities(uint8_t* p) {
   memset(p,0,20);p[0]=0xC7;p[1]=1;p[2]=SYNAP_MODULE_ID;p[3]=1;
   uint16_t supported=1|8|16|32|64,ready=8|16|64;
   uint16_t sensor=0;
+#if USE_REAL_I2S_MIC
   if (microphoneValidated.load()) ready|=1;
+#endif
   if (batteryAvailable) ready|=32;
 #if SYNAP_CHAKSHU
   ChakshuMedia::Snapshot status;ChakshuMedia::copy(status);

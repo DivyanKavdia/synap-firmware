@@ -5,7 +5,9 @@ void encodeModuleCapabilities(uint8_t* p) {
   memset(p,0,20);p[0]=0xC7;p[1]=1;p[2]=SYNAP_MODULE_ID;p[3]=1;
   uint16_t supported=1|8|16|32|64,ready=8|16|64;
   uint16_t sensor=0;
+#if USE_REAL_I2S_MIC
   if (microphoneValidated.load()) ready|=1;
+#endif
   if (batteryAvailable) ready|=32;
 #if SYNAP_CHAKSHU
   ChakshuMedia::Snapshot status;ChakshuMedia::copy(status);

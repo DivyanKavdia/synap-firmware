@@ -20,7 +20,9 @@ int xQueueReceive(std::deque<Request>* queue,Request* result,int) {
   *result=queue->front();queue->pop_front();return pdTRUE;
 }
 int xQueueSend(std::deque<Request>* queue,const Request* request,int) {
-  if(full)return 0;queue->push_back(*request);return pdTRUE;
+  if(full)return 0;
+  queue->push_back(*request);
+  return pdTRUE;
 }
 void copy(Snapshot& value){value=status;}
 void save(const Snapshot& value){status=value;}
