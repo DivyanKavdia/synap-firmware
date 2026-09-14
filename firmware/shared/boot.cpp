@@ -42,6 +42,7 @@ void initializeBLE() {
   initializeModuleCapabilities(service);
 #if SYNAP_CHAKSHU
   ChakshuMedia::ble(service);
+  ChakshuTransfer::ble(service);
 #endif
   service->start();
   BLEAdvertising* advertising=BLEDevice::getAdvertising();
@@ -103,6 +104,7 @@ void setup() {
   Serial.printf("Synap %u %s reset=%u\n", SYNAP_FIRMWARE_BUILD, synapDeviceId, unsigned(bootResetReason));
 #if SYNAP_CHAKSHU
   ChakshuMedia::initialize();
+  ChakshuTransfer::initialize();
 #endif
   initializeBLE();
   initializeRecovery();
