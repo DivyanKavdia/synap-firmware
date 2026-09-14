@@ -1,0 +1,11 @@
+[
+  "runtime.cpp",
+  "ota.cpp",
+  "module-capabilities.cpp",
+  "power.cpp",
+  "audio-session.cpp",
+  "ble-control.cpp",
+  "audio-capture.cpp",
+  "audio-transport.cpp",
+  "boot.cpp"
+]

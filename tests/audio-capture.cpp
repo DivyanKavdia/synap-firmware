@@ -23,12 +23,17 @@ struct FakeI2S {
   size_t position=0,readIndex=0;
   bool cancelOnNextRead=false;
   void load(const std::vector<int16_t>& pcm) {
+#if PDM_FIXTURE
+    data.resize(pcm.size()*2);position=0;readIndex=0;
+    std::memcpy(data.data(),pcm.data(),data.size());
+#else
     data.resize(pcm.size()*4); position=0; readIndex=0;
     for(size_t i=0;i<pcm.size();++i){
       // Include discarded microphone precision and unused slot bits.
       const int32_t raw=static_cast<int32_t>(int64_t(pcm[i])*65536 + ((i*7919)&65535));
       std::memcpy(data.data()+i*4,&raw,4);
     }
+#endif
   }
   size_t readBytes(char* dest,size_t count) {
     assert(microphoneLockDepth==1);

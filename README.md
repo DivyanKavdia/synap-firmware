@@ -1,61 +1,53 @@
-# Synap Firmware
+# Synap firmware
 
-Firmware for ESP32-S3 SuperMini and ESP32-C3 SuperMini pendants. Firmware versions use **synap-os1-build#**, with `#` replaced by the numeric build counter; the [production target index](https://raw.githubusercontent.com/DivyanKavdia/synap-firmware/ota-releases/targets.json) identifies the latest numeric build.
+Firmware for **synap C3**, **synap S3** and **Chakshu**. Versions use synap-os1-build# with a numeric build counter.
 
-## Shared and board-specific code
+[Chakshu first-flash and hardware checks](docs/CHAKSHU.md) · [Wiring](docs/HARDWARE_PINOUT.md) · [Architecture](docs/ARCHITECTURE.md) · [OTA releases](OTA_RELEASES.md)
 
-The shared runtime and S3 defaults live in `synap_esp32s3/synap_esp32s3.ino`. S3 compiles that file directly. The C3 build applies explicit feature overrides; there is no separately maintained copy of the shared runtime.
+## Common code and board differences
+
+Edit shared runtime code in **firmware/shared/**. The assembly tool reproduces the portable S3 Arduino sketch; board adapters produce C3 and Chakshu sketches without maintaining separate BLE/audio engines.
 
 | Responsibility | Source |
 | --- | --- |
-| Audio, BLE, OTA, recovery, gestures, task coordination and common power logic | `synap_esp32s3/synap_esp32s3.ino` |
-| Target identity and release metadata | `tools/targets.cjs` |
-| Target selection and source-generation CLI | `tools/materialize-target.cjs` |
-| C3 pins, image validation and single-core task creation | `tools/boards/esp32c3/index.cjs` |
-| C3 battery and LED integration | `tools/boards/esp32c3/{battery,led}.cjs` |
-| C3 LED implementation | `firmware/esp32c3/status-led.cpp` |
+| Common connection, BLE, audio, recovery, OTA, power and boot | firmware/shared/ |
+| Target identity, memory, OTA slots and release paths | tools/targets.cjs |
+| Shared sketch assembly | tools/assemble-source.cjs |
+| Target generation | tools/materialize-target.cjs |
+| C3 pins, battery, LED and single-core overrides | tools/boards/esp32c3/, firmware/esp32c3/ |
+| Chakshu PDM, pin exclusions and always-awake profile | tools/boards/xiao-sense/ |
+| Chakshu camera, SD filesystem and media-check worker | firmware/xiao-sense/ |
 
-The C3 LED C++ file is a function template inserted into the generated sketch, not a standalone compilation unit. Touch and wake gestures use the shared runtime on both boards. Do not edit generated sketches. See [architecture and feature boundaries](docs/ARCHITECTURE.md) for the extension rules and runtime contracts.
+Do not edit the generated sketch directly. CI verifies byte-for-byte synchronization. Fragments are assembled in order and inherit shared types; they are not standalone translation units. Checked adapter anchors fail generation when shared code changes incompatibly.
 
-## Board differences
+| Feature | S3 SuperMini | C3 SuperMini | Chakshu / XIAO Sense |
+| --- | --- | --- | --- |
+| Flash / PSRAM | 4 MB / 2 MB | 4 MB / none | 8 MB / 8 MB OPI |
+| Microphone | INMP441 I2S, GPIO4/5/6 | INMP441 I2S, GPIO4/5/6 | Onboard PDM, clock42/data41 |
+| Touch | GPIO13 | GPIO3 | Disabled |
+| LED | RGB GPIO48 | Blue GPIO8 | External indicators disabled |
+| Battery sensing | GPIO8 | GPIO1, telemetry only | Disabled |
+| Sleep/wake | Four-second hold | Four-second hold | Always awake during bring-up |
+| Camera / SD | None | None | OV3660 probe / installed card |
+| SD checks | None | None | Photo, 10s WAV, silent 2fps MJPEG |
+| CPU idle / active | 80 / 240 MHz | 80 / 160 MHz | 240 / 240 MHz |
 
-| Feature | S3 SuperMini | C3 SuperMini |
-| --- | --- | --- |
-| Flash / PSRAM | 4 MB / 2 MB | 4 MB / none |
-| Touch input | GPIO13 | GPIO3 |
-| Recording gesture | Double tap; acts on second tap | Double tap; acts on second tap |
-| Sleep / wake gesture | Hold 4 seconds, then release | Hold 4 seconds, then release |
-| LED | Onboard RGB, GPIO48 | Onboard blue, GPIO8 |
-| Battery sense | GPIO8 | GPIO1 |
-| Battery protection | Confirmed critical battery blocks OTA and requests idle sleep | Telemetry only; automatic cutoff inactive |
-| CPU idle / active | 80 / 240 MHz | 80 / 160 MHz |
+C3 and SuperMini S3 use double tap to start recording or stop and enter standby. A single tap does nothing. Sleep waits for recording to stop; wake requires a four-second hold through boot validation and release. Chakshu uses the app controls with no touch hardware.
 
-Both use microphone GPIO4/5/6, 16 kHz mono audio, the same BLE protocols and optional negotiated disconnect recovery.
-
-One tap does nothing. Double tap starts recording, or stops an active recording
-and enters BLE standby. Sleep waits for active recording to stop. Wake requires
-four seconds of hold validation after boot, followed by release; allow a little
-extra time for boot. Wake alone does not start recording. Update older S3 firmware
-to replace its previous triple-tap sleep/wake gesture.
-
-- [Hardware, wiring, LED patterns and battery calibration](docs/HARDWARE_PINOUT.md)
-- [Runtime contracts and validation](docs/ARCHITECTURE.md)
-- [Disconnect recovery protocol](docs/DISCONNECT_RECOVERY.md)
-- [Build, OTA publication and release trust](OTA_RELEASES.md)
+All targets reuse the same BLE service, control protocol, durable device ID and recording format. PWA detection reads a separate versioned capability descriptor; it does not infer hardware from a display name. OTA checks bind each binary to its exact target, including separate identities for SuperMini S3 and XIAO Sense.
 
 ## Build and validate
 
-Run from the repository root:
-
-```sh
+~~~sh
+node tools/assemble-source.cjs
+node tools/assemble-source.cjs --check
 node --test tests/*.cjs
-mkdir -p prepared/synap_esp32s3
-cp synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32s3/synap_esp32s3.ino
-node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3/synap_esp32c3.ino
-```
+node tools/materialize-target.cjs esp32c3-supermini-4m synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3/synap_esp32c3.ino
+node tools/materialize-target.cjs xiao-esp32s3-sense-8m synap_esp32s3/synap_esp32s3.ino prepared/synap_chakshu/synap_chakshu.ino
+~~~
 
-CI compiles both targets with the pinned toolchain and retains exact generated sources. Eligible main builds publish automatically. Initial installation uses USB; subsequent updates use PWA BLE OTA. Never interchange C3 and S3 binaries.
+CI compiles all three targets with Arduino ESP32 3.3.5 and retains application/factory binaries and exact prepared source. Eligible main builds publish automatically; pull requests only build artifacts. First installation uses USB. Subsequent released builds use PWA BLE OTA. Never interchange board binaries.
 
-Real I2S capture is the default. Capture converts the signed 32-bit I2S slot to PCM16 without software filtering, gain, gating or denoising. Uncompressed PCM16 is preferred at MTU 185 or above; smaller supported links use the existing IMA ADPCM fallback. The app identifies the actual format. This is not raw 24-bit microphone streaming. `-DUSE_REAL_I2S_MIC=0` enables a diagnostic tone. Unpublished USB builds identify as build 0.
+Capture is 16 kHz mono PCM16 with no software filtering, gain, gate or denoising. INMP441 capture converts its signed 32-bit I2S slot to PCM16; XIAO PDM already supplies PCM16. BLE prefers uncompressed PCM at MTU185 or above and retains ADPCM fallback on smaller links. This is not raw 24-bit streaming. Diagnostic tone builds remain available on C3/S3 with USE_REAL_I2S_MIC=0; Chakshu hardware checks require the real mic. Unpublished builds identify as build0.
 
-Native tests and successful board builds do not establish physical battery accuracy, audio quality or battery life. Hardware acceptance must cover recording, disconnect recovery, gestures, sleep/wake and OTA on both boards.
+Native tests and board builds do not establish physical audio/image quality, battery accuracy or battery life. Validate each physical target, and follow the dedicated Chakshu checklist before extending continuous SD recording or video.

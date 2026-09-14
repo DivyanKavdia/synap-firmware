@@ -29,6 +29,13 @@ const TARGETS=Object.freeze({
     manifestPath:'targets/esp32c3-supermini-4m/latest.json',
     releasePrefix:'targets/esp32c3-supermini-4m/',
     sourceName:'synap_esp32c3.ino'
+  }),
+  'xiao-esp32s3-sense-8m':Object.freeze({
+    id:'xiao-esp32s3-sense-8m',family:'esp32s3',assetStem:'chakshu',board:'Chakshu (XIAO ESP32S3 Sense)',
+    chip:9,flashBytes:8388608,psramBytes:8388608,partition:'default_8MB',slotSize:0x330000,
+    productMarker:'SYNAP-CHAKSHU-OTA-ID-V3',
+    manifestPath:'targets/xiao-esp32s3-sense-8m/latest.json',releasePrefix:'targets/xiao-esp32s3-sense-8m/',
+    sourceName:'synap_chakshu.ino'
   })
 });
 
