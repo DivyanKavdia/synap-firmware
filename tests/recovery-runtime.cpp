@@ -28,7 +28,8 @@ bool sleepPending=false,busy=false,transport=true;
 uint32_t now=100;
 uint32_t millis(){return now;}
 bool otaBusy(){return busy;}
-bool configureTransportFromPeerMtu(){return transport;}
+unsigned transportConfigurations=0;
+bool configureTransportFromPeerMtu(){++transportConfigurations;return transport;}
 unsigned microphoneStops=0;
 void stopMicrophone(){++microphoneStops;}
 void requestStreamError(ErrorCode,uint32_t){assert(false);}
@@ -43,11 +44,17 @@ void encodeImaAdpcm(const int16_t*,uint8_t*){assert(false && "Recovery must reta
 uint16_t emitted=0;uint32_t lastPace=0;
 bool rejectNotification=false;
 bool reconnectDuringSend=false;
+bool replayDuringSend=false;
 bool sendCapturedFrame(const AudioFrame& frame,uint32_t pace){
   const auto sequence=frame.sequence;
   assert(frame.generation==streamGeneration);
   for(unsigned i=0;i<800;++i)assert(frame.samples[i]==int16_t((unsigned(sequence)+i)%65536-32768));
   if(reconnectDuringSend){++connectionGeneration;return false;}
+  if(replayDuringSend){
+    recoveryRequest.command=3;memset(recoveryRequest.token,7,8);
+    recoveryRequest.sequence=65530;recoveryRequest.connection=connectionGeneration;
+    processRecoveryRequest();replayDuringSend=false;
+  }
   if(rejectNotification){++notifyRejected;return false;}
   emitted=sequence;lastPace=pace;return true;
 }
@@ -55,13 +62,14 @@ int main(){
   initializeRecovery();assert(recoveryRing.capacity==600);
   BLECharacteristic characteristic;recoveryCharacteristic=&characteristic;
   RecoveryCallbacks callbacks;auto* callback=static_cast<BLECharacteristicCallbacks*>(&callbacks);
-  callback->onRead(&characteristic);assert(characteristic.bytes[2]==1 && characteristic.bytes.size()==16);
-  auto request=[&](uint8_t command,uint8_t token,uint16_t seq){characteristic.bytes.assign(command==2?11:9,token);characteristic.bytes[0]=command;if(command==2){characteristic.bytes[9]=seq&255;characteristic.bytes[10]=seq>>8;}callback->onWrite(&characteristic);processRecoveryRequest();};
+  callback->onRead(&characteristic);assert(characteristic.bytes[2]==0x11 && characteristic.bytes.size()==16);
+  auto request=[&](uint8_t command,uint8_t token,uint16_t seq){characteristic.bytes.assign(command==1?9:11,token);characteristic.bytes[0]=command;if(command!=1){characteristic.bytes[9]=seq&255;characteristic.bytes[10]=seq>>8;}callback->onWrite(&characteristic);processRecoveryRequest();};
   request(1,7,0);assert(recoveryEnabled);
   streamingEnabled=true;
   for(unsigned i=0;i<620;i++){AudioFrame f{};f.generation=1;f.sequence=uint16_t(65500+i);for(unsigned j=0;j<800;++j)f.samples[j]=int16_t((unsigned(f.sequence)+j)%65536-32768);retainRecoveryFrame(f);}
   assert(recoveryRing.count==600 && captureDrops==20);
   recoveryWaiting=true;recoveryWaitingAt=100;
+  request(3,7,65530);assert(recoveryWaiting && recoveryReplayAck==0);
   request(2,8,65530);assert(recoveryWaiting && recoveryRing.cursor==0);
   transport=false;request(2,7,65530);assert(recoveryWaiting);transport=true;
   cccd.enabled=false;request(2,7,65530);assert(recoveryWaiting);cccd.enabled=true;
@@ -76,7 +84,23 @@ int main(){
   assert(sendRecoveryFrame() && emitted==65531 && lastPace==30000);
   for(unsigned i=0;i<5;i++){assert(sendRecoveryFrame());}
   assert(emitted==0);
+  const auto configured=transportConfigurations;
+  request(3,8,65530);assert(recoveryReplayAck==0 && recoveryRing.cursor==17);
+  cccd.enabled=false;request(3,7,65530);assert(recoveryReplayAck==0);cccd.enabled=true;
+  // A live send finishing after the replay command cannot skip the first
+  // requested frame, even when the two sequences cross uint16 wrap.
+  replayDuringSend=true;assert(sendRecoveryFrame());
+  assert(recoveryReplayAck==1 && recoveryRing.cursor==11);
+  assert(sendRecoveryFrame() && emitted==65531);
+  assert(transportConfigurations==configured && streamingEnabled && !recoveryWaiting);
+  // If the requested boundary expired, replay starts at the oldest retained PCM.
+  request(3,7,65500);assert(recoveryRing.cursor==0 && recoveryReplayAck==2);
+  assert(sendRecoveryFrame() && emitted==65520);
+  recoveryReplayAck=255;request(3,7,65530);assert(recoveryReplayAck==0);
+  callback->onRead(&characteristic);assert(characteristic.bytes[3]==0);
   finishBufferedRecording();assert(recoveryFinishing && microphoneStops==1 && (characteristic.bytes[2]&8));
+  const auto drainingCursor=recoveryRing.cursor;
+  request(3,7,65500);assert(recoveryRing.cursor==drainingCursor && recoveryReplayAck==0);
   finishBufferedRecording();assert(microphoneStops==1);
   while(recoveryCanSend()){assert(sendRecoveryFrame());}
   assert(lastPace==45000 && !recoveryCanSend());

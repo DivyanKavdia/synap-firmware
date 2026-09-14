@@ -1161,6 +1161,7 @@ uint32_t recoveryFinishAt=0;
 std::atomic<uint32_t> recoveryWaitingAt{0};
 BLECharacteristic* recoveryCharacteristic=nullptr;
 uint8_t recoveryToken[8]={};
+uint8_t recoveryReplayAck=0; // Protected by recoveryMutex; acknowledges connected replay.
 struct RecoveryRequest { uint8_t command=0,token[8]={}; uint16_t sequence=0; uint32_t connection=0; };
 RecoveryRequest recoveryRequest;
 class RecoveryGuard {
@@ -1190,7 +1191,7 @@ void resetRecovery(bool disarm=false);
 void resetRecovery(bool disarm) {
   recoveryWaiting=false; recoveryWaitingAt=0; recoveryFinishing=false; recoveryFinishAt=0;
   if(disarm)recoveryEnabled=false;
-  if(recoveryMutex) { RecoveryGuard guard; recoveryRing.reset(); if(disarm)memset(recoveryToken,0,sizeof(recoveryToken)); }
+  if(recoveryMutex) { RecoveryGuard guard; recoveryRing.reset(); recoveryReplayAck=0; if(disarm)memset(recoveryToken,0,sizeof(recoveryToken)); }
 }
 void retainRecoveryFrame(const AudioFrame& frame) {
   if(!recoveryEnabled.load())return;
@@ -1224,7 +1225,7 @@ void processRecoveryRequest() {
   { RecoveryGuard guard; request=recoveryRequest; recoveryRequest.command=0; }
   if(!request.command || request.connection!=connectionGeneration.load() || !deviceConnected.load() || otaBusy() || sleepPending)return;
   if(request.command==1 && !streamingEnabled.load() && recoveryRing.capacity) {
-    RecoveryGuard guard; memcpy(recoveryToken,request.token,8); recoveryEnabled=true; recoveryRing.reset();
+    RecoveryGuard guard; memcpy(recoveryToken,request.token,8); recoveryEnabled=true; recoveryRing.reset(); recoveryReplayAck=0;
   } else if(request.command==2 && recoveryEnabled.load() && recoveryWaiting.load() && streamingEnabled.load()) {
     { RecoveryGuard guard; if(memcmp(request.token,recoveryToken,8)!=0)return; }
 #if defined(CONFIG_BLUEDROID_ENABLED)
@@ -1234,13 +1235,27 @@ void processRecoveryRequest() {
     { RecoveryGuard guard; recoveryRing.after(request.sequence); }
     recoveryWaitingAt=0; recoveryWaiting=false;
     setDeviceState(DeviceState::STREAMING,ErrorCode::NONE); updateStatusCharacteristic(true);
+  } else if(request.command==3 && recoveryEnabled.load() && !recoveryWaiting.load() &&
+            streamingEnabled.load() && !recoveryFinishing.load()) {
+    // A suspended web view can lose notifications while the native BLE link
+    // remains connected. Rewind retained samples without restarting capture or
+    // renegotiating its format. A send already in flight can only advance its
+    // own sequence (Ring::sent), never skip the rewound recovery cursor.
+#if defined(CONFIG_BLUEDROID_ENABLED)
+    if(!audioCccd || !audioCccd->getNotifications())return;
+#endif
+    RecoveryGuard guard;
+    if(memcmp(request.token,recoveryToken,8)!=0)return;
+    recoveryRing.after(request.sequence);
+    ++recoveryReplayAck;
   }
 }
 void updateRecoveryStatus(BLECharacteristic* characteristic,bool notify) {
     uint8_t value[16]={0x52,1,0,0};
     if(recoveryMutex) {
       RecoveryGuard guard;
-      value[2]=(recoveryRing.capacity?1:0)|(recoveryEnabled.load()?2:0)|(recoveryWaiting.load()?4:0)|(recoveryFinishing.load()?8:0);
+      value[2]=(recoveryRing.capacity?0x11:0)|(recoveryEnabled.load()?2:0)|(recoveryWaiting.load()?4:0)|(recoveryFinishing.load()?8:0);
+      value[3]=recoveryReplayAck;
       value[4]=recoveryRing.capacity&255; value[5]=recoveryRing.capacity>>8;
       const uint16_t pending=recoveryRing.count-recoveryRing.cursor;
       value[6]=pending&255; value[7]=pending>>8;
@@ -1266,7 +1281,7 @@ class RecoveryCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* characteristic) override {
     if(!recoveryMutex)return;
     const uint8_t* data=characteristic->getData();const size_t size=characteristic->getLength();
-    if(!data || !((size==9 && data[0]==1)||(size==11 && data[0]==2)))return;
+    if(!data || !((size==9 && data[0]==1)||(size==11 && (data[0]==2 || data[0]==3))))return;
     RecoveryGuard guard;
     recoveryRequest.command=data[0];memcpy(recoveryRequest.token,data+1,8);
     recoveryRequest.sequence=size==11 ? uint16_t(data[9])|(uint16_t(data[10])<<8) : 0;
