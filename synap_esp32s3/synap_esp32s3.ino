@@ -579,6 +579,7 @@ void encodeModuleCapabilities(uint8_t* p) {
   if (status.ready&2) ready|=128|512;
   if ((status.ready&5)==5) ready|=256;
   sensor=status.sensor;
+  p[14]=ChakshuTransfer::requests?1:0;
 #endif
   p[4]=supported&255;p[5]=supported>>8;p[6]=ready&255;p[7]=ready>>8;
   p[8]=sensor&255;p[9]=sensor>>8;p[10]=SAMPLE_RATE&255;p[11]=SAMPLE_RATE>>8;
@@ -1859,6 +1860,7 @@ void initializeBLE() {
   initializeModuleCapabilities(service);
 #if SYNAP_CHAKSHU
   ChakshuMedia::ble(service);
+  ChakshuTransfer::ble(service);
 #endif
   service->start();
   BLEAdvertising* advertising=BLEDevice::getAdvertising();
@@ -1920,6 +1922,7 @@ void setup() {
   Serial.printf("Synap %u %s reset=%u\n", SYNAP_FIRMWARE_BUILD, synapDeviceId, unsigned(bootResetReason));
 #if SYNAP_CHAKSHU
   ChakshuMedia::initialize();
+  ChakshuTransfer::initialize();
 #endif
   initializeBLE();
   initializeRecovery();

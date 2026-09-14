@@ -21,6 +21,8 @@ function materializeChakshu(source,target) {
   if(stopStart<0 || stopEnd<0)throw Error('Missing BLE stop boundary');
   const stop=out.slice(stopStart,stopEnd).replace('  stopMicrophone();','  if (!mediaBusy()) stopMicrophone();');
   out=out.slice(0,stopStart)+stop+out.slice(stopEnd);
+  replace('applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu());',
+    'applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu() || mediaBusy());','Camera CPU profile');
   // Remove touch wake/sleep implementations, including durable wake gates from another board.
   out=replaceFunctionBlock(out,'bool armTouchWakeSource() {','void publishPowerEvent(',
     'bool armTouchWakeSource() { return false; }\nvoid armTouchWakeAndSleep() {}\nbool confirmTouchWakeGesture() { return true; }\n\n','Always-awake boot');
@@ -39,7 +41,7 @@ function materializeChakshu(source,target) {
   replace('  static int32_t raw[SAMPLES_PER_FRAME];','  static int16_t raw[SAMPLES_PER_FRAME];','Native PCM16 capture buffer');
   replace('    const int32_t sample=raw[i] >> 16;','    const int32_t sample=raw[i];','Preserve onboard PCM samples');
   replace('// SYNAP_BOARD_FEATURES',
-    ['camera.cpp','sd-storage.cpp','media.cpp'].map(name=>readTemplate('xiao-sense',name)).join('\n'),'Camera and SD drivers');
+    ['camera.cpp','sd-storage.cpp','media.cpp','media-transfer.cpp'].map(name=>readTemplate('xiao-sense',name)).join('\n'),'Camera and SD drivers');
   if (out.includes('statusLed.') || out.includes('pinMode(TOUCH_INPUT_PIN') ||
       out.includes('analogSetPinAttenuation(') || out.includes('esp_deep_sleep_start()'))
     throw Error('Chakshu still accesses absent hardware');
