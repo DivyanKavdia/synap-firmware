@@ -1,6 +1,7 @@
 'use strict';
 const {PRIMARY_TARGET}=require('../../targets.cjs');
 const {replaceOnce,replaceFunctionBlock,readTemplate}=require('../../target-source.cjs');
+const {materializeBle}=require('./ble.cjs');
 function materializeChakshu(source,target) {
   let out=source.split(PRIMARY_TARGET).join(target.id)
     .split('SYNAP-ESP32S3-OTA-ID-V3').join(target.productMarker)
@@ -52,6 +53,6 @@ function materializeChakshu(source,target) {
   if (out.includes('statusLed.') || out.includes('pinMode(TOUCH_INPUT_PIN') ||
       out.includes('analogSetPinAttenuation(') || out.includes('esp_deep_sleep_start()'))
     throw Error('Chakshu still accesses absent hardware');
-  return out;
+  return materializeBle(out);
 }
 module.exports={materializeChakshu};
