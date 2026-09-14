@@ -87,7 +87,8 @@ void cleanup() {
   if(commandQueue){vQueueDelete(commandQueue);commandQueue=nullptr;}
   if(mnData){mn->destroy(mnData);mnData=nullptr;}
   if(afeData){afe->destroy(afeData);afeData=nullptr;}
-  if(models){srmodel_host_deinit(models);models=nullptr;}
+  // srmodel_load owns the model metadata; weights remain our PSRAM allocation.
+  if(models){esp_srmodel_deinit(models);models=nullptr;}
   free(weights);weights=nullptr;free(afeInput);afeInput=nullptr;
 }
 void initialize() {
