@@ -21,7 +21,8 @@ Use the Chakshu build only; a generic Synap S3 binary has different pins and mem
 The CI **verified-firmware** artifact includes:
 - xiao-esp32s3-sense-8m/factory.bin: merged first-flash image, flash at address 0x0.
 - xiao-esp32s3-sense-8m/firmware.bin: application image for the configured OTA slots.
-- source-sync/synap_chakshu.ino: portable Arduino source.
+- xiao-esp32s3-sense-8m/synap_chakshu.ino: portable Arduino source with the matching build counter; use this for an Arduino/Arduinodroid first flash.
+- source-sync/synap_chakshu.ino: unversioned prepared source for auditing.
 
 For a source build, run:
 
@@ -31,7 +32,7 @@ node tools/materialize-target.cjs xiao-esp32s3-sense-8m synap_esp32s3/synap_esp3
 arduino-cli compile --fqbn 'esp32:esp32:esp32s3:FlashSize=8M,PartitionScheme=default_8MB,PSRAM=opi,USBMode=hwcdc,CDCOnBoot=cdc' prepared/synap_chakshu
 ~~~
 
-Use Arduino ESP32 core **3.3.5**, 8 MB flash, **OPI PSRAM**, and **default_8MB dual OTA partitions** (two 0x330000-byte slots). CI uses the generic ESP32S3 board definition with all Sense pins explicitly assigned. In Arduino IDE/Arduinodroid, use XIAO ESP32S3 or equivalent settings; do not choose Huge APP/no OTA. Local builds identify as build 0; released source includes its release build counter.
+Use Arduino ESP32 core **3.3.5**, 8 MB flash, **OPI PSRAM**, and **default_8MB dual OTA partitions** (two 0x330000-byte slots). CI uses the generic ESP32S3 board definition with all Sense pins explicitly assigned. In Arduino IDE/Arduinodroid, use XIAO ESP32S3 or equivalent settings; do not choose Huge APP/no OTA. Local builds identify as build 0; versioned artifact source includes its build counter. The current PWA updater expects a release-range build identity, so use the versioned artifact source if you want subsequent BLE updates without another USB flash.
 
 ## Test with the 2 GB card
 
