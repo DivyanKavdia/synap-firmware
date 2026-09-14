@@ -119,3 +119,13 @@ Status: 0 starting, 1 listening, 2 model missing, 3 insufficient memory, 4 inval
 - [Espressif XIAO camera pin map, core 3.3.5](https://github.com/espressif/arduino-esp32/blob/3.3.5/libraries/ESP32/examples/Camera/CameraWebServer/camera_pins.h)
 - [Espressif 8 MB partition layout](https://github.com/espressif/arduino-esp32/blob/3.3.5/tools/partitions/default_8MB.csv)
 - [Espressif MultiNet speech commands and phoneme format](https://docs.espressif.com/projects/esp-sr/en/latest/esp32s3/speech_command_recognition/README.html)
+
+### Install the voice model from the PWA
+
+After updating to firmware with the model upload service, connect the associated Chakshu and open Settings → Local voice controls → Install voice model. The PWA downloads the pinned 2,177,224-byte model, checks SHA-256, and transfers it over BLE to `/synap/models/srmodels.part`. Keep the page open, the pendant powered, and the SD card inserted. After completion choose Restart Chakshu, then reconnect. Manual SD installation remains available.
+
+Only the model staging/final/backup paths can be written by this service. Upload reserves the media storage lock and pauses command recognition; audio, camera checks and OTA cannot start concurrently. The control task owns file writes and validation. A cancelled, timed-out, or disconnected transfer never replaces the current model or recordings. A connection can resume the acknowledged offset for 15 minutes while the pendant remains powered; a power cycle requires restarting the transfer. Completion rereads and hashes the SD file, then renames the old model to a backup and replaces it. Boot restores that backup if interrupted between the renames. Activation uses an explicit restart.
+
+Protocol 1 uses WRITE `4fa12358` and READ `4fa12359` (standard Synap UUID suffix). Commands are operation byte + nonzero little-endian session u32: 1 begin, 3 verify/install, 4 restart, 5 cancel, 6 resume; operation 2 adds offset u32 + 1–480 data bytes, bounded by negotiated ATT payload minus 9. Up to four writes are sent before polling the cumulative acknowledged offset. A resume binds the session to the current connection generation. Status is 20 bytes: `CE 01 state error`, session u32@4, offset u32@8, model size u32@12, max data u16@16, SD ready@18, upload service ready@19. States: 0 available, 1 receiving, 2 verifying, 3 installed, 4 failed, 5 restarting. This protocol version accepts only the pinned model in `model-contract.cpp`.
+
+Host tests cover resume, duplicate packets, stale connections, offsets, partial/corrupt data, timeout, cancellation, SD lock exclusion, rollback and preservation. Bluetooth speed and SD power-loss behavior still need testing on a physical pendant.

@@ -5,8 +5,8 @@
 #include <model_path.h>
 #include <mbedtls/sha256.h>
 namespace ChakshuVoice {
-constexpr size_t MODEL_BYTES=2177224;
-constexpr char MODEL_SHA256[]="9bb7348b31891a89eb494f5995970a7fc52b765759e4992d471ab2901bf9c47c";
+using ChakshuModel::MODEL_BYTES;
+using ChakshuModel::MODEL_SHA256;
 enum Status : uint8_t { STARTING=0,LISTENING=1,MODEL_MISSING=2,NO_MEMORY=3,MODEL_ERROR=4,VOICE_DISABLED=5 };
 std::atomic<uint8_t> status{MODEL_MISSING};
 std::atomic<bool> enabled{true};
@@ -28,7 +28,7 @@ Gate gate;
 const char* phrases[]={"hi pnKso","hi paKso","TdK FbTb","KLgK FbTb","STnRT VgDmb","STnP VgDmb","eDmb nN","eDmb eF"};
 const int ids[]={WAKE,WAKE,PHOTO,PHOTO,VIDEO_START,VIDEO_STOP,AUDIO_ON,AUDIO_OFF};
 esp_mn_phrase_t commands[8]{};esp_mn_node_t nodes[9]{};
-bool active(){return status.load()==LISTENING&&enabled.load();}
+bool active(){return status.load()==LISTENING&&enabled.load()&&!ChakshuModel::busy();}
 void feed(const int16_t* samples,size_t count) {
   if(!active()||!pcmQueue)return;
   while(count){Block block;block.count=std::min(count,size_t(800));memcpy(block.samples,samples,block.count*2);
