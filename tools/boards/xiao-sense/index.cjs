@@ -41,7 +41,7 @@ function materializeChakshu(source,target) {
   replace('  static int32_t raw[SAMPLES_PER_FRAME];','  static int16_t raw[SAMPLES_PER_FRAME];','Native PCM16 capture buffer');
   replace('    const int32_t sample=raw[i] >> 16;','    const int32_t sample=raw[i];','Preserve onboard PCM samples');
   replace('// SYNAP_BOARD_FEATURES',
-    ['model-contract.cpp','voice-contract.cpp','camera.cpp','sd-storage.cpp','media.cpp','media-transfer.cpp','model-upload.cpp','voice.cpp'].map(name=>readTemplate('xiao-sense',name)).join('\n'),'Camera and SD drivers');
+    ['model-contract.cpp','model-flash.cpp','voice-contract.cpp','camera.cpp','sd-storage.cpp','media.cpp','media-transfer.cpp','model-upload.cpp','voice.cpp'].map(name=>readTemplate('xiao-sense',name)).join('\n'),'Camera and SD drivers');
   replace('  if (!mediaBusy()) stopMicrophone();','  if (!mediaBusy() && !ChakshuVoice::active()) stopMicrophone();','Keep command microphone listening');
   replace('  return true;\n}\nvoid acquisitionTask', '  ChakshuVoice::feed(frame.samples,SAMPLES_PER_FRAME);\n  return true;\n}\nvoid acquisitionTask','Copy capture to keyword queue');
   replace('  initializeRecovery();','  initializeRecovery();\n  ChakshuModel::initialize();\n  ChakshuVoice::initialize();','Start local command recognizer');
