@@ -66,6 +66,24 @@ int main(){
   assert.match(nativeTest(fixture),/PASS native audio ownership/);
 });
 
+test('Chakshu native submission preserves PCM, frame pacing, retries and cancellation across all MTUs',()=>{
+  const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
+  const codec=source.slice(source.indexOf('static const uint16_t IMA_STEP_TABLE'),source.indexOf('void transmitterTask(void* parameter) {'));
+  const transport=source.slice(source.indexOf('bool configureTransportFromPeerMtu() {'),source.indexOf('void startStreaming(uint8_t version) {'));
+  let fixture=fs.readFileSync('tests/audio-runtime.cpp','utf8');
+  // The host enqueue implementation is covered above; exercise the generated
+  // packetizer against a host that accepts, delays or rejects each exact packet.
+  const host=`std::atomic<uint16_t> chakshuConnectionHandle{0};
+bool sendChakshuAudio(const uint8_t* bytes,size_t length){
+  const auto before=notifyRejected.load();
+  characteristic.setValue(bytes,length);characteristic.notify();
+  return before==notifyRejected.load();
+}
+`;
+  fixture=fixture.replace('// INSERT CODEC AND TRANSPORT',host+transport+codec);
+  assert.match(nativeTest(fixture),/PASS runtime; codec golden=3749bea1db6af550/);
+});
+
 test('pinned NimBLE handles short reads and consecutive writes with live values',{skip:!process.env.SYNAP_NIMBLE_SRC},()=>{
   const dir=process.env.SYNAP_NIMBLE_SRC;
   assert.match(fs.readFileSync(path.join(dir,'../library.properties'),'utf8'),/^version=2\.3\.6$/m);

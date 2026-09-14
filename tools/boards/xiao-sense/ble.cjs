@@ -25,6 +25,10 @@ function materializeBle(source) {
   out=out.replace(/const String value=(\w+)->getValue\(\);/g,'const auto value=$1->getValue();');
   out=out.replace(/bleServer->getConnId\(\)/g,'chakshuConnectionHandle.load()');
   replace('bleServer->createService(NimBLEUUID(SERVICE_UUID),88)','bleServer->createService(SERVICE_UUID)','Native service handles');
+  replace('#if defined(CONFIG_NIMBLE_ENABLED)\n  bleServer->advertiseOnDisconnect(true);\n#endif',
+    '  bleServer->advertiseOnDisconnect(true);','Native reconnect advertising');
+  replace("  // Audio/control + device ID + OTA/status/build identity + diagnostics exceed\n  // Bluedroid's default service reservation. NimBLE accepts this overload as well.",
+    '  // NimBLE-Arduino sizes the service table from its registered characteristics.','Native service comment');
   replace('  advertising->setScanResponse(true);\n  advertising->setMinPreferred(BLE_MIN_INTERVAL);\n  advertising->setMaxPreferred(BLE_MAX_INTERVAL);',
     '  advertising->enableScanResponse(true);\n  advertising->setName(DEVICE_NAME);\n  advertising->setPreferredParams(BLE_MIN_INTERVAL,BLE_MAX_INTERVAL);','Native advertising');
   replace('  if (!configureTransportFromPeerMtu()) { stopStreaming(ErrorCode::MTU_TOO_SMALL); return; }',

@@ -19,6 +19,7 @@ All three modules share one runtime. Edit canonical fragments in `firmware/share
 | GATT service and boot | `firmware/shared/boot.cpp` |
 | C3 differential behavior | `tools/boards/esp32c3/`, `firmware/esp32c3/` |
 | Chakshu PDM, always-awake profile and pin exclusions | `tools/boards/xiao-sense/index.cjs` |
+| Chakshu native NimBLE callbacks and audio submission | `tools/boards/xiao-sense/ble.cjs`, `firmware/xiao-sense/ble-server.cpp`, `ble-audio.cpp` |
 | Chakshu camera and filesystem drivers | `firmware/xiao-sense/camera.cpp`, `sd-storage.cpp` |
 | SD hardware check worker and request/status protocol | `firmware/xiao-sense/media.cpp` |
 | Fresh-frame/file transfers and paired offline audio/video | `firmware/xiao-sense/media-transfer.cpp` |
