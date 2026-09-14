@@ -18,7 +18,7 @@ for(const target of ['esp32s3-fh4r2-qspi-4m','esp32c3-supermini-4m']) {
 #include <iostream>
 #define USE_REAL_I2S_MIC 1
 ${version}
-std::atomic<bool> deviceConnected{true},streamingEnabled{true},otaBusySnapshot{false};
+std::atomic<bool> deviceConnected{true},streamingEnabled{true},otaBusySnapshot{false},pcmTransport{false};
 bool bootSleepWasLocked=false;
 uint8_t bootResetReason=9;
 std::atomic<uint32_t> capturedFrames{2345},captureDrops{2},notifyRejected{7},controlDrops{1};
@@ -33,11 +33,12 @@ ${diagnostics}
 uint32_t u32(unsigned o){const auto& b=characteristic.bytes;return uint32_t(b[o])|(uint32_t(b[o+1])<<8)|(uint32_t(b[o+2])<<16)|(uint32_t(b[o+3])<<24);}
 int main(){
   updateDiagnosticsCharacteristic();const auto& b=characteristic.bytes;
-  assert(b.size()==48 && b[0]==0xD6 && b[1]==2 && b[2]==7 && b[3]==9);
+  assert(b.size()==48 && b[0]==0xD6 && b[1]==2 && b[2]==0x47 && b[3]==9);
   assert(u32(4)==2345 && u32(8)==2 && u32(12)==7 && u32(16)==1);
   assert(u32(20)==95000 && u32(24)==82000 && u32(28)==123);
   assert(b[32]==8 && b[33]==0 && b[34]==7 && b[35]==0);
   assert(u32(36)==3 && u32(40)==0xFEDCBA98 && u32(44)==0x103);
+  pcmTransport=true;updateDiagnosticsCharacteristic();assert(b[2]==0xC7);
   capturedFrames=0;notifyRejected=0;streamingEnabled=false;updateDiagnosticsCharacteristic();
   assert(u32(4)==0 && u32(12)==0 && u32(36)==3 && b[32]==8 && u32(44)==0x103);
   lastDisconnectReason=0xFFFF;updateDiagnosticsCharacteristic();assert(b[32]==255 && b[33]==255);

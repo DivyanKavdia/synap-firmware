@@ -39,12 +39,14 @@ auto* audioCccd=&cccd;
 struct BLECharacteristic{std::vector<uint8_t> bytes;unsigned notifications=0;uint8_t* getData(){return bytes.data();}size_t getLength(){return bytes.size();}void setValue(const uint8_t* value,size_t n){bytes.assign(value,value+n);}void notify(){++notifications;}};
 struct BLECharacteristicCallbacks{virtual ~BLECharacteristicCallbacks()=default;virtual void onRead(BLECharacteristic*){}virtual void onWrite(BLECharacteristic*){}};
 // INSERT RECOVERY
-void encodeImaAdpcm(const int16_t* samples,uint8_t* output){memset(output,uint8_t(samples[0]),404);}
+void encodeImaAdpcm(const int16_t*,uint8_t*){assert(false && "Recovery must retain original PCM");}
 uint16_t emitted=0;uint32_t lastPace=0;
 bool rejectNotification=false;
 bool reconnectDuringSend=false;
-bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t*,uint32_t pace){
-  assert(generation==streamGeneration);
+bool sendCapturedFrame(const AudioFrame& frame,uint32_t pace){
+  const auto sequence=frame.sequence;
+  assert(frame.generation==streamGeneration);
+  for(unsigned i=0;i<800;++i)assert(frame.samples[i]==int16_t((unsigned(sequence)+i)%65536-32768));
   if(reconnectDuringSend){++connectionGeneration;return false;}
   if(rejectNotification){++notifyRejected;return false;}
   emitted=sequence;lastPace=pace;return true;
@@ -57,7 +59,7 @@ int main(){
   auto request=[&](uint8_t command,uint8_t token,uint16_t seq){characteristic.bytes.assign(command==2?11:9,token);characteristic.bytes[0]=command;if(command==2){characteristic.bytes[9]=seq&255;characteristic.bytes[10]=seq>>8;}callback->onWrite(&characteristic);processRecoveryRequest();};
   request(1,7,0);assert(recoveryEnabled);
   streamingEnabled=true;
-  for(unsigned i=0;i<620;i++){AudioFrame f{};f.generation=1;f.sequence=uint16_t(65500+i);retainRecoveryFrame(f);}
+  for(unsigned i=0;i<620;i++){AudioFrame f{};f.generation=1;f.sequence=uint16_t(65500+i);for(unsigned j=0;j<800;++j)f.samples[j]=int16_t((unsigned(f.sequence)+j)%65536-32768);retainRecoveryFrame(f);}
   assert(recoveryRing.count==600 && captureDrops==20);
   recoveryWaiting=true;recoveryWaitingAt=100;
   request(2,8,65530);assert(recoveryWaiting && recoveryRing.cursor==0);
@@ -82,7 +84,7 @@ int main(){
   request(1,9,0);assert(!recoveryEnabled);streamingEnabled=false;request(1,9,0);assert(recoveryEnabled);
   characteristic.bytes.assign(9,1);callback->onWrite(&characteristic);++connectionGeneration;processRecoveryRequest();assert(recoveryToken[0]==9);
   free(recoveryRing.frames);recoveryRing.frames=nullptr;recoveryRing.capacity=0;psram=false;
-  initializeRecovery();assert(recoveryRing.capacity==100);
+  initializeRecovery();assert(recoveryRing.capacity==25);
   free(recoveryRing.frames);recoveryRing.frames=nullptr;recoveryRing.capacity=0;freeHeap=120000;
   initializeRecovery();assert(!recoveryRing.frames && recoveryRing.capacity==0);
   std::cout<<"PASS recovery: wrap, bounded overflow, ownership, stale writes, transport, drain and low-memory fallback\n";
