@@ -16,6 +16,11 @@ struct MicrophoneGuard { MicrophoneGuard(){++microphoneLockDepth;} ~MicrophoneGu
 struct SerialStub { void println(const char*) {} } Serial;
 static void vTaskDelay(int) {}
 static int pdMS_TO_TICKS(int ms) { return ms; }
+namespace ChakshuVoice {
+std::vector<int16_t> copied;
+unsigned copies=0;
+void feed(const int16_t* samples,size_t count){copied.assign(samples,samples+count);++copies;}
+}
 
 struct FakeI2S {
   std::vector<uint8_t> data;
@@ -71,6 +76,12 @@ int main() {
   for(int part=0;part<2;++part){
     assert(acquireAudioFrame(frame));
     for(int i=0;i<800;++i)assert(frame.samples[i]==pcm[part*800+i]);
+#if PDM_FIXTURE
+    assert(ChakshuVoice::copied==std::vector<int16_t>(pcm.begin()+part*800,pcm.begin()+(part+1)*800));
+    assert(ChakshuVoice::copies==unsigned(part+1));
+#else
+    assert(ChakshuVoice::copies==0);
+#endif
   }
 
   // A new generation is independent of the preceding recording.
@@ -108,7 +119,9 @@ int main() {
   // Stopping during a partial read aborts capture rather than publishing a frame.
   microphoneI2S.load(signal(800));microphoneI2S.readSizes={4};
   microphoneI2S.cancelOnNextRead=true;
+  const unsigned copiesBeforeStop=ChakshuVoice::copies;
   assert(!acquireAudioFrame(frame));
+  assert(ChakshuVoice::copies==copiesBeforeStop);
   assert(starts==1);
   std::puts("PASS: exact production capture preserves byte alignment, frame continuity, all PCM16 values, DC, quiet samples, recovery and stop cancellation");
 }

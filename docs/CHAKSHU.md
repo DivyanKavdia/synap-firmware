@@ -81,9 +81,41 @@ The client sends one request at a time, polls for its matching response ID, vali
 
 CI compiles all three board targets. Simulated browser tests exercise account isolation, native queue transfers, separate audio/video storage and frame-limited inference. They do not establish camera/audio synchronization or throughput on a phone. For device validation, record an audible clap in view, verify the matching WAV/JSON/MJPEG timeline, test a disconnected SD take, and check card-full/removed-card recovery. Cloud descriptions require the matching PWA/backend deployment.
 
+## Local voice commands: Hi Chakshu
+
+The Chakshu-only source adds Espressif MultiNet5 Q8 English speech recognition. The activation phrase is **“Hi Chakshu”**. After a pause, say **“take photo”** / **“click photo”**, **“start video”**, **“stop video”**, **“audio on”**, or **“audio off”**. Each command requires a fresh activation within eight seconds, confidence at least 0.90 and a 1.2-second action cooldown. This uses a continuous phoneme recognizer plus an activation gate; no separately trained custom WakeNet model is included. Tune pronunciations/thresholds only after recording false-activation and missed-command measurements on the real pendant.
+
+### Model installation
+
+1. Use the firmware release's `chakshu-voice-model.zip`, or build it with `python3 tools/prepare-voice-model.py /tmp/chakshu-voice-model`.
+2. With the pendant powered off, copy the ZIP's `synap` directory onto the SD card, preserving all existing recordings. The final path is `/synap/models/srmodels.bin`.
+3. Reinsert the card, power on, connect the PWA and check Settings → Device → Local voice controls. Enable the listener if it was previously disabled.
+
+The pack pins Espressif source revision `27da4f945f779bab2d238889924622f7988b1b1c`, verifies the three source blob identities and includes Espressif's license. Firmware verifies **2,177,224 bytes** and SHA-256 **9bb7348b31891a89eb494f5995970a7fc52b765759e4992d471ab2901bf9c47c** before passing weights to the model parser. A missing, mismatched or unavailable model reports a status; camera and ordinary audio remain usable. Weights load into PSRAM from SD. The existing dual OTA partitions are unchanged. No recognition audio is uploaded for command detection.
+
+### Capture ownership and behavior
+
+- BLE capture and the SD audio worker feed copies of their unmodified PCM into a bounded recognition queue. An idle reader uses the existing recursive microphone lock and rechecks ownership under that lock. It yields to either recording consumer. The AFE processes only its copy. Queue discontinuities reset recognition; stale commands are discarded.
+- Enabled recognition holds the active CPU profile. Audio off stops a take while the listener remains available for audio on. Disable Local voice controls to stop command listening; the setting persists in NVS.
+- A visible connected PWA claims a six-second, connection-generation-bound lease. Commands go to the PWA while that lease is valid, so existing account ownership, storage and mode-switch rules apply. No lease means local SD actions. Offline mode switches save the previous take, then create separate files for the next mode. Photo during an SD take is handled by the owning worker.
+- Offline video creates matching silent MJPEG, mono PCM16 WAV and sample-timeline JSON files. Audio-only creates its own standalone WAV. Both are limited to 60 seconds of PCM or 65 seconds elapsed. Importing standalone WAVs puts them in the audio library; paired video audio is imported once. Stop cancels queued local starts while leaving PWA transfer requests intact.
+- CI includes native activation, stale-command, routing and microphone-ownership checks, prepares the pinned model ZIP, and compiles all three targets. Real ESP32 linking, flash fit and runtime recognition still need a successful build/device check for each release candidate. Bench-test all commands while idle, during BLE audio/video and disconnected SD capture; measure PSRAM, recognizer drops, audio continuity and false activations. Stop and preserve partial files for SD-full/removed-card cases.
+
+### Voice extension v1
+
+Descriptor byte 15 is 1 for this firmware; C3/S3 remain zero. UUIDs share the suffix above.
+
+| Characteristic | Layout |
+| --- | --- |
+| `4fa12356`, read/write | Read 20-byte status. Write `CC 01 op`: 0 disable, 1 enable, 2 renew PWA lease, 3 release lease. |
+| `4fa12357`, notify | 20 bytes: `CD 01 status enabled`, sequence uint32 LE at 4, action at 8, result at 9, pendant milliseconds uint32 LE at 10, discontinuities uint32 LE at 14, offline-active at 18, reserved at 19. |
+
+Status: 0 starting, 1 listening, 2 model missing, 3 insufficient memory, 4 invalid model/setup, 5 disabled. Action: 1 photo, 2 video start, 3 video stop, 4 audio on, 5 audio off. Result: 0 local request accepted/no-op, 1 busy/rejected, 2 delegated to the leased page. Accepted is not a claim that the later SD write succeeded; inspect media status and saved files. Media extension operations 10 and 11 start standalone SD audio and save a JPEG respectively.
+
 ## References
 
 - [Seeed microphone pins and PDM setup](https://wiki.seeedstudio.com/xiao_esp32s3_sense_mic/)
 - [Seeed microSD wiring and preparation](https://wiki.seeedstudio.com/xiao_esp32s3_sense_filesystem/)
 - [Espressif XIAO camera pin map, core 3.3.5](https://github.com/espressif/arduino-esp32/blob/3.3.5/libraries/ESP32/examples/Camera/CameraWebServer/camera_pins.h)
 - [Espressif 8 MB partition layout](https://github.com/espressif/arduino-esp32/blob/3.3.5/tools/partitions/default_8MB.csv)
+- [Espressif MultiNet speech commands and phoneme format](https://docs.espressif.com/projects/esp-sr/en/latest/esp32s3/speech_command_recognition/README.html)

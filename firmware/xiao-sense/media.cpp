@@ -50,6 +50,7 @@ uint8_t recordWav(Snapshot& s) {
       received+=n;
     }
     if (error!=OK) break;
+    ChakshuVoice::feed(samples,800);
     const size_t written=file.write(reinterpret_cast<const uint8_t*>(samples),sizeof(samples));
     s.bytes+=written;
     if (written!=sizeof(samples)) error=IO_ERROR;
