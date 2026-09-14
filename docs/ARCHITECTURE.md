@@ -21,6 +21,7 @@ All three modules share one runtime. Edit canonical fragments in `firmware/share
 | Chakshu PDM, always-awake profile and pin exclusions | `tools/boards/xiao-sense/index.cjs` |
 | Chakshu camera and filesystem drivers | `firmware/xiao-sense/camera.cpp`, `sd-storage.cpp` |
 | SD hardware check worker and request/status protocol | `firmware/xiao-sense/media.cpp` |
+| Fresh-frame/file transfers and paired offline audio/video | `firmware/xiao-sense/media-transfer.cpp` |
 | Target, image capacity and release paths | `tools/targets.cjs` |
 
 The fragments inherit runtime types when assembled; they are not separate translation units. New board features belong behind a board adapter or feature driver, not a copied audio/BLE engine. See [Chakshu](CHAKSHU.md) for current feature boundaries and hardware checks.

@@ -1,4 +1,4 @@
-# Chakshu hardware check
+# Chakshu capture and media
 
 Chakshu is the third Synap module: Seeed XIAO ESP32S3 Sense, onboard PDM microphone, OV3660 camera and microSD. The initial build assumes an 8 MB flash / 8 MB OPI PSRAM XIAO and an installed 2 GB card. Capacity and camera sensor ID are read from hardware, not hardcoded as successful.
 
@@ -48,9 +48,38 @@ Try the installed FAT card as-is. Firmware does not format it. If mounting fails
 
 Readiness means driver initialization succeeded, not that real-world audio/image quality has been certified. Physical checks are required.
 
-## Scope
+## Photo/video library extension
 
-This first version provides basic hardware verification and Synap audio integration. Continuous SD recording, simultaneous SD and live audio, synchronized audio/video, media listing/download in the PWA, Wi-Fi video, and cloud image/video understanding are future work. Do not treat these short checks as a background-recording solution for long sessions.
+Capability descriptor byte 14 advertises media extension version 1 when its worker is available. C3/S3 keep byte 14 zero. The PWA associates the permanent Chakshu device ID with the signed-in account; this preference never gives access to another account's files.
+
+- Online photo/video reads fresh JPEG frames through the existing BLE service while ordinary audio notifications continue. The PWA stores silent frame sequences and its audio journal separately. Throughput determines frame rate; this is not a full-frame-rate MP4 stream or Wi-Fi preview.
+- Offline capture writes a matching `.mjpeg`, `.wav`, and `.json` under `/synap/`. WAV is mono 16 kHz PCM16; JSON records frame positions on the captured audio sample timeline. Takes stop at 60 seconds of PCM, 65 seconds of wall time, a stop request, or a storage/capture error. Disconnection does not stop an accepted SD take.
+- SD offline capture excludes BLE audio, OTA and hardware checks. Photo/file transfers share the app's serialized native queue. The two media workers claim the shared camera/SD busy flag atomically.
+- File reads are limited to generated `/synap/xxxxxxxx-xxxxxxxx` names and JPEG/WAV/MJPEG/JSON extensions. Listing exposes up to 100 photo/video entries; larger card archives can be imported with a card reader. Downloads never delete the originals. The PWA rejects files larger than 32 MiB.
+- Existing ten-second hardware checks remain independent. Earlier silent video has no audio timing sidecar; it can be imported for playback/manual description, but cannot drive timestamped voice explanations.
+
+### Media extension wire format
+
+UUID suffix is `-0000-1000-8000-00805f9b34fb`.
+
+| Characteristic | Layout |
+| --- | --- |
+| `4fa12354`, write with response | `CA`, operation byte, request ID uint32 LE, offset uint32 LE, optional UTF-8 path (up to 63 bytes) |
+| `4fa12355`, read | `CB`, version 1, state (1 success, 2 error), error code, request ID uint32 LE, total bytes uint32 LE, offset uint32 LE, up to 480 payload bytes |
+
+| Operation | Action |
+| --- | --- |
+| 1 / 2 | Capture fresh JPEG / read captured bytes at offset |
+| 3 / 4 | Select SD file by path / read selected file or listing bytes |
+| 5 / 6 | Start bounded SD audio/video take / request stop |
+| 7 / 8 | Build JSON catalogue / read catalogue size |
+| 9 | Read offline take status as JSON: active, state, error, progress, path |
+
+The client sends one request at a time, polls for its matching response ID, validates every byte offset/total, and does not automatically repeat a capture. BLE callbacks only copy requests/results; camera and SD work execute in the worker. Stop/status remain available during an offline take. Changing the BLE connection invalidates a selected file or frame.
+
+### Physical validation
+
+CI compiles all three board targets. Simulated browser tests exercise account isolation, native queue transfers, separate audio/video storage and frame-limited inference. They do not establish camera/audio synchronization or throughput on a phone. For device validation, record an audible clap in view, verify the matching WAV/JSON/MJPEG timeline, test a disconnected SD take, and check card-full/removed-card recovery. Cloud descriptions require the matching PWA/backend deployment.
 
 ## References
 

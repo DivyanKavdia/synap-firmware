@@ -158,15 +158,16 @@ void tick() {
   Request request;
   if (!requests || xQueueReceive(requests,&request,0)!=pdTRUE ||
       !deviceConnected.load() || request.connection!=connectionGeneration.load()) return;
-  if (busy.load()) return; // Preserve the accepted operation's result until it completes.
+  bool expected=false;
+  if (!busy.compare_exchange_strong(expected,true)) return; // Claim the camera/SD worker atomically.
   Snapshot s;copy(s);
   // A retried command has the same ID; never capture twice after an ACK loss.
-  if (s.id==request.id && s.operation==request.operation) return;
+  if (s.id==request.id && s.operation==request.operation) {busy.store(false);return;}
   s.id=request.id;s.operation=request.operation;s.progress=0;s.bytes=0;s.path[0]=0;
   if (otaBusy() || streamingEnabled.load() || remoteStandby) {
-    s.state=3;s.error=BUSY;save(s);return;
+    s.state=3;s.error=BUSY;save(s);busy.store(false);return;
   }
-  s.state=1;s.error=OK;save(s);busy.store(true);
+  s.state=1;s.error=OK;save(s);
   if (xQueueSend(jobs,&request,0)!=pdTRUE) {
     s.state=3;s.error=BUSY;save(s);busy.store(false);
   }
