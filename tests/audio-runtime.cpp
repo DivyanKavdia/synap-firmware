@@ -5,6 +5,9 @@
 #include <iostream>
 #include <vector>
 #include <algorithm>
+constexpr uint16_t AUDIO_BYTES_PER_FRAME=1600,PCM_MIN_MTU=185;
+constexpr uint8_t PCM_AUDIO_PROTOCOL_VERSION=2;
+std::atomic<bool> pcmTransport{false};
 constexpr uint16_t SAMPLES_PER_FRAME=800, ADPCM_HEADER_BYTES=4, ADPCM_BYTES_PER_FRAME=404;
 constexpr uint16_t MAX_AUDIO_PAYLOAD_BYTES=500,MIN_REQUIRED_MTU=32;
 constexpr uint8_t AUDIO_CODEC_IMA_ADPCM=1, AUDIO_HEADER_BYTES=8, AUDIO_PACKET_MAGIC=0xA5;
@@ -47,7 +50,10 @@ int main(){
     assert(configureTransportFromPeerMtu()==(mtu>=32));
     if(mtu<32){assert(audioPayloadBytes==0 && chunksPerFrame==0);continue;}
     assert(chunksPerFrame>=1 && chunksPerFrame<=20 && audioPayloadBytes+8<=attValueCapacity);
-    assert((chunksPerFrame-1)*audioPayloadBytes<404 && chunksPerFrame*audioPayloadBytes>=404);
+    const uint16_t bytes=mtu>=PCM_MIN_MTU?1600:404;
+    assert(pcmTransport==(mtu>=PCM_MIN_MTU));
+    assert((chunksPerFrame-1)*audioPayloadBytes<bytes && chunksPerFrame*audioPayloadBytes>=bytes);
+    if(pcmTransport)assert(audioPayloadBytes%2==0 && chunksPerFrame<=10);
   }
   uint32_t random=0x579AB13Cu;
   uint64_t hash=14695981039346656037ull;
@@ -75,23 +81,25 @@ int main(){
       assert(characteristic.packets.size()==chunksPerFrame);
       if(chunksPerFrame==1)assert(spinMicros==0);
       uint8_t encoded[404];encodeImaAdpcm(frame.samples,encoded);
+      const uint16_t expectedBytes=pcmTransport?1600:404;
+      const uint8_t* expected=pcmTransport?reinterpret_cast<const uint8_t*>(frame.samples):encoded;
       unsigned received=0;
       for(unsigned i=0;i<characteristic.packets.size();++i){
         const auto& packet=characteristic.packets[i];const auto& bytes=packet.bytes;
-        assert(bytes.size()<=attValueCapacity && bytes[0]==0xA5 && bytes[1]==3);
+        assert(bytes.size()<=attValueCapacity && bytes[0]==0xA5 && bytes[1]==(pcmTransport?2:3));
         assert(bytes[2]==255 && bytes[3]==255 && bytes[4]==i && bytes[5]==chunksPerFrame);
         const unsigned size=unsigned(bytes[6])+(unsigned(bytes[7])<<8);
-        assert(size+8==bytes.size() && received+size<=404);
-        assert(memcmp(bytes.data()+8,encoded+received,size)==0);received+=size;
+        assert(size+8==bytes.size() && received+size<=expectedBytes);
+        assert(memcmp(bytes.data()+8,expected+received,size)==0);received+=size;
         if(i)assert(uint32_t(packet.time-initial)>=i*45000u/chunksPerFrame);
       }
-      assert(received==404);
+      assert(received==expectedBytes);
       // A queued frame must not burst out before the previous frame's pacing window.
       assert(sendAudioFrame(frame));
       assert(uint32_t(characteristic.packets[chunksPerFrame].time-initial)>=45000);
     }
   }
-  chunksPerFrame=20;audioPayloadBytes=21;attValueCapacity=29;
+  pcmTransport=false;chunksPerFrame=20;audioPayloadBytes=21;attValueCapacity=29;
   characteristic.packets.clear();cancelOnNotify=true;
   assert(!sendAudioFrame(frame));assert(characteristic.packets.size()==1);
   cancelOnNotify=false;streamGeneration=frame.generation;

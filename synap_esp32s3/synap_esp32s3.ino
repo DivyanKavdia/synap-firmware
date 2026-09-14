@@ -57,7 +57,9 @@ char synapDeviceId[19] = {};
 
 constexpr uint8_t PROTOCOL_VERSION = 2;
 constexpr uint8_t AUDIO_PACKET_MAGIC = 0xA5;
-constexpr uint8_t AUDIO_PROTOCOL_VERSION = 3;
+constexpr uint8_t AUDIO_PROTOCOL_VERSION = 3; // Compressed compatibility stream.
+constexpr uint8_t PCM_AUDIO_PROTOCOL_VERSION = 2; // Existing uncompressed PCM wire format.
+constexpr uint16_t PCM_MIN_MTU = 185; // At most ten PCM notifications per 50 ms frame.
 constexpr uint8_t AUDIO_CODEC_IMA_ADPCM = 1;
 constexpr uint8_t STATUS_PACKET_MAGIC = 0x5A;
 constexpr uint8_t DIAGNOSTICS_MAGIC = 0xD6;
@@ -163,6 +165,7 @@ DeviceState deviceState = DeviceState::DISCONNECTED;
 ErrorCode errorCode = ErrorCode::NONE;
 std::atomic<uint16_t> peerMtu{23}, attValueCapacity{20}, audioPayloadBytes{0};
 std::atomic<uint8_t> chunksPerFrame{0};
+std::atomic<bool> pcmTransport{false};
 #if !USE_REAL_I2S_MIC
 float tonePhase = 0;
 #endif
@@ -235,6 +238,7 @@ void acquisitionTask(void* parameter);
 void transmitterTask(void* parameter);
 bool acquireAudioFrame(AudioFrame& frame);
 bool sendAudioFrame(const AudioFrame& frame);
+bool sendCapturedFrame(const AudioFrame& frame, uint32_t paceUs);
 void initializeBLE();
 void fatalSetup(const char* message);
 
@@ -1099,7 +1103,9 @@ void updateDiagnosticsCharacteristic() {
   uint8_t flags=0;
 #if USE_REAL_I2S_MIC
   flags|=0x01;
+  flags|=0x40; // Captured PCM has no firmware DSP before transport encoding.
 #endif
+  if (pcmTransport.load()) flags|=0x80; // Uncompressed PCM transport selected.
   if (deviceConnected.load()) flags|=0x02;
   if (streamingEnabled.load()) flags|=0x04;
   // The GATT read callback must not inspect the control task's mutable OTA engine.
@@ -1128,19 +1134,19 @@ void updateDiagnosticsCharacteristic() {
 }
 // Optional recovery protocol. Buffers are volatile and owned by one app session.
 namespace SynapRecovery {
-struct EncodedFrame { uint32_t generation; uint16_t sequence; uint8_t bytes[404]; };
+using StoredFrame = AudioFrame; // Recovery always retains uncompressed PCM.
 class Ring {
  public:
-  EncodedFrame* frames=nullptr;
+  StoredFrame* frames=nullptr;
   uint16_t capacity=0,head=0,count=0,cursor=0;
   void reset() { head=count=cursor=0; }
-  bool push(const EncodedFrame& frame) {
+  bool push(const StoredFrame& frame) {
     if (!capacity) return false;
     bool lost=false;
     if (count==capacity) { head=(head+1)%capacity; if(cursor) --cursor; else lost=true; --count; }
     frames[(head+count)%capacity]=frame; ++count; return lost;
   }
-  bool peek(EncodedFrame& frame) const { if(cursor>=count) return false; frame=frames[(head+cursor)%capacity]; return true; }
+  bool peek(StoredFrame& frame) const { if(cursor>=count) return false; frame=frames[(head+cursor)%capacity]; return true; }
   void sent(uint16_t sequence) { if(cursor<count && frames[(head+cursor)%capacity].sequence==sequence) ++cursor; }
   void after(uint16_t sequence) {
     cursor=0;
@@ -1163,19 +1169,21 @@ class RecoveryGuard {
   ~RecoveryGuard() { xSemaphoreGive(recoveryMutex); }
 };
 void encodeImaAdpcm(const int16_t* samples, uint8_t* output);
-bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t* encoded,uint32_t paceUs);
+bool sendCapturedFrame(const AudioFrame& frame, uint32_t paceUs);
+bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t* encoded,uint32_t paceUs,bool pcm);
 
 void initializeRecovery() {
   recoveryMutex=xSemaphoreCreateMutex();
   if(!recoveryMutex)return;
 #if CONFIG_IDF_TARGET_ESP32S3
-  recoveryRing.frames=static_cast<SynapRecovery::EncodedFrame*>(heap_caps_malloc(600*sizeof(SynapRecovery::EncodedFrame),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+  recoveryRing.frames=static_cast<SynapRecovery::StoredFrame*>(heap_caps_malloc(600*sizeof(SynapRecovery::StoredFrame),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
   if(recoveryRing.frames)recoveryRing.capacity=600;
 #endif
-  // Keep internal RAM available for I2S, BLE and OTA on a board without PSRAM.
+  // 25 PCM frames use about 40 KB, preserving the previous internal-RAM budget.
+  // S3 PSRAM can retain 30 seconds; C3/no-PSRAM retains 1.25 seconds.
   if(!recoveryRing.frames && heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)>140000) {
-    recoveryRing.frames=static_cast<SynapRecovery::EncodedFrame*>(heap_caps_malloc(100*sizeof(SynapRecovery::EncodedFrame),MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
-    if(recoveryRing.frames)recoveryRing.capacity=100;
+    recoveryRing.frames=static_cast<SynapRecovery::StoredFrame*>(heap_caps_malloc(25*sizeof(SynapRecovery::StoredFrame),MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+    if(recoveryRing.frames)recoveryRing.capacity=25;
   }
 }
 void resetRecovery(bool disarm=false);
@@ -1186,10 +1194,8 @@ void resetRecovery(bool disarm) {
 }
 void retainRecoveryFrame(const AudioFrame& frame) {
   if(!recoveryEnabled.load())return;
-  SynapRecovery::EncodedFrame encoded; encoded.generation=frame.generation; encoded.sequence=frame.sequence;
-  encodeImaAdpcm(frame.samples,encoded.bytes);
   RecoveryGuard guard;
-  if(streamingEnabled.load() && frame.generation==streamGeneration.load() && recoveryRing.push(encoded)) ++captureDrops;
+  if(streamingEnabled.load() && frame.generation==streamGeneration.load() && recoveryRing.push(frame)) ++captureDrops;
 }
 bool recoveryCanSend() {
   if(!recoveryEnabled.load() || recoveryWaiting.load() || !deviceConnected.load())return false;
@@ -1197,12 +1203,12 @@ bool recoveryCanSend() {
 }
 bool sendRecoveryFrame() {
   const uint32_t connection=connectionGeneration.load();
-  SynapRecovery::EncodedFrame frame; uint16_t pending=0;
+  SynapRecovery::StoredFrame frame; uint16_t pending=0;
   { RecoveryGuard guard; if(!recoveryRing.peek(frame))return false; pending=recoveryRing.count-recoveryRing.cursor; }
   if(recoveryWaiting.load() || !streamingEnabled.load() || !deviceConnected.load())return false;
   const uint32_t pace=pending>4 && chunksPerFrame.load()<=5 ? 30000u : 45000u;
   const uint32_t rejectedBefore=notifyRejected.load();
-  const bool sent=sendEncodedFrame(frame.generation,frame.sequence,frame.bytes,pace);
+  const bool sent=sendCapturedFrame(frame,pace);
   if(sent && !recoveryWaiting.load() && connection==connectionGeneration.load()) { RecoveryGuard guard; recoveryRing.sent(frame.sequence); }
   else if(!sent && !recoveryWaiting.load() && deviceConnected.load() && streamingEnabled.load() && frame.generation==streamGeneration.load() && connection==connectionGeneration.load()) {
     // A full controller queue is temporary. Retain this frame for a later send;
@@ -1289,13 +1295,20 @@ bool configureTransportFromPeerMtu() {
   peerMtu = bleServer->getPeerMTU(bleServer->getConnId());
   if (peerMtu < 23) peerMtu = 23;
   attValueCapacity = peerMtu - 3;
-  audioPayloadBytes = 0; chunksPerFrame = 0;
+  audioPayloadBytes = 0; chunksPerFrame = 0; pcmTransport=false;
   if (peerMtu < MIN_REQUIRED_MTU) return false;
   const uint16_t available = attValueCapacity - AUDIO_HEADER_BYTES;
-  const uint16_t bounded = available < MAX_AUDIO_PAYLOAD_BYTES ? available : MAX_AUDIO_PAYLOAD_BYTES;
-  chunksPerFrame = (ADPCM_BYTES_PER_FRAME + bounded - 1) / bounded;
+  uint16_t bounded = available < MAX_AUDIO_PAYLOAD_BYTES ? available : MAX_AUDIO_PAYLOAD_BYTES;
+  // Packet-size eligibility is not a throughput guarantee; drop/reject counters
+  // remain visible. Keep the selected format stable until START or RESUME.
+  pcmTransport=peerMtu>=PCM_MIN_MTU;
+  if(pcmTransport.load())bounded&=~1u;
+  const uint16_t frameBytes=pcmTransport.load()?AUDIO_BYTES_PER_FRAME:ADPCM_BYTES_PER_FRAME;
+  chunksPerFrame = (frameBytes + bounded - 1) / bounded;
   if (chunksPerFrame > MAX_CHUNKS_PER_FRAME) return false;
-  audioPayloadBytes = (ADPCM_BYTES_PER_FRAME + chunksPerFrame - 1) / chunksPerFrame;
+  uint16_t payload=(frameBytes + chunksPerFrame - 1) / chunksPerFrame;
+  if(pcmTransport.load())payload=(payload+1u)&~1u; // Never split a PCM16 sample.
+  audioPayloadBytes=payload;
   return audioPayloadBytes + AUDIO_HEADER_BYTES <= attValueCapacity;
 }
 void startStreaming(uint8_t version) {
@@ -1551,7 +1564,8 @@ bool acquireAudioFrame(AudioFrame& frame) {
   }
   for (uint16_t i=0; i<SAMPLES_PER_FRAME; ++i) {
     const int32_t sample=raw[i] >> 16;
-    // I2S slot conversion only: preserve DC, quiet samples and the first sample.
+    // Format conversion only: retain the signed upper 16 bits of the I2S slot.
+    // No filter, gain, gate or per-recording signal history precedes the codec.
     frame.samples[i]=static_cast<int16_t>(sample);
   }
 #else
@@ -1632,21 +1646,24 @@ void encodeImaAdpcm(const int16_t* samples, uint8_t* output) {
   }
 }
 
-bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t* encoded,uint32_t paceUs) {
+bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t* encoded,uint32_t paceUs,bool pcm) {
+  const uint16_t frameBytes=pcm?AUDIO_BYTES_PER_FRAME:ADPCM_BYTES_PER_FRAME;
   const uint8_t chunks=chunksPerFrame;
   const uint16_t payload=audioPayloadBytes, capacity=attValueCapacity;
   if (chunks < MIN_CHUNKS_PER_FRAME || chunks > MAX_CHUNKS_PER_FRAME ||
-      !payload || payload > MAX_AUDIO_PAYLOAD_BYTES) return false;
+      !payload || payload > MAX_AUDIO_PAYLOAD_BYTES ||
+      uint32_t(chunks)*payload<frameBytes || uint32_t(chunks-1)*payload>=frameBytes) return false;
   static uint8_t packet[AUDIO_HEADER_BYTES+MAX_AUDIO_PAYLOAD_BYTES];
   const uint32_t connection=connectionGeneration.load();
   for (uint8_t index=0; index<chunks; ++index) {
     if (!streamingEnabled.load() || !deviceConnected.load() ||
         generation != streamGeneration.load() || connection != connectionGeneration.load()) return false;
     const uint16_t offset=index*payload;
-    const uint16_t remaining=ADPCM_BYTES_PER_FRAME-offset;
+    if(offset>=frameBytes)return false;
+    const uint16_t remaining=frameBytes-offset;
     const uint16_t length=remaining < payload ? remaining : payload;
     if (AUDIO_HEADER_BYTES+length > capacity) return false;
-    packet[0]=AUDIO_PACKET_MAGIC; packet[1]=AUDIO_PROTOCOL_VERSION;
+    packet[0]=AUDIO_PACKET_MAGIC; packet[1]=pcm?PCM_AUDIO_PROTOCOL_VERSION:AUDIO_PROTOCOL_VERSION;
     packet[2]=sequence & 255; packet[3]=sequence >> 8;
     packet[4]=index; packet[5]=chunks; packet[6]=length & 255; packet[7]=length >> 8;
     memcpy(packet+AUDIO_HEADER_BYTES, encoded+offset, length);
@@ -1677,10 +1694,19 @@ bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t* encod
   }
   return generation == streamGeneration.load() && deviceConnected.load() && connection == connectionGeneration.load();
 }
-bool sendAudioFrame(const AudioFrame& frame) {
+bool sendCapturedFrame(const AudioFrame& frame, uint32_t paceUs) {
+  if(pcmTransport.load()) {
+    // ESP32-C3/S3 PCM samples are little endian, matching the protocol-v2 wire.
+    return sendEncodedFrame(frame.generation,frame.sequence,
+      reinterpret_cast<const uint8_t*>(frame.samples),paceUs,true);
+  }
+  // Only small-MTU links use lossy compression. Recovery storage stays PCM.
   static uint8_t encoded[ADPCM_BYTES_PER_FRAME];
   encodeImaAdpcm(frame.samples,encoded);
-  return sendEncodedFrame(frame.generation,frame.sequence,encoded,45000u);
+  return sendEncodedFrame(frame.generation,frame.sequence,encoded,paceUs,false);
+}
+bool sendAudioFrame(const AudioFrame& frame) {
+  return sendCapturedFrame(frame,45000u);
 }
 void transmitterTask(void* parameter) {
   (void)parameter;

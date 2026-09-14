@@ -31,10 +31,9 @@ Shared changes must be exercised on both generated targets. Target-specific chan
 ### Audio and concurrency
 
 - Capture: 16 kHz PCM16 mono, 800 samples / 50 ms frame; left I2S slot.
-- Capture: direct 32-bit I2S slot to signed PCM16 conversion, with no high-pass filter, denoiser, gate, normalization or gain adjustment. BLE IMA ADPCM remains lossy transport compression (404 bytes per 50 ms frame; 8,080 audio bytes/s instead of 32,000 PCM bytes/s). The app decodes once and preserves those decoded samples.
-- Filter coefficients: a = 31880/32768, b = 32324/32768; y[n] = a*y[n−1] + b*(x[n]−x[n−1]). Q8 state, 64-bit intermediates, symmetric rounding and saturation retain quiet signals without extra audio frames.
-- Filter history belongs to capture and resets on recording generation or successful I2S recovery. Synthetic tests verify response and bypass; hardware timing and speech quality require measurement.
-- Encoding: independent 404-byte IMA ADPCM frames, so a lost frame does not corrupt the following frame.
+- Capture performs only signed I2S slot conversion (`raw >> 16`). The firmware high-pass filter and its state are removed; there is no software gain, gate, denoiser or voice activity suppression. First samples, DC and quiet PCM values survive conversion.
+- INMP441 outputs 24 significant bits in a 32-bit slot. PCM16 drops the lower eight significant bits; the microphone's built-in ADC/filtering remains. Capture is unconditioned PCM16, not raw 24-bit microphone data.
+- Transport prefers uncompressed protocol-v2 PCM16 (1,600 bytes/frame, 256 kb/s) at negotiated MTU >=185. Lower supported MTUs use independent 404-byte IMA ADPCM protocol-v3 frames (64.64 kb/s), so a lost frame cannot corrupt the next frame. MTU eligibility limits fragment count; it does not prove sustained radio throughput. START/RESUME selects the format; there is no hidden mid-connection codec switch.
 - Transport adapts to ATT capacity; normal fragment pacing uses a 45 ms window.
 - Connection preferences and the one-time request on each connection use 15–30 ms intervals, zero peripheral latency and a 6-second supervision timeout. These are requests; the phone controls the negotiated parameters.
 - Audio notifications retry local stack rejection up to four attempts with 15/30/45 ms yielding backoff. A congested recovery frame retains its cursor for a later retry; a legacy session counts the lost frame and keeps capturing. Pacing restarts after each accepted notification, so a delayed callback cannot burst overdue fragments. Connection generations invalidate old sends even when a reconnect preserves the recording generation.
@@ -55,7 +54,7 @@ No measured runtime extension is claimed. Assess complete battery-side current i
 
 ### Disconnect recovery
 
-A compatible PWA explicitly arms volatile audio recovery for its session. Without that negotiation, disconnect stops recording. S3 can reserve 600 encoded frames (30 seconds) in PSRAM. Without PSRAM, 100 frames (5 seconds) require more than 140 KB free internal heap after BLE initialization; allocation failure leaves ordinary capture available.
+A compatible PWA explicitly arms volatile audio recovery for its session. Without that negotiation, disconnect stops recording. The ring always stores PCM, including when its eventual transmission uses ADPCM. S3 can reserve 600 PCM frames (30 seconds, about 965 KB) in PSRAM. Without PSRAM, 25 PCM frames (1.25 seconds, about 40 KB) require more than 140 KB free internal heap after BLE initialization; allocation failure leaves ordinary capture available.
 
 Recovery expires after 60 seconds; STOP drain has a 35-second bound. Overflow, reboot, sleep and app reload have explicit limits. No audio is written to flash. See the [recovery protocol](DISCONNECT_RECOVERY.md) for session binding, pacing and acknowledgement semantics.
 
@@ -65,7 +64,7 @@ Primary service: `4fa12345-0000-1000-8000-00805f9b34fb`. Characteristic suffixes
 
 | Suffix | Purpose | Protocol |
 | --- | --- | --- |
-| 46 | Audio | v3 |
+| 46 | Audio | v2 PCM preferred; v3 ADPCM fallback |
 | 47 | Control / status | v2 |
 | 48 / 49 | OTA write / status | v3 |
 | 4b | Firmware identity | Target and build |
@@ -76,17 +75,17 @@ Primary service: `4fa12345-0000-1000-8000-00805f9b34fb`. Characteristic suffixes
 
 The public device ID is not a secret. OTA validates target identity, image structure, size and SHA-256, and supports resume. Recording blocks OTA; confirmed critical battery additionally blocks it on S3. The PWA verifies publisher provenance separately; see [release trust](../OTA_RELEASES.md).
 
-Diagnostics v2 retains the first 32-byte layout from v1, with version byte 2. Additional little-endian fields are disconnect reason (`u16`, offset 32), last rejected notification status (`u16`, 34), disconnect count since boot (`u32`, 36), last disconnect uptime in milliseconds (`u32`, 40), and last notification error (`u32`, 44). Link/error evidence survives START and reconnect. `0xFFFF` means the reason was unavailable; the pinned NimBLE server callback omits it. Bluedroid supplies the raw reason (for example, `0x08` for supervision timeout). Reboot is distinguishable through reset reason, uptime and reset counters; these diagnostics are volatile.
+Diagnostics v2 retains the first 32-byte layout from v1, with version byte 2. Flags byte 2 adds `0x40` for real-microphone capture without firmware DSP. `0x80` identifies selected PCM transport. Its absence with `0x40` present identifies ADPCM fallback. Absence of `0x40` means unknown on older builds; existing consumers can ignore it. This flag does not claim lossless transport. Additional little-endian fields are disconnect reason (`u16`, offset 32), last rejected notification status (`u16`, 34), disconnect count since boot (`u32`, 36), last disconnect uptime in milliseconds (`u32`, 40), and last notification error (`u32`, 44). Link/error evidence survives START and reconnect. `0xFFFF` means the reason was unavailable; the pinned NimBLE server callback omits it. Bluedroid supplies the raw reason (for example, `0x08` for supervision timeout). Reboot is distinguishable through reset reason, uptime and reset counters; these diagnostics are volatile.
 
 For a C3 disconnect retest, update firmware and the PWA, keep the app foregrounded, record for 10–15 minutes, then stop and inspect Settings diagnostics. Include the `GATT disconnected` and `Pendant diagnostics` entries. Repeat on battery and USB power if disconnects persist. Software regression checks cannot establish radio or power stability on physical hardware.
 
 ## Validation
 
-`node --test tests/*.cjs` compiles actual firmware functions with warnings as errors and undefined-behavior sanitization. Tests cover codec bytes, all MTU values, exact unfiltered PCM conversion, partial I2S reads, concurrent STOP/recovery, connection races, battery policies, LED timing, shared gestures under both board configurations, recovery limits, OTA resume and release identity. Gesture regressions include delayed STOP completion, short holds, stable wake release, OTA interruption, reconnect, timer wrap and rejection of the wrong board's wake cause.
+`node --test tests/*.cjs` compiles actual firmware functions with warnings as errors and undefined-behavior sanitization. Tests cover codec bytes, all MTU values, all 65,536 PCM16 values, partial I2S reads, concurrent STOP/recovery, connection races, battery policies, LED timing, shared gestures under both board configurations, recovery limits, OTA resume and release identity. Gesture regressions include delayed STOP completion, short holds, stable wake release, OTA interruption, reconnect, timer wrap and rejection of the wrong board's wake cause.
 
 Source-generation tests also exercise the CLI outside the repository working directory and reject changed/ambiguous anchors. CI compiles both pinned Arduino targets and validates release artifacts.
 
-Before claiming a runtime improvement, validate both physical boards: long recordings and drop counters, START/STOP latency, repeated RF interruptions, touch gestures, sleep/wake, battery readings while charging/unplugged, OTA resume and battery-side current. The PWA owns enhancement, transcription, summaries and speaker identification; those features are outside this repository.
+Before claiming a runtime improvement, validate both physical boards: long recordings and drop counters, START/STOP latency, repeated RF interruptions, touch gestures, sleep/wake, battery readings while charging/unplugged, OTA resume and battery-side current. The PWA preserves decoded PCM for playback and new cloud uploads. Enhancement is an explicit preview/export action; cloud transcription receives the stored upload without automatic trimming. Summaries and speaker identification remain outside this repository.
 
 ## Implementation references
 

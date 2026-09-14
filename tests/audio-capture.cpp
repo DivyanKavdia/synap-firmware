@@ -25,8 +25,8 @@ struct FakeI2S {
   void load(const std::vector<int16_t>& pcm) {
     data.resize(pcm.size()*4); position=0; readIndex=0;
     for(size_t i=0;i<pcm.size();++i){
-      // Nonzero lower slot bits must not leak into the high PCM16 word.
-      const int32_t raw=static_cast<int32_t>(int64_t(pcm[i])*65536+int64_t((i*997)&65535));
+      // Include discarded microphone precision and unused slot bits.
+      const int32_t raw=static_cast<int32_t>(int64_t(pcm[i])*65536 + ((i*7919)&65535));
       std::memcpy(data.data()+i*4,&raw,4);
     }
   }
@@ -76,7 +76,7 @@ int main() {
   for(int i=0;i<800;++i)assert(frame.samples[i]==pcm[i]);
 
   // Three empty reads trigger the existing bounded restart; old partial PCM and
-  // slot bytes must be discarded before the recovered frame is encoded.
+  // must be discarded before the recovered frame is encoded.
   microphoneI2S.load(signal(800));
   microphoneI2S.readSizes={17,0,0,0};
   recoveryPcm=signal(800,99);
@@ -84,14 +84,20 @@ int main() {
   assert(starts==1 && stops==1);
   for(int i=0;i<800;++i)assert(frame.samples[i]==recoveryPcm[i]);
 
-  // Every signed PCM16 value survives, including DC, rails and quiet samples.
-  std::vector<int16_t> exhaustive(82*800);
-  for(size_t i=0;i<exhaustive.size();++i)exhaustive[i]=int16_t(int(i%65536)-32768);
-  microphoneI2S.load(exhaustive);
-  microphoneI2S.readSizes={1,3,17,2,97};
-  for(size_t offset=0;offset<exhaustive.size();offset+=800){
+  // Every signed PCM16 value survives production capture, including low-level
+  // +/-1, DC, full scale, and the first sample after a start or recovery.
+  std::vector<int16_t> fullRange(800);
+  for (int base=-32768;base<=32767;base+=800) {
+    for (int i=0;i<800;++i)fullRange[i]=int16_t(std::min(32767,base+i));
+    microphoneI2S.load(fullRange);microphoneI2S.readSizes={1,3,11,2};
     assert(acquireAudioFrame(frame));
-    for(int i=0;i<800;++i)assert(frame.samples[i]==exhaustive[offset+i]);
+    for (int i=0;i<800;++i)assert(frame.samples[i]==fullRange[i]);
+  }
+  for (int value : {-32768,-1234,-2,-1,0,1,2,1234,32767}) {
+    std::fill(fullRange.begin(),fullRange.end(),int16_t(value));
+    microphoneI2S.load(fullRange);microphoneI2S.readSizes.clear();
+    assert(acquireAudioFrame(frame));
+    for (int i=0;i<800;++i)assert(frame.samples[i]==value);
   }
 
   // Stopping during a partial read aborts capture rather than publishing a frame.
@@ -99,5 +105,5 @@ int main() {
   microphoneI2S.cancelOnNextRead=true;
   assert(!acquireAudioFrame(frame));
   assert(starts==1);
-  std::puts("PASS: exact production capture preserves all 65536 PCM values, byte alignment, frame continuity, recovery and stop cancellation");
+  std::puts("PASS: exact production capture preserves byte alignment, frame continuity, all PCM16 values, DC, quiet samples, recovery and stop cancellation");
 }
