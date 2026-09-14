@@ -56,6 +56,6 @@ node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/sy
 
 CI compiles both targets with the pinned toolchain and retains exact generated sources. Eligible main builds publish automatically. Initial installation uses USB; subsequent updates use PWA BLE OTA. Never interchange C3 and S3 binaries.
 
-Real I2S capture is the default. `-DUSE_REAL_I2S_MIC=0` enables a diagnostic tone; `-DSYNAP_MIC_HPF_ENABLE=0` bypasses the high-pass filter for comparison. Unpublished USB builds identify as build 0.
+Real I2S capture is unfiltered: only 32-bit I2S slot to PCM16 conversion precedes BLE ADPCM encoding. No high-pass filter, denoiser, noise gate or automatic gain is applied. `-DUSE_REAL_I2S_MIC=0` enables a diagnostic tone. Unpublished USB builds identify as build 0.
 
 Native tests and successful board builds do not establish physical battery accuracy, audio quality or battery life. Hardware acceptance must cover recording, disconnect recovery, gestures, sleep/wake and OTA on both boards.

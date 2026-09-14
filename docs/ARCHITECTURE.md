@@ -31,7 +31,7 @@ Shared changes must be exercised on both generated targets. Target-specific chan
 ### Audio and concurrency
 
 - Capture: 16 kHz PCM16 mono, 800 samples / 50 ms frame; left I2S slot.
-- Conditioning: unity-gain conversion followed by a 70 Hz first-order high-pass. There is no firmware speech-band denoiser, noise gate or automatic gain boost.
+- Capture: direct 32-bit I2S slot to signed PCM16 conversion, with no high-pass filter, denoiser, gate, normalization or gain adjustment. BLE IMA ADPCM remains lossy transport compression (404 bytes per 50 ms frame; 8,080 audio bytes/s instead of 32,000 PCM bytes/s). The app decodes once and preserves those decoded samples.
 - Filter coefficients: a = 31880/32768, b = 32324/32768; y[n] = a*y[n−1] + b*(x[n]−x[n−1]). Q8 state, 64-bit intermediates, symmetric rounding and saturation retain quiet signals without extra audio frames.
 - Filter history belongs to capture and resets on recording generation or successful I2S recovery. Synthetic tests verify response and bypass; hardware timing and speech quality require measurement.
 - Encoding: independent 404-byte IMA ADPCM frames, so a lost frame does not corrupt the following frame.
@@ -82,7 +82,7 @@ For a C3 disconnect retest, update firmware and the PWA, keep the app foreground
 
 ## Validation
 
-`node --test tests/*.cjs` compiles actual firmware functions with warnings as errors and undefined-behavior sanitization. Tests cover codec bytes, all MTU values, filtering, partial I2S reads, concurrent STOP/recovery, connection races, battery policies, LED timing, shared gestures under both board configurations, recovery limits, OTA resume and release identity. Gesture regressions include delayed STOP completion, short holds, stable wake release, OTA interruption, reconnect, timer wrap and rejection of the wrong board's wake cause.
+`node --test tests/*.cjs` compiles actual firmware functions with warnings as errors and undefined-behavior sanitization. Tests cover codec bytes, all MTU values, exact unfiltered PCM conversion, partial I2S reads, concurrent STOP/recovery, connection races, battery policies, LED timing, shared gestures under both board configurations, recovery limits, OTA resume and release identity. Gesture regressions include delayed STOP completion, short holds, stable wake release, OTA interruption, reconnect, timer wrap and rejection of the wrong board's wake cause.
 
 Source-generation tests also exercise the CLI outside the repository working directory and reject changed/ambiguous anchors. CI compiles both pinned Arduino targets and validates release artifacts.
 

@@ -10,7 +10,7 @@ test('BLE link changes survive queue pressure and stale commands cannot starve m
   const callbacks=source.slice(source.indexOf('class ServerCallbacks'),source.indexOf('class ControlCallbacks'));
   const faultState=source.slice(source.indexOf('portMUX_TYPE streamErrorMux'),source.indexOf('DeviceState deviceState'));
   const faults=source.slice(source.indexOf('void queueEvent(EventType type, uint8_t command, uint8_t version, uint32_t stream) {'),source.indexOf('class ServerCallbacks'));
-  const task=source.slice(source.indexOf('void reconcileConnection() {'),source.indexOf('#ifndef SYNAP_MIC_HPF_ENABLE'));
+  const task=source.slice(source.indexOf('void reconcileConnection() {'),source.indexOf('bool acquireAudioFrame(AudioFrame& frame) {'));
   const fixture=fs.readFileSync(path.join(__dirname,'control-runtime.cpp'),'utf8');
   assert.match(nativeTest(fixture.replace('// INSERT LINK CONSTANTS',linkConstants).replace('// INSERT CONTROL TYPES',types).replace('// INSERT FAULT STATE',faultState).replace('// INSERT FAULT FUNCTIONS',faults).replace('// INSERT START',start).replace('// INSERT CALLBACKS',callbacks).replace('// INSERT CONTROL TASK',task)),/PASS link recovery/);
 });

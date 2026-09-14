@@ -1523,64 +1523,10 @@ void controlTask(void* parameter) {
   }
 }
 
-// Set to 0 for an unfiltered PCM comparison build.
-#ifndef SYNAP_MIC_HPF_ENABLE
-#define SYNAP_MIC_HPF_ENABLE 1
-#endif
-
-namespace SynapAudio {
-
-// First-order 70 Hz high-pass at 16 kHz, with unity Nyquist gain.
-// a = exp(-2*pi*70/16000), b = (1+a)/2, quantized to Q15.
-// Q8 state avoids integer limit-cycle noise on quiet signals. Products use
-// int64_t so full-scale steps cannot overflow, including on the ESP32-C3.
-// This removes rumble/DC, not speech-band noise. No gain, gate or VAD is used.
-class SpeechHighPass {
- public:
-  void reset() { previousInputQ8_=0; previousOutputQ8_=0; initialized_=false; }
-
-  int16_t process(int16_t sample) {
-#if SYNAP_MIC_HPF_ENABLE
-    const int32_t inputQ8=int32_t(sample)*256;
-    if (!initialized_) {
-      previousInputQ8_=inputQ8;
-      initialized_=true;
-      return 0;
-    }
-    const int64_t nextQ8=(int64_t(previousOutputQ8_)*31880 +
-      (int64_t(inputQ8)-previousInputQ8_)*32324)/32768;
-    previousInputQ8_=inputQ8;
-    previousOutputQ8_=static_cast<int32_t>(nextQ8);
-    // Symmetric rounding avoids adding a negative DC bias to quiet audio.
-    int32_t output=static_cast<int32_t>((nextQ8+(nextQ8<0 ? -128 : 128))/256);
-    if (output>32767) output=32767;
-    if (output<-32768) output=-32768;
-    return static_cast<int16_t>(output);
-#else
-    return sample;
-#endif
-  }
-
- private:
-  int32_t previousInputQ8_=0, previousOutputQ8_=0;
-  bool initialized_=false;
-};
-
-} // namespace SynapAudio
-
-static_assert(SAMPLE_RATE==16000, "Speech high-pass requires 16 kHz PCM");
-
 bool acquireAudioFrame(AudioFrame& frame) {
 #if USE_REAL_I2S_MIC
   MicrophoneGuard guard;
   static int32_t raw[SAMPLES_PER_FRAME];
-  // Capture-task ownership avoids sharing filter state with the control task.
-  static SynapAudio::SpeechHighPass highPass;
-  static uint32_t highPassGeneration=0;
-  if (highPassGeneration!=frame.generation) {
-    highPass.reset();
-    highPassGeneration=frame.generation;
-  }
   size_t received=0;
   uint8_t emptyReads=0;
   bool microphoneRecoveryUsed=false;
@@ -1596,7 +1542,7 @@ bool acquireAudioFrame(AudioFrame& frame) {
         stopMicrophone();
         vTaskDelay(pdMS_TO_TICKS(35));
         if (!streamingEnabled.load() || frame.generation != streamGeneration.load()) return false;
-        if (startMicrophone()) { highPass.reset(); received=0; emptyReads=0; continue; }
+        if (startMicrophone()) { received=0; emptyReads=0; continue; }
       }
       return false;
     }
@@ -1605,7 +1551,8 @@ bool acquireAudioFrame(AudioFrame& frame) {
   }
   for (uint16_t i=0; i<SAMPLES_PER_FRAME; ++i) {
     const int32_t sample=raw[i] >> 16;
-    frame.samples[i]=highPass.process(static_cast<int16_t>(sample));
+    // I2S slot conversion only: preserve DC, quiet samples and the first sample.
+    frame.samples[i]=static_cast<int16_t>(sample);
   }
 #else
   const float increment=2.0f*PI*440.0f/SAMPLE_RATE;
