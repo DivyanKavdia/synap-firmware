@@ -139,7 +139,7 @@ class PathCallbacks : public BLECharacteristicCallbacks {
   }
 };
 void initialize() {
-  ChakshuCamera::begin();ChakshuStorage::begin();
+  ChakshuCamera::begin();ChakshuStorage::begin(false);
   Snapshot s;refresh(s);save(s);
   requests=xQueueCreate(4,sizeof(Request));jobs=xQueueCreate(1,sizeof(Request));
   if (!requests || !jobs ||
