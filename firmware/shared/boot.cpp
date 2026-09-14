@@ -90,9 +90,7 @@ void setup() {
   sampleBattery(true);
 #if USE_REAL_I2S_MIC
   microphoneValidated=startMicrophone();
-#if !SYNAP_CHAKSHU
   if (microphoneValidated) stopMicrophone();
-#endif
 #endif
   applyCpuPowerProfile(false);
   audioFrameQueue=xQueueCreate(20, sizeof(AudioFrame));

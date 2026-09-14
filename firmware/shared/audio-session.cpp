@@ -209,11 +209,7 @@ void stopStreaming(ErrorCode reason) {
   ++streamGeneration; // Invalidates queued AND already-in-flight old task work.
   if (audioFrameQueue) xQueueReset(audioFrameQueue);
 #if USE_REAL_I2S_MIC
-#if SYNAP_CHAKSHU
-  if (!mediaBusy()) stopMicrophone();
-#else
   stopMicrophone();
-#endif
 #endif
   // Acknowledge STOP only after the final in-flight notification has returned.
   while (transmitterActive.load()) vTaskDelay(1);

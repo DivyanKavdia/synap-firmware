@@ -56,6 +56,6 @@ test('release workflow compiles the shared complete production pipeline',()=>{
   const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
   assert.match(workflow,/cp synap_esp32s3\/synap_esp32s3\.ino prepared\/synap_esp32s3\/synap_esp32s3\.ino/);
   const compileLines=workflow.split('\n').filter(line=>line.includes('arduino-cli compile'));
-  assert.equal(compileLines.length,2);
+  assert.equal(compileLines.length,3);
   assert(compileLines.every(line=>line.includes('-DUSE_REAL_I2S_MIC=1')));
 });

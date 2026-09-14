@@ -14,6 +14,13 @@ function materializeChakshu(source,target) {
   out=out.split('statusLed.clear();statusLed.show();').join('/* No external LED on Chakshu. */');
   out=replaceFunctionBlock(out,'void updateStatusLed(bool force) {','void setDeviceState(',
     'void updateStatusLed(bool force) { (void)force; }\n\n','No external indicator');
+  replace('  if (microphoneValidated) stopMicrophone();',
+    '  // Keep the onboard PDM microphone initialized for bring-up.','Always-on microphone');
+  const stopStart=out.indexOf('void stopStreaming(ErrorCode reason) {');
+  const stopEnd=out.indexOf('bool configureTransportFromPeerMtu() {',stopStart);
+  if(stopStart<0 || stopEnd<0)throw Error('Missing BLE stop boundary');
+  const stop=out.slice(stopStart,stopEnd).replace('  stopMicrophone();','  if (!mediaBusy()) stopMicrophone();');
+  out=out.slice(0,stopStart)+stop+out.slice(stopEnd);
   // Remove touch wake/sleep implementations, including durable wake gates from another board.
   out=replaceFunctionBlock(out,'bool armTouchWakeSource() {','void publishPowerEvent(',
     'bool armTouchWakeSource() { return false; }\nvoid armTouchWakeAndSleep() {}\nbool confirmTouchWakeGesture() { return true; }\n\n','Always-awake boot');
