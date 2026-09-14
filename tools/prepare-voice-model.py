@@ -27,13 +27,14 @@ def build(out):
             header+=struct.pack('<32sII',name.encode(),offset+len(body),len(data)); body+=data
     packed=header+body
     digest=hashlib.sha256(packed).hexdigest()
-    source=(pathlib.Path(__file__).resolve().parent.parent/'firmware/xiao-sense/voice.cpp').read_text()
+    source=(pathlib.Path(__file__).resolve().parent.parent/'firmware/xiao-sense/model-contract.cpp').read_text()
     if f'MODEL_BYTES={len(packed)};' not in source or f'MODEL_SHA256[]="{digest}"' not in source:
         raise ValueError('Model pack does not match firmware integrity constants')
     manifest={'schema':1,'source':REV,'models':list(FILES),'bytes':len(packed),'sha256':digest}
     (out/'model.json').write_text(json.dumps(manifest,indent=2)+'\n')
     (out/'srmodels.bin').write_bytes(packed)
     license=download('LICENSE')
+    (out/'ESPRESSIF-LICENSE.txt').write_bytes(license)
     with zipfile.ZipFile(out/'chakshu-voice-model.zip','w',zipfile.ZIP_DEFLATED) as z:
         z.writestr('synap/models/srmodels.bin',packed)
         z.writestr('synap/models/model.json',json.dumps(manifest,indent=2)+'\n')
