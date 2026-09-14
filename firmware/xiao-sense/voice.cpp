@@ -7,7 +7,7 @@
 namespace ChakshuVoice {
 constexpr size_t MODEL_BYTES=2177224;
 constexpr char MODEL_SHA256[]="9bb7348b31891a89eb494f5995970a7fc52b765759e4992d471ab2901bf9c47c";
-enum Status : uint8_t { STARTING=0,LISTENING=1,MODEL_MISSING=2,NO_MEMORY=3,MODEL_ERROR=4,DISABLED=5 };
+enum Status : uint8_t { STARTING=0,LISTENING=1,MODEL_MISSING=2,NO_MEMORY=3,MODEL_ERROR=4,VOICE_DISABLED=5 };
 std::atomic<uint8_t> status{MODEL_MISSING};
 std::atomic<bool> enabled{true};
 std::atomic<int> persistEnabled{-1};
@@ -132,7 +132,7 @@ void initialize() {
      xTaskCreatePinnedToCore(feedTask,"voice-feed",4096,nullptr,2,&feedHandle,0)!=pdPASS||
      xTaskCreatePinnedToCore(detectTask,"voice-detect",8192,nullptr,1,&detectHandle,1)!=pdPASS||
      xTaskCreatePinnedToCore(idleTask,"voice-idle",4096,nullptr,1,&idleHandle,0)!=pdPASS){status=NO_MEMORY;cleanup();return;}
-  status=enabled.load()?LISTENING:DISABLED;
+  status=enabled.load()?LISTENING:VOICE_DISABLED;
   xTaskNotifyGive(feedHandle);xTaskNotifyGive(detectHandle);xTaskNotifyGive(idleHandle);
   Serial.printf("[VOICE] Hi Chakshu ready=%u psram=%lu\n",unsigned(active()),(unsigned long)ESP.getFreePsram());
 }
@@ -185,7 +185,7 @@ class Callbacks : public BLECharacteristicCallbacks {
     if(op==3){leaseAt=0;return;}
     if(op>1)return;
     enabled=op==1;persistEnabled=op;++discontinuities;leaseAt=0;
-    if(mnData)status=enabled?LISTENING:DISABLED;
+    if(mnData)status=enabled?LISTENING:VOICE_DISABLED;
     // Persist in the control task; never write flash from a BLE callback.
   }
 };

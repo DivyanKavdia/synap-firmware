@@ -1,6 +1,17 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs');
 const {nativeTest}=require('./support/native.cjs');
+test('voice status compiles with Arduino GPIO macros and keeps wire values',()=>{
+  const source=fs.readFileSync('firmware/xiao-sense/voice.cpp','utf8');
+  const status=source.match(/enum Status : uint8_t \{[^}]+\};/)[0];
+  const fixture=`#include <cstdint>
+#include <cstdio>
+#define DISABLED 0x00
+namespace ChakshuVoice { ${status} }
+static_assert(ChakshuVoice::LISTENING==1 && ChakshuVoice::VOICE_DISABLED==5);
+int main(){puts("PASS Arduino status compatibility");}`;
+  assert.match(nativeTest(fixture),/PASS Arduino status compatibility/);
+});
 test('Hi Chakshu gate rejects unarmed, uncertain, expired and repeated commands',()=>{
   const contract=fs.readFileSync('firmware/xiao-sense/voice-contract.cpp','utf8');
   const fixture=`#include <cstdint>
