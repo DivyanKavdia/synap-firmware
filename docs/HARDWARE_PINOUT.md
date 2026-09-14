@@ -73,3 +73,20 @@ S3 calibration reference is 4.13 V cell / 1.32 V ADC / raw 1544. The specified S
 C3 uses the nominal equal-resistor ratio: cell voltage = GPIO1 ADC voltage × 2. The 4.15 V full-charge anchor corresponds to 2.075 V at GPIO1; valid readings at or above that anchor report 100%. For example, a charging sample of 2.080 V reports 4.160 V and 100%. The existing 2.80–4.35 V validity range still rejects implausible readings.
 
 The resistor junction, capacitor signal terminal and GPIO1 must be the same electrical point, measured against C3 GND. Diagnostics preserve ADC millivolts, raw counts and reconstructed cell voltage. The PWA displays valid percentages and “—” for unavailable readings.
+
+## Chakshu: XIAO ESP32S3 Sense
+
+These connections are on the Sense board. No external wiring is required for bring-up.
+
+| Function | GPIO |
+| --- | --- |
+| PDM microphone clock / data | 42 / 41 |
+| SD SCK / MISO / MOSI / CS | 7 / 8 / 9 / 21 |
+| Camera XCLK / SCCB SDA / SCCB SCL | 10 / 40 / 39 |
+| Camera D0 / D1 / D2 / D3 | 15 / 17 / 18 / 16 |
+| Camera D4 / D5 / D6 / D7 | 14 / 12 / 11 / 48 |
+| Camera VSYNC / HREF / PCLK | 38 / 47 / 13 |
+| Camera PWDN / RESET | Unconnected (-1) |
+| External touch / battery divider / NeoPixel | Disabled |
+
+GPIO8, GPIO13 and GPIO48 must not inherit the SuperMini battery, touch or LED behavior. See [Chakshu bring-up](CHAKSHU.md).

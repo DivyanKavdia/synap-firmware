@@ -2,20 +2,28 @@
 
 ## Source ownership
 
-One runtime supplies audio capture, encoding, BLE transport, OTA, optional recovery, battery sampling and task coordination for both boards. It remains in the established Arduino sketch path, `synap_esp32s3/synap_esp32s3.ino`, with S3 defaults and SDK target guards.
+All three modules share one runtime. Edit canonical fragments in `firmware/shared/`, then run `node tools/assemble-source.cjs`. The generated `synap_esp32s3/synap_esp32s3.ino` remains checked in for portable Arduino downloads and existing native tests; CI verifies it matches the canonical source exactly.
 
-`tools/materialize-target.cjs` selects the board. S3 is a byte-for-byte passthrough. The C3 adapter in `tools/boards/esp32c3/index.cjs` applies identity/pin mapping, LED, battery and single-core task overrides in that order. Touch handling is shared without source replacement. `tools/target-source.cjs` provides shared checked source edits and template loading. Missing or ambiguous single-replacement anchors abort generation.
+`tools/materialize-target.cjs` selects the hardware adapter. S3 is a byte-for-byte passthrough. C3 adapts pins, LED, battery and single-core tasks. Chakshu selects native PDM PCM16, camera and SD drivers, removes touch/LED/battery GPIO initialization and sleep, and uses a separate 8 MB OTA target. Checked replacement anchors fail generation if shared code changes incompatibly.
 
-| Change | Edit location |
+| Responsibility | Edit location |
 | --- | --- |
-| Shared audio, transport, recovery or OTA behavior | Production sketch |
-| Shared awake gestures / boot wake confirmation | `pollTouchControl` / `confirmTouchWakeGesture` in the production sketch |
-| S3 LED or battery defaults | Production sketch; review C3 integration anchors |
-| C3 battery ratio, ADC range, full-charge anchor or cutoff policy | `tools/boards/esp32c3/battery.cjs` |
-| C3 LED pulse behavior | `firmware/esp32c3/status-led.cpp` |
-| C3 LED setup, off state and deep-sleep hold | `tools/boards/esp32c3/led.cjs` |
-| C3 pins and task creation | `tools/boards/esp32c3/index.cjs` |
-| Binary identity, capacity and release paths | `tools/targets.cjs`; coordinate source identity changes |
+| Runtime types, public BLE IDs and shared state | `firmware/shared/runtime.cpp` |
+| Device-bound OTA protocol and flash backend | `firmware/shared/ota.cpp` |
+| Hardware feature descriptor | `firmware/shared/module-capabilities.cpp` |
+| Power, mic lifecycle, battery and touch | `firmware/shared/power.cpp` |
+| Recording session, transport negotiation and recovery | `firmware/shared/audio-session.cpp` |
+| BLE callbacks and serialized control task | `firmware/shared/ble-control.cpp` |
+| PCM capture and frame acquisition | `firmware/shared/audio-capture.cpp` |
+| Codec, packetization and transmitter | `firmware/shared/audio-transport.cpp` |
+| GATT service and boot | `firmware/shared/boot.cpp` |
+| C3 differential behavior | `tools/boards/esp32c3/`, `firmware/esp32c3/` |
+| Chakshu PDM, always-awake profile and pin exclusions | `tools/boards/xiao-sense/index.cjs` |
+| Chakshu camera and filesystem drivers | `firmware/xiao-sense/camera.cpp`, `sd-storage.cpp` |
+| SD hardware check worker and request/status protocol | `firmware/xiao-sense/media.cpp` |
+| Target, image capacity and release paths | `tools/targets.cjs` |
+
+The fragments inherit runtime types when assembled; they are not separate translation units. New board features belong behind a board adapter or feature driver, not a copied audio/BLE engine. See [Chakshu](CHAKSHU.md) for current feature boundaries and hardware checks.
 
 The C3 LED template inherits runtime types and globals when inserted; compiling it
 separately is unsupported. Both boards share the former C3 gesture behavior:

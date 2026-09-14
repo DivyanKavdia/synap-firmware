@@ -1,5 +1,7 @@
 # Synap Firmware
 
+Third module: **Chakshu / XIAO ESP32S3 Sense** adds onboard PDM audio, camera and SD hardware checks. See [Chakshu setup](docs/CHAKSHU.md). Shared code now lives in `firmware/shared/`; regenerate the portable Arduino sketch with `node tools/assemble-source.cjs` before building.
+
 Firmware for ESP32-S3 SuperMini and ESP32-C3 SuperMini pendants. Firmware versions use **synap-os1-build#**, with `#` replaced by the numeric build counter; the [production target index](https://raw.githubusercontent.com/DivyanKavdia/synap-firmware/ota-releases/targets.json) identifies the latest numeric build.
 
 ## Shared and board-specific code

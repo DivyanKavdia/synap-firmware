@@ -5,7 +5,13 @@ namespace ChakshuCamera {
 bool ready=false;
 uint16_t sensorPid=0;
 bool begin() {
-  if (ready) return true;
+  if (ready) {
+    camera_fb_t* probe=esp_camera_fb_get();
+    const bool healthy=probe && probe->format==PIXFORMAT_JPEG && probe->len>4;
+    if (probe) esp_camera_fb_return(probe);
+    if (healthy) return true;
+    esp_camera_deinit();ready=false;
+  }
   if (!psramFound()) return false;
   camera_config_t config{};
   config.ledc_channel=LEDC_CHANNEL_0;

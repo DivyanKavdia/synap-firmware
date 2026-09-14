@@ -59,7 +59,9 @@ uint8_t recordWav(Snapshot& s) {
   // Even a failed take retains a correctly sized header for the samples actually written.
   ChakshuStorage::wavHeader(header,s.bytes&~1u);
   if (!file.seek(0) || file.write(header,44)!=44) error=IO_ERROR;
-  file.flush();file.close();
+  file.flush();
+  if (file.size()!=44u+s.bytes) error=IO_ERROR;
+  file.close();
   return error;
 }
 uint8_t captureCamera(Snapshot& s,bool video) {
@@ -67,8 +69,10 @@ uint8_t captureCamera(Snapshot& s,bool video) {
   if (!file) return ChakshuStorage::freeBytes<ChakshuStorage::RESERVE_BYTES?NO_SPACE:IO_ERROR;
   uint8_t error=OK;
   const uint8_t frames=video?20:1;
+  const uint32_t deadline=millis()+15000u;
   TickType_t wake=xTaskGetTickCount();
   for (uint8_t i=0;i<frames;++i) {
+    if (int32_t(millis()-deadline)>=0) { error=CAPTURE_ERROR;break; }
     // With one framebuffer, return a stale queued frame before taking the next exposure.
     camera_fb_t* stale=esp_camera_fb_get();
     if (stale) esp_camera_fb_return(stale);
@@ -98,13 +102,15 @@ void worker(void*) {
     uint8_t error=OK;
     if (request.operation==1) {
       microphoneValidated=startMicrophone();
-      ChakshuCamera::begin();ChakshuStorage::begin();
+      ChakshuCamera::begin();ChakshuStorage::begin(true);
     } else if (!ChakshuStorage::ready) error=NO_SD;
     else if (request.operation==2 || request.operation==4) {
       error=ChakshuCamera::ready?captureCamera(s,request.operation==4):NO_CAMERA;
     } else if (request.operation==3) error=recordWav(s);
     else error=BAD_COMMAND;
-    // Keep the onboard mic initialized in the always-awake bring-up profile.
+    if (error==IO_ERROR || error==NO_SD) ChakshuStorage::ready=false;
+    if (request.operation==3 && error==CAPTURE_ERROR) { stopMicrophone();microphoneValidated=false; }
+    // The module remains awake after checks.
     refresh(s);s.error=error;s.state=error?3:2;
     if (!error) s.progress=100;
     save(s);

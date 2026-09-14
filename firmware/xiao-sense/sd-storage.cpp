@@ -11,7 +11,8 @@ void refresh() {
   const uint64_t used=ready?SD.usedBytes():0;
   freeBytes=used<=capacity?capacity-used:0;
 }
-bool begin() {
+bool begin(bool remount) {
+  if (remount) ready=false;
   if (!ready) {
     SD.end();
     SPI.begin(7,8,9,21);
