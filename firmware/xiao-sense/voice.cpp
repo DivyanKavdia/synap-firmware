@@ -93,19 +93,30 @@ void cleanup() {
 }
 void initialize() {
   Preferences settings;if(settings.begin("chakshu-voice",true)){enabled.store(settings.getBool("enabled",true));settings.end();}
-  if(!ChakshuStorage::ready){status=MODEL_MISSING;return;}
-  File file=SD.open("/synap/models/srmodels.bin",FILE_READ);
-  if(!file){status=MODEL_MISSING;return;}
-  if(file.size()!=MODEL_BYTES){file.close();status=MODEL_ERROR;return;}
+  File file;
+  if(!ChakshuFlashModel::present()){
+    if(!ChakshuStorage::ready){status=MODEL_MISSING;return;}
+    file=SD.open("/synap/models/srmodels.bin",FILE_READ);
+    if(!file){status=MODEL_MISSING;return;}
+    if(file.size()!=MODEL_BYTES){file.close();status=MODEL_ERROR;return;}
+  }
   // Preserve headroom for BLE/recovery, camera and SD before invoking the model allocator.
   if(ESP.getFreePsram()<MODEL_BYTES+3u*1024u*1024u){file.close();status=NO_MEMORY;return;}
   weights=ps_malloc(MODEL_BYTES);
   if(!weights){file.close();status=NO_MEMORY;return;}
-  const size_t read=file.read(static_cast<uint8_t*>(weights),MODEL_BYTES);file.close();
+  size_t read=0;
+  if(ChakshuFlashModel::present()){
+    const auto result=ChakshuFlashModel::load(static_cast<uint8_t*>(weights),MODEL_BYTES);
+    if(result!=ChakshuFlashModel::LOADED){
+      status=result==ChakshuFlashModel::NO_MEMORY?NO_MEMORY:MODEL_ERROR;cleanup();return;
+    }
+    read=MODEL_BYTES;
+  }else {read=file.read(static_cast<uint8_t*>(weights),MODEL_BYTES);file.close();}
   uint8_t digest[32];char hex[65]{};
   if(read!=MODEL_BYTES||mbedtls_sha256(static_cast<const unsigned char*>(weights),MODEL_BYTES,digest,0)!=0){status=MODEL_ERROR;cleanup();return;}
   for(int i=0;i<32;++i)snprintf(hex+i*2,3,"%02x",digest[i]);
   if(strcmp(hex,MODEL_SHA256)){status=MODEL_ERROR;cleanup();return;}
+  Serial.printf("[VOICE] model verified from %s\n",ChakshuFlashModel::present()?"internal flash":"SD");
   // Only byte-for-byte pinned weights reach Espressif's unbounded model parser.
   models=srmodel_load(weights);
   if(!models){status=MODEL_ERROR;cleanup();return;}

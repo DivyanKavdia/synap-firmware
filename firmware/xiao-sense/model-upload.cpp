@@ -69,9 +69,14 @@ void publish(){
   const uint16_t mtu=deviceConnected.load()?bleServer->getPeerMTU(bleServer->getConnId()):23;
   const uint16_t data=std::min(uint16_t(480),uint16_t(std::max(uint16_t(23),mtu)-12));
   p[16]=data&255;p[17]=data>>8;p[18]=ChakshuStorage::ready?1:0;p[19]=queue?1:0;
+  // Bit 1 identifies a model installed with firmware, with no separate SD upload.
+  if(ChakshuFlashModel::present()){
+    p[2]=INSTALLED;p[3]=OK;put32le(p+4,0);put32le(p+8,MODEL_BYTES);p[19]=2;
+  }
   portENTER_CRITICAL(&mux);memcpy(snapshot,p,20);portEXIT_CRITICAL(&mux);
 }
 void tick(){
+  if(ChakshuFlashModel::present()){publish();return;}
   if(rebootAt){if(uint32_t(millis()-rebootAt)>1500u)ESP.restart();return;}
   upload.tick(millis());
   Message message;
@@ -90,6 +95,7 @@ void tick(){
   upload.verify();publish();
 }
 void initialize(){
+  if(ChakshuFlashModel::present()){publish();return;}
   if(ChakshuStorage::ready)restoreBackup();
   queue=xQueueCreate(8,sizeof(Message));publish();
 }

@@ -29,6 +29,7 @@ Do not edit the generated sketch directly. CI verifies byte-for-byte synchroniza
 | Battery sensing | GPIO8 | GPIO1, telemetry only | Disabled |
 | Sleep/wake | Four-second hold | Four-second hold | Always awake during bring-up |
 | Camera / SD | None | None | OV3660 probe / installed card |
+| Local voice model | None | None | Included in Chakshu OTA; no SD required |
 | SD checks | None | None | Photo, 10s WAV, silent 2fps MJPEG |
 | CPU idle / active | 80 / 240 MHz | 80 / 160 MHz | 240 / 240 MHz |
 
