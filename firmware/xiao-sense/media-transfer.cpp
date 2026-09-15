@@ -4,25 +4,63 @@ namespace ChakshuTransfer {
 struct Request { uint32_t connection,id,offset;uint8_t operation;char path[64];bool local=false;uint32_t localEpoch=0; };
 QueueHandle_t requests=nullptr;
 portMUX_TYPE mux=portMUX_INITIALIZER_UNLOCKED;
-uint8_t response[496]{};size_t responseSize=16;
+uint8_t response[496]{};size_t responseSize=16;uint32_t responseConnection=0;
 uint8_t* buffer=nullptr;size_t bufferSize=0;
-File selectedFile;
+char selectedPath[64]{};
 uint32_t selectedConnection=0;
 std::atomic<bool> offline{false},stopRequested{false},photoRequested{false};
 std::atomic<uint8_t> offlineMode{0};
 std::atomic<uint32_t> localEpoch{0};
 ChakshuMedia::Snapshot offlineStatus;
 
-void reply(uint32_t id,uint8_t error,uint32_t total=0,uint32_t offset=0,const uint8_t* bytes=nullptr,size_t size=0) {
+void reply(uint32_t id,uint8_t error,uint32_t total=0,uint32_t offset=0,const uint8_t* bytes=nullptr,size_t size=0,uint32_t connection=connectionGeneration.load()) {
   uint8_t value[496]{};value[0]=0xCB;value[1]=1;value[2]=error?2:1;value[3]=error;
   put32le(value+4,id);put32le(value+8,total);put32le(value+12,offset);
   size=std::min(size,size_t(480));if(size)memcpy(value+16,bytes,size);
-  portENTER_CRITICAL(&mux);memcpy(response,value,16+size);responseSize=16+size;portEXIT_CRITICAL(&mux);
+  portENTER_CRITICAL(&mux);
+  if(connection==connectionGeneration.load()) {
+    memcpy(response,value,16+size);responseSize=16+size;responseConnection=connection;
+  }
+  portEXIT_CRITICAL(&mux);
+}
+void replyFor(const Request& request,uint8_t error,uint32_t total=0,uint32_t offset=0,const uint8_t* bytes=nullptr,size_t size=0) {
+  reply(request.id,error,total,offset,bytes,size,request.connection);
+}
+void readResponse(uint8_t* value,size_t& size) {
+  portENTER_CRITICAL(&mux);
+  if(responseConnection==connectionGeneration.load()) {size=responseSize;memcpy(value,response,size);}
+  else {size=16;memset(value,0,size);value[0]=0xCB;value[1]=1;}
+  portEXIT_CRITICAL(&mux);
 }
 void saveOffline(const ChakshuMedia::Snapshot& value) {
   portENTER_CRITICAL(&mux);offlineStatus=value;portEXIT_CRITICAL(&mux);
 }
-void clearSelection() { if(selectedFile)selectedFile.close();free(buffer);buffer=nullptr;bufferSize=0; }
+void clearSelection() { selectedPath[0]=0;free(buffer);buffer=nullptr;bufferSize=0; }
+// File handles never outlive a resource lease: a hardware check can remount SD
+// between BLE reads. Retain the path and reopen only while the gate is held.
+uint8_t selectFile(const char* path,uint32_t& total) {
+  if(!ChakshuStorage::ready)return ChakshuMedia::NO_SD;
+  File file=SD.open(path,FILE_READ);
+  if(!file||file.isDirectory()){file.close();return ChakshuMedia::NO_SD;}
+  total=file.size();file.close();snprintf(selectedPath,sizeof(selectedPath),"%s",path);return 0;
+}
+uint8_t readSelection(uint32_t offset,uint32_t& total,uint8_t* bytes,size_t& size) {
+  if(selectedPath[0]) {
+    if(!ChakshuStorage::ready)return ChakshuMedia::NO_SD;
+    File file=SD.open(selectedPath,FILE_READ);
+    if(!file||file.isDirectory()){file.close();return ChakshuMedia::IO_ERROR;}
+    total=file.size();
+    uint8_t error=ChakshuMedia::IO_ERROR;
+    if(offset<total){
+      size=std::min(size_t(480),size_t(total-offset));
+      if(file.seek(offset)&&file.read(bytes,size)==int(size))error=0;
+    }
+    file.close();return error;
+  }
+  total=bufferSize;
+  if(!buffer||offset>=total)return ChakshuMedia::IO_ERROR;
+  size=std::min(size_t(480),size_t(total-offset));memcpy(bytes,buffer+offset,size);return 0;
+}
 bool validPath(const char* path) {
   const size_t n=strlen(path);if(n<28||n>31||strncmp(path,"/synap/",7)||path[15]!='-'||path[24]!='.')return false;
   for(size_t i=7;i<24;++i)if(i!=15 && !((path[i]>='0'&&path[i]<='9')||(path[i]>='a'&&path[i]<='f')))return false;
@@ -122,7 +160,7 @@ void recordOffline(bool withVideo=true) {
   if(video){video.flush();if(video.size()!=videoBytes)error=IO_ERROR;video.close();}
   if(!error && ((withVideo&&!frames)||!audioBytes))error=CAPTURE_ERROR;
   s.bytes=withVideo?videoBytes:audioBytes;s.error=error;s.state=error?3:2;s.progress=error?s.progress:100;
-  refresh(s);saveOffline(s);photoRequested.store(false);offline.store(false);offlineMode.store(0);busy.store(false);
+  refresh(s);saveOffline(s);photoRequested.store(false);offline.store(false);offlineMode.store(0);
 }
 void worker(void*) {
   Request request{};
@@ -130,14 +168,14 @@ void worker(void*) {
     if(xQueueReceive(requests,&request,portMAX_DELAY)!=pdTRUE)continue;
     if(request.local&&request.localEpoch!=localEpoch.load())continue;
     if(!request.local&&(request.connection!=connectionGeneration.load()||!deviceConnected.load()))continue;
+    ChakshuResources::Lease admission;
+    if(!admission||otaBusySnapshot.load()) {replyFor(request,1);continue;}
     if(selectedConnection!=request.connection){clearSelection();selectedConnection=request.connection;}
-    bool expected=false;
-    if(otaBusy()||!ChakshuMedia::busy.compare_exchange_strong(expected,true)) {reply(request.id,1);continue;}
     if(request.operation==5||request.operation==10) {
-      if(streamingEnabled.load()||remoteStandby){reply(request.id,1);ChakshuMedia::busy.store(false);continue;}
+      if(streamingEnabled.load()||remoteStandby){replyFor(request,1);continue;}
       clearSelection();stopRequested.store(false);photoRequested.store(false);offlineMode.store(request.operation);offline.store(true);
       ChakshuMedia::Snapshot s;s.state=1;s.operation=request.operation==5?4:3;saveOffline(s);
-      reply(request.id,0);recordOffline(request.operation==5);continue;
+      replyFor(request,0);recordOffline(request.operation==5);continue;
     }
     uint8_t error=0;uint32_t total=0;size_t size=0;uint8_t bytes[480];
     switch(request.operation) {
@@ -148,23 +186,18 @@ void worker(void*) {
         s.operation=2;s.state=error?3:2;s.error=error;ChakshuMedia::refresh(s);ChakshuMedia::save(s);break;
       }
       case 2:case 4:
-        total=selectedFile?selectedFile.size():bufferSize;
-        if(request.offset>=total){error=7;break;}
-        size=std::min(size_t(480),size_t(total-request.offset));
-        if(selectedFile){if(!selectedFile.seek(request.offset)||selectedFile.read(bytes,size)!=int(size))error=7;}
-        else if(buffer)memcpy(bytes,buffer+request.offset,size);else error=7;
+        error=readSelection(request.offset,total,bytes,size);
         break;
       case 3:
         clearSelection();
         if(!validPath(request.path)){error=2;break;}
-        selectedFile=SD.open(request.path,FILE_READ);
-        if(!selectedFile||selectedFile.isDirectory())error=3;else total=selectedFile.size();
+        error=selectFile(request.path,total);
         break;
       case 7:error=catalogue();total=bufferSize;break;
       case 8:total=bufferSize;break;
       default:error=2;
     }
-    reply(request.id,error,total,request.offset,bytes,error?0:size);ChakshuMedia::busy.store(false);
+    replyFor(request,error,total,request.offset,bytes,error?0:size);
   }
 }
 class CommandCallbacks : public BLECharacteristicCallbacks {
@@ -174,19 +207,19 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
     const uint8_t* p=reinterpret_cast<const uint8_t*>(value.c_str());Request request{};
     request.operation=p[1];memcpy(&request.id,p+2,4);memcpy(&request.offset,p+6,4);
     request.connection=connectionGeneration.load();memcpy(request.path,p+10,value.length()-10);
-    if(request.operation==6){stopRequested.store(true);reply(request.id,0);return;}
+    if(request.operation==6){stopRequested.store(true);replyFor(request,0);return;}
     if(request.operation==9) {
       ChakshuMedia::Snapshot s;portENTER_CRITICAL(&mux);s=offlineStatus;portEXIT_CRITICAL(&mux);
       char json[180];const int size=snprintf(json,sizeof(json),"{\"active\":%s,\"state\":%u,\"error\":%u,\"progress\":%u,\"path\":\"%s\"}",offline.load()?"true":"false",s.state,s.error,s.progress,s.path);
-      reply(request.id,0,size,0,reinterpret_cast<const uint8_t*>(json),size);return;
+      replyFor(request,0,size,0,reinterpret_cast<const uint8_t*>(json),size);return;
     }
-    if(offline.load()||!requests||xQueueSend(requests,&request,0)!=pdTRUE)reply(request.id,1);
+    if(offline.load()||!requests||xQueueSend(requests,&request,0)!=pdTRUE)replyFor(request,1);
   }
 };
 class DataCallbacks : public BLECharacteristicCallbacks {
   void onRead(BLECharacteristic* characteristic) override {
     uint8_t value[496];size_t size;
-    portENTER_CRITICAL(&mux);size=responseSize;memcpy(value,response,size);portEXIT_CRITICAL(&mux);
+    readResponse(value,size);
     characteristic->setValue(value,size);
   }
 };

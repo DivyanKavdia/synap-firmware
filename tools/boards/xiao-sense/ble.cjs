@@ -47,8 +47,10 @@ function materializeBle(source) {
     '  if (!chakshuAudioSubscribed.load()) { stopStreaming(ErrorCode::AUDIO_NOT_SUBSCRIBED);return; }\n  if (!configureTransportFromPeerMtu()) { stopStreaming(ErrorCode::MTU_TOO_SMALL); return; }','Require actual audio subscription');
   replace('    audioCharacteristic->setValue(packet, AUDIO_HEADER_BYTES+length);','    // Send this immutable packet to the current subscribed connection.','Owned audio payload');
   replace('    ++recoveryReplayAck;', '    ++recoveryReplayAck;\n    ++chakshuAudioReplayGeneration;', 'Invalidate fragment progress for connected replay');
+  replace('  SynapRecovery::StoredFrame frame; uint16_t pending=0;\n  { RecoveryGuard guard; if(!recoveryRing.peek(frame))return false; pending=recoveryRing.count-recoveryRing.cursor; }',
+    readTemplate('xiao-sense','recovery-frame.cpp').trimEnd(),'Retain in-flight PCM through ring eviction');
   replace('  const bool sent=sendCapturedFrame(frame,pace);',
-    '  const uint32_t replay=chakshuAudioReplayGeneration.load();\n  const bool sent=sendCapturedFrame(frame,pace);','Bind recovery submission to replay');
+    '  const bool sent=sendCapturedFrame(frame,pace);\n  if(sent)held=false;','Release completed recovery frame');
   replace('if(sent && !recoveryWaiting.load() && connection==connectionGeneration.load())',
     'if(sent && replay==chakshuAudioReplayGeneration.load() && !recoveryWaiting.load() && connection==connectionGeneration.load())','Do not skip a rewound in-flight frame');
   replace('  for (uint8_t index=0; index<chunks; ++index) {',

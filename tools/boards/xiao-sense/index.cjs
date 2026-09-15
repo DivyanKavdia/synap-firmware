@@ -4,6 +4,13 @@ const {materializeBle}=require('./ble.cjs');
 function materializeChakshu(source,target) {
   let out=source;
   const replace=(before,after,label)=>out=replaceOnce(out,before,after,label);
+  replace('#include <atomic>','#include <atomic>\n'+readTemplate('xiao-sense','ownership.cpp'),'Resource admission gate');
+  replace('bool remoteStandby = false;','std::atomic<bool> remoteStandby{false};','Cross-task standby state');
+  replace('  if (mediaBusy()) { updateStatusCharacteristic(true);return; }',
+    '  ChakshuResources::Lease admission;\n  if (!admission) { updateStatusCharacteristic(true);return; }','Reserve START transition');
+  replace('    otaSession.packet(message.data,message.length,millis(),generation,',
+    '    ChakshuResources::Lease admission;\n    otaSession.packet(message.data,message.length,millis(),generation,','Reserve OTA transition');
+  replace('      || mediaBusy()','      || !admission','OTA admission result');
   replace('#include <Adafruit_NeoPixel.h>','','No external LED');
   replace('Adafruit_NeoPixel statusLed(1, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);','','No camera-pin LED');
   out=out.split('statusLed.clear();statusLed.show();').join('/* No external LED on Chakshu. */');
@@ -46,6 +53,10 @@ function materializeChakshu(source,target) {
   if (out.includes('statusLed.') || out.includes('pinMode(TOUCH_INPUT_PIN') ||
       out.includes('analogSetPinAttenuation(') || out.includes('esp_deep_sleep_start()'))
     throw Error('Chakshu still accesses absent hardware');
-  return materializeBle(out);
+  out=materializeBle(out);
+  replace('void controlTask(void* parameter) {',
+    'void controlTask(void* parameter) {\n  while (!ChakshuResources::runtimeReady.load()) vTaskDelay(1);','Wait for complete BLE initialization');
+  replace('  initializeBLE();','  initializeBLE();\n  ChakshuResources::runtimeReady.store(true);','Publish initialized runtime');
+  return out;
 }
 module.exports={materializeChakshu};

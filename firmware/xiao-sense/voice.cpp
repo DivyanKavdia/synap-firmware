@@ -39,7 +39,7 @@ void feedTask(void*) {
   Block block;size_t filled=0;uint32_t epoch=discontinuities.load();
   for(;;){
     if(xQueueReceive(pcmQueue,&block,pdMS_TO_TICKS(100))!=pdTRUE)continue;
-    if(!active()||otaBusy()){filled=0;continue;}
+    if(!active()||otaBusySnapshot.load()){filled=0;continue;}
     if(epoch!=discontinuities.load()){epoch=discontinuities.load();filled=0;xQueueReset(pcmQueue);continue;}
     size_t at=0;
     while(at<block.count){const size_t n=std::min(size_t(feedSize)-filled,size_t(block.count)-at);
@@ -52,7 +52,7 @@ void detectTask(void*) {
   uint32_t epoch=discontinuities.load();
   for(;;){
     afe_fetch_result_t* result=afe->fetch_with_delay(afeData,pdMS_TO_TICKS(100));
-    if(!active()||otaBusy()||epoch!=discontinuities.load()){
+    if(!active()||otaBusySnapshot.load()||epoch!=discontinuities.load()){
       epoch=discontinuities.load();gate.reset();mn->clean(mnData);afe->reset_buffer(afeData);continue;
     }
     if(!result||result->ret_value!=ESP_OK||!result->data)continue;
@@ -70,9 +70,9 @@ void idleTask(void*) {
   int16_t samples[800];
   for(;;){
     // Streaming and SD consumers supply their own copies. Never compete for I2S.
-    if(!active()||streamingEnabled.load()||mediaBusy()||otaBusy()||
+    if(!active()||streamingEnabled.load()||mediaBusy()||otaBusySnapshot.load()||
        xSemaphoreTakeRecursive(microphoneMutex,0)!=pdTRUE){vTaskDelay(pdMS_TO_TICKS(20));continue;}
-    if(active()&&!streamingEnabled.load()&&!mediaBusy()&&!otaBusy()&&startMicrophone()){
+    if(active()&&!streamingEnabled.load()&&!mediaBusy()&&!otaBusySnapshot.load()&&startMicrophone()){
       const size_t n=microphoneI2S.readBytes(reinterpret_cast<char*>(samples),sizeof(samples));
       if(n&&!(n&1))feed(samples,n/2);else ++discontinuities;
     }

@@ -5,7 +5,7 @@
 #include <deque>
 namespace ChakshuMedia {
 struct Request { uint32_t connection;uint8_t operation,id; };
-struct Snapshot { uint8_t operation=0,id=0,state=0,error=0,ready=0,progress=0;uint32_t bytes=0;char path[64]{}; };
+struct Snapshot { uint8_t operation=0,id=0,state=0,error=0,ready=0,progress=0;uint32_t bytes=0,connection=0;char path[64]{}; };
 Snapshot status;
 std::atomic<bool> busy{false},deviceConnected{true},streamingEnabled{false};
 std::atomic<uint32_t> connectionGeneration{7};
@@ -42,9 +42,16 @@ int main() {
   busy=false;status.state=2;status.bytes=320000;
   input.push_back({7,3,3});tick();
   assert(status.state==2&&status.bytes==320000&&!busy&&output.size()==1);
+  // A new connection restarts its transaction IDs at one; it must still capture.
+  connectionGeneration=8;input.push_back({8,3,3});tick();
+  assert(status.state==1&&status.connection==8&&busy&&output.size()==2);
+  busy=false;connectionGeneration=7;
   full=true;input.push_back({7,2,4});tick();
   assert(status.id==4&&status.state==3&&status.error==BUSY&&!busy);
-  full=false;deviceConnected=false;input.push_back({7,3,5});tick();
-  assert(status.id==4&&output.size()==1);
+  // BUSY was never admitted, so retrying the same ID can now proceed.
+  full=false;input.push_back({7,2,4});tick();
+  assert(status.state==1&&status.error==OK&&busy&&output.size()==3);busy=false;
+  deviceConnected=false;input.push_back({7,3,5});tick();
+  assert(status.id==4&&output.size()==3);
   std::puts("PASS media ownership, stale-link rejection, audio/OTA exclusion, idempotency and queue failure");
 }

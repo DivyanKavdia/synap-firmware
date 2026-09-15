@@ -5,19 +5,26 @@ enum Error : uint8_t { OK=0, BUSY=1, BAD_COMMAND=2, NO_SD=3, NO_CAMERA=4,
 struct Request { uint32_t connection;uint8_t operation,id; };
 struct Snapshot {
   uint8_t operation=0,id=0,state=0,error=0,ready=0,progress=0;
-  uint32_t totalMiB=0,freeMiB=0,bytes=0;
+  uint32_t totalMiB=0,freeMiB=0,bytes=0,connection=0;
   uint16_t sensor=0;
   char path[64]{};
 };
 portMUX_TYPE mux=portMUX_INITIALIZER_UNLOCKED;
 Snapshot status;
-std::atomic<bool> busy{false};
+std::atomic<bool>& busy=ChakshuResources::media;
 QueueHandle_t requests=nullptr,jobs=nullptr;
 void copy(Snapshot& out) {
   portENTER_CRITICAL(&mux);out=status;portEXIT_CRITICAL(&mux);
 }
 void save(const Snapshot& value) {
   portENTER_CRITICAL(&mux);status=value;portEXIT_CRITICAL(&mux);
+}
+void copyForConnection(Snapshot& out) {
+  copy(out);
+  if(out.connection && out.connection!=connectionGeneration.load()) {
+    out.operation=out.id=out.state=out.error=out.progress=0;
+    out.bytes=0;out.path[0]=0;
+  }
 }
 void refresh(Snapshot& s) {
   ChakshuStorage::refresh();
@@ -27,7 +34,7 @@ void refresh(Snapshot& s) {
   s.freeMiB=uint32_t(ChakshuStorage::freeBytes/(1024u*1024u));
 }
 void encode(uint8_t* p) {
-  Snapshot s;copy(s);memset(p,0,20);
+  Snapshot s;copyForConnection(s);memset(p,0,20);
   p[0]=0xC9;p[1]=1;p[2]=s.operation;p[3]=s.id;p[4]=s.state;
   p[5]=s.error;p[6]=s.ready;p[7]=s.progress;
   put32le(p+8,s.totalMiB);put32le(p+12,s.freeMiB);put32le(p+16,s.bytes);
@@ -100,6 +107,9 @@ void worker(void*) {
   for (;;) {
     if (xQueueReceive(jobs,&request,portMAX_DELAY)!=pdTRUE) continue;
     Snapshot s;copy(s);
+    if(!deviceConnected.load() || request.connection!=connectionGeneration.load()) {
+      s.state=3;s.error=BAD_COMMAND;save(s);busy.store(false);continue;
+    }
     uint8_t error=OK;
     if (request.operation==1) {
       microphoneValidated=startMicrophone();
@@ -136,7 +146,7 @@ class StatusCallbacks : public BLECharacteristicCallbacks {
 };
 class PathCallbacks : public BLECharacteristicCallbacks {
   void onRead(BLECharacteristic* characteristic) override {
-    Snapshot s;copy(s);characteristic->setValue(s.path);
+    Snapshot s;copyForConnection(s);characteristic->setValue(s.path);
   }
 };
 void initialize() {
@@ -163,8 +173,8 @@ void tick() {
   if (!busy.compare_exchange_strong(expected,true)) return; // Claim the camera/SD worker atomically.
   Snapshot s;copy(s);
   // A retried command has the same ID; never capture twice after an ACK loss.
-  if (s.id==request.id && s.operation==request.operation) {busy.store(false);return;}
-  s.id=request.id;s.operation=request.operation;s.progress=0;s.bytes=0;s.path[0]=0;
+  if (s.connection==request.connection && s.id==request.id && s.operation==request.operation && s.error!=BUSY) {busy.store(false);return;}
+  s.connection=request.connection;s.id=request.id;s.operation=request.operation;s.progress=0;s.bytes=0;s.path[0]=0;
   if (otaBusy() || streamingEnabled.load() || remoteStandby) {
     s.state=3;s.error=BUSY;save(s);busy.store(false);return;
   }
