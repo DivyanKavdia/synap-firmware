@@ -19,6 +19,13 @@ void copy(Snapshot& out) {
 void save(const Snapshot& value) {
   portENTER_CRITICAL(&mux);status=value;portEXIT_CRITICAL(&mux);
 }
+void copyForConnection(Snapshot& out) {
+  copy(out);
+  if(out.connection && out.connection!=connectionGeneration.load()) {
+    out.operation=out.id=out.state=out.error=out.progress=0;
+    out.bytes=0;out.path[0]=0;
+  }
+}
 void refresh(Snapshot& s) {
   ChakshuStorage::refresh();
   s.ready=(microphoneValidated.load()?1:0)|(ChakshuCamera::ready?2:0)|(ChakshuStorage::ready?4:0);
@@ -27,7 +34,7 @@ void refresh(Snapshot& s) {
   s.freeMiB=uint32_t(ChakshuStorage::freeBytes/(1024u*1024u));
 }
 void encode(uint8_t* p) {
-  Snapshot s;copy(s);memset(p,0,20);
+  Snapshot s;copyForConnection(s);memset(p,0,20);
   p[0]=0xC9;p[1]=1;p[2]=s.operation;p[3]=s.id;p[4]=s.state;
   p[5]=s.error;p[6]=s.ready;p[7]=s.progress;
   put32le(p+8,s.totalMiB);put32le(p+12,s.freeMiB);put32le(p+16,s.bytes);
@@ -139,7 +146,7 @@ class StatusCallbacks : public BLECharacteristicCallbacks {
 };
 class PathCallbacks : public BLECharacteristicCallbacks {
   void onRead(BLECharacteristic* characteristic) override {
-    Snapshot s;copy(s);characteristic->setValue(s.path);
+    Snapshot s;copyForConnection(s);characteristic->setValue(s.path);
   }
 };
 void initialize() {

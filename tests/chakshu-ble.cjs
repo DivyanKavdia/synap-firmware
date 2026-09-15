@@ -262,3 +262,57 @@ int main(){
 }`;
   assert.match(nativeTest(fixture,['-Wno-unused-parameter']),/PASS exact GATT text bytes/);
 });
+
+test('a full recovery ring cannot evict the PCM of a partially transmitted Chakshu frame',()=>{
+ const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
+ const ring=source.slice(source.indexOf('namespace SynapRecovery {'),source.indexOf('SynapRecovery::Ring recoveryRing;'));
+ const send=source.slice(source.indexOf('bool sendRecoveryFrame() {'),source.indexOf('void processRecoveryRequest() {'));
+ const progress=source.slice(source.indexOf('class ChakshuAudioProgress {'),source.indexOf('bool sendChakshuAudio('));
+ const fixture=`#include <atomic>
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <vector>
+struct AudioFrame {uint32_t generation;uint16_t sequence;int16_t samples[800];};
+${ring}
+${progress}
+SynapRecovery::Ring recoveryRing;
+struct RecoveryGuard {};
+std::atomic<uint32_t> connectionGeneration{1},streamGeneration{1},notifyRejected{0},chakshuAudioReplayGeneration{0};
+std::atomic<bool> recoveryWaiting{false},streamingEnabled{true},deviceConnected{true};
+std::atomic<uint8_t> chunksPerFrame{4};
+enum class ErrorCode {TRANSPORT_CHANGED};
+void requestStreamError(ErrorCode,uint32_t){assert(false);}
+int pdMS_TO_TICKS(int n){return n;}void vTaskDelay(int){}
+std::vector<int16_t> delivered;
+std::vector<uint16_t> sequences;
+bool sendCapturedFrame(const AudioFrame& frame,uint32_t){
+ const auto chunk=chakshuAudioProgress.begin(frame.generation,connectionGeneration,chakshuAudioReplayGeneration,frame.sequence,4,400,true);
+ sequences.push_back(frame.sequence);
+ delivered.insert(delivered.end(),frame.samples+chunk*200,frame.samples+(chunk+1)*200);
+ chakshuAudioProgress.accept(chunk);
+ if(chunk==3){chakshuAudioProgress.reset();return true;}
+ ++notifyRejected;return false;
+}
+${send}
+int main(){
+ AudioFrame storage[2];recoveryRing.frames=storage;recoveryRing.capacity=2;
+ AudioFrame frame{1,9,{}};for(int i=0;i<800;++i)frame.samples[i]=i-400;recoveryRing.push(frame);
+ assert(!sendRecoveryFrame());
+ for(int call=1;call<4;++call){
+  // More than a ring's worth of fresh capture arrives during each BLE retry.
+  for(int j=0;j<3;++j){++frame.sequence;for(int i=0;i<800;++i)frame.samples[i]=1234;recoveryRing.push(frame);}
+  assert(sendRecoveryFrame()==(call==3));
+ }
+ assert(delivered.size()==800);
+ for(int i=0;i<800;++i)assert(delivered[i]==i-400);
+ for(auto sequence:sequences)assert(sequence==9);
+ // Sending the evicted frame must not acknowledge unsent newer ring frames.
+ assert(recoveryRing.cursor==0);
+ assert(!sendRecoveryFrame()&&sequences.back()>9);
+ const auto old=sequences.back();++chakshuAudioReplayGeneration;recoveryRing.after(frame.sequence);
+ assert(!sendRecoveryFrame());assert(sequences.back()==old); // Empty replay: no stale held-frame send.
+ puts("PASS complete frame survives ring overflow");
+}`;
+ assert.match(nativeTest(fixture,['-Wno-unused-variable']),/PASS complete frame survives ring overflow/);
+});
