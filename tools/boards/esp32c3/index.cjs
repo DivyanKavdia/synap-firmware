@@ -1,21 +1,14 @@
 'use strict';
 const {PRIMARY_TARGET}=require('../../targets.cjs');
 const {replaceOnce}=require('../../target-source.cjs');
-const led=require('./led.cjs'),battery=require('./battery.cjs');
+const led=require('./led.cjs');
 
 function materializeC3(source,target){
-  let out=replaceOnce(source,'#define SYNAP_MODULE_ID 1','#define SYNAP_MODULE_ID 2','C3 module identity');
-  out=out.replace(/ESP32-S3FH4R2/g,'ESP32-C3 SuperMini');
-  out=out.split(PRIMARY_TARGET).join(target.id);
-  out=out.split('SYNAP-ESP32S3-OTA-ID-V3').join(target.productMarker);
-  out=replaceOnce(out,'p[21]!=9 || p[22]!=0','p[21]!=5 || p[22]!=0','ESP image chip ID');
-  out=replaceOnce(out,'constexpr uint8_t RGB_LED_PIN = 48;','constexpr uint8_t RGB_LED_PIN = 8;','C3 status LED pin');
-  out=replaceOnce(out,'#define SYNAP_TOUCH_PIN 13','#define SYNAP_TOUCH_PIN 3','C3 touch/wake pin');
-  out=replaceOnce(out,'#define SYNAP_BATTERY_ADC_PIN 8','#define SYNAP_BATTERY_ADC_PIN 1','C3 battery ADC pin');
-  out=out.replace(/GPIO8/g,'GPIO1');
+  let out=replaceOnce(source,'p[21]!=9 || p[22]!=0',`p[21]!=${target.chip} || p[22]!=0`,'ESP image chip ID');
+  out=replaceOnce(out,'analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_6db);',
+    `analogSetPinAttenuation(BATTERY_ADC_PIN, ${target.hardware.batteryAttenuation});`,'ADC input range');
 
   out=led.apply(out);
-  out=battery.apply(out);
 
   const taskBefore=`  if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
       xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, &captureTaskHandle, 0) != pdPASS ||

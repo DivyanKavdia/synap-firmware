@@ -1,14 +1,18 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path');
 const {PRIMARY_TARGET,getTarget}=require('./targets.cjs');
+const {applyProfile}=require('./device-profile.cjs');
 const {materializeChakshu}=require('./boards/xiao-sense/index.cjs');
 const {materializeC3}=require('./boards/esp32c3/index.cjs');
 
 function materialize(source,targetId){
   const target=getTarget(targetId);
   if(target.id===PRIMARY_TARGET)return source;
-  if(target.id==='xiao-esp32s3-sense-8m')return materializeChakshu(source,target);
-  if(target.family==='esp32c3')return materializeC3(source,target);
+  source=applyProfile(source,target)
+    .split(PRIMARY_TARGET).join(target.id)
+    .split(getTarget(PRIMARY_TARGET).productMarker).join(target.productMarker);
+  if(target.adapter==='xiao-sense')return materializeChakshu(source,target);
+  if(target.adapter==='esp32c3')return materializeC3(source,target);
   throw Error(`No materializer for ${target.id}`);
 }
 

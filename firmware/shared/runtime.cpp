@@ -1,10 +1,5 @@
-// Synap pendant firmware for ESP32-S3FH4R2. Wiring and build settings: README.md.
-// Built from firmware/shared; regenerate with node tools/assemble-source.cjs.
-#ifndef SYNAP_CHAKSHU
-#define SYNAP_CHAKSHU 0
-#endif
-#define SYNAP_MODULE_ID 1
 #include <Arduino.h>
+// SYNAP_DEVICE_PROFILE
 #include <BLEDevice.h>
 #include <esp_mac.h>
 #include <esp_system.h>
@@ -52,7 +47,6 @@ class MicrophoneGuard {
 #include <math.h>
 #endif
 
-#define DEVICE_NAME "synap"
 #define DEVICE_ID_UUID "4fa1234c-0000-1000-8000-00805f9b34fb"
 #define DIAGNOSTICS_UUID "4fa1234d-0000-1000-8000-00805f9b34fb"
 // Public board identity, independent of firmware version, NVS and OTA authorization.
@@ -100,15 +94,8 @@ constexpr uint16_t REQUESTED_MTU = 517;
 constexpr uint16_t BLE_MIN_INTERVAL = 12, BLE_MAX_INTERVAL = 24; // 15–30 ms
 constexpr uint16_t BLE_SLAVE_LATENCY = 0, BLE_SUPERVISION_TIMEOUT = 600; // 6 s
 constexpr uint16_t MAX_AUDIO_PAYLOAD_BYTES = 500;
-constexpr uint8_t RGB_LED_PIN = 48;
-#ifndef SYNAP_TOUCH_PIN
-#define SYNAP_TOUCH_PIN 13
-#endif
 #ifndef SYNAP_TOUCH_ACTIVE_LEVEL
 #define SYNAP_TOUCH_ACTIVE_LEVEL HIGH
-#endif
-#ifndef SYNAP_BATTERY_ADC_PIN
-#define SYNAP_BATTERY_ADC_PIN 8
 #endif
 constexpr uint8_t TOUCH_INPUT_PIN = SYNAP_TOUCH_PIN;
 constexpr uint8_t TOUCH_ACTIVE_LEVEL = SYNAP_TOUCH_ACTIVE_LEVEL;
@@ -122,12 +109,6 @@ constexpr uint8_t BATTERY_EVENT_MAGIC = 0xB7;
 constexpr uint8_t BATTERY_EVENT_VERSION = 2;
 // Short, dim status pulses limit the onboard WS2812's battery load.
 constexpr uint8_t LED_DIM = 4;
-constexpr int8_t I2S_BCLK_PIN = 4, I2S_WS_PIN = 5, I2S_DATA_IN_PIN = 6;
-#if CONFIG_IDF_TARGET_ESP32S3
-constexpr uint32_t IDLE_CPU_MHZ = 80, ACTIVE_CPU_MHZ = 240;
-#else
-constexpr uint32_t IDLE_CPU_MHZ = 80, ACTIVE_CPU_MHZ = 160;
-#endif
 
 enum class DeviceState : uint8_t { DISCONNECTED=0, CONNECTED_IDLE=1, STREAMING=2, ERROR=3 };
 enum class ErrorCode : uint8_t {

@@ -79,8 +79,7 @@ void setup() {
   touchChangedAt=millis();
   pinMode(BATTERY_ADC_PIN, INPUT);
   analogReadResolution(12);
-  // GPIO8 is calibrated at 1.32 V ADC for a 4.13 V cell on the 1M/470k divider.
-  // 6 dB attenuation comfortably covers the expected range while retaining resolution.
+  // The device profile selects the divider calibration and ADC input range.
   analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_6db);
   statusLed.begin();
   statusLed.clear();
