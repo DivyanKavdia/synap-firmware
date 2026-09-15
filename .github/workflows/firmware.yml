@@ -47,11 +47,6 @@ jobs:
           node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3/synap_esp32c3.ino
           node tools/materialize-target.cjs xiao-esp32s3-sense-8m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_chakshu/synap_chakshu.ino
           test "$(git status --porcelain -- synap_esp32s3)" = ""
-      - name: Embed pinned voice model in Chakshu only
-        run: |
-          python3 tools/prepare-voice-model.py bundle/voice-model
-          python3 tools/embed-voice-model.py prepared/synap_chakshu/synap_chakshu.ino bundle/voice-model/srmodels.bin
-          SYNAP_MODEL_PACK=bundle/voice-model/srmodels.bin node --test tests/chakshu-flash-pack.cjs
       - name: Compile S3, C3 and Chakshu application targets with one build number
         env:
           RUN_NUMBER: ${{ github.run_number }}
@@ -62,7 +57,6 @@ jobs:
           arduino-cli compile --fqbn 'esp32:esp32:esp32s3:FlashSize=4M,PartitionScheme=default,PSRAM=enabled,USBMode=hwcdc,CDCOnBoot=cdc' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build -DUSE_REAL_I2S_MIC=1" --output-dir compiled-s3 prepared/synap_esp32s3
           arduino-cli compile --fqbn 'esp32:esp32:esp32c3:FlashSize=4M,PartitionScheme=default' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build -DUSE_REAL_I2S_MIC=1" --output-dir compiled-c3 prepared/synap_esp32c3
           arduino-cli compile --fqbn 'esp32:esp32:esp32s3:FlashSize=8M,PartitionScheme=default_8MB,PSRAM=opi,USBMode=hwcdc,CDCOnBoot=cdc' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build -DUSE_REAL_I2S_MIC=1" --output-dir compiled-chakshu prepared/synap_chakshu
-          node tools/verify-embedded-model.cjs compiled-chakshu/synap_chakshu.ino.bin prepared/synap_chakshu/synap_chakshu.ino bundle/voice-model/srmodels.bin
           node tools/release.cjs compiled-chakshu/synap_chakshu.ino.bin "$build" "$GITHUB_SHA" bundle/xiao-esp32s3-sense-8m "$SYNAP_RELEASE_BRANCH" prepared/synap_chakshu/synap_chakshu.ino xiao-esp32s3-sense-8m
           node tools/release.cjs compiled-s3/synap_esp32s3.ino.bin "$build" "$GITHUB_SHA" bundle/esp32s3-fh4r2-qspi-4m "$SYNAP_RELEASE_BRANCH" prepared/synap_esp32s3/synap_esp32s3.ino esp32s3-fh4r2-qspi-4m
           node tools/release.cjs compiled-c3/synap_esp32c3.ino.bin "$build" "$GITHUB_SHA" bundle/esp32c3-supermini-4m "$SYNAP_RELEASE_BRANCH" prepared/synap_esp32c3/synap_esp32c3.ino esp32c3-supermini-4m

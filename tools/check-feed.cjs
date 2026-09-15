@@ -60,12 +60,7 @@ async function verifyGitHubProvenance(feed,tip){
   if(index.schema!==1||index.version!==primary.manifest.version||index.build!==primary.manifest.build||index.channel!==primary.manifest.channel||index.primary!==PRIMARY_TARGET||
       JSON.stringify(Object.keys(index.targets||{}).sort())!==JSON.stringify(expectedTargets))throw Error('Authoritative target index is invalid');
   const tip=branch==='ota-releases'?await releaseTip():null;
-  const model=JSON.parse(fs.readFileSync(path.join('bundle','voice-model','model.json'),'utf8'));
-  const modelURL=`https://raw.githubusercontent.com/${repository}/${branch}/models/${model.sha256}/srmodels.bin`;
-  const modelBytes=Buffer.from(await(await get(modelURL)).arrayBuffer());
-  if(modelBytes.length!==model.bytes||crypto.createHash('sha256').update(modelBytes).digest('hex')!==model.sha256)
-    throw Error('Public voice model differs from the pinned model bundle');
-  console.log('PASS: pinned Chakshu voice model download, digest and browser CORS');
+
   for(const {config,manifest} of local){
     const feed=await authoritativeJson(config.manifestPath);
     if(feed.version!==manifest.version||feed.identity!==manifest.identity||feed.build!==manifest.build||feed.sha256!==manifest.sha256||feed.commit!==manifest.commit||feed.target!==config.id)

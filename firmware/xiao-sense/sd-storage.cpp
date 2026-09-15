@@ -1,4 +1,4 @@
-// Media and model jobs serialize filesystem ownership. Never format a mounted card.
+// Media jobs serialize filesystem ownership. Never format a mounted card.
 #include <SD.h>
 #include <SPI.h>
 namespace ChakshuStorage {

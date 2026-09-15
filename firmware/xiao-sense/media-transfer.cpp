@@ -66,8 +66,9 @@ bool validPath(const char* path) {
   for(size_t i=7;i<24;++i)if(i!=15 && !((path[i]>='0'&&path[i]<='9')||(path[i]>='a'&&path[i]<='f')))return false;
   return !strcmp(path+25,"jpg")||!strcmp(path+25,"wav")||!strcmp(path+25,"mjpeg")||!strcmp(path+25,"json");
 }
-uint8_t captureFrame() {
+uint8_t captureFrame(bool preview=false) {
   clearSelection();if(!ChakshuCamera::ready)return ChakshuMedia::NO_CAMERA;
+  if(!ChakshuCamera::configure(preview))return ChakshuMedia::CAPTURE_ERROR;
   // Discard the old buffer so the PWA timestamps a newly captured frame.
   camera_fb_t* frame=esp_camera_fb_get();if(frame)esp_camera_fb_return(frame);
   frame=esp_camera_fb_get();if(!frame)return ChakshuMedia::CAPTURE_ERROR;
@@ -104,6 +105,7 @@ void recordOffline(bool withVideo=true) {
   char audioPath[64]{},indexPath[64]{};uint8_t header[44];
   if(!ChakshuStorage::ready)error=NO_SD;
   else if(withVideo&&!ChakshuCamera::ready)error=NO_CAMERA;
+  else if(withVideo&&!ChakshuCamera::configure(false))error=CAPTURE_ERROR;
   else if(!startMicrophone())error=NO_MIC;
   if(!error) {
     if(!withVideo) {
@@ -133,7 +135,6 @@ void recordOffline(bool withVideo=true) {
     while(!error&&!stopRequested.load()&&audioBytes<1920000u&&millis()-started<65000u) {
       const size_t count=microphoneI2S.readBytes(reinterpret_cast<char*>(pcm),sizeof(pcm));
       if(!count || (count&1)){error=CAPTURE_ERROR;break;}
-      ChakshuVoice::feed(reinterpret_cast<const int16_t*>(pcm),count/2);
       if(audio.write(pcm,count)!=count){error=IO_ERROR;break;}
       audioBytes+=count;
       if(withVideo&&audioBytes/32>=nextFrame) {
@@ -160,6 +161,7 @@ void recordOffline(bool withVideo=true) {
   if(video){video.flush();if(video.size()!=videoBytes)error=IO_ERROR;video.close();}
   if(!error && ((withVideo&&!frames)||!audioBytes))error=CAPTURE_ERROR;
   s.bytes=withVideo?videoBytes:audioBytes;s.error=error;s.state=error?3:2;s.progress=error?s.progress:100;
+  stopMicrophone();
   refresh(s);saveOffline(s);photoRequested.store(false);offline.store(false);offlineMode.store(0);
 }
 void worker(void*) {
@@ -179,7 +181,8 @@ void worker(void*) {
     }
     uint8_t error=0;uint32_t total=0;size_t size=0;uint8_t bytes[480];
     switch(request.operation) {
-      case 1:error=captureFrame();total=bufferSize;break;
+      // Offset 1 is an optional QVGA video hint; legacy offset 0 retains VGA photos.
+      case 1:error=captureFrame(request.offset==1);total=bufferSize;break;
       case 11: {
         ChakshuMedia::Snapshot s;
         error=!ChakshuStorage::ready?ChakshuMedia::NO_SD:!ChakshuCamera::ready?ChakshuMedia::NO_CAMERA:ChakshuMedia::captureCamera(s,false);
@@ -198,6 +201,7 @@ void worker(void*) {
       default:error=2;
     }
     replyFor(request,error,total,request.offset,bytes,error?0:size);
+    if(!streamingEnabled.load())stopMicrophone();
   }
 }
 class CommandCallbacks : public BLECharacteristicCallbacks {

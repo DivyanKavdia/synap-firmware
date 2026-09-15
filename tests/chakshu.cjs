@@ -20,7 +20,7 @@ test('Chakshu uses onboard PDM and does not configure absent hardware',()=>{
   assert.match(source,/config.pin_d7=48/);
   assert.match(source,/SYNAP-CHAKSHU-OTA-ID-V3/);
   assert.doesNotMatch(source,/SYNAP-ESP32S3-OTA-ID-V3/);
-  assert.match(source,/if \(!mediaBusy\(\) && !ChakshuVoice::active\(\)\) stopMicrophone\(\)/);
+  assert.match(source,/if \(!mediaBusy\(\)\) stopMicrophone\(\)/);
 });
 test('Chakshu has separate release paths, OTA marker and dual 8MB slots',()=>{
   const target=getTarget('xiao-esp32s3-sense-8m');

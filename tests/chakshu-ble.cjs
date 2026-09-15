@@ -8,11 +8,11 @@ test('Chakshu alone uses native callbacks, owned commands and synchronous audio 
   const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
   assert.match(source,/#include <NimBLEDevice.h>/);
   assert.doesNotMatch(source,/#include <BLE|audioCharacteristic->notify\(|getData\(/);
-  assert.match(source,/void onRead\(NimBLECharacteristic\* c, NimBLEConnInfo&\)override/);
+  assert.match(source,/void onRead\(NimBLECharacteristic\* characteristic, NimBLEConnInfo&\) override/);
   assert.match(source,/memcpy\(message.data,written.data\(\),size\)/);
   assert.match(source,/sendChakshuAudio\(packet,AUDIO_HEADER_BYTES\+length\)/);
   const boot=source.slice(source.indexOf('void setup() {'));
-  assert(boot.indexOf('ChakshuVoice::initialize();')<boot.indexOf('initializeBLE();'));
+  assert.doesNotMatch(source,/ChakshuVoice|ChakshuModel|esp_afe|esp_mn|srmodels|4fa1235[6789]-/);
   assert(boot.indexOf('xTaskCreatePinnedToCore(acquisitionTask')<boot.indexOf('initializeBLE();'));
   for(const target of ['esp32s3-fh4r2-qspi-4m','esp32c3-supermini-4m']) {
     const other=materialize(assemble(),target);

@@ -83,61 +83,21 @@ The client sends one request at a time, polls for its matching response ID, vali
 
 CI compiles all three board targets. Simulated browser tests exercise account isolation, native queue transfers, separate audio/video storage and frame-limited inference. They do not establish camera/audio synchronization or throughput on a phone. For device validation, record an audible clap in view, verify the matching WAV/JSON/MJPEG timeline, test a disconnected SD take, and check card-full/removed-card recovery. Cloud descriptions require the matching PWA/backend deployment.
 
-## Local voice commands: Hi Chakshu
+## Core capture release
 
-Chakshu uses **NimBLE-Arduino 2.3.6** with Arduino ESP32 3.3.5. Install that library when compiling the self-contained Chakshu sketch locally; OTA users do not install any library. C3 and regular S3 keep the core's existing BLE library. The Chakshu adapter keeps service UUIDs, command bytes, PCM audio, firmware identity and OTA partitions unchanged.
+Local voice recognition is removed for now. There is no model initialization, AFE/MultiNet task, microphone copy queue, NVS voice toggle, voice lease or model upload service. Descriptor byte 15 is zero. CI does not download, embed, publish or require voice-model assets. Previous models on an SD card are left untouched; this firmware never opens them. Git history retains the experimental implementation for a later, separately measured reintroduction.
 
-This avoids Arduino BLE 3.3.5's NimBLE short-read callback guard, which can return empty/stale voice, recovery and media values. Native callbacks copy each write before acknowledging it. Audio checks the current subscription and the actual host enqueue result, and does not treat delayed notification callbacks as acceptance of a different fragment. Required model state and recording tasks are initialized before advertising.
+Use the PWA microphone, photo and video buttons. Bluetooth video requests use operation 1 with offset 1 as a QVGA (320 × 240) hint. Standalone photos and SD captures remain VGA (640 × 480). Older clients send offset 0 and keep VGA; older firmware ignores the hint. Sensor changes happen only inside the camera/SD ownership gate. A single PSRAM JPEG framebuffer remains in use.
 
-The Chakshu-only source adds Espressif MultiNet5 Q8 English speech recognition. The activation phrase is **“Hi Chakshu”**. After a pause, say **“take photo”** / **“click photo”**, **“start video”**, **“stop video”**, **“audio on”**, or **“audio off”**. Each command requires a fresh activation within eight seconds, confidence at least 0.90 and a 1.2-second action cooldown. This uses a continuous phoneme recognizer plus an activation gate; no separately trained custom WakeNet model is included. Tune pronunciations/thresholds only after recording false-activation and missed-command measurements on the real pendant.
+Required queues, capture tasks and recovery state are ready before advertising. Camera/SD checks still run during setup; their time is reported as `media_ms` alongside `ready_ms`, free heap and free PSRAM in the serial boot log. No claim of a measured boot speedup is made without a new device boot log. The retired model was loaded on the boot path before advertising.
 
-### Model installation
+Chakshu uses NimBLE-Arduino 2.3.6 and Arduino ESP32 3.3.5. The main S3 and C3 adapters retain their existing BLE stack. The new image needs a normal firmware update and reboot; refreshing the PWA alone cannot remove a model from installed firmware.
 
-1. In the PWA, update the associated **Chakshu** through Settings → Firmware. The OTA image includes code and voice weights together; no SD card, separate model upload, USB flash, or partition migration is required.
-2. Reconnect after the update. Settings → Local voice controls identifies the model as stored in internal flash. Enable the listener if it was previously disabled.
-3. An SD card is still required for recordings made without the connected PWA. Online audio, photos and video use browser storage.
-
-The model pins Espressif source revision `27da4f945f779bab2d238889924622f7988b1b1c`. CI verifies all source blobs, compresses the model losslessly with raw DEFLATE, and embeds it in **only** the prepared Chakshu sketch. The ESP32-S3 ROM decoder expands the flash data into PSRAM in bounded chunks. Firmware checks **2,177,224 bytes** and SHA-256 **9bb7348b31891a89eb494f5995970a7fc52b765759e4992d471ab2901bf9c47c** before passing it to the model parser. This storage compression does not change recorded audio or model weights. Failed allocation/decoding/verification disables recognition while camera and ordinary audio remain available.
-
-Code and model share the existing `default_8MB` application image and its OTA integrity/provenance checks. CI verifies that the linked binary actually contains the complete compressed model and fits the unchanged `0x330000`-byte slot. Interrupted transfers leave the running code/model pair intact; the existing resume and commit protocol applies to the entire image. Future model changes arrive as firmware updates. C3 and regular S3 source generation and partition layouts are unchanged.
-
-For local builds, materialize Chakshu, run `python3 tools/prepare-voice-model.py <model-directory>`, then `python3 tools/embed-voice-model.py <prepared-chakshu.ino> <model-directory>/srmodels.bin` before compiling. The release's `synap_chakshu.ino` already contains the array and is self-contained. A materialized sketch without the embedding step retains the older SD fallback; it requires `/synap/models/srmodels.bin`. The ZIP and SD installer remain available for those older/manual builds. No recognition audio is uploaded for command detection.
-
-### Capture ownership and behavior
-
-- BLE capture and the SD audio worker feed copies of their unmodified PCM into a bounded recognition queue. An idle reader uses the existing recursive microphone lock and rechecks ownership under that lock. It yields to either recording consumer. The AFE processes only its copy. Queue discontinuities reset recognition; stale commands are discarded.
-- Enabled recognition holds the active CPU profile. Audio off stops a take while the listener remains available for audio on. Disable Local voice controls to stop command listening; the setting persists in NVS.
-- A visible connected PWA claims a six-second, connection-generation-bound lease. Commands go to the PWA while that lease is valid, so existing account ownership, storage and mode-switch rules apply. No lease means local SD actions. Offline mode switches save the previous take, then create separate files for the next mode. Photo during an SD take is handled by the owning worker.
-- Offline video creates matching silent MJPEG, mono PCM16 WAV and sample-timeline JSON files. Audio-only creates its own standalone WAV. Both are limited to 60 seconds of PCM or 65 seconds elapsed. Importing standalone WAVs puts them in the audio library; paired video audio is imported once. Stop cancels queued local starts while leaving PWA transfer requests intact.
-- CI includes native activation, stale-command, routing and microphone-ownership checks, prepares the pinned model ZIP, and compiles all three targets. Real ESP32 linking, flash fit and runtime recognition still need a successful build/device check for each release candidate. Bench-test all commands while idle, during BLE audio/video and disconnected SD capture; measure PSRAM, recognizer drops, audio continuity and false activations. Stop and preserve partial files for SD-full/removed-card cases.
-
-### Voice extension v1
-
-Descriptor byte 15 is 1 for this firmware; C3/S3 remain zero. UUIDs share the suffix above.
-
-| Characteristic | Layout |
-| --- | --- |
-| `4fa12356`, read/write | Read 20-byte status. Write `CC 01 op`: 0 disable, 1 enable, 2 renew PWA lease, 3 release lease. |
-| `4fa12357`, notify | 20 bytes: `CD 01 status enabled`, sequence uint32 LE at 4, action at 8, result at 9, pendant milliseconds uint32 LE at 10, discontinuities uint32 LE at 14, offline-active at 18, reserved at 19. |
-
-Status: 0 starting, 1 listening, 2 model missing, 3 insufficient memory, 4 invalid model/setup, 5 disabled. Action: 1 photo, 2 video start, 3 video stop, 4 audio on, 5 audio off. Result: 0 local request accepted/no-op, 1 busy/rejected, 2 delegated to the leased page. Accepted is not a claim that the later SD write succeeded; inspect media status and saved files. Media extension operations 10 and 11 start standalone SD audio and save a JPEG respectively.
+See [the September 15 core review](chakshu-core-review.md) for the log findings, checks and remaining physical validation.
 
 ## References
 
 - [Seeed microphone pins and PDM setup](https://wiki.seeedstudio.com/xiao_esp32s3_sense_mic/)
 - [Seeed microSD wiring and preparation](https://wiki.seeedstudio.com/xiao_esp32s3_sense_filesystem/)
 - [Espressif XIAO camera pin map, core 3.3.5](https://github.com/espressif/arduino-esp32/blob/3.3.5/libraries/ESP32/examples/Camera/CameraWebServer/camera_pins.h)
-- [Espressif 8 MB partition layout](https://github.com/espressif/arduino-esp32/blob/3.3.5/tools/partitions/default_8MB.csv)
-- [Espressif MultiNet speech commands and phoneme format](https://docs.espressif.com/projects/esp-sr/en/latest/esp32s3/speech_command_recognition/README.html)
-
-### Legacy SD model installation from the PWA
-
-For older/manual firmware without the embedded model, connect the associated Chakshu and open Settings → Local voice controls → Install voice model. The PWA downloads the pinned 2,177,224-byte model, checks SHA-256, and transfers it over BLE to `/synap/models/srmodels.part`. Keep the page open, the pendant powered, and the SD card inserted. After completion choose Restart Chakshu, then reconnect. Manual SD installation remains available.
-
-Only the model staging/final/backup paths can be written by this service. Upload reserves the media storage lock and pauses command recognition; audio, camera checks and OTA cannot start concurrently. The control task owns file writes and validation. A cancelled, timed-out, or disconnected transfer never replaces the current model or recordings. A connection can resume the acknowledged offset for 15 minutes while the pendant remains powered; a power cycle requires restarting the transfer. Completion rereads and hashes the SD file, then renames the old model to a backup and replaces it. Boot restores that backup if interrupted between the renames. Activation uses an explicit restart.
-
-Protocol 1 uses WRITE `4fa12358` and READ `4fa12359` (standard Synap UUID suffix). Commands are operation byte + nonzero little-endian session u32: 1 begin, 3 verify/install, 4 restart, 5 cancel, 6 resume; operation 2 adds offset u32 + 1–480 data bytes, bounded by negotiated ATT payload minus 9. Up to four writes are sent before polling the cumulative acknowledged offset. A resume binds the session to the current connection generation. Status is 20 bytes: `CE 01 state error`, session u32@4, offset u32@8, model size u32@12, max data u16@16, SD ready@18, capability flags@19 (bit 0: SD upload service, bit 1: embedded flash model). States: 0 available, 1 receiving, 2 verifying, 3 installed, 4 failed, 5 restarting. This protocol version accepts only the pinned model in `model-contract.cpp`.
-
-Host tests cover resume, duplicate packets, stale connections, offsets, partial/corrupt data, timeout, cancellation, SD lock exclusion, rollback and preservation. Bluetooth speed and SD power-loss behavior still need testing on a physical pendant.
-
-Embedded builds report installed (3), offset equal to model size, session 0 and flags 2 regardless of SD presence. They do not allocate the legacy model upload queue; its write characteristic accepts no installation/restart commands. The voice-status characteristic independently reports whether recognition loaded and is listening. The PWA hides the SD installer, progress and extra restart for embedded builds.
+- [Espressif camera driver and framebuffer tradeoffs](https://github.com/espressif/esp32-camera)

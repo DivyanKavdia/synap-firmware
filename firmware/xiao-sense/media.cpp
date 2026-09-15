@@ -57,7 +57,6 @@ uint8_t recordWav(Snapshot& s) {
       received+=n;
     }
     if (error!=OK) break;
-    ChakshuVoice::feed(samples,800);
     const size_t written=file.write(reinterpret_cast<const uint8_t*>(samples),sizeof(samples));
     s.bytes+=written;
     if (written!=sizeof(samples)) error=IO_ERROR;
@@ -73,6 +72,7 @@ uint8_t recordWav(Snapshot& s) {
   return error;
 }
 uint8_t captureCamera(Snapshot& s,bool video) {
+  if (!ChakshuCamera::configure(false)) return CAPTURE_ERROR;
   File file=ChakshuStorage::create(s.path,sizeof(s.path),video?"mjpeg":"jpg");
   if (!file) return ChakshuStorage::freeBytes<ChakshuStorage::RESERVE_BYTES?NO_SPACE:IO_ERROR;
   uint8_t error=OK;
@@ -127,6 +127,7 @@ void worker(void*) {
     save(s);
     Serial.printf("[CHAKSHU] op=%u result=%u bytes=%lu file=%s\n",
       unsigned(s.operation),unsigned(error),(unsigned long)s.bytes,s.path);
+    stopMicrophone();
     busy.store(false);
   }
 }

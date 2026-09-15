@@ -7,7 +7,7 @@ Device firmware for **synap S3**, **synap C3**, and **Chakshu**. All three use t
 - [Device capabilities](docs/DEVICE_CAPABILITIES.md): supported features, readiness and the PWA contract.
 - [Architecture](docs/ARCHITECTURE.md): source ownership and how targets are assembled.
 - [Pinout](docs/HARDWARE_PINOUT.md): wiring and battery calibration.
-- [Chakshu](docs/CHAKSHU.md): camera, SD, voice model and first installation.
+- [Chakshu](docs/CHAKSHU.md): audio, camera, SD and first installation.
 - [OTA releases](OTA_RELEASES.md): build identities, artifacts and publication.
 - [Disconnect recovery](docs/DISCONNECT_RECOVERY.md): buffering and session ownership.
 
@@ -25,6 +25,6 @@ node tools/materialize-target.cjs xiao-esp32s3-sense-8m synap_esp32s3/synap_esp3
 
 The checked-in S3 `.ino` is generated. Edit its owners, then regenerate it. Keep each complete Arduino sketch in its own folder; two complete `.ino` files in one folder are compiled together and cause duplicate definitions.
 
-CI pins Arduino ESP32 **3.3.5**, Adafruit NeoPixel **1.15.2**, and NimBLE-Arduino **2.3.6**. It compiles every target, embeds the verified voice model in Chakshu only, and retains prepared source plus application and factory binaries. Eligible `main` builds publish OTA releases as `synap-os1-build#`; unpublished local builds identify as build0. First installation uses USB; OTA subsequently writes the inactive application slot. Never interchange target binaries.
+CI pins Arduino ESP32 **3.3.5**, Adafruit NeoPixel **1.15.2**, and NimBLE-Arduino **2.3.6**. It compiles every target without local speech recognition, and retains prepared source plus application and factory binaries. Eligible `main` builds publish OTA releases as `synap-os1-build#`; unpublished local builds identify as build0. First installation uses USB; OTA subsequently writes the inactive application slot. Never interchange target binaries.
 
 Audio capture is 16 kHz mono PCM16 without software filtering or gain. BLE prefers PCM at MTU185 or above and uses ADPCM on smaller supported links. Ordinary recording remains available when optional camera, SD or voice setup fails. Host tests and successful compilation do not establish microphone quality, radio endurance or battery accuracy on physical boards.

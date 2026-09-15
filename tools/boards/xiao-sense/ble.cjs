@@ -36,7 +36,7 @@ function materializeBle(source) {
   out=out.replace(/void (onRead|onWrite)\(NimBLECharacteristic\* (\w+)\)/g,'void $1(NimBLECharacteristic* $2, NimBLEConnInfo&)');
   out=out.replace(/const String value=(\w+)->getValue\(\);/g,'const auto value=$1->getValue();');
   out=out.replace(/bleServer->getConnId\(\)/g,'chakshuConnectionHandle.load()');
-  replace('bleServer->createService(NimBLEUUID(SERVICE_UUID),88)','bleServer->createService(SERVICE_UUID)','Native service handles');
+  replace('bleServer->createService(NimBLEUUID(SERVICE_UUID),64)','bleServer->createService(SERVICE_UUID)','Native service handles');
   replace('#if defined(CONFIG_NIMBLE_ENABLED)\n  bleServer->advertiseOnDisconnect(true);\n#endif',
     '  bleServer->advertiseOnDisconnect(true);','Native reconnect advertising');
   replace("  // Audio/control + device ID + OTA/status/build identity + diagnostics exceed\n  // Bluedroid's default service reservation. NimBLE accepts this overload as well.",
@@ -61,9 +61,9 @@ function materializeBle(source) {
     '  chakshuAudioProgress.reset();\n  return generation == streamGeneration.load() && deviceConnected.load() && connection == connectionGeneration.load();','Complete partial audio frame');
   replace('      const uint32_t rejectedBefore=notifyRejected.load();\n      // In the pinned Arduino BLE library, onStatus runs before notify returns.\n      // SUCCESS_NOTIFY means queued locally, not persisted by the phone.\n      audioCharacteristic->notify();\n      if(notifyRejected.load()==rejectedBefore) { accepted=true;break; }',
     '      if(sendChakshuAudio(packet,AUDIO_HEADER_BYTES+length)) { accepted=true;break; }','Native audio acceptance');
-  // Initialize required state before advertising; model loading can take seconds.
-  replace('  initializeBLE();\n  initializeRecovery();\n  ChakshuModel::initialize();\n  ChakshuVoice::initialize();',
-    '  initializeRecovery();\n  ChakshuModel::initialize();\n  ChakshuVoice::initialize();','Finish model before advertising');
+  // Required capture state must exist before the first client can send START.
+  replace('  initializeBLE();\n  initializeRecovery();',
+    '  initializeRecovery();','Prepare recovery before advertising');
   replace('    fatalSetup("[FATAL] task allocation failed");\n  }\n}',
     '    fatalSetup("[FATAL] task allocation failed");\n  }\n  initializeBLE();\n}','Advertise after capture tasks are ready');
   if(/getData\(|getConnId\(|#include <BLE|\bBLECharacteristic\b/.test(out))throw Error('Unadapted Chakshu Bluetooth API');

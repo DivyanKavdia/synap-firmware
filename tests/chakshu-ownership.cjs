@@ -58,7 +58,7 @@ test('OTA admission excludes media through flash begin and publishes the worker 
   const engine=source.slice(source.indexOf('static void put32le('),source.indexOf('#include <esp_ota_ops.h>'));
   const publish=source.slice(source.indexOf('void otaPublish(bool notify) {'),source.indexOf('void otaInitialize(',source.indexOf('void otaPublish(bool notify) {')));
   const power=source.slice(source.indexOf('bool otaNeedsActiveCpu() {'),source.indexOf('class OtaWriteCallbacks'));
-  const tick=source.slice(source.indexOf('void otaTick() {'),source.indexOf('// Model upload protocol 1'));
+  const tick=source.slice(source.indexOf('void otaTick() {'),source.indexOf('// XIAO Sense camera owns'));
   let fixture=fs.readFileSync('tests/ota-runtime.cpp','utf8');
   fixture=fixture.replace('// INSERT ENGINE',`#define SYNAP_CHAKSHU 1\n${ownership}\n${engine}`)
     .replace('// INSERT POWER',power).replace('// INSERT PUBLISH',publish).replace('// INSERT TICK',tick)
@@ -79,9 +79,8 @@ int main(){
 });
 
 test('workers use atomic OTA state and control waits until setup publishes all services',()=>{
-  const voice=fs.readFileSync('firmware/xiao-sense/voice.cpp','utf8').split('void cleanup()')[0];
   const transfer=fs.readFileSync('firmware/xiao-sense/media-transfer.cpp','utf8');
-  assert.doesNotMatch(voice+transfer,/otaBusy\(\)/);
+  assert.doesNotMatch(transfer,/otaBusy\(\)/);
   assert.match(source,/void controlTask\(void\* parameter\) \{\s+while \(!ChakshuResources::runtimeReady.load\(\)\) vTaskDelay\(1\);/);
   assert.match(source,/initializeBLE\(\);\s+ChakshuResources::runtimeReady.store\(true\);/);
   assert(source.indexOf('class Lease')<source.indexOf('void otaTick() {'));

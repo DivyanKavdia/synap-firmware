@@ -1,4 +1,4 @@
-// One admission gate orders START/OTA transitions against camera, SD and model jobs.
+// One admission gate orders START/OTA transitions against camera and SD jobs.
 // Persistent workers retain the gate until completion; transitions publish their
 // atomic streaming/OTA state before releasing it. No BLE callback waits on it.
 namespace ChakshuResources {

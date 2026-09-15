@@ -51,7 +51,7 @@ if(production){
   const tag=version,tags=api('releases?per_page=100','GET',undefined,'[.[].tag_name]');
   if(!tags.includes(tag)){
     const assetDir=path.join('bundle','release-assets');fs.mkdirSync(assetDir,{recursive:true});
-    const assets=[path.join('bundle','voice-model','chakshu-voice-model.zip')];
+    const assets=[];
     for(const {config,dir} of artifacts){
       const stem=config.assetStem||config.family;
       const binaryOut=path.join(assetDir,`firmware-${stem}.bin`),manifestOut=path.join(assetDir,`latest-${stem}.json`),sourceOut=path.join(assetDir,config.sourceName),hashOut=path.join(assetDir,`source-${stem}.sha256`);
@@ -66,18 +66,6 @@ if(production){
 }
 
 const treeEntries=[];
-// Raw GitHub content supports browser CORS; release asset redirects do not.
-// Content-address the pinned model so a later firmware release cannot change it.
-const modelDir=path.join('bundle','voice-model');
-const model=JSON.parse(fs.readFileSync(path.join(modelDir,'model.json'),'utf8'));
-const weights=fs.readFileSync(path.join(modelDir,'srmodels.bin'));
-if(weights.length!==model.bytes||require('node:crypto').createHash('sha256').update(weights).digest('hex')!==model.sha256)
-  throw Error('Voice model integrity mismatch');
-const modelBlob=api('git/blobs','POST',{content:weights.toString('base64'),encoding:'base64'});
-const modelPath=`models/${model.sha256}`;
-treeEntries.push({path:`${modelPath}/srmodels.bin`,mode:'100644',type:'blob',sha:modelBlob.sha});
-for(const name of ['model.json','ESPRESSIF-LICENSE.txt'])
-  treeEntries.push({path:`${modelPath}/${name}`,mode:'100644',type:'blob',content:fs.readFileSync(path.join(modelDir,name),'utf8')});
 for(const {config,manifest,binary} of artifacts){
   const blob=api('git/blobs','POST',{content:binary.toString('base64'),encoding:'base64'});
   const artifactPath=new URL(manifest.url).pathname.split(`/${branch}/`)[1];

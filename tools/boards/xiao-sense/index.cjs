@@ -16,15 +16,13 @@ function materializeChakshu(source,target) {
   out=out.split('statusLed.clear();statusLed.show();').join('/* No external LED on Chakshu. */');
   out=replaceFunctionBlock(out,'void updateStatusLed(bool force) {','void setDeviceState(',
     'void updateStatusLed(bool force) { (void)force; }\n\n','No external indicator');
-  replace('  if (microphoneValidated) stopMicrophone();',
-    '  // Keep PDM initialized until the local voice service acquires the microphone.','Always-on microphone');
   const stopStart=out.indexOf('void stopStreaming(ErrorCode reason) {');
   const stopEnd=out.indexOf('bool configureTransportFromPeerMtu() {',stopStart);
   if(stopStart<0 || stopEnd<0)throw Error('Missing BLE stop boundary');
   const stop=out.slice(stopStart,stopEnd).replace('  stopMicrophone();','  if (!mediaBusy()) stopMicrophone();');
   out=out.slice(0,stopStart)+stop+out.slice(stopEnd);
   replace('applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu());',
-    'applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu() || mediaBusy() || ChakshuVoice::active());','Camera CPU profile');
+    'applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu() || mediaBusy());','Camera CPU profile');
   // Remove touch wake/sleep implementations, including durable wake gates from another board.
   out=replaceFunctionBlock(out,'bool armTouchWakeSource() {','void publishPowerEvent(',
     'bool armTouchWakeSource() { return false; }\nvoid armTouchWakeAndSleep() {}\nbool confirmTouchWakeGesture() { return true; }\n\n','Always-awake boot');
@@ -42,21 +40,16 @@ function materializeChakshu(source,target) {
   replace('  static int32_t raw[SAMPLES_PER_FRAME];','  static int16_t raw[SAMPLES_PER_FRAME];','Native PCM16 capture buffer');
   replace('    const int32_t sample=raw[i] >> 16;','    const int32_t sample=raw[i];','Preserve onboard PCM samples');
   replace('// SYNAP_BOARD_FEATURES',
-    ['model-contract.cpp','model-flash.cpp','voice-contract.cpp','camera.cpp','sd-storage.cpp','media.cpp','media-transfer.cpp','model-upload.cpp','voice.cpp'].map(name=>readTemplate('xiao-sense',name)).join('\n'),'Camera and SD drivers');
-  replace('  if (!mediaBusy()) stopMicrophone();','  if (!mediaBusy() && !ChakshuVoice::active()) stopMicrophone();','Keep command microphone listening');
-  replace('  return true;\n}\nvoid acquisitionTask', '  ChakshuVoice::feed(frame.samples,SAMPLES_PER_FRAME);\n  return true;\n}\nvoid acquisitionTask','Copy capture to keyword queue');
-  replace('  initializeRecovery();','  initializeRecovery();\n  ChakshuModel::initialize();\n  ChakshuVoice::initialize();','Start local command recognizer');
-  replace('    ChakshuMedia::tick();','    ChakshuMedia::tick();\n    ChakshuModel::tick();\n    ChakshuVoice::tick();','Dispatch local commands');
-  replace('  ChakshuTransfer::ble(service);','  ChakshuTransfer::ble(service);\n  ChakshuVoice::ble(service);\n  ChakshuModel::ble(service);','Keyword control service');
-  replace('BLEUUID(SERVICE_UUID),64','BLEUUID(SERVICE_UUID),88','Reserve keyword handles');
-  replace('  p[14]=ChakshuTransfer::requests?1:0;','  p[14]=ChakshuTransfer::requests?1:0;\n  p[15]=1;','Keyword protocol capability');
+    ['camera.cpp','sd-storage.cpp','media.cpp','media-transfer.cpp'].map(name=>readTemplate('xiao-sense',name)).join('\n'),'Camera and SD drivers');
   if (out.includes('statusLed.') || out.includes('pinMode(TOUCH_INPUT_PIN') ||
       out.includes('analogSetPinAttenuation(') || out.includes('esp_deep_sleep_start()'))
     throw Error('Chakshu still accesses absent hardware');
+  replace('  ChakshuMedia::initialize();',
+    '  const uint32_t mediaStarted=millis();\n  ChakshuMedia::initialize();\n  const uint32_t mediaBootMs=millis()-mediaStarted;','Measure media boot cost');
   out=materializeBle(out);
   replace('void controlTask(void* parameter) {',
     'void controlTask(void* parameter) {\n  while (!ChakshuResources::runtimeReady.load()) vTaskDelay(1);','Wait for complete BLE initialization');
-  replace('  initializeBLE();','  initializeBLE();\n  ChakshuResources::runtimeReady.store(true);','Publish initialized runtime');
+  replace('  initializeBLE();','  initializeBLE();\n  ChakshuResources::runtimeReady.store(true);\n  Serial.printf("[CHAKSHU] ready_ms=%lu media_ms=%lu heap=%lu psram=%lu voice=off\\n",(unsigned long)millis(),(unsigned long)mediaBootMs,(unsigned long)ESP.getFreeHeap(),(unsigned long)ESP.getFreePsram());','Publish initialized runtime');
   return out;
 }
 module.exports={materializeChakshu};
