@@ -5,13 +5,23 @@ namespace ChakshuCamera {
 bool ready=false;
 uint16_t sensorPid=0;
 framesize_t frameSize=FRAMESIZE_VGA;
+int jpegQuality=12;
 bool configure(bool preview) {
   if (!ready) return false;
   const framesize_t next=preview?FRAMESIZE_QVGA:FRAMESIZE_VGA;
-  if (next==frameSize) return true;
+  const int quality=preview?22:12;
+  if (next==frameSize && quality==jpegQuality) return true;
   sensor_t* sensor=esp_camera_sensor_get();
-  if (!sensor || sensor->set_framesize(sensor,next)!=0) return false;
-  frameSize=next;return true;
+  if (!sensor) return false;
+  if(next!=frameSize) {
+    if(sensor->set_framesize(sensor,next)!=0)return false;
+    frameSize=next;
+  }
+  if(quality!=jpegQuality) {
+    if(sensor->set_quality(sensor,quality)!=0)return false;
+    jpegQuality=quality;
+  }
+  return true;
 }
 bool begin() {
   if (ready) {
@@ -42,7 +52,7 @@ bool begin() {
     Serial.printf("[CHAKSHU] camera init failed: 0x%x\n",unsigned(error));
     return false;
   }
-  frameSize=FRAMESIZE_VGA;
+  frameSize=FRAMESIZE_VGA;jpegQuality=12;
   sensor_t* sensor=esp_camera_sensor_get();
   sensorPid=sensor?uint16_t(sensor->id.PID):0;
   camera_fb_t* frame=esp_camera_fb_get();

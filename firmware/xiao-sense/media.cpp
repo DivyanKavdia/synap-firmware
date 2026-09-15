@@ -1,11 +1,12 @@
 // Bounded hardware checks. BLE callbacks only copy requests; work runs off the control task.
 namespace ChakshuMedia {
 enum Error : uint8_t { OK=0, BUSY=1, BAD_COMMAND=2, NO_SD=3, NO_CAMERA=4,
-  NO_MIC=5, NO_SPACE=6, IO_ERROR=7, CAPTURE_ERROR=8 };
+  NO_MIC=5, NO_SPACE=6, IO_ERROR=7, CAPTURE_ERROR=8, SD_TOO_SLOW=9 };
 struct Request { uint32_t connection;uint8_t operation,id; };
 struct Snapshot {
   uint8_t operation=0,id=0,state=0,error=0,ready=0,progress=0;
   uint32_t totalMiB=0,freeMiB=0,bytes=0,connection=0;
+  uint32_t audioMs=0,frames=0,droppedFrames=0;
   uint16_t sensor=0;
   char path[64]{};
 };

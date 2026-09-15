@@ -593,6 +593,9 @@ void encodeModuleCapabilities(uint8_t* p) {
   if ((status.ready&(SYNAP_CAP_AUDIO|SYNAP_CAP_SD))==(SYNAP_CAP_AUDIO|SYNAP_CAP_SD)) ready|=SYNAP_CAP_SDAUDIO;
   sensor=status.sensor;
   p[14]=ChakshuTransfer::requests?1:0;
+  // Additive media-v1 features: paced notifications, saved photo preview,
+  // Wi-Fi downloads, independent SD audio/video workers.
+  p[16]=ChakshuTransfer::requests?15:0;
 #endif
   ready &= supported;
   p[4]=supported&255;p[5]=supported>>8;p[6]=ready&255;p[7]=ready>>8;
@@ -610,7 +613,6 @@ void initializeModuleCapabilities(BLEService* service) {
   capability->setCallbacks(new ModuleCapabilitiesCallbacks());
   uint8_t value[20];encodeModuleCapabilities(value);capability->setValue(value,sizeof(value));
 }
-
 void updateStatusLed(bool force) {
   const uint32_t now = millis();
   uint8_t r=0,g=0,b=0;

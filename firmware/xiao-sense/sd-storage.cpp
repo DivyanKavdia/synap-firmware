@@ -16,7 +16,13 @@ bool begin(bool remount) {
   if (!ready) {
     SD.end();
     SPI.begin(7,8,9,21);
-    ready=SD.begin(21,SPI,10000000,"/sd",5,false) && SD.cardType()!=CARD_NONE;
+    // Older cards and expansion-board contacts may need a slower SPI clock.
+    // Mount only; format_if_empty is always false.
+    for(const uint32_t hz:{10000000u,4000000u,1000000u}) {
+      ready=SD.begin(21,SPI,hz,"/sd",5,false) && SD.cardType()!=CARD_NONE;
+      if(ready)break;
+      SD.end();
+    }
     if (ready && !SD.exists("/synap")) ready=SD.mkdir("/synap");
     if (!bootId) bootId=esp_random();
   }

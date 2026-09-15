@@ -3,6 +3,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     if(deviceConnected.load()) { server->disconnect(peer.getConnHandle());return; }
     chakshuConnectionHandle=peer.getConnHandle();
     chakshuAudioSubscribed=false;
+    ChakshuTransfer::subscribedConnection=BLE_HS_CONN_HANDLE_NONE;
+    ++ChakshuTransfer::cancelWindow;
     ChakshuLink::connectedAt=millis();ChakshuLink::statusSeen=false;
     ChakshuLink::interval=peer.getConnInterval();ChakshuLink::latency=peer.getConnLatency();
     ChakshuLink::timeout=peer.getConnTimeout();
@@ -22,6 +24,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     ChakshuLink::lastParamRequestCode=ChakshuLink::paramRequestCode.load();
     ChakshuLink::lastStage=ChakshuLink::stage(true,streamingEnabled.load()&&!recoveryWaiting.load(),chakshuAudioSubscribed.load());
     deviceConnected=false;chakshuAudioSubscribed=false;
+    ChakshuTransfer::subscribedConnection=BLE_HS_CONN_HANDLE_NONE;
+    ++ChakshuTransfer::cancelWindow;
     chakshuConnectionHandle=BLE_HS_CONN_HANDLE_NONE;
     ++linkDisconnects;lastDisconnectAt=millis();lastDisconnectReason=uint16_t(reason);
     if(recoveryEnabled.load()&&streamingEnabled.load()) {

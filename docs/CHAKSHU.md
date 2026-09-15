@@ -1,6 +1,6 @@
 # Chakshu capture and media
 
-Chakshu is the third Synap module: Seeed XIAO ESP32S3 Sense, onboard PDM microphone, OV3660 camera and microSD. The initial build assumes an 8 MB flash / 8 MB OPI PSRAM XIAO and an installed 2 GB card. Capacity and camera sensor ID are read from hardware, not hardcoded as successful.
+Chakshu is the third Synap module: Seeed XIAO ESP32S3 Sense, onboard PDM microphone, OV3660 camera and microSD. The build targets an 8 MB flash / 8 MB OPI PSRAM XIAO and probes the installed card. Capacity and camera sensor ID are read from hardware, not hardcoded as successful.
 
 ## Initial behavior
 
@@ -53,7 +53,7 @@ Readiness means driver initialization succeeded, not that real-world audio/image
 Capability descriptor byte 14 advertises media extension version 1 when its worker is available. C3/S3 keep byte 14 zero. The PWA associates the permanent Chakshu device ID with the signed-in account; this preference never gives access to another account's files.
 
 - Online photo/video reads fresh JPEG frames through the existing BLE service while ordinary audio notifications continue. The PWA stores silent frame sequences and its audio journal separately. Throughput determines frame rate; this is not a full-frame-rate MP4 stream or Wi-Fi preview.
-- Offline capture writes a matching `.mjpeg`, `.wav`, and `.json` under `/synap/`. WAV is mono 16 kHz PCM16; JSON records frame positions on the captured audio sample timeline. Takes stop at 60 seconds of PCM, 65 seconds of wall time, a stop request, or a storage/capture error. Disconnection does not stop an accepted SD take.
+- Offline capture writes a matching `.mjpeg`, `.wav`, and `.json` under `/synap/`. WAV is mono 16 kHz PCM16; JSON records frame positions on the captured audio sample timeline. Takes stop at 60 seconds of PCM, 32 MiB of JPEG frames, 65 seconds of wall time, a stop request, or a storage/capture error. Disconnection does not stop an accepted SD take.
 - SD offline capture excludes BLE audio, OTA and hardware checks. Photo/file transfers share the app's serialized native queue. The two media workers claim the shared camera/SD busy flag atomically.
 - File reads are limited to generated `/synap/xxxxxxxx-xxxxxxxx` names and JPEG/WAV/MJPEG/JSON extensions. Listing exposes up to 100 photo/video entries; larger card archives can be imported with a card reader. Downloads never delete the originals. The PWA rejects files larger than 32 MiB.
 - Existing ten-second hardware checks remain independent. Earlier silent video has no audio timing sidecar; it can be imported for playback/manual description, but cannot drive timestamped voice explanations.
@@ -75,7 +75,11 @@ The PWA uses write without response for short commands when advertised, then wai
 | 3 / 4 | Select SD file by path / read selected file or listing bytes |
 | 5 / 6 | Start bounded SD audio/video take / request stop |
 | 7 / 8 | Build JSON catalogue / read catalogue size |
-| 9 | Read offline take status as JSON: active, state, error, progress, path |
+| 9 | Read offline take status as JSON: active, state, error, progress, path, audioMs, frames, droppedFrames |
+| 12 / 16 | Send a bounded notification window from offset / cancel outstanding camera credit |
+| 13 / 15 | Save the VGA photo on SD and select its smaller preview / read the original SD path |
+| 14 | Remount SD while idle; never format |
+| 20 / 21 / 22 | Start private Wi-Fi downloads / read join details / request shutdown |
 
 The client sends one request at a time, polls for its matching response ID, validates every byte offset/total, and does not automatically repeat a capture. BLE callbacks only copy requests/results; camera and SD work execute in the worker. Stop/status remain available during an offline take. Changing the BLE connection invalidates a selected file or frame.
 
@@ -87,7 +91,7 @@ CI compiles all three board targets. Simulated browser tests exercise account is
 
 Local voice recognition is removed for now. There is no model initialization, AFE/MultiNet task, microphone copy queue, NVS voice toggle, voice lease or model upload service. Descriptor byte 15 is zero. CI does not download, embed, publish or require voice-model assets. Previous models on an SD card are left untouched; this firmware never opens them. Git history retains the experimental implementation for a later, separately measured reintroduction.
 
-Use the PWA microphone, photo and video buttons. Bluetooth video requests use operation 1 with offset 1 as a QVGA (320 × 240) hint. Standalone photos and SD captures remain VGA (640 × 480). Older clients send offset 0 and keep VGA; older firmware ignores the hint. Sensor changes happen only inside the camera/SD ownership gate. A single PSRAM JPEG framebuffer remains in use.
+Use the PWA microphone, photo and video buttons. Bluetooth video requests use operation 1 with offset 1 as a QVGA (320 × 240) hint. Standalone photos and the legacy SD hardware checks use VGA (640 × 480); the independent SD video recorder uses QVGA. Older clients send offset 0 and keep VGA; older firmware ignores the hint. Sensor changes happen only inside the camera/SD ownership gate. A single PSRAM JPEG framebuffer remains in use.
 
 Required queues, capture tasks and recovery state are ready before advertising. Camera/SD checks still run during setup; their time is reported as `media_ms` alongside `ready_ms`, free heap and free PSRAM in the serial boot log. No claim of a measured boot speedup is made without a new device boot log. The retired model was loaded on the boot path before advertising.
 
@@ -101,3 +105,65 @@ See [the September 15 core review](chakshu-core-review.md) for the log findings,
 - [Seeed microSD wiring and preparation](https://wiki.seeedstudio.com/xiao_esp32s3_sense_filesystem/)
 - [Espressif XIAO camera pin map, core 3.3.5](https://github.com/espressif/arduino-esp32/blob/3.3.5/libraries/ESP32/examples/Camera/CameraWebServer/camera_pins.h)
 - [Espressif camera driver and framebuffer tradeoffs](https://github.com/espressif/esp32-camera)
+
+## SD performance release
+
+Descriptor byte 16 advertises independent additions to media version 1: bit 0
+paced notifications, bit 1 SD photo previews, bit 2 private Wi-Fi downloads,
+and bit 3 independent SD capture/card refresh. It is zero on other targets.
+Old clients continue using their existing requests.
+
+The new `4fa1235a` notification characteristic uses a 16-byte header: `CC`,
+version 1, kind (1 data, 2 window end), error, request ID uint32 LE, total
+uint32 LE, and byte offset uint32 LE. Payload is at most `min(480, MTU-19)`.
+Operation 12 grants at most eight packets and two seconds of work. The client
+acknowledges contiguous data by requesting its next offset; gaps are retried
+from the first missing byte. An empty end marker with total zero yields to
+audio. An absent subscription cannot enqueue data. Connection generations,
+subscription reset and cancellation epochs prevent stale work after reconnect
+or Stop, including requests still queued when Stop arrives.
+
+Camera notifications leave eight NimBLE mbufs free and wait whenever audio has
+more than two pending frames or is draining. They wait 15 ms between submissions
+during audio and 4 ms otherwise. These are scheduling limits, not measured
+throughput. The client retains read-based transfer for earlier firmware and
+notification delivery failure, without taking another exposure.
+
+Operation 13 saves the existing VGA JPEG before creating a QVGA preview from
+that same exposure. Decode dimensions and output size are checked. The decoder
+uses high-byte-first RGB565, matching the pinned JPEG encoder. A failed or
+oversized conversion falls back to the complete original; SD write failure is
+reported. Original files remain on the card after imports and downloads.
+
+SD video now has separate microphone acquisition, camera acquisition and file
+writer tasks. PCM has 40 slots (two seconds); JPEG has two slots. The camera
+uses QVGA, JPEG quality 22, and a 100 ms target interval (up to 10 fps). A slow
+writer can drop camera frames; timestamps reflect capture time on the recorded
+audio timeline. Audio overflow stops with error 9 and drains queued samples,
+rather than silently overwriting audio. Stop joins both producers before freeing
+buffers. Card/short-write failures preserve partial files but those files may
+require recovery from the card. A 32 MiB visual limit keeps completed clips
+within the PWA import limit. Actual frame rate depends on exposure and the card.
+
+Wi-Fi is off at boot. Operation 20 is accepted only while idle with an SD card
+and retains the media lease until shutdown, excluding audio, SD work and OTA.
+It starts a password-protected, one-client `Chakshu-XXXX` access point with a
+fresh password and independent URL token. The user joins it manually and opens
+`http://192.168.4.1/` with the private token from the PWA. The local page lists
+up to 300 generated media files and serves read-only downloads; it has no
+upload, delete or format endpoint. Every file request checks the token and exact
+filename grammar. Stop is an authenticated POST. Join details are returned only
+by explicit BLE requests and are never logged. The network stops after three
+minutes without requests or fifteen minutes overall, checked between bounded
+network writes. Stop/status requests remain available while it serves files.
+Wi-Fi throughput and BLE coexistence still need measurement on the pendant.
+
+### Card already inserted
+
+After updating, open Library → Photos & video → **Check SD card** while idle.
+The mount tries 10, 4, then 1 MHz without formatting. A ready card makes the header
+video button use SD by default. Record a short visible clap, stop, then download
+the matching MJPEG/WAV/JSON over Wi-Fi and import the three files together in
+Synap. Check synchronization, frame count, audio duration and repeatability on
+the physical device. Phone preview remains an explicit alternative in Library.
+Local voice recognition remains disabled.

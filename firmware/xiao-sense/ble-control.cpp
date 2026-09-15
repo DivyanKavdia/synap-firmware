@@ -12,6 +12,7 @@ class ChakshuControlCharacteristic : public NimBLECharacteristic {
     if (!deviceConnected.load() || peer.getConnHandle() != chakshuConnectionHandle.load()) return;
     const uint8_t command = length == 2 && data ? data[0] : 0xFF;
     const uint8_t version = length == 2 && data ? data[1] : 0;
+    if(command==CMD_STOP && version==PROTOCOL_VERSION)++ChakshuTransfer::cancelWindow;
     queueEvent(EventType::COMMAND, command, version, streamGeneration.load());
   }
 };

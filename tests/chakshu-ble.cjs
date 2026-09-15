@@ -141,6 +141,8 @@ test('Chakshu control writes enqueue original commands without replacing readabl
 #include <cstdio>
 #include <vector>
 #define CONTROL_CHAR_UUID "control"
+constexpr int CMD_STOP=0,PROTOCOL_VERSION=2;
+namespace ChakshuTransfer {std::atomic<uint32_t> cancelWindow{0};}
 namespace NIMBLE_PROPERTY {constexpr int READ=1,WRITE=2,WRITE_NR=4,NOTIFY=8;}
 struct NimBLEConnInfo {uint16_t handle;uint16_t getConnHandle(){return handle;}};
 struct NimBLECharacteristic {

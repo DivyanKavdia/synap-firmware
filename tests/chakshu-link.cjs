@@ -50,6 +50,7 @@ test('Chakshu keeps connect callbacks passive and retains early-disconnect evide
 #include <cassert>
 #include <cstdio>
 constexpr uint16_t BLE_HS_CONN_HANDLE_NONE=65535;
+namespace ChakshuTransfer {std::atomic<uint16_t> subscribedConnection{65535};std::atomic<uint32_t> cancelWindow{0};}
 constexpr int BLE_MIN_INTERVAL=12,BLE_MAX_INTERVAL=24,BLE_SLAVE_LATENCY=0,BLE_SUPERVISION_TIMEOUT=600;
 uint32_t clockMs=1000;uint32_t millis(){return clockMs;}
 std::atomic<bool> deviceConnected{false},chakshuAudioSubscribed{false},streamingEnabled{false};

@@ -1,12 +1,14 @@
 // Media extension v1. Small responses share the existing BLE link with audio.
 // Only this worker touches its file/frame buffers. BLE callbacks copy requests/results.
+#include <img_converters.h>
+#include <jpeg_decoder.h>
 namespace ChakshuTransfer {
-struct Request { uint32_t connection,id,offset;uint8_t operation;char path[64];bool local=false;uint32_t localEpoch=0; };
+struct Request { uint32_t connection,id,offset;uint8_t operation;char path[64];bool local=false;uint32_t localEpoch=0,windowEpoch=0; };
 QueueHandle_t requests=nullptr;
 portMUX_TYPE mux=portMUX_INITIALIZER_UNLOCKED;
 uint8_t response[496]{};size_t responseSize=16;uint32_t responseConnection=0;
 uint8_t* buffer=nullptr;size_t bufferSize=0;
-char selectedPath[64]{};
+char selectedPath[64]{},originalPath[64]{};
 uint32_t selectedConnection=0;
 std::atomic<bool> offline{false},stopRequested{false},photoRequested{false};
 std::atomic<uint8_t> offlineMode{0};
@@ -81,6 +83,48 @@ uint8_t captureFrame(bool preview=false) {
   }
   esp_camera_fb_return(frame);return error;
 }
+struct PreviewJpeg { uint8_t* bytes;size_t size=0;bool failed=false; };
+bool decodePreview(uint8_t* rgb) {
+  esp_jpeg_image_cfg_t config{};
+  config.indata=buffer;config.indata_size=bufferSize;
+  config.outbuf=rgb;config.outbuf_size=320u*240u*2u;
+  config.out_format=JPEG_IMAGE_FORMAT_RGB565;config.out_scale=JPEG_IMAGE_SCALE_1_2;
+  // fmt2jpg expects the high RGB565 byte first. The decoder defaults to the
+  // opposite order. Inspect dimensions before writing the bounded output buffer.
+  config.flags.swap_color_bytes=1;
+  esp_jpeg_image_output_t decoded{};
+  return esp_jpeg_get_image_info(&config,&decoded)==ESP_OK &&
+    decoded.width==320 && decoded.height==240 && decoded.output_len==config.outbuf_size &&
+    esp_jpeg_decode(&config,&decoded)==ESP_OK;
+}
+size_t previewChunk(void* argument,size_t offset,const void* bytes,size_t size) {
+  auto& jpeg=*static_cast<PreviewJpeg*>(argument);
+  if(!bytes)return 0;
+  if(offset>64000 || size>64000-offset){jpeg.failed=true;return 0;}
+  memcpy(jpeg.bytes+offset,bytes,size);jpeg.size=offset+size;return size;
+}
+uint8_t captureSavedPreview() {
+  originalPath[0]=0;
+  if(!ChakshuStorage::ready)return ChakshuMedia::NO_SD;
+  uint8_t error=captureFrame(false);if(error)return error;
+  ChakshuStorage::refresh();
+  if(ChakshuStorage::freeBytes<bufferSize+ChakshuStorage::RESERVE_BYTES)return ChakshuMedia::NO_SPACE;
+  File original=ChakshuStorage::create(originalPath,sizeof(originalPath),"jpg");
+  if(!original){originalPath[0]=0;return ChakshuMedia::IO_ERROR;}
+  const bool saved=original.write(buffer,bufferSize)==bufferSize;
+  original.flush();original.close();
+  if(!saved){ChakshuStorage::ready=false;originalPath[0]=0;return ChakshuMedia::IO_ERROR;}
+  // Derive the preview from this same exposure, never a second photo. On
+  // conversion failure the complete original can still be transferred.
+  uint8_t* rgb=static_cast<uint8_t*>(ps_malloc(320u*240u*2u));
+  PreviewJpeg jpeg{static_cast<uint8_t*>(ps_malloc(64000))};
+  if(rgb && jpeg.bytes && decodePreview(rgb) &&
+     fmt2jpg_cb(rgb,320u*240u*2u,320,240,PIXFORMAT_RGB565,60,previewChunk,&jpeg) &&
+     !jpeg.failed && jpeg.size>4 && jpeg.size<bufferSize) {
+    free(buffer);buffer=jpeg.bytes;bufferSize=jpeg.size;jpeg.bytes=nullptr;
+  }
+  free(rgb);free(jpeg.bytes);return 0;
+}
 uint8_t catalogue() {
   clearSelection();if(!ChakshuStorage::ready)return ChakshuMedia::NO_SD;
   File directory=SD.open("/synap");if(!directory)return ChakshuMedia::IO_ERROR;
@@ -99,70 +143,53 @@ uint8_t catalogue() {
 }
 
 void recordOffline(bool withVideo=true) {
-  using namespace ChakshuMedia;
-  Snapshot s;{portENTER_CRITICAL(&mux);s=offlineStatus;portEXIT_CRITICAL(&mux);}
-  uint8_t error=0;File video,audio,index;uint32_t audioBytes=0,videoBytes=0,frames=0;
-  char audioPath[64]{},indexPath[64]{};uint8_t header[44];
-  if(!ChakshuStorage::ready)error=NO_SD;
-  else if(withVideo&&!ChakshuCamera::ready)error=NO_CAMERA;
-  else if(withVideo&&!ChakshuCamera::configure(false))error=CAPTURE_ERROR;
-  else if(!startMicrophone())error=NO_MIC;
-  if(!error) {
-    if(!withVideo) {
-      audio=ChakshuStorage::create(s.path,sizeof(s.path),"wav");
-      if(!audio)error=IO_ERROR;
-      else {ChakshuStorage::wavHeader(header,0);if(audio.write(header,44)!=44)error=IO_ERROR;}
-    } else {
-    video=ChakshuStorage::create(s.path,sizeof(s.path),"mjpeg");
-    if(!video)error=IO_ERROR;
-    else {
-      snprintf(audioPath,sizeof(audioPath),"%.*s.wav",int(strlen(s.path)-6),s.path);
-      snprintf(indexPath,sizeof(indexPath),"%.*s.json",int(strlen(s.path)-6),s.path);
-      audio=SD.open(audioPath,FILE_WRITE);index=SD.open(indexPath,FILE_WRITE);
-      if(!audio||!index)error=IO_ERROR;
-      else {
-        ChakshuStorage::wavHeader(header,0);
-        if(audio.write(header,44)!=44)error=IO_ERROR;
-        index.print("{\"schema\":1,\"frameTimesMs\":[");
-      }
-    }
+  ChakshuMedia::Snapshot s;
+  {portENTER_CRITICAL(&mux);s=offlineStatus;portEXIT_CRITICAL(&mux);}
+  ChakshuRecorder::record(s,withVideo,stopRequested,saveOffline);
+  ChakshuMedia::refresh(s);saveOffline(s);
+  photoRequested=false;offline=false;offlineMode=0;
+}
+
+bool chakshuAudioHasBacklog();
+BLECharacteristic* streamCharacteristic=nullptr;
+std::atomic<uint16_t> subscribedConnection{BLE_HS_CONN_HANDLE_NONE};
+std::atomic<uint32_t> cancelWindow{0};
+bool sendMediaPacket(const Request& request,uint8_t kind,uint8_t error,uint32_t total,uint32_t offset,const uint8_t* bytes,size_t size) {
+  const uint16_t connection=chakshuConnectionHandle.load();
+  if(!deviceConnected.load() || request.connection!=connectionGeneration.load() ||
+     subscribedConnection.load()!=connection || !streamCharacteristic)return false;
+  const uint16_t mtu=bleServer->getPeerMTU(connection);
+  if(mtu<19 || size>480 || size>size_t(mtu-19))return false;
+  uint8_t packet[496]{};packet[0]=0xCC;packet[1]=1;packet[2]=kind;packet[3]=error;
+  put32le(packet+4,request.id);put32le(packet+8,total);put32le(packet+12,offset);
+  if(size)memcpy(packet+16,bytes,size);
+  constexpr int reserve=8;
+  if(os_msys_num_free()<=reserve)return false;
+  os_mbuf* mbuf=ble_hs_mbuf_from_flat(packet,16+size);
+  if(!mbuf)return false;
+  if(os_msys_num_free()<reserve){os_mbuf_free_chain(mbuf);return false;}
+  return ble_gattc_notify_custom(connection,streamCharacteristic->getHandle(),mbuf)==0;
+}
+void streamWindow(const Request& request) {
+  const uint32_t started=millis(),cancel=request.windowEpoch;
+  uint32_t offset=request.offset,total=0;uint8_t bytes[480],error=0;
+  const uint16_t mtu=bleServer->getPeerMTU(chakshuConnectionHandle.load());
+  const size_t capacity=mtu>19?std::min(size_t(480),size_t(mtu-19)):0;
+  if(!capacity){replyFor(request,ChakshuMedia::BAD_COMMAND);return;}
+  for(unsigned count=0;count<8 && millis()-started<2000u;) {
+    if(cancel!=cancelWindow.load() || request.connection!=connectionGeneration.load() || !deviceConnected.load())return;
+    if(streamingEnabled.load() && chakshuAudioHasBacklog()){vTaskDelay(pdMS_TO_TICKS(20));continue;}
+    size_t size=0;error=readSelection(offset,total,bytes,size);if(error)break;
+    size=std::min(size,capacity);
+    if(sendMediaPacket(request,1,0,total,offset,bytes,size)){offset+=size;++count;if(offset>=total)break;}
+    vTaskDelay(pdMS_TO_TICKS(streamingEnabled.load()?15:4));
   }
+  // Missing notifications are requested again by byte offset. Never retry the
+  // photo exposure or queue an unbounded stream ahead of audio and Stop.
+  for(unsigned n=0;n<8 && cancel==cancelWindow.load();++n) {
+    if(sendMediaPacket(request,2,error,total,offset,nullptr,0))break;
+    vTaskDelay(pdMS_TO_TICKS(15));
   }
-  const uint32_t started=millis();uint32_t nextFrame=0,nextSpaceCheck=0;alignas(int16_t) uint8_t pcm[1600];
-  // Finite 60-second takes remain bounded after BLE/phone disconnection.
-  {
-    MicrophoneGuard guard;
-    while(!error&&!stopRequested.load()&&audioBytes<1920000u&&millis()-started<65000u) {
-      const size_t count=microphoneI2S.readBytes(reinterpret_cast<char*>(pcm),sizeof(pcm));
-      if(!count || (count&1)){error=CAPTURE_ERROR;break;}
-      if(audio.write(pcm,count)!=count){error=IO_ERROR;break;}
-      audioBytes+=count;
-      if(withVideo&&audioBytes/32>=nextFrame) {
-        camera_fb_t* frame=esp_camera_fb_get();if(frame)esp_camera_fb_return(frame);
-        frame=esp_camera_fb_get();
-        if(!frame||frame->format!=PIXFORMAT_JPEG){if(frame)esp_camera_fb_return(frame);error=CAPTURE_ERROR;break;}
-        if(video.write(frame->buf,frame->len)!=frame->len)error=IO_ERROR;
-        else videoBytes+=frame->len;
-        esp_camera_fb_return(frame);
-        if(frames++)index.print(',');index.print(audioBytes/32);nextFrame=audioBytes/32+500;
-      }
-      if(photoRequested.exchange(false)) {
-        Snapshot image;image.operation=2;
-        image.error=ChakshuCamera::ready?captureCamera(image,false):NO_CAMERA;
-        image.state=image.error?3:2;refresh(image);save(image);
-      }
-      if(audioBytes>=nextSpaceCheck){ChakshuStorage::refresh();if(ChakshuStorage::freeBytes<ChakshuStorage::RESERVE_BYTES)error=NO_SPACE;nextSpaceCheck=audioBytes+16000;}
-      s.bytes=withVideo?videoBytes:audioBytes;s.progress=uint8_t(audioBytes/19200);saveOffline(s);
-      vTaskDelay(1);
-    }
-  }
-  if(audio){ChakshuStorage::wavHeader(header,audioBytes);if(!audio.seek(0)||audio.write(header,44)!=44)error=IO_ERROR;audio.flush();audio.close();}
-  if(index){index.printf("],\"durationMs\":%lu,\"audio\":\"%s\"}",static_cast<unsigned long>(audioBytes/32),audioPath);index.flush();index.close();}
-  if(video){video.flush();if(video.size()!=videoBytes)error=IO_ERROR;video.close();}
-  if(!error && ((withVideo&&!frames)||!audioBytes))error=CAPTURE_ERROR;
-  s.bytes=withVideo?videoBytes:audioBytes;s.error=error;s.state=error?3:2;s.progress=error?s.progress:100;
-  stopMicrophone();
-  refresh(s);saveOffline(s);photoRequested.store(false);offline.store(false);offlineMode.store(0);
 }
 void worker(void*) {
   Request request{};
@@ -172,17 +199,29 @@ void worker(void*) {
     if(!request.local&&(request.connection!=connectionGeneration.load()||!deviceConnected.load()))continue;
     ChakshuResources::Lease admission;
     if(!admission||otaBusySnapshot.load()) {replyFor(request,1);continue;}
-    if(selectedConnection!=request.connection){clearSelection();selectedConnection=request.connection;}
+    if(selectedConnection!=request.connection){clearSelection();originalPath[0]=0;selectedConnection=request.connection;}
     if(request.operation==5||request.operation==10) {
       if(streamingEnabled.load()||remoteStandby){replyFor(request,1);continue;}
       clearSelection();stopRequested.store(false);photoRequested.store(false);offlineMode.store(request.operation);offline.store(true);
       ChakshuMedia::Snapshot s;s.state=1;s.operation=request.operation==5?4:3;saveOffline(s);
       replyFor(request,0);recordOffline(request.operation==5);continue;
     }
+    if(request.operation==20) {
+      if(streamingEnabled.load()||remoteStandby){replyFor(request,1);continue;}
+      if(!ChakshuStorage::ready){replyFor(request,ChakshuMedia::NO_SD);continue;}
+      clearSelection();
+      if(!ChakshuWifi::begin()){replyFor(request,10);continue;}
+      char json[256];const size_t size=ChakshuWifi::encode(json,sizeof(json));
+      replyFor(request,0,size,0,reinterpret_cast<const uint8_t*>(json),size);
+      ChakshuWifi::serve();continue;
+    }
     uint8_t error=0;uint32_t total=0;size_t size=0;uint8_t bytes[480];
     switch(request.operation) {
       // Offset 1 is an optional QVGA video hint; legacy offset 0 retains VGA photos.
       case 1:error=captureFrame(request.offset==1);total=bufferSize;break;
+      case 12:streamWindow(request);if(!streamingEnabled.load())stopMicrophone();continue;
+      case 13:error=captureSavedPreview();total=bufferSize;break;
+      case 15:total=size=strlen(originalPath);memcpy(bytes,originalPath,size);break;
       case 11: {
         ChakshuMedia::Snapshot s;
         error=!ChakshuStorage::ready?ChakshuMedia::NO_SD:!ChakshuCamera::ready?ChakshuMedia::NO_CAMERA:ChakshuMedia::captureCamera(s,false);
@@ -196,6 +235,12 @@ void worker(void*) {
         if(!validPath(request.path)){error=2;break;}
         error=selectFile(request.path,total);
         break;
+      case 14: {
+        if(streamingEnabled.load()){error=ChakshuMedia::BUSY;break;}
+        error=ChakshuStorage::begin(true)?0:ChakshuMedia::NO_SD;
+        ChakshuMedia::Snapshot s;ChakshuMedia::copy(s);ChakshuMedia::refresh(s);ChakshuMedia::save(s);
+        break;
+      }
       case 7:error=catalogue();total=bufferSize;break;
       case 8:total=bufferSize;break;
       default:error=2;
@@ -210,11 +255,17 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
     if(value.length()<10||value.length()>73||uint8_t(value[0])!=0xCA)return;
     const uint8_t* p=reinterpret_cast<const uint8_t*>(value.c_str());Request request{};
     request.operation=p[1];memcpy(&request.id,p+2,4);memcpy(&request.offset,p+6,4);
-    request.connection=connectionGeneration.load();memcpy(request.path,p+10,value.length()-10);
+    request.connection=connectionGeneration.load();request.windowEpoch=cancelWindow.load();memcpy(request.path,p+10,value.length()-10);
     if(request.operation==6){stopRequested.store(true);replyFor(request,0);return;}
+    if(request.operation==16){++cancelWindow;replyFor(request,0);return;}
+    if(request.operation==21 || request.operation==22) {
+      if(request.operation==22)ChakshuWifi::stopRequested=true;
+      char json[256];const size_t size=ChakshuWifi::encode(json,sizeof(json));
+      replyFor(request,0,size,0,reinterpret_cast<const uint8_t*>(json),size);return;
+    }
     if(request.operation==9) {
       ChakshuMedia::Snapshot s;portENTER_CRITICAL(&mux);s=offlineStatus;portEXIT_CRITICAL(&mux);
-      char json[180];const int size=snprintf(json,sizeof(json),"{\"active\":%s,\"state\":%u,\"error\":%u,\"progress\":%u,\"path\":\"%s\"}",offline.load()?"true":"false",s.state,s.error,s.progress,s.path);
+      char json[256];const int size=snprintf(json,sizeof(json),"{\"active\":%s,\"state\":%u,\"error\":%u,\"progress\":%u,\"path\":\"%s\",\"audioMs\":%lu,\"frames\":%lu,\"droppedFrames\":%lu}",offline.load()?"true":"false",s.state,s.error,s.progress,s.path,(unsigned long)s.audioMs,(unsigned long)s.frames,(unsigned long)s.droppedFrames);
       replyFor(request,0,size,0,reinterpret_cast<const uint8_t*>(json),size);return;
     }
     if(offline.load()||!requests||xQueueSend(requests,&request,0)!=pdTRUE)replyFor(request,1);
@@ -225,6 +276,12 @@ class DataCallbacks : public BLECharacteristicCallbacks {
     uint8_t value[496];size_t size;
     readResponse(value,size);
     characteristic->setValue(value,size);
+  }
+};
+class StreamCallbacks : public BLECharacteristicCallbacks {
+  void onSubscribe(BLECharacteristic*,NimBLEConnInfo& peer,uint16_t flags) override {
+    if(peer.getConnHandle()==chakshuConnectionHandle.load())
+      subscribedConnection=flags&1?peer.getConnHandle():BLE_HS_CONN_HANDLE_NONE;
   }
 };
 void initialize() {
@@ -238,5 +295,7 @@ void ble(BLEService* service) {
   command->setCallbacks(new CommandCallbacks());
   auto* data=service->createCharacteristic("4fa12355-0000-1000-8000-00805f9b34fb",BLECharacteristic::PROPERTY_READ);
   data->setCallbacks(new DataCallbacks());
+  streamCharacteristic=service->createCharacteristic("4fa1235a-0000-1000-8000-00805f9b34fb",BLECharacteristic::PROPERTY_NOTIFY);
+  streamCharacteristic->setCallbacks(new StreamCallbacks());
 }
 } // namespace ChakshuTransfer

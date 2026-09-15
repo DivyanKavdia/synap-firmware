@@ -40,13 +40,15 @@ function materializeChakshu(source,target) {
   replace('  static int32_t raw[SAMPLES_PER_FRAME];','  static int16_t raw[SAMPLES_PER_FRAME];','Native PCM16 capture buffer');
   replace('    const int32_t sample=raw[i] >> 16;','    const int32_t sample=raw[i];','Preserve onboard PCM samples');
   replace('// SYNAP_BOARD_FEATURES',
-    ['camera.cpp','sd-storage.cpp','media.cpp','media-transfer.cpp'].map(name=>readTemplate('xiao-sense',name)).join('\n'),'Camera and SD drivers');
+    ['camera.cpp','sd-storage.cpp','media.cpp','media-buffers.cpp','sd-recording.cpp','wifi-downloads.cpp','media-transfer.cpp'].map(name=>readTemplate('xiao-sense',name)).join('\n'),'Camera and SD drivers');
   if (out.includes('statusLed.') || out.includes('pinMode(TOUCH_INPUT_PIN') ||
       out.includes('analogSetPinAttenuation(') || out.includes('esp_deep_sleep_start()'))
     throw Error('Chakshu still accesses absent hardware');
   replace('  ChakshuMedia::initialize();',
     '  const uint32_t mediaStarted=millis();\n  ChakshuMedia::initialize();\n  ChakshuLink::mediaBootMs=millis()-mediaStarted;','Measure media boot cost');
   out=materializeBle(out);
+  replace('bool sendRecoveryFrame() {',
+    'bool ChakshuTransfer::chakshuAudioHasBacklog() {\n  if (!recoveryMutex) return false;\n  RecoveryGuard guard;\n  return recoveryFinishing.load() || recoveryRing.count-recoveryRing.cursor>2;\n}\nbool sendRecoveryFrame() {','Prioritize audio over camera notifications');
   replace('void controlTask(void* parameter) {',
     'void controlTask(void* parameter) {\n  while (!ChakshuResources::runtimeReady.load()) vTaskDelay(1);','Wait for complete BLE initialization');
   replace('  initializeBLE();','  initializeBLE();\n  ChakshuLink::bootReadyMs=millis();\n  ChakshuResources::runtimeReady.store(true);\n  Serial.printf("[CHAKSHU] ready_ms=%lu media_ms=%lu heap=%lu psram=%lu voice=off\\n",(unsigned long)ChakshuLink::bootReadyMs.load(),(unsigned long)ChakshuLink::mediaBootMs.load(),(unsigned long)ESP.getFreeHeap(),(unsigned long)ESP.getFreePsram());','Publish initialized runtime');
