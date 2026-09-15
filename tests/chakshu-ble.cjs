@@ -38,7 +38,8 @@ struct NimBLECharacteristic {uint16_t getHandle(){return 42;}} characteristic;
 auto* audioCharacteristic=&characteristic;
 struct NimBLECharacteristicCallbacks {virtual void onSubscribe(NimBLECharacteristic*,NimBLEConnInfo&,uint16_t){}};
 struct os_mbuf {std::vector<uint8_t> bytes;};
-bool allocationFails=false;int allocations=0,submits=0,live=0,result=0;
+bool allocationFails=false;int allocations=0,submits=0,live=0,result=0,freeBuffers=12;
+int os_msys_num_free(){return freeBuffers;}
 std::vector<uint8_t> sent;
 os_mbuf* ble_hs_mbuf_from_flat(const uint8_t* bytes,size_t length){
  ++allocations;if(allocationFails)return nullptr;++live;return new os_mbuf{{bytes,bytes+length}};
@@ -55,6 +56,9 @@ int main(){
  base.onSubscribe(&characteristic,peer,2);assert(!chakshuAudioSubscribed);
  base.onSubscribe(&characteristic,peer,1);assert(chakshuAudioSubscribed);
  assert(sendChakshuAudio(packet,sizeof(packet))&&sent==std::vector<uint8_t>(packet,packet+408));
+ freeBuffers=8;const int allocatedBefore=allocations;
+ assert(!sendChakshuAudio(packet,sizeof(packet))&&allocations==allocatedBefore&&lastNotifyError==6);
+ freeBuffers=12;notifyRejected=0;
  allocationFails=true;assert(!sendChakshuAudio(packet,sizeof(packet))&&submits==1&&notifyRejected==1&&lastNotifyError==6);
  allocationFails=false;result=6;assert(!sendChakshuAudio(packet,sizeof(packet))&&notifyRejected==2&&live==0);
  result=0;for(int i=0;i<10000;++i)assert(sendChakshuAudio(packet,sizeof(packet)));
@@ -71,17 +75,129 @@ test('Chakshu native submission preserves PCM, frame pacing, retries and cancell
   const codec=source.slice(source.indexOf('static const uint16_t IMA_STEP_TABLE'),source.indexOf('void transmitterTask(void* parameter) {'));
   const transport=source.slice(source.indexOf('bool configureTransportFromPeerMtu() {'),source.indexOf('void startStreaming(uint8_t version) {'));
   let fixture=fs.readFileSync('tests/audio-runtime.cpp','utf8');
+  const progress=source.slice(source.indexOf('class ChakshuAudioProgress {'),source.indexOf('bool sendChakshuAudio('));
   // The host enqueue implementation is covered above; exercise the generated
   // packetizer against a host that accepts, delays or rejects each exact packet.
   const host=`std::atomic<uint16_t> chakshuConnectionHandle{0};
+std::atomic<uint32_t> chakshuAudioReplayGeneration{0};
 bool sendChakshuAudio(const uint8_t* bytes,size_t length){
   const auto before=notifyRejected.load();
   characteristic.setValue(bytes,length);characteristic.notify();
   return before==notifyRejected.load();
 }
 `;
-  fixture=fixture.replace('// INSERT CODEC AND TRANSPORT',host+transport+codec);
+  fixture=fixture.replace('// INSERT CODEC AND TRANSPORT',progress+host+transport+codec);
   assert.match(nativeTest(fixture),/PASS runtime; codec golden=3749bea1db6af550/);
+});
+
+test('Chakshu congested frame retries continue at the first unsent fragment and reset for a new owner',()=>{
+  const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
+  const progress=source.slice(source.indexOf('class ChakshuAudioProgress {'),source.indexOf('bool sendChakshuAudio('));
+  const codec=source.slice(source.indexOf('static const uint16_t IMA_STEP_TABLE'),source.indexOf('void transmitterTask(void* parameter) {'));
+  const transport=source.slice(source.indexOf('bool configureTransportFromPeerMtu() {'),source.indexOf('void startStreaming(uint8_t version) {'));
+  let fixture=fs.readFileSync('tests/audio-runtime.cpp','utf8').split('int main(){')[0];
+  const host=`std::atomic<uint16_t> chakshuConnectionHandle{0};
+std::atomic<uint32_t> chakshuAudioReplayGeneration{0};
+int budget=2;
+bool sendChakshuAudio(const uint8_t* bytes,size_t length){
+ if(budget==0){++notifyRejected;return false;}--budget;
+ characteristic.setValue(bytes,length);characteristic.notify();return true;
+}
+`;
+  fixture=fixture.replace('// INSERT CODEC AND TRANSPORT',progress+host+transport+codec)+`
+int main(){
+ server.mtu=517;assert(configureTransportFromPeerMtu());assert(chunksPerFrame==4);
+ AudioFrame frame{1,7,{}};for(int i=0;i<800;++i)frame.samples[i]=i-400;
+ assert(!sendAudioFrame(frame));assert(characteristic.packets.size()==2);
+ for(int i=2;i<4;++i){budget=1;assert(sendAudioFrame(frame)==(i==3));}
+ assert(characteristic.packets.size()==4);
+ for(int i=0;i<4;++i){auto& p=characteristic.packets[i].bytes;assert(p[4]==i);
+   assert(!memcmp(p.data()+8,reinterpret_cast<uint8_t*>(frame.samples)+i*400,400));}
+ // Completed frames can be intentionally replayed in full.
+ budget=1;assert(!sendAudioFrame(frame));assert(characteristic.packets.back().bytes[4]==0);
+ ++chakshuAudioReplayGeneration;budget=1;assert(!sendAudioFrame(frame));assert(characteristic.packets.back().bytes[4]==0);
+ ++connectionGeneration;budget=1;assert(!sendAudioFrame(frame));assert(characteristic.packets.back().bytes[4]==0);
+ ++streamGeneration;frame.generation=streamGeneration;budget=1;
+ assert(!sendAudioFrame(frame));assert(characteristic.packets.back().bytes[4]==0);
+ ++frame.sequence;budget=1;assert(!sendAudioFrame(frame));assert(characteristic.packets.back().bytes[4]==0);
+ server.mtu=185;assert(configureTransportFromPeerMtu());budget=1;
+ assert(!sendAudioFrame(frame));assert(characteristic.packets.back().bytes[4]==0);
+ puts("PASS partial frame progress");
+}`;
+  assert.match(nativeTest(fixture),/PASS partial frame progress/);
+});
+
+test('Chakshu control writes enqueue original commands without replacing readable status',()=>{
+  const code=fs.readFileSync('firmware/xiao-sense/ble-control.cpp','utf8');
+  const fixture=`#include <atomic>
+#include <cstdint>
+#include <cstring>
+#include <cassert>
+#include <cstdio>
+#include <vector>
+#define CONTROL_CHAR_UUID "control"
+namespace NIMBLE_PROPERTY {constexpr int READ=1,WRITE=2,WRITE_NR=4,NOTIFY=8;}
+struct NimBLEConnInfo {uint16_t handle;uint16_t getConnHandle(){return handle;}};
+struct NimBLECharacteristic {
+ std::vector<uint8_t> status;
+ NimBLECharacteristic(const char*,int flags,int length){assert(flags==15&&length==16);}
+ virtual void writeEvent(const uint8_t* bytes,uint16_t length,NimBLEConnInfo&){status.assign(bytes,bytes+length);}
+};
+std::atomic<bool> deviceConnected{true};
+std::atomic<uint16_t> chakshuConnectionHandle{7};std::atomic<uint32_t> streamGeneration{9};
+enum class EventType {COMMAND};
+struct Command {uint8_t command,version;uint32_t generation;};std::vector<Command> commands;
+void queueEvent(EventType,uint8_t command,uint8_t version,uint32_t generation){commands.push_back({command,version,generation});}
+${code}
+int main(){
+ ChakshuControlCharacteristic control;NimBLECharacteristic& characteristic=control;
+ // The last published status stays STREAMING during the entire recovery drain.
+ characteristic.status={0x5a,2,2,0,5,2,2,2,4,8,128,62,32,3,144,1};
+ const auto status=characteristic.status;NimBLEConnInfo owner{7},stranger{8};
+ uint8_t stop[]={0,2};
+ for(int i=0;i<8;++i){characteristic.writeEvent(stop,2,owner);assert(characteristic.status==status);}
+ assert(commands.size()==8);for(const auto& c:commands)assert(c.command==0&&c.version==2&&c.generation==9);
+ stop[0]=1;assert(commands.back().command==0);
+ characteristic.writeEvent(stop,2,stranger);deviceConnected=false;characteristic.writeEvent(stop,2,owner);
+ assert(commands.size()==8);deviceConnected=true;
+ characteristic.writeEvent(nullptr,0,owner);assert(commands.back().command==255&&commands.back().version==0);
+ assert(characteristic.status==status);
+ characteristic.status[2]=1;characteristic.writeEvent(stop,2,owner);assert(characteristic.status[2]==1);
+ puts("PASS isolated control commands");
+}`;
+  assert.match(nativeTest(fixture),/PASS isolated control commands/);
+});
+
+test('a connected replay of the in-flight frame is not advanced by its previous submission',()=>{
+  const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
+  const ring=source.slice(source.indexOf('namespace SynapRecovery {'),source.indexOf('SynapRecovery::Ring recoveryRing;'));
+  const send=source.slice(source.indexOf('bool sendRecoveryFrame() {'),source.indexOf('void processRecoveryRequest() {'));
+  const fixture=`#include <atomic>
+#include <cstdint>
+#include <cassert>
+#include <cstdio>
+struct AudioFrame {uint32_t generation;uint16_t sequence;int16_t samples[800];};
+${ring}
+SynapRecovery::Ring recoveryRing;
+struct RecoveryGuard {};
+std::atomic<uint32_t> connectionGeneration{1},streamGeneration{1},notifyRejected{0},chakshuAudioReplayGeneration{0};
+std::atomic<bool> recoveryWaiting{false},streamingEnabled{true},deviceConnected{true};
+std::atomic<uint8_t> chunksPerFrame{4};
+enum class ErrorCode{TRANSPORT_CHANGED};
+void requestStreamError(ErrorCode,uint32_t){assert(false);}
+int pdMS_TO_TICKS(int n){return n;}void vTaskDelay(int){}
+bool replay=true;
+bool sendCapturedFrame(const AudioFrame&,uint32_t){
+ if(replay){replay=false;recoveryRing.after(9);++chakshuAudioReplayGeneration;}return true;
+}
+${send}
+int main(){
+ AudioFrame frames[2]={{1,9,{}},{1,10,{}}};recoveryRing.frames=frames;recoveryRing.capacity=2;recoveryRing.count=2;recoveryRing.cursor=1;
+ assert(sendRecoveryFrame()&&recoveryRing.cursor==1);
+ assert(sendRecoveryFrame()&&recoveryRing.cursor==2);
+ puts("PASS in-flight replay ownership");
+}`;
+  assert.match(nativeTest(fixture,['-Wno-unused-variable']),/PASS in-flight replay ownership/);
 });
 
 test('pinned NimBLE handles short reads and consecutive writes with live values',{skip:!process.env.SYNAP_NIMBLE_SRC},()=>{
