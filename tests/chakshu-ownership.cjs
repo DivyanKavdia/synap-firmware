@@ -82,6 +82,6 @@ test('workers use atomic OTA state and control waits until setup publishes all s
   const transfer=fs.readFileSync('firmware/xiao-sense/media-transfer.cpp','utf8');
   assert.doesNotMatch(transfer,/otaBusy\(\)/);
   assert.match(source,/void controlTask\(void\* parameter\) \{\s+while \(!ChakshuResources::runtimeReady.load\(\)\) vTaskDelay\(1\);/);
-  assert.match(source,/initializeBLE\(\);\s+ChakshuResources::runtimeReady.store\(true\);/);
+  assert.match(source,/initializeBLE\(\);\s+ChakshuLink::bootReadyMs=millis\(\);\s+ChakshuResources::runtimeReady.store\(true\);/);
   assert(source.indexOf('class Lease')<source.indexOf('void otaTick() {'));
 });

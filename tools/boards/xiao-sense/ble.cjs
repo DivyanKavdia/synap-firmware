@@ -16,9 +16,16 @@ function materializeBle(source) {
   replace('characteristic->setValue(s.path);',
     'characteristic->setValue(reinterpret_cast<const uint8_t*>(s.path),strlen(s.path));','SD path text bytes');
   replace('#include <atomic>','#include <atomic>\nstd::atomic<uint16_t> chakshuConnectionHandle{BLE_HS_CONN_HANDLE_NONE};\nstd::atomic<bool> chakshuAudioSubscribed{false};\nstd::atomic<uint32_t> chakshuAudioReplayGeneration{0};','Chakshu connection ownership');
+  replace('#include <atomic>','#include <atomic>\n'+readTemplate('xiao-sense','ble-health.cpp'),'Retained Chakshu link diagnostics');
   out=replaceFunctionBlock(out,'class ServerCallbacks :','class ControlCallbacks :',readTemplate('xiao-sense','ble-server.cpp')+'\n','Chakshu server callbacks');
   out=replaceFunctionBlock(out,'class AudioCallbacks :','class DiagnosticsCallbacks :',readTemplate('xiao-sense','ble-audio.cpp')+'\n','Chakshu audio notifications');
   out=replaceFunctionBlock(out,'class ControlCallbacks :','class AudioCallbacks :',readTemplate('xiao-sense','ble-control.cpp')+'\n','Chakshu command/status separation');
+  replace('    queueEvent(EventType::COMMAND, command, version, streamGeneration.load());',
+    '    if (command==CMD_GET_STATUS && version==PROTOCOL_VERSION) ChakshuLink::statusSeen=true;\n    queueEvent(EventType::COMMAND, command, version, streamGeneration.load());','Observe core handshake without extra GATT traffic');
+  replace('constexpr uint8_t DIAGNOSTICS_VERSION = 2;','constexpr uint8_t DIAGNOSTICS_VERSION = 3;','Chakshu link diagnostics version');
+  replace('  uint8_t value[48] = {};','  uint8_t value[72] = {};','Chakshu link diagnostics size');
+  replace('  diagnosticsCharacteristic->setValue(value,sizeof(value));',
+    '  ChakshuLink::append(value,deviceConnected.load(),streamingEnabled.load()&&!recoveryWaiting.load(),chakshuAudioSubscribed.load(),millis());\n  diagnosticsCharacteristic->setValue(value,sizeof(value));','Append boot and last-link evidence');
   replace('  controlCharacteristic=service->createCharacteristic(CONTROL_CHAR_UUID,\n    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE |\n    BLECharacteristic::PROPERTY_WRITE_NR | BLECharacteristic::PROPERTY_NOTIFY);\n  controlCharacteristic->setCallbacks(new ControlCallbacks());',
     '  controlCharacteristic=new ChakshuControlCharacteristic();\n  service->addCharacteristic(controlCharacteristic);','Register isolated control writes');
   replace('  if (notify && deviceConnected.load()) controlCharacteristic->notify();',
@@ -42,7 +49,7 @@ function materializeBle(source) {
   replace("  // Audio/control + device ID + OTA/status/build identity + diagnostics exceed\n  // Bluedroid's default service reservation. NimBLE accepts this overload as well.",
     '  // NimBLE-Arduino sizes the service table from its registered characteristics.','Native service comment');
   replace('  advertising->setScanResponse(true);\n  advertising->setMinPreferred(BLE_MIN_INTERVAL);\n  advertising->setMaxPreferred(BLE_MAX_INTERVAL);',
-    '  advertising->enableScanResponse(true);\n  advertising->setName(DEVICE_NAME);\n  advertising->setPreferredParams(BLE_MIN_INTERVAL,BLE_MAX_INTERVAL);','Native advertising');
+    '  advertising->enableScanResponse(true);\n  advertising->setName(DEVICE_NAME);\n  advertising->setPreferredParams(BLE_MIN_INTERVAL,BLE_MAX_INTERVAL);\n  advertising->setMinInterval(32);\n  advertising->setMaxInterval(32);','Native advertising');
   replace('  if (!configureTransportFromPeerMtu()) { stopStreaming(ErrorCode::MTU_TOO_SMALL); return; }',
     '  if (!chakshuAudioSubscribed.load()) { stopStreaming(ErrorCode::AUDIO_NOT_SUBSCRIBED);return; }\n  if (!configureTransportFromPeerMtu()) { stopStreaming(ErrorCode::MTU_TOO_SMALL); return; }','Require actual audio subscription');
   replace('    audioCharacteristic->setValue(packet, AUDIO_HEADER_BYTES+length);','    // Send this immutable packet to the current subscribed connection.','Owned audio payload');
