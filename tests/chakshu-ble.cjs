@@ -37,15 +37,16 @@ struct NimBLEConnInfo {uint16_t id;uint16_t getConnHandle(){return id;}};
 struct NimBLECharacteristic {uint16_t getHandle(){return 42;}} characteristic;
 auto* audioCharacteristic=&characteristic;
 struct NimBLECharacteristicCallbacks {virtual void onSubscribe(NimBLECharacteristic*,NimBLEConnInfo&,uint16_t){}};
-struct os_mbuf {std::vector<uint8_t> bytes;};
-bool allocationFails=false;int allocations=0,submits=0,live=0,result=0,freeBuffers=12;
+struct os_mbuf {std::vector<uint8_t> bytes;int blocks;};
+bool allocationFails=false;int allocations=0,submits=0,live=0,result=0,freeBuffers=12,blocksPerPacket=2;
 int os_msys_num_free(){return freeBuffers;}
 std::vector<uint8_t> sent;
 os_mbuf* ble_hs_mbuf_from_flat(const uint8_t* bytes,size_t length){
- ++allocations;if(allocationFails)return nullptr;++live;return new os_mbuf{{bytes,bytes+length}};
+ ++allocations;if(allocationFails)return nullptr;++live;freeBuffers-=blocksPerPacket;return new os_mbuf{{bytes,bytes+length},blocksPerPacket};
 }
+void os_mbuf_free_chain(os_mbuf* p){freeBuffers+=p->blocks;delete p;--live;}
 int ble_gattc_notify_custom(uint16_t connection,uint16_t handle,os_mbuf* packet){
- assert(connection==7&&handle==42&&packet);++submits;sent=packet->bytes;delete packet;--live;return result;
+ assert(connection==7&&handle==42&&packet);++submits;sent=packet->bytes;os_mbuf_free_chain(packet);return result;
 }
 ${source}
 int main(){
@@ -56,10 +57,14 @@ int main(){
  base.onSubscribe(&characteristic,peer,2);assert(!chakshuAudioSubscribed);
  base.onSubscribe(&characteristic,peer,1);assert(chakshuAudioSubscribed);
  assert(sendChakshuAudio(packet,sizeof(packet))&&sent==std::vector<uint8_t>(packet,packet+408));
- freeBuffers=8;const int allocatedBefore=allocations;
+ freeBuffers=8;assert(sendChakshuAudio(packet,sizeof(packet))&&freeBuffers==8);
+ blocksPerPacket=5;const int submittedBefore=submits;
+ assert(!sendChakshuAudio(packet,sizeof(packet))&&submits==submittedBefore&&live==0&&freeBuffers==8);
+ freeBuffers=4;const int allocatedBefore=allocations;
  assert(!sendChakshuAudio(packet,sizeof(packet))&&allocations==allocatedBefore&&lastNotifyError==6);
+ blocksPerPacket=2;
  freeBuffers=12;notifyRejected=0;
- allocationFails=true;assert(!sendChakshuAudio(packet,sizeof(packet))&&submits==1&&notifyRejected==1&&lastNotifyError==6);
+ allocationFails=true;assert(!sendChakshuAudio(packet,sizeof(packet))&&submits==2&&notifyRejected==1&&lastNotifyError==6);
  allocationFails=false;result=6;assert(!sendChakshuAudio(packet,sizeof(packet))&&notifyRejected==2&&live==0);
  result=0;for(int i=0;i<10000;++i)assert(sendChakshuAudio(packet,sizeof(packet)));
  assert(live==0&&notifyRejected==2);
