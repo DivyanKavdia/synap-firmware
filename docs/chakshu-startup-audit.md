@@ -101,7 +101,13 @@ and reconnects; a reboot clears it and supplies a new reset reason/uptime.
 
 These are source, native and browser-fixture checks. They do not prove RF
 stability, camera throughput, antenna quality, power integrity or iOS background
-delivery on the physical pendant. The next device run should use this firmware
+delivery on the physical pendant. Seeed's board instructions specifically require
+attaching the supplied external Wi-Fi/Bluetooth antenna; Bluetooth may not work
+without it. The supplied screenshots show the app, not the antenna connector, so
+its attachment cannot be established from this report. Check that connection as
+part of the physical retest; this is not evidence that it is currently missing.
+
+The next device run should use this firmware
 and shell together: cold boot, connect, record audio, take a photo, record a
 short video, stop/save, and reconnect several times. If a drop remains, the new
 log can distinguish early handshake loss from streaming loss and a fresh boot
@@ -114,6 +120,7 @@ it is not required for BLE audio or photo transfer.
 - [Pinned server callback dispatch](https://github.com/h2zero/NimBLE-Arduino/blob/2.3.6/src/NimBLEServer.cpp)
 - [Pinned host error namespaces](https://github.com/h2zero/NimBLE-Arduino/blob/2.3.6/src/nimble/nimble/host/include/host/ble_hs.h)
 - [Apple advertising/connection guidance, QA1931](https://developer.apple.com/library/archive/qa/qa1931/_index.html)
+- [Seeed XIAO ESP32S3 Bluetooth antenna installation](https://wiki.seeedstudio.com/xiao_esp32s3_bluetooth/#installation-of-antenna)
 
 QA1931 supports the fixed 20 ms advertising choice. Its older connection-timeout
 range is not used to reject modern central-selected parameters; the firmware

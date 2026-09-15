@@ -17,6 +17,9 @@ function materializeBle(source) {
     'characteristic->setValue(reinterpret_cast<const uint8_t*>(s.path),strlen(s.path));','SD path text bytes');
   replace('#include <atomic>','#include <atomic>\nstd::atomic<uint16_t> chakshuConnectionHandle{BLE_HS_CONN_HANDLE_NONE};\nstd::atomic<bool> chakshuAudioSubscribed{false};\nstd::atomic<uint32_t> chakshuAudioReplayGeneration{0};','Chakshu connection ownership');
   replace('#include <atomic>','#include <atomic>\n'+readTemplate('xiao-sense','ble-health.cpp'),'Retained Chakshu link diagnostics');
+  // Diagnostics are defined before the recovery implementation in the shared
+  // sketch. Declare this flag before the v3 encoder reads it.
+  replace('#include <atomic>','#include <atomic>\nextern std::atomic<bool> recoveryWaiting;','Recovery state for early diagnostic encoder');
   out=replaceFunctionBlock(out,'class ServerCallbacks :','class ControlCallbacks :',readTemplate('xiao-sense','ble-server.cpp')+'\n','Chakshu server callbacks');
   out=replaceFunctionBlock(out,'class AudioCallbacks :','class DiagnosticsCallbacks :',readTemplate('xiao-sense','ble-audio.cpp')+'\n','Chakshu audio notifications');
   out=replaceFunctionBlock(out,'class ControlCallbacks :','class AudioCallbacks :',readTemplate('xiao-sense','ble-control.cpp')+'\n','Chakshu command/status separation');
