@@ -15,15 +15,19 @@ function materializeBle(source) {
     'identity->setValue(reinterpret_cast<const uint8_t*>(SYNAP_FIRMWARE_ID),sizeof(SYNAP_FIRMWARE_ID)-1);','Firmware identity text bytes');
   replace('characteristic->setValue(s.path);',
     'characteristic->setValue(reinterpret_cast<const uint8_t*>(s.path),strlen(s.path));','SD path text bytes');
-  replace('#include <atomic>','#include <atomic>\nstd::atomic<uint16_t> chakshuConnectionHandle{BLE_HS_CONN_HANDLE_NONE};\nstd::atomic<bool> chakshuAudioSubscribed{false};','Chakshu connection ownership');
+  replace('#include <atomic>','#include <atomic>\nstd::atomic<uint16_t> chakshuConnectionHandle{BLE_HS_CONN_HANDLE_NONE};\nstd::atomic<bool> chakshuAudioSubscribed{false};\nstd::atomic<uint32_t> chakshuAudioReplayGeneration{0};','Chakshu connection ownership');
   out=replaceFunctionBlock(out,'class ServerCallbacks :','class ControlCallbacks :',readTemplate('xiao-sense','ble-server.cpp')+'\n','Chakshu server callbacks');
   out=replaceFunctionBlock(out,'class AudioCallbacks :','class DiagnosticsCallbacks :',readTemplate('xiao-sense','ble-audio.cpp')+'\n','Chakshu audio notifications');
+  out=replaceFunctionBlock(out,'class ControlCallbacks :','class AudioCallbacks :',readTemplate('xiao-sense','ble-control.cpp')+'\n','Chakshu command/status separation');
+  replace('  controlCharacteristic=service->createCharacteristic(CONTROL_CHAR_UUID,\n    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE |\n    BLECharacteristic::PROPERTY_WRITE_NR | BLECharacteristic::PROPERTY_NOTIFY);\n  controlCharacteristic->setCallbacks(new ControlCallbacks());',
+    '  controlCharacteristic=new ChakshuControlCharacteristic();\n  service->addCharacteristic(controlCharacteristic);','Register isolated control writes');
+  replace('  if (notify && deviceConnected.load()) controlCharacteristic->notify();',
+    '  if (notify && deviceConnected.load()) controlCharacteristic->notify(value,sizeof(value),chakshuConnectionHandle.load());','Notify owned status bytes');
   // NimBLE-Arduino invokes write callbacks synchronously with the current value.
   // Take one owned copy so an asynchronous status update cannot replace a command.
   replace('    OtaMessage message{};\n    const size_t size=characteristic->getLength();','    OtaMessage message{};\n    const auto written=characteristic->getValue();\n    const size_t size=written.size();','OTA command snapshot');
   replace('!characteristic->getData()','!written.data()','OTA command pointer');
   replace('memcpy(message.data,characteristic->getData(),size);','memcpy(message.data,written.data(),size);','OTA command bytes');
-  replace('    const size_t length = characteristic->getLength();\n    const uint8_t* data = characteristic->getData();','    const auto written=characteristic->getValue();\n    const size_t length=written.size();\n    const uint8_t* data=written.data();','Audio command snapshot');
   replace('    const uint8_t* data=characteristic->getData();const size_t size=characteristic->getLength();','    const auto written=characteristic->getValue();\n    const uint8_t* data=written.data();const size_t size=written.size();','Recovery command snapshot');
   // No hand-managed CCCDs or Bluedroid-specific branches on this target.
   out=out.replace(/#if defined\(CONFIG_BLUEDROID_ENABLED\)\n[\s\S]*?#endif\n/g,'');
@@ -42,6 +46,17 @@ function materializeBle(source) {
   replace('  if (!configureTransportFromPeerMtu()) { stopStreaming(ErrorCode::MTU_TOO_SMALL); return; }',
     '  if (!chakshuAudioSubscribed.load()) { stopStreaming(ErrorCode::AUDIO_NOT_SUBSCRIBED);return; }\n  if (!configureTransportFromPeerMtu()) { stopStreaming(ErrorCode::MTU_TOO_SMALL); return; }','Require actual audio subscription');
   replace('    audioCharacteristic->setValue(packet, AUDIO_HEADER_BYTES+length);','    // Send this immutable packet to the current subscribed connection.','Owned audio payload');
+  replace('    ++recoveryReplayAck;', '    ++recoveryReplayAck;\n    ++chakshuAudioReplayGeneration;', 'Invalidate fragment progress for connected replay');
+  replace('  const bool sent=sendCapturedFrame(frame,pace);',
+    '  const uint32_t replay=chakshuAudioReplayGeneration.load();\n  const bool sent=sendCapturedFrame(frame,pace);','Bind recovery submission to replay');
+  replace('if(sent && !recoveryWaiting.load() && connection==connectionGeneration.load())',
+    'if(sent && replay==chakshuAudioReplayGeneration.load() && !recoveryWaiting.load() && connection==connectionGeneration.load())','Do not skip a rewound in-flight frame');
+  replace('  for (uint8_t index=0; index<chunks; ++index) {',
+    '  const uint8_t first=chakshuAudioProgress.begin(generation,connection,chakshuAudioReplayGeneration.load(),sequence,chunks,payload,pcm);\n  for (uint8_t index=first; index<chunks; ++index) {','Resume partial audio frame');
+  replace('    if(!accepted)return false;',
+    '    if(!accepted)return false;\n    chakshuAudioProgress.accept(index);','Retain accepted fragment progress');
+  replace('  return generation == streamGeneration.load() && deviceConnected.load() && connection == connectionGeneration.load();',
+    '  chakshuAudioProgress.reset();\n  return generation == streamGeneration.load() && deviceConnected.load() && connection == connectionGeneration.load();','Complete partial audio frame');
   replace('      const uint32_t rejectedBefore=notifyRejected.load();\n      // In the pinned Arduino BLE library, onStatus runs before notify returns.\n      // SUCCESS_NOTIFY means queued locally, not persisted by the phone.\n      audioCharacteristic->notify();\n      if(notifyRejected.load()==rejectedBefore) { accepted=true;break; }',
     '      if(sendChakshuAudio(packet,AUDIO_HEADER_BYTES+length)) { accepted=true;break; }','Native audio acceptance');
   // Initialize required state before advertising; model loading can take seconds.

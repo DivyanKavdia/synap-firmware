@@ -13,6 +13,20 @@ The ring retains uncompressed PCM16 frames with their original uint16 sequence n
 
 STOP freezes microphone capture, drains the remaining buffer and then acknowledges idle. Disconnection recovery is bounded at 60 seconds; stop drain is bounded at 35 seconds and reports a transport error if it expires. Audio is volatile: nothing survives reboot, power removal or sleep. This is not standalone recording or background iOS support.
 
+Chakshu consumes control writes through its characteristic's `writeEvent` override,
+without storing the two command bytes in the readable status value. Status
+notifications carry the explicit 16-byte snapshot, so a later write cannot change
+an already requested notification. This fixes build1231's command echoes during
+STOP drain. C3/S3 retain their existing BLE callbacks.
+
+Chakshu audio checks host mbuf headroom before allocating a notification, leaving
+room for ATT control/recovery traffic. When congestion exhausts a fragment's retry
+budget, the transmitter retains the first unsent fragment index. The recovery
+ring retries from that index rather than resending the accepted prefix forever.
+A different stream, connection, frame or packet layout resets the cursor; a
+completed frame can still be replayed in full. These are local enqueue guarantees,
+not acknowledgements that the phone saved audio.
+
 If the link drops during STOP drain, a restored connection must still complete RESUME before the buffer can be considered drained. Waiting for that handshake is not an empty buffer. The existing absolute drain deadline continues to apply during the interruption.
 
 Native tests run the production ring/request code for rollover, bounded overflow, token mismatch, stale connection writes, subscription/MTU refusal, stop drain and allocation fallback. Existing codec golden bytes, all ATT capacities, capture/STOP concurrency, C3/S3 gestures and OTA tests still run. PWA browser tests exercise recovery into one journal and stopping before catch-up finishes. Real S3/C3 free heap, long recordings, RF interruptions, Bluefy and battery life must be checked on devices before claiming a measured reliability improvement.
