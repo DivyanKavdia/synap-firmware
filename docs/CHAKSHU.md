@@ -64,8 +64,10 @@ UUID suffix is `-0000-1000-8000-00805f9b34fb`.
 
 | Characteristic | Layout |
 | --- | --- |
-| `4fa12354`, write with response | `CA`, operation byte, request ID uint32 LE, offset uint32 LE, optional UTF-8 path (up to 63 bytes) |
+| `4fa12354`, write with or without response | `CA`, operation byte, request ID uint32 LE, offset uint32 LE, optional UTF-8 path (up to 63 bytes) |
 | `4fa12355`, read | `CB`, version 1, state (1 success, 2 error), error code, request ID uint32 LE, total bytes uint32 LE, offset uint32 LE, up to 480 payload bytes |
+
+The PWA uses write without response for short commands when advertised, then waits for the matching result ID. Requests containing longer file paths retain write with response so minimum-MTU connections can use long writes. Both paths enqueue the same worker request; Bluetooth callbacks do not capture images or access SD.
 
 | Operation | Action |
 | --- | --- |

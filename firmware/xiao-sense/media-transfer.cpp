@@ -229,7 +229,8 @@ void initialize() {
   reply(0,0);
 }
 void ble(BLEService* service) {
-  auto* command=service->createCharacteristic("4fa12354-0000-1000-8000-00805f9b34fb",BLECharacteristic::PROPERTY_WRITE);
+  auto* command=service->createCharacteristic("4fa12354-0000-1000-8000-00805f9b34fb",
+    BLECharacteristic::PROPERTY_WRITE|BLECharacteristic::PROPERTY_WRITE_NR);
   command->setCallbacks(new CommandCallbacks());
   auto* data=service->createCharacteristic("4fa12355-0000-1000-8000-00805f9b34fb",BLECharacteristic::PROPERTY_READ);
   data->setCallbacks(new DataCallbacks());
