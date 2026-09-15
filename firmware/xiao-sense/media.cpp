@@ -5,13 +5,13 @@ enum Error : uint8_t { OK=0, BUSY=1, BAD_COMMAND=2, NO_SD=3, NO_CAMERA=4,
 struct Request { uint32_t connection;uint8_t operation,id; };
 struct Snapshot {
   uint8_t operation=0,id=0,state=0,error=0,ready=0,progress=0;
-  uint32_t totalMiB=0,freeMiB=0,bytes=0;
+  uint32_t totalMiB=0,freeMiB=0,bytes=0,connection=0;
   uint16_t sensor=0;
   char path[64]{};
 };
 portMUX_TYPE mux=portMUX_INITIALIZER_UNLOCKED;
 Snapshot status;
-std::atomic<bool> busy{false};
+std::atomic<bool>& busy=ChakshuResources::media;
 QueueHandle_t requests=nullptr,jobs=nullptr;
 void copy(Snapshot& out) {
   portENTER_CRITICAL(&mux);out=status;portEXIT_CRITICAL(&mux);
@@ -100,6 +100,9 @@ void worker(void*) {
   for (;;) {
     if (xQueueReceive(jobs,&request,portMAX_DELAY)!=pdTRUE) continue;
     Snapshot s;copy(s);
+    if(!deviceConnected.load() || request.connection!=connectionGeneration.load()) {
+      s.state=3;s.error=BAD_COMMAND;save(s);busy.store(false);continue;
+    }
     uint8_t error=OK;
     if (request.operation==1) {
       microphoneValidated=startMicrophone();
@@ -163,8 +166,8 @@ void tick() {
   if (!busy.compare_exchange_strong(expected,true)) return; // Claim the camera/SD worker atomically.
   Snapshot s;copy(s);
   // A retried command has the same ID; never capture twice after an ACK loss.
-  if (s.id==request.id && s.operation==request.operation) {busy.store(false);return;}
-  s.id=request.id;s.operation=request.operation;s.progress=0;s.bytes=0;s.path[0]=0;
+  if (s.connection==request.connection && s.id==request.id && s.operation==request.operation && s.error!=BUSY) {busy.store(false);return;}
+  s.connection=request.connection;s.id=request.id;s.operation=request.operation;s.progress=0;s.bytes=0;s.path[0]=0;
   if (otaBusy() || streamingEnabled.load() || remoteStandby) {
     s.state=3;s.error=BUSY;save(s);busy.store(false);return;
   }

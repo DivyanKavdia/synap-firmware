@@ -3,7 +3,7 @@
 #include <SPI.h>
 namespace ChakshuStorage {
 constexpr uint32_t RESERVE_BYTES=4u*1024u*1024u;
-bool ready=false;
+std::atomic<bool> ready{false};
 uint64_t capacity=0,freeBytes=0;
 uint32_t sequence=0,bootId=0;
 void refresh() {

@@ -22,6 +22,7 @@
 | Initialization and boot validation | `firmware/shared/boot.cpp` |
 | C3 single-core tasks and discrete LED | `tools/boards/esp32c3/`, `firmware/esp32c3/` |
 | Chakshu PDM, hardware exclusions and NimBLE adapter | `tools/boards/xiao-sense/` |
+| Chakshu resource admission and initialization barrier | `firmware/xiao-sense/ownership.cpp` |
 | Chakshu camera, SD, media and voice/model services | `firmware/xiao-sense/` |
 
 The shared fragments are assembled in order into one Arduino translation unit; they inherit the runtime's types and prototypes. `synap_esp32s3/synap_esp32s3.ino` is generated for portable downloads and native tests. CI checks byte equality. C3 and Chakshu are materialized from that sketch after release preparation, preserving the selected build identity.
@@ -33,6 +34,7 @@ Board adapters retain checked transformations where library APIs differ. C3 repl
 - **Audio:** 800 PCM16 samples per 50 ms frame. INMP441 converts signed 32-bit slots with `raw >> 16`; PDM already supplies PCM16. No software gain, denoiser, gate or silence trimming is applied to the recording stream. Voice inference consumes a separate copy.
 - **Transport:** START/RESUME selects PCM v2 at MTU ≥185 or independent 404-byte IMA ADPCM v3 frames on smaller supported links. Missing frames retain timeline gaps. Negotiated MTU is not a guarantee of radio throughput.
 - **Ownership:** the recursive microphone mutex serializes reads/start/stop. Capture blocks while idle; transmit blocks on its queue. STOP waits for capture ownership and in-flight notification submission before acknowledging idle. A notification accepted by the local stack is not proof of phone persistence.
+- **Chakshu admission:** a nonblocking resource lease orders START/OTA transitions against camera, SD and model jobs. START publishes streaming state before releasing it; OTA publishes its atomic busy snapshot. Long media jobs retain the lease until file finalization. The control task waits for complete BLE initialization. See [the Chakshu runtime review](CHAKSHU_RUNTIME_REVIEW.md).
 - **Connections:** generations invalidate sends from old links. Control transitions use an atomic pending flag independent of command-queue capacity. An abandoned buffered stream may retain STREAMING while a new link still reports MTU23/zero payload; the PWA must issue STOP only when it has no matching recording owner, then require an idle acknowledgement.
 - **Recovery:** an explicitly armed session stores volatile PCM, up to 30 seconds in available PSRAM. Without PSRAM, allocation is smaller and conditional on free heap. Recovery expires after 60 seconds; STOP drain is bounded to 35 seconds. See the recovery guide for token and replay semantics.
 - **Power:** profiles preserve S3 80/240 MHz, C3 80/160 MHz and Chakshu 240/240 MHz. C3/S3 share double-tap recording control and four-second hold/release sleep/wake. Chakshu does not use external touch, battery-divider or LED pins.

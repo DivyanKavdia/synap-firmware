@@ -67,19 +67,19 @@ test('idle command listener yields microphone ownership to both recording consum
 #include <cstdio>
 constexpr int pdTRUE=1,portMAX_DELAY=0;struct Done{};
 void ulTaskNotifyTake(int,int){}int pdMS_TO_TICKS(int n){return n;}void vTaskDelay(int){throw Done{};}
-std::atomic<bool> streamingEnabled{false};std::atomic<uint32_t> discontinuities{0};
-bool media=false,ota=false,on=true,lock=false,contended=false,race=false;
-bool active(){return on;}bool mediaBusy(){return media;}bool otaBusy(){return ota;}
+std::atomic<bool> streamingEnabled{false},otaBusySnapshot{false};std::atomic<uint32_t> discontinuities{0};
+bool media=false,on=true,lock=false,contended=false,race=false;
+bool active(){return on;}bool mediaBusy(){return media;}
 int microphoneMutex=0,reads=0,copies=0;
 int xSemaphoreTakeRecursive(int,int){if(contended)return 0;assert(!lock);lock=true;if(race)streamingEnabled=true;return pdTRUE;}
 void xSemaphoreGiveRecursive(int){assert(lock);lock=false;}
 bool startMicrophone(){assert(lock);return true;}
-struct I2S{size_t readBytes(char* bytes,size_t n){assert(lock);assert(!streamingEnabled&&!media&&!ota);++reads;auto* pcm=reinterpret_cast<int16_t*>(bytes);for(size_t i=0;i<n/2;++i)pcm[i]=i-400;return n;}} microphoneI2S;
+struct I2S{size_t readBytes(char* bytes,size_t n){assert(lock);assert(!streamingEnabled&&!media&&!otaBusySnapshot);++reads;auto* pcm=reinterpret_cast<int16_t*>(bytes);for(size_t i=0;i<n/2;++i)pcm[i]=i-400;return n;}} microphoneI2S;
 void feed(const int16_t* pcm,size_t count){assert(count==800);for(size_t i=0;i<count;++i)assert(pcm[i]==int(i)-400);++copies;}
 ${idle}
 void once(){try{idleTask(nullptr);}catch(Done&){}assert(!lock);}
 int main(){once();assert(reads==1&&copies==1);
-  streamingEnabled=true;once();streamingEnabled=false;media=true;once();media=false;ota=true;once();ota=false;
+  streamingEnabled=true;once();streamingEnabled=false;media=true;once();media=false;otaBusySnapshot=true;once();otaBusySnapshot=false;
   on=false;once();on=true;contended=true;once();contended=false;race=true;once();
   assert(reads==1&&copies==1);puts("PASS idle listener never steals recording PCM");}
 `;
