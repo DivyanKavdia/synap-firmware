@@ -1,48 +1,24 @@
 'use strict';
-
-const PRIMARY_TARGET='esp32s3-fh4r2-qspi-4m';
-const TARGETS=Object.freeze({
-  [PRIMARY_TARGET]:Object.freeze({
-    id:PRIMARY_TARGET,
-    family:'esp32s3',
-    board:'ESP32-S3 SuperMini',
-    chip:9,
-    flashBytes:4194304,
-    psramBytes:2097152,
-    partition:'default',
-    slotSize:0x140000,
-    productMarker:'SYNAP-ESP32S3-OTA-ID-V3',
-    manifestPath:'latest.json',
-    releasePrefix:'',
-    sourceName:'synap_esp32s3.ino'
-  }),
-  'esp32c3-supermini-4m':Object.freeze({
-    id:'esp32c3-supermini-4m',
-    family:'esp32c3',
-    board:'ESP32-C3 SuperMini',
-    chip:5,
-    flashBytes:4194304,
-    psramBytes:0,
-    partition:'default',
-    slotSize:0x140000,
-    productMarker:'SYNAP-ESP32C3-OTA-ID-V3',
-    manifestPath:'targets/esp32c3-supermini-4m/latest.json',
-    releasePrefix:'targets/esp32c3-supermini-4m/',
-    sourceName:'synap_esp32c3.ino'
-  }),
-  'xiao-esp32s3-sense-8m':Object.freeze({
-    id:'xiao-esp32s3-sense-8m',family:'esp32s3',assetStem:'chakshu',board:'Chakshu (XIAO ESP32S3 Sense)',
-    chip:9,flashBytes:8388608,psramBytes:8388608,partition:'default_8MB',slotSize:0x330000,
-    productMarker:'SYNAP-CHAKSHU-OTA-ID-V3',
-    manifestPath:'targets/xiao-esp32s3-sense-8m/latest.json',releasePrefix:'targets/xiao-esp32s3-sense-8m/',
-    sourceName:'synap_chakshu.ino'
-  })
-});
-
-function getTarget(id){
-  const target=TARGETS[id];
-  if(!target)throw Error(`Unknown firmware target: ${id}`);
-  return target;
+const catalog = require('../devices/catalog.json');
+function freeze(value) {
+  if (value && typeof value === 'object') {
+    Object.values(value).forEach(freeze);
+    Object.freeze(value);
+  }
+  return value;
 }
-
-module.exports={PRIMARY_TARGET,TARGETS,getTarget};
+if (catalog.schema !== 1) throw Error('Unsupported device catalog');
+const FLAGS = freeze(catalog.flags);
+const TARGETS = freeze(Object.fromEntries(catalog.devices.map(device => [device.id, device])));
+const PRIMARY_TARGET = catalog.primaryTarget;
+function getTarget(id) {
+  if (!Object.hasOwn(TARGETS, id)) throw Error(`Unknown firmware target: ${id}`);
+  return TARGETS[id];
+}
+function capabilityMask(target) {
+  return target.features.reduce((mask, feature) => {
+    if (!Object.hasOwn(FLAGS, feature)) throw Error(`Unknown device feature: ${feature}`);
+    return mask | FLAGS[feature];
+  }, 0);
+}
+module.exports = { PRIMARY_TARGET, TARGETS, FLAGS, getTarget, capabilityMask };

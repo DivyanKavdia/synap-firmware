@@ -9,10 +9,11 @@ for(const [c3,disabled] of [[false,false],[true,false],[true,true]]){
     const code=materialize(source,c3?'esp32c3-supermini-4m':'esp32s3-fh4r2-qspi-4m');
     const battery=code.slice(code.indexOf('uint8_t batteryPercentFromMillivolts('),code.indexOf('bool armTouchWakeSource() {'));
     const attenuation=code.match(/analogSetPinAttenuation\(BATTERY_ADC_PIN, ADC_\w+\);/)[0];
+    const profile=require('../tools/device-profile.cjs').profileBlock(code).split('\n').filter(line=>!line.startsWith('constexpr ')).join('\n');
     const fixture=fs.readFileSync(path.join(__dirname,'battery-runtime.cpp'),'utf8');
     const flags=[`-DCONFIG_IDF_TARGET_ESP32C3=${c3?1:0}`,`-DCONFIG_IDF_TARGET_ESP32S3=${c3?0:1}`];
     if(disabled)flags.push('-DSYNAP_BATTERY_MONITOR_ENABLE=0');
-    assert.match(nativeTest(fixture.replace('// INSERT CONFIGURATION',`void configureBatteryAdc(){${attenuation}}`).replace('// INSERT BATTERY',battery),flags),/PASS battery/);
+    assert.match(nativeTest(fixture.replace('// INSERT CONFIGURATION',profile+'\n'+`void configureBatteryAdc(){${attenuation}}`).replace('// INSERT BATTERY',battery),flags),/PASS battery/);
     if(c3){
       assert.match(code,/#define SYNAP_BATTERY_ADC_PIN 1/);
       assert.doesNotMatch(code,/BATTERY_CAL_ADC_MV|raw 1544/);

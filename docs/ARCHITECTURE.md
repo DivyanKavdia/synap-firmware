@@ -2,105 +2,65 @@
 
 ## Source ownership
 
-All three modules share one runtime. Edit canonical fragments in `firmware/shared/`, then run `node tools/assemble-source.cjs`. The generated `synap_esp32s3/synap_esp32s3.ino` remains checked in for portable Arduino downloads and existing native tests; CI verifies it matches the canonical source exactly.
+`devices/catalog.json` is the device catalog shared with the PWA. It defines each target's module ID, release identity and limits, supported features, pins and power policy. `tools/targets.cjs` exposes the catalog to build and release tools. `tools/device-profile.cjs` renders the complete profile block, so board adapters do not rewrite individual pin or battery constants.
 
-`tools/materialize-target.cjs` selects the hardware adapter. S3 is a byte-for-byte passthrough. C3 adapts pins, LED, battery and single-core tasks. Chakshu selects native PDM PCM16, camera and SD drivers, removes touch/LED/battery GPIO initialization and sleep, and uses a separate 8 MB OTA target. Checked replacement anchors fail generation if shared code changes incompatibly.
-
-| Responsibility | Edit location |
+| Responsibility | Owner |
 | --- | --- |
-| Runtime types, public BLE IDs and shared state | `firmware/shared/runtime.cpp` |
-| Device-bound OTA protocol and flash backend | `firmware/shared/ota.cpp` |
-| Hardware feature descriptor | `firmware/shared/module-capabilities.cpp` |
-| Power, mic lifecycle, battery and touch | `firmware/shared/power.cpp` |
-| Recording session, transport negotiation and recovery | `firmware/shared/audio-session.cpp` |
+| Device catalog and release limits | `devices/catalog.json` |
+| Profile rendering and target selection | `tools/device-profile.cjs`, `tools/materialize-target.cjs` |
+| Assembly order and generated S3 sketch | `firmware/shared/sources.json`, `tools/assemble-source.cjs` |
+| Types, queues, shared state and prototypes | `firmware/shared/runtime.cpp` |
+| Capability descriptor and readiness | `firmware/shared/module-capabilities.cpp` |
+| Microphone lifecycle and recursive driver lock | `firmware/shared/microphone.cpp` |
+| Battery conversion, availability and cutoff | `firmware/shared/battery.cpp` |
+| Status LED and CPU clocks | `firmware/shared/status-led.cpp`, `cpu-power.cpp` |
+| Touch, standby and durable sleep/wake gates | `firmware/shared/power.cpp` |
+| Recording sessions, buffering and MTU negotiation | `firmware/shared/audio-session.cpp` |
 | BLE callbacks and serialized control task | `firmware/shared/ble-control.cpp` |
-| PCM capture and frame acquisition | `firmware/shared/audio-capture.cpp` |
-| Codec, packetization and transmitter | `firmware/shared/audio-transport.cpp` |
-| GATT service and boot | `firmware/shared/boot.cpp` |
-| C3 differential behavior | `tools/boards/esp32c3/`, `firmware/esp32c3/` |
-| Chakshu PDM, always-awake profile and pin exclusions | `tools/boards/xiao-sense/index.cjs` |
-| Chakshu native NimBLE callbacks and audio submission | `tools/boards/xiao-sense/ble.cjs`, `firmware/xiao-sense/ble-server.cpp`, `ble-audio.cpp` |
-| Chakshu camera and filesystem drivers | `firmware/xiao-sense/camera.cpp`, `sd-storage.cpp` |
-| SD hardware check worker and request/status protocol | `firmware/xiao-sense/media.cpp` |
-| Fresh-frame/file transfers and paired offline audio/video | `firmware/xiao-sense/media-transfer.cpp` |
-| Target, image capacity and release paths | `tools/targets.cjs` |
+| PCM capture and packet transmission | `firmware/shared/audio-capture.cpp`, `audio-transport.cpp` |
+| OTA verification and inactive-slot writes | `firmware/shared/ota.cpp` |
+| Initialization and boot validation | `firmware/shared/boot.cpp` |
+| C3 single-core tasks and discrete LED | `tools/boards/esp32c3/`, `firmware/esp32c3/` |
+| Chakshu PDM, hardware exclusions and NimBLE adapter | `tools/boards/xiao-sense/` |
+| Chakshu camera, SD, media and voice/model services | `firmware/xiao-sense/` |
 
-The fragments inherit runtime types when assembled; they are not separate translation units. New board features belong behind a board adapter or feature driver, not a copied audio/BLE engine. See [Chakshu](CHAKSHU.md) for current feature boundaries and hardware checks.
+The shared fragments are assembled in order into one Arduino translation unit; they inherit the runtime's types and prototypes. `synap_esp32s3/synap_esp32s3.ino` is generated for portable downloads and native tests. CI checks byte equality. C3 and Chakshu are materialized from that sketch after release preparation, preserving the selected build identity.
 
-The C3 LED template inherits runtime types and globals when inserted; compiling it
-separately is unsupported. Both boards share the former C3 gesture behavior:
-immediate double-tap recording control and a four-second hold with release for
-sleep/wake. Only electrical wake arming and wake-cause validation vary: EXT0 on
-S3 GPIO13, GPIO wake on C3 GPIO3. The C3 touch/wake templates and integration
-adapter were removed so gestures cannot drift between targets.
+Board adapters retain checked transformations where library APIs differ. C3 replaces the RGB implementation with an active-low discrete LED and creates tasks on one core. Chakshu selects native PDM capture, omits absent GPIO peripherals and sleep, and adds camera/SD/voice services. Its NimBLE adapter owns subscription state, synchronous command snapshots and direct notification acceptance. A missing or ambiguous transformation boundary fails the build.
 
-Shared changes must be exercised on all three generated targets. Target-specific changes must preserve the other targets' behavior. Keep release identities, protocol versions and materialization anchors explicit. Comments should explain ownership, timing constraints or hardware reasons.
+## Runtime contracts
 
-## Shared runtime contracts
+- **Audio:** 800 PCM16 samples per 50 ms frame. INMP441 converts signed 32-bit slots with `raw >> 16`; PDM already supplies PCM16. No software gain, denoiser, gate or silence trimming is applied to the recording stream. Voice inference consumes a separate copy.
+- **Transport:** START/RESUME selects PCM v2 at MTU ≥185 or independent 404-byte IMA ADPCM v3 frames on smaller supported links. Missing frames retain timeline gaps. Negotiated MTU is not a guarantee of radio throughput.
+- **Ownership:** the recursive microphone mutex serializes reads/start/stop. Capture blocks while idle; transmit blocks on its queue. STOP waits for capture ownership and in-flight notification submission before acknowledging idle. A notification accepted by the local stack is not proof of phone persistence.
+- **Connections:** generations invalidate sends from old links. Control transitions use an atomic pending flag independent of command-queue capacity. An abandoned buffered stream may retain STREAMING while a new link still reports MTU23/zero payload; the PWA must issue STOP only when it has no matching recording owner, then require an idle acknowledgement.
+- **Recovery:** an explicitly armed session stores volatile PCM, up to 30 seconds in available PSRAM. Without PSRAM, allocation is smaller and conditional on free heap. Recovery expires after 60 seconds; STOP drain is bounded to 35 seconds. See the recovery guide for token and replay semantics.
+- **Power:** profiles preserve S3 80/240 MHz, C3 80/160 MHz and Chakshu 240/240 MHz. C3/S3 share double-tap recording control and four-second hold/release sleep/wake. Chakshu does not use external touch, battery-divider or LED pins.
+- **Battery:** the catalog selects calibration and full-charge reference. Both SuperMini targets report valid measurements; only S3 enforces confirmed critical-battery sleep/OTA guards. C3 remains telemetry-only. Out-of-range samples remain diagnostic data and report unavailable.
+- **OTA:** the updater checks target, public device ID, image structure, size and SHA-256 before committing the inactive slot. Recording blocks updates. Public IDs are association identifiers, not credentials.
 
-### Audio and concurrency
+## BLE ownership
 
-- Capture: 16 kHz PCM16 mono, 800 samples / 50 ms frame; left I2S slot.
-- Capture performs only signed I2S slot conversion (`raw >> 16`). The firmware high-pass filter and its state are removed; there is no software gain, gate, denoiser or voice activity suppression. First samples, DC and quiet PCM values survive conversion.
-- INMP441 outputs 24 significant bits in a 32-bit slot. PCM16 drops the lower eight significant bits; the microphone's built-in ADC/filtering remains. Capture is unconditioned PCM16, not raw 24-bit microphone data.
-- Transport prefers uncompressed protocol-v2 PCM16 (1,600 bytes/frame, 256 kb/s) at negotiated MTU >=185. Lower supported MTUs use independent 404-byte IMA ADPCM protocol-v3 frames (64.64 kb/s), so a lost frame cannot corrupt the next frame. MTU eligibility limits fragment count; it does not prove sustained radio throughput. START/RESUME selects the format; there is no hidden mid-connection codec switch.
-- Transport adapts to ATT capacity; normal fragment pacing uses a 45 ms window.
-- Connection preferences and the one-time request on each connection use 15–30 ms intervals, zero peripheral latency and a 6-second supervision timeout. These are requests; the phone controls the negotiated parameters.
-- Audio notifications retry local stack rejection up to four attempts with 15/30/45 ms yielding backoff. A congested recovery frame retains its cursor for a later retry; a legacy session counts the lost frame and keeps capturing. Pacing restarts after each accepted notification, so a delayed callback cannot burst overdue fragments. Connection generations invalidate old sends even when a reconnect preserves the recording generation.
-- Capture blocks while idle. Transmit blocks on its queue. A recursive microphone mutex serializes I2S reads, startup, shutdown and recovery.
-- STOP waits for capture ownership and in-flight notification submission before acknowledging idle. Submission is not proof of phone persistence.
-- BLE transitions use an atomic pending flag independent of command queue capacity. Stale commands do not skip control-loop maintenance.
-- OTA state refresh cannot overwrite an active recording state. Diagnostics use atomic snapshots for cross-task state.
+Primary service: `4fa12345-0000-1000-8000-00805f9b34fb`.
 
-### Power and battery
+| First UUID group | Purpose |
+| --- | --- |
+| `4fa12346` / `47` | Audio / control-status |
+| `4fa12348` / `49` | OTA command / progress |
+| `4fa1234b` / `4c` | Target/build identity / permanent device ID |
+| `4fa1234d` / `4e` | Diagnostics / battery, touch and power events |
+| `4fa1234f` | Optional disconnect recovery |
+| `4fa12350` | Device capabilities |
+| `4fa12351`–`59` | Chakshu hardware checks, media, voice and model services |
 
-CPU profiles are manual: 80 MHz idle, S3 240 MHz active, C3 160 MHz active. Paused OTA releases its boost after one second without commands and boosts before resumed flash work. The Arduino housekeeping loop waits one second after boot validation; control, capture, transmit and radio retain their own timing.
+Diagnostics v2 preserves v1's initial fields and adds disconnect reason/count/time and last notification failure. Flags `0x40` and `0x80` mean unconditioned real-mic capture and selected PCM transport respectively. Counters persist across recording starts/reconnects but not reboot. `0xFFFF` means the stack did not provide a disconnect reason.
 
-Standby stops microphone/I2S but keeps BLE available. C3 retains its connected LED heartbeat; S3 stays dark outside OTA. A disconnected, non-recording, non-OTA pendant can sleep after five minutes. Deep sleep is guarded by retained and durable markers; the shared four-second wake hold and stable release are checked before BLE starts. Touch gestures are ignored during OTA.
+## Extending a device
 
-Battery sampling averages 16 readings every 15 seconds, with forced status samples. Notifications are suppressed during recording. Valid reconstructed cell range is 2.8–4.35 V; readings outside it remain diagnostic data and report unavailable. Low/critical thresholds are 3.60/3.40 V. Only S3 enforces confirmed critical-battery sleep/OTA guards. Wiring, calibration and the unresolved C3 charging discrepancy are documented in [hardware](HARDWARE_PINOUT.md).
+1. Update the catalog with an explicit feature and electrical policy. Preserve existing IDs and wire-bit assignments.
+2. Implement the feature in its owning driver. Report support separately from successful initialization.
+3. Regenerate the S3 sketch and materialize all targets. Update the PWA catalog using its `tools/device-catalog.cjs --from ../synap-firmware` command.
+4. Add a behavior regression at the affected boundary and run native tests plus all board builds. Keep generated outputs out of handwritten source edits.
+5. Validate physical boards for affected timing, microphone, camera, storage, power or OTA behavior. CI covers code and simulated protocols, not physical endurance.
 
-No measured runtime extension is claimed. Assess complete battery-side current in recording, connected idle, standby, advertising and deep sleep before changing clocks, BLE intervals or supplies.
-
-### Disconnect recovery
-
-A compatible PWA explicitly arms volatile audio recovery for its session. Without that negotiation, disconnect stops recording. The ring always stores PCM, including when its eventual transmission uses ADPCM. S3 can reserve 600 PCM frames (30 seconds, about 965 KB) in PSRAM. Without PSRAM, 25 PCM frames (1.25 seconds, about 40 KB) require more than 140 KB free internal heap after BLE initialization; allocation failure leaves ordinary capture available.
-
-Recovery expires after 60 seconds; STOP drain has a 35-second bound. Overflow, reboot, sleep and app reload have explicit limits. No audio is written to flash. See the [recovery protocol](DISCONNECT_RECOVERY.md) for session binding, pacing and acknowledgement semantics.
-
-## BLE contracts
-
-Primary service: `4fa12345-0000-1000-8000-00805f9b34fb`. Characteristic suffixes below replace the last two digits of its first UUID group.
-
-| Suffix | Purpose | Protocol |
-| --- | --- | --- |
-| 46 | Audio | v2 PCM preferred; v3 ADPCM fallback |
-| 47 | Control / status | v2 |
-| 48 / 49 | OTA write / status | v3 |
-| 4b | Firmware identity | Target and build |
-| 4c | Public device ID | Factory eFuse-derived identity |
-| 4d | Diagnostics | v2 (48 bytes; v1 fields retain their offsets) |
-| 4e | Battery, touch and power events | Per-event version |
-| 4f | Optional disconnect recovery | v1 |
-
-The public device ID is not a secret. OTA validates target identity, image structure, size and SHA-256, and supports resume. Recording blocks OTA; confirmed critical battery additionally blocks it on S3. The PWA verifies publisher provenance separately; see [release trust](../OTA_RELEASES.md).
-
-Diagnostics v2 retains the first 32-byte layout from v1, with version byte 2. Flags byte 2 adds `0x40` for real-microphone capture without firmware DSP. `0x80` identifies selected PCM transport. Its absence with `0x40` present identifies ADPCM fallback. Absence of `0x40` means unknown on older builds; existing consumers can ignore it. This flag does not claim lossless transport. Additional little-endian fields are disconnect reason (`u16`, offset 32), last rejected notification status (`u16`, 34), disconnect count since boot (`u32`, 36), last disconnect uptime in milliseconds (`u32`, 40), and last notification error (`u32`, 44). Link/error evidence survives START and reconnect. `0xFFFF` means the reason was unavailable; the pinned NimBLE server callback omits it. Bluedroid supplies the raw reason (for example, `0x08` for supervision timeout). Reboot is distinguishable through reset reason, uptime and reset counters; these diagnostics are volatile.
-
-For a C3 disconnect retest, update firmware and the PWA, keep the app foregrounded, record for 10–15 minutes, then stop and inspect Settings diagnostics. Include the `GATT disconnected` and `Pendant diagnostics` entries. Repeat on battery and USB power if disconnects persist. Software regression checks cannot establish radio or power stability on physical hardware.
-
-## Validation
-
-`node --test tests/*.cjs` compiles actual firmware functions with warnings as errors and undefined-behavior sanitization. Tests cover codec bytes, all MTU values, all 65,536 PCM16 values, partial I2S reads, concurrent STOP/recovery, connection races, battery policies, LED timing, shared gestures under both board configurations, recovery limits, OTA resume and release identity. Gesture regressions include delayed STOP completion, short holds, stable wake release, OTA interruption, reconnect, timer wrap and rejection of the wrong board's wake cause.
-
-Source-generation tests also exercise the CLI outside the repository working directory and reject changed/ambiguous anchors. CI compiles all three pinned Arduino targets and validates release artifacts.
-
-Before claiming a runtime improvement, validate all affected physical boards (and the Chakshu checklist): long recordings and drop counters, START/STOP latency, repeated RF interruptions, touch gestures, sleep/wake, battery readings while charging/unplugged, OTA resume and battery-side current. The PWA preserves decoded PCM for playback and new cloud uploads. Enhancement is an explicit preview/export action; cloud transcription receives the stored upload without automatic trimming. Summaries and speaker identification remain outside this repository.
-
-## Implementation references
-
-- [Pinned Arduino I2S implementation](https://github.com/espressif/arduino-esp32/blob/3.3.5/libraries/ESP_I2S/src/ESP_I2S.cpp)
-- [Pinned BLE notification implementation](https://github.com/espressif/arduino-esp32/blob/3.3.5/libraries/BLE/src/BLECharacteristic.cpp)
-- [Apple connection parameter guidance](https://developer.apple.com/library/archive/qa/qa1931/_index.html)
-- [Pinned BLE server callbacks and connection requests](https://github.com/espressif/arduino-esp32/blob/3.3.5/libraries/BLE/src/BLEServer.cpp)
-- [INMP441 format and response](https://product.tdk.com/system/files/dam/doc/product/sw_piezo/mic/mems-mic/data_sheet/inmp441.pdf)
+Comments should explain electrical constraints, asynchronous ownership or protocol compatibility. Current behavior belongs here and in the feature guides; old incident narratives belong in Git history.

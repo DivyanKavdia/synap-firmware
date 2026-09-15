@@ -1,10 +1,37 @@
-// Synap pendant firmware for ESP32-S3FH4R2. Wiring and build settings: README.md.
-// Built from firmware/shared; regenerate with node tools/assemble-source.cjs.
-#ifndef SYNAP_CHAKSHU
-#define SYNAP_CHAKSHU 0
-#endif
-#define SYNAP_MODULE_ID 1
 #include <Arduino.h>
+// SYNAP_DEVICE_PROFILE_BEGIN
+// Generated from devices/catalog.json; edit the catalog and reassemble.
+#define SYNAP_CHAKSHU 0
+#define SYNAP_MODULE_ID 1
+#define DEVICE_NAME "synap"
+#define SYNAP_SUPPORTED_CAPABILITIES 121
+#define SYNAP_CAP_AUDIO 1
+#define SYNAP_CAP_CAMERA 2
+#define SYNAP_CAP_SD 4
+#define SYNAP_CAP_SETTINGS 8
+#define SYNAP_CAP_TOUCH 16
+#define SYNAP_CAP_BATTERY 32
+#define SYNAP_CAP_STANDBY 64
+#define SYNAP_CAP_VIDEO 128
+#define SYNAP_CAP_SDAUDIO 256
+#define SYNAP_CAP_PHOTO 512
+#ifndef SYNAP_TOUCH_PIN
+#define SYNAP_TOUCH_PIN 13
+#endif
+#ifndef SYNAP_BATTERY_ADC_PIN
+#define SYNAP_BATTERY_ADC_PIN 8
+#endif
+#ifndef SYNAP_BATTERY_MONITOR_ENABLE
+#define SYNAP_BATTERY_MONITOR_ENABLE 1
+#endif
+#define SYNAP_BATTERY_ENFORCE 1
+#define SYNAP_BATTERY_FULL_MV 4130
+#define SYNAP_BATTERY_SCALE_NUMERATOR 4130
+#define SYNAP_BATTERY_SCALE_DENOMINATOR 1320
+constexpr uint8_t RGB_LED_PIN = 48;
+constexpr int8_t I2S_BCLK_PIN = 4, I2S_WS_PIN = 5, I2S_DATA_IN_PIN = 6;
+constexpr uint32_t IDLE_CPU_MHZ = 80, ACTIVE_CPU_MHZ = 240;
+// SYNAP_DEVICE_PROFILE_END
 #include <BLEDevice.h>
 #include <esp_mac.h>
 #include <esp_system.h>
@@ -52,7 +79,6 @@ class MicrophoneGuard {
 #include <math.h>
 #endif
 
-#define DEVICE_NAME "synap"
 #define DEVICE_ID_UUID "4fa1234c-0000-1000-8000-00805f9b34fb"
 #define DIAGNOSTICS_UUID "4fa1234d-0000-1000-8000-00805f9b34fb"
 // Public board identity, independent of firmware version, NVS and OTA authorization.
@@ -100,15 +126,8 @@ constexpr uint16_t REQUESTED_MTU = 517;
 constexpr uint16_t BLE_MIN_INTERVAL = 12, BLE_MAX_INTERVAL = 24; // 15–30 ms
 constexpr uint16_t BLE_SLAVE_LATENCY = 0, BLE_SUPERVISION_TIMEOUT = 600; // 6 s
 constexpr uint16_t MAX_AUDIO_PAYLOAD_BYTES = 500;
-constexpr uint8_t RGB_LED_PIN = 48;
-#ifndef SYNAP_TOUCH_PIN
-#define SYNAP_TOUCH_PIN 13
-#endif
 #ifndef SYNAP_TOUCH_ACTIVE_LEVEL
 #define SYNAP_TOUCH_ACTIVE_LEVEL HIGH
-#endif
-#ifndef SYNAP_BATTERY_ADC_PIN
-#define SYNAP_BATTERY_ADC_PIN 8
 #endif
 constexpr uint8_t TOUCH_INPUT_PIN = SYNAP_TOUCH_PIN;
 constexpr uint8_t TOUCH_ACTIVE_LEVEL = SYNAP_TOUCH_ACTIVE_LEVEL;
@@ -122,12 +141,6 @@ constexpr uint8_t BATTERY_EVENT_MAGIC = 0xB7;
 constexpr uint8_t BATTERY_EVENT_VERSION = 2;
 // Short, dim status pulses limit the onboard WS2812's battery load.
 constexpr uint8_t LED_DIM = 4;
-constexpr int8_t I2S_BCLK_PIN = 4, I2S_WS_PIN = 5, I2S_DATA_IN_PIN = 6;
-#if CONFIG_IDF_TARGET_ESP32S3
-constexpr uint32_t IDLE_CPU_MHZ = 80, ACTIVE_CPU_MHZ = 240;
-#else
-constexpr uint32_t IDLE_CPU_MHZ = 80, ACTIVE_CPU_MHZ = 160;
-#endif
 
 enum class DeviceState : uint8_t { DISCONNECTED=0, CONNECTED_IDLE=1, STREAMING=2, ERROR=3 };
 enum class ErrorCode : uint8_t {
@@ -564,23 +577,24 @@ void otaTick() {
 
 // SYNAP_BOARD_FEATURES
 // Versioned 20-byte descriptor fits the default ATT payload; names are display-only.
-// Bits: audio, camera, SD, flash settings, touch, battery, standby, MJPEG, SD WAV, photo.
 void encodeModuleCapabilities(uint8_t* p) {
   memset(p,0,20);p[0]=0xC7;p[1]=1;p[2]=SYNAP_MODULE_ID;p[3]=1;
-  uint16_t supported=1|8|16|32|64,ready=8|16|64;
+  const uint16_t supported=SYNAP_SUPPORTED_CAPABILITIES;
+  uint16_t ready=supported & (SYNAP_CAP_SETTINGS|SYNAP_CAP_TOUCH|SYNAP_CAP_STANDBY);
   uint16_t sensor=0;
 #if USE_REAL_I2S_MIC
-  if (microphoneValidated.load()) ready|=1;
+  if (microphoneValidated.load()) ready|=SYNAP_CAP_AUDIO;
 #endif
-  if (batteryAvailable) ready|=32;
+  if (batteryAvailable) ready|=SYNAP_CAP_BATTERY;
 #if SYNAP_CHAKSHU
   ChakshuMedia::Snapshot status;ChakshuMedia::copy(status);
-  supported=1|2|4|8|128|256|512;ready=8|status.ready;
-  if (status.ready&2) ready|=128|512;
-  if ((status.ready&5)==5) ready|=256;
+  ready=SYNAP_CAP_SETTINGS|status.ready;
+  if (status.ready&SYNAP_CAP_CAMERA) ready|=SYNAP_CAP_VIDEO|SYNAP_CAP_PHOTO;
+  if ((status.ready&(SYNAP_CAP_AUDIO|SYNAP_CAP_SD))==(SYNAP_CAP_AUDIO|SYNAP_CAP_SD)) ready|=SYNAP_CAP_SDAUDIO;
   sensor=status.sensor;
   p[14]=ChakshuTransfer::requests?1:0;
 #endif
+  ready &= supported;
   p[4]=supported&255;p[5]=supported>>8;p[6]=ready&255;p[7]=ready>>8;
   p[8]=sensor&255;p[9]=sensor>>8;p[10]=SAMPLE_RATE&255;p[11]=SAMPLE_RATE>>8;
   p[12]=uint8_t(ESP.getFlashChipSize()/(1024u*1024u));
@@ -631,9 +645,6 @@ void setDeviceState(DeviceState state, ErrorCode error) {
 }
 
 void applyCpuPowerProfile(bool active) {
-#if SYNAP_CHAKSHU
-  active=true; // Stable clocks during Sense hardware bring-up.
-#endif
   static uint32_t appliedMHz = 0;
   const uint32_t targetMHz = active ? ACTIVE_CPU_MHZ : IDLE_CPU_MHZ;
   if (appliedMHz == targetMHz) return;
@@ -686,10 +697,9 @@ void stopMicrophone() {
 }
 
 uint8_t batteryPercentFromMillivolts(uint16_t mv) {
-  // Production calibration: DMM 4.13 V, ADC 1.32 V, raw 1544 = full charge.
-  // Interpolate between LiPo discharge anchors rather than using a linear scale.
-  if (mv>=4130) return 100;
-  if (mv>=4050) return 90 + uint32_t(mv-4050)*10/80;
+  // Board calibration sets the full-charge anchor; lower LiPo anchors are shared.
+  if (mv>=SYNAP_BATTERY_FULL_MV) return 100;
+  if (mv>=4050) return 90 + uint32_t(mv-4050)*10/(SYNAP_BATTERY_FULL_MV-4050);
   if (mv>=3950) return 80 + uint32_t(mv-3950)*10/100;
   if (mv>=3850) return 70 + uint32_t(mv-3850)*10/100;
   if (mv>=3780) return 60 + uint32_t(mv-3780)*10/70;
@@ -702,15 +712,8 @@ uint8_t batteryPercentFromMillivolts(uint16_t mv) {
   return 0;
 }
 
-#ifndef SYNAP_BATTERY_MONITOR_ENABLE
-#if CONFIG_IDF_TARGET_ESP32S3
-#define SYNAP_BATTERY_MONITOR_ENABLE 1
-#else
-#define SYNAP_BATTERY_MONITOR_ENABLE 0
-#endif
-#endif
 bool batteryCritical() {
-#if SYNAP_BATTERY_MONITOR_ENABLE
+#if SYNAP_BATTERY_MONITOR_ENABLE && SYNAP_BATTERY_ENFORCE
   return batteryAvailable && batteryValidSamples>=3 && batteryCriticalSamples>=2 &&
     batteryMillivolts<=BATTERY_CRITICAL_MV;
 #else
@@ -765,10 +768,7 @@ void sampleBattery(bool force) {
   const uint32_t adcRaw=rawTotal/16u;
   batteryAdcMillivolts=uint16_t(adcMv>65535u?65535u:adcMv);
   batteryAdcRaw=uint16_t(adcRaw>65535u?65535u:adcRaw);
-  // Measured calibration for the 1M/470k divider: 1.32 V ADC = 4.13 V cell (raw 1544).
-  constexpr uint32_t BATTERY_CAL_ADC_MV = 1320u;
-  constexpr uint32_t BATTERY_CAL_CELL_MV = 4130u;
-  const uint32_t cellMv=(adcMv*BATTERY_CAL_CELL_MV + BATTERY_CAL_ADC_MV/2u)/BATTERY_CAL_ADC_MV;
+  const uint32_t cellMv=(adcMv*SYNAP_BATTERY_SCALE_NUMERATOR + SYNAP_BATTERY_SCALE_DENOMINATOR/2u)/SYNAP_BATTERY_SCALE_DENOMINATOR;
   if (cellMv>=2800u && cellMv<=4350u) {
     batteryMillivolts=uint16_t(cellMv);
     batteryPercent=batteryPercentFromMillivolts(batteryMillivolts);
@@ -1897,8 +1897,7 @@ void setup() {
   touchChangedAt=millis();
   pinMode(BATTERY_ADC_PIN, INPUT);
   analogReadResolution(12);
-  // GPIO8 is calibrated at 1.32 V ADC for a 4.13 V cell on the 1M/470k divider.
-  // 6 dB attenuation comfortably covers the expected range while retaining resolution.
+  // The device profile selects the divider calibration and ADC input range.
   analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_6db);
   statusLed.begin();
   statusLed.clear();

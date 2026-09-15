@@ -25,6 +25,6 @@ test('target edits fail closed when shared anchors change or become ambiguous',(
   assert.throws(()=>replaceOnce('aa','a','c','pin'),/Ambiguous.*pin/);
   assert.throws(()=>replaceFunctionBlock('begin','begin','end','new','function'),/Missing.*end/);
   assert.throws(()=>replaceFunctionBlock('begin begin end','begin','end','new','function'),/Ambiguous/);
-  assert.throws(()=>materialize(source.replace('#define SYNAP_TOUCH_PIN 13',''), 'esp32c3-supermini-4m'),/Missing.*touch/);
+  assert.throws(()=>materialize(source.replace('// SYNAP_DEVICE_PROFILE_BEGIN',''), 'esp32c3-supermini-4m'),/Missing.*profile/);
   assert.throws(()=>materialize(source,'unknown-board'),/Unknown firmware target/);
 });

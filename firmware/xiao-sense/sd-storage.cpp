@@ -1,4 +1,4 @@
-// Only the media worker accesses the filesystem after boot. No auto-format or deletion.
+// Media and model jobs serialize filesystem ownership. Never format a mounted card.
 #include <SD.h>
 #include <SPI.h>
 namespace ChakshuStorage {
