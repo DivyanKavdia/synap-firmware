@@ -41,7 +41,7 @@ ${chakshu?'std::atomic<bool> recoveryWaiting{false};':''}
 uint32_t u32(unsigned o){const auto& b=characteristic.bytes;return uint32_t(b[o])|(uint32_t(b[o+1])<<8)|(uint32_t(b[o+2])<<16)|(uint32_t(b[o+3])<<24);}
 int main(){
   updateDiagnosticsCharacteristic();const auto& b=characteristic.bytes;
-  assert(b.size()==${chakshu?72:48} && b[0]==0xD6 && b[1]==${chakshu?3:2} && b[2]==0x47 && b[3]==9);
+  assert(b.size()==${chakshu?84:48} && b[0]==0xD6 && b[1]==${chakshu?4:2} && b[2]==0x47 && b[3]==9);
   assert(u32(4)==2345 && u32(8)==2 && u32(12)==7 && u32(16)==1);
   assert(u32(20)==95000 && u32(24)==82000 && u32(28)==123);
   assert(b[32]==8 && b[33]==0 && b[34]==7 && b[35]==0);

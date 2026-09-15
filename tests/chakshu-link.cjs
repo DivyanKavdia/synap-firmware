@@ -41,7 +41,7 @@ int main(){
 }`),/PASS one host-owned/);
 });
 
-test('Chakshu lets the central negotiate and retains early-disconnect evidence across repeated links',()=>{
+test('Chakshu keeps connect callbacks passive and retains early-disconnect evidence across repeated links',()=>{
   const health=fs.readFileSync('firmware/xiao-sense/ble-health.cpp','utf8');
   const callbacks=fs.readFileSync('firmware/xiao-sense/ble-server.cpp','utf8');
   const result=nativeTest(`
@@ -72,6 +72,7 @@ struct NimBLEServer {
 struct NimBLEServerCallbacks {
   virtual void onConnect(NimBLEServer*,NimBLEConnInfo&){}
   virtual void onDisconnect(NimBLEServer*,NimBLEConnInfo&,int){}
+  virtual void onConnParamsUpdate(NimBLEConnInfo&){}
 };
 ${health}
 ${callbacks}
@@ -96,7 +97,7 @@ int main(){
     assert(!deviceConnected && !chakshuAudioSubscribed && chakshuConnectionHandle==65535);
     assert(lastDisconnectReason==0x213 && linkDisconnects==i+1);
     assert(ChakshuLink::lastDurationMs==7250 && ChakshuLink::lastStage==stage);
-    uint8_t bytes[72]={};ChakshuLink::append(bytes,false,false,false,clockMs);
+    uint8_t bytes[84]={};ChakshuLink::append(bytes,false,false,false,clockMs);
     assert(u32(bytes,48)==940 && u32(bytes,52)==410 && u32(bytes,56)==7250);
     assert(bytes[60]==24 && bytes[62]==0 && bytes[64]==88 && bytes[65]==2);
     assert(bytes[66]==stage && bytes[67]==0 && u32(bytes,68)==0);
@@ -113,8 +114,9 @@ int main(){
 
 test('only Chakshu extends diagnostics and uses a fixed 20 ms advertising interval',()=>{
   const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
-  assert.match(source,/DIAGNOSTICS_VERSION = 3/);
-  assert.match(source,/uint8_t value\[72\] = \{\}/);
+  assert.match(source,/DIAGNOSTICS_VERSION = 4/);
+  assert.match(source,/uint8_t value\[84\] = \{\}/);
+  assert.match(source,/reconcileConnection\(\);\s+serviceChakshuLink\(\);/);
   assert.match(source,/ChakshuLink::append\(value,deviceConnected.load\(\)/);
   assert.match(source,/command==CMD_GET_STATUS && version==PROTOCOL_VERSION\) ChakshuLink::statusSeen=true/);
   assert.match(source,/setMinInterval\(32\)/);assert.match(source,/setMaxInterval\(32\)/);

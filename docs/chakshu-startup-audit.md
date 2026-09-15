@@ -1,10 +1,47 @@
 # Chakshu startup and connection audit — 15 September 2026
 
-Baseline: firmware `dfc456d` (build 1240), PWA `4ad45c6` (shell 116).
-The reported symptom is repeated disconnects, especially just after connecting,
-with better previous results on the standard S3. No new build-1240 device log or
-radio trace was supplied with this report. Earlier logs establish both
-app-requested disconnects and disconnects originating outside the app.
+Current review: firmware build **1242** (`02300cb`), PWA shell **117**
+(`6d7ca2d`). The 16:17–16:32 device log now supplies retained GAP diagnostics.
+The earlier audit below started from firmware build 1240 and shell 116.
+
+## Follow-up: measured supervision timeout
+
+The earlier removal of every connection-parameter request was too broad. It
+removed duplicate startup work but also removed the six-second supervision
+request used by the standard S3. Build 1242 accepted the phone's **720 ms**
+timeout. The following evidence supports correcting that specific difference:
+
+| Observation from the device | Interpretation |
+| --- | --- |
+| `disconnectReason:520` (`0x208`), interval 30 ms, latency 0, supervision 720 ms; previous link lasted 6,391 ms | A real link supervision timeout occurred during early connection setup. This is not an app queue deadline. |
+| A later streaming link also ended with `0x208`; last audio arrived 733 ms before the app received disconnect | Consistent with the same short supervision timeout. The log cannot determine the underlying cause of the missed radio events. |
+| Boot ready 1,625 ms, camera/SD initialization 1,106 ms; uptime reached 793 seconds with the same software-reset reason | The repeated disconnects did not repeatedly reboot this firmware. Model loading is absent and does not explain these drops. The 16:19 disconnect during OTA is a separate expected reboot. |
+| Subsequent takes received 1,713 frames (85.65 s) and 436 frames (21.8 s), with zero missing or incomplete frames | PCM delivery can sustain complete takes on the same boot. The change keeps that transport intact. |
+| The camera response rejected after the disconnect; the screenshot contains an actual frame | Camera transfer is partly working. That error alone does not prove the camera caused the radio timeout. |
+| Capture continued into the 30-second recovery ring after the failed video; the next reconnect stopped an orphaned stream | Post-disconnect capture drops are not proof of live-link sample loss. The video failure path saves received frames and ends its paired audio journal as an interrupted take. |
+
+Chakshu now checks the observed timeout from the control task, beginning one
+second after the connect callback. If it is below six seconds, it submits the
+standard S3 request: **15–30 ms interval, latency 0, 6,000 ms supervision**.
+Already adequate central settings need no request. A submitted request is never
+repeated on that connection, even if the phone rejects or later replaces it.
+Only immediate local `BLE_HS_EBUSY` / `BLE_HS_EALREADY` responses can retry, at
+one-second spacing, with a maximum of three submissions attempted per link.
+Other errors end the attempt. New connections get independent state; stale
+native completions cannot annotate a replacement link.
+
+This is a request, not a guarantee that the central accepts it. Diagnostics v4
+reports both the native submission result and the actual parameters observed in
+GAP callbacks, retaining the previous link's request evidence too. A native
+return code of zero means submitted; `linkSupervisionMs:6000` is the relevant
+confirmation of the observed timeout. The host still owns the only DLE request.
+No voice model, microphone filtering, camera mode or browser reconnect policy is
+changed by this correction.
+
+This addresses an observed fragile timeout configuration. It does **not** prove
+why the radio missed events or establish physical stability without a new run.
+The 17 older processing retries and the later empty transcript are separate
+from these link diagnostics; recordings must be preserved.
 
 ## Findings and changes
 
@@ -12,7 +49,7 @@ app-requested disconnects and disconnects originating outside the app.
 | --- | --- | --- | --- |
 | Healthy startup work can cause an app-requested disconnect | The PWA queue budget covered only the active request, not all earlier requests. Simultaneous callers could enqueue before an active owner existed. Two regression cases failed on the baseline: a five-second discovery with a queued subscription, and three healthy six-second discoveries. | Budget queue wait across all preceding requests. Preserve each request's separate native deadline. A queued timeout can disconnect only when the actual native blocker has already timed out. | Reproduced in executable tests. This is a confirmed app defect. |
 | Chakshu explicitly requested data length that its host already requests | Chakshu's `onConnect` called `setDataLen(251)`. In pinned NimBLE 2.3.6, `ble_gap_event_connect_call` calls the application callback and then requests maximum data length itself. | Remove the duplicate application request. The host still negotiates maximum data length. | Confirmed call duplication; its contribution to this particular phone's drops requires device validation. |
-| Additional connection tuning was bundled into the same startup callback | `onConnect` also requested 15–30 ms / latency 0 / six-second supervision parameters. These values are not inherently invalid. The host can terminate a link on a parameter-procedure timeout. | Retain the central's negotiated parameters instead of requesting another update during startup. | Removes an avoidable negotiation path; no claim that every previous drop was a negotiation timeout. |
+| Additional connection tuning was bundled into the same startup callback | `onConnect` also requested 15–30 ms / latency 0 / six-second supervision parameters. These values are not inherently invalid. The host can terminate a link on a parameter-procedure timeout. | Build 1242 retained central parameters. The follow-up restores a bounded, deferred six-second request for observed short timeouts. | The new device log establishes that leaving a 720 ms timeout unchanged was inadequate; central acceptance still requires verification. |
 | Passive update discovery competed with initial capability/event discovery | The updater ran immediately when the connection became ready and discovered updater/status/identity characteristics and subscribed to progress. | Automatic checks wait five seconds. Manual checks remain immediate. Passive consumers defer during manual camera/video activity as well as audio capture. | Full-app test covers delayed discovery, updater deferral and Start during discovery. |
 | The diagnostic text obscured NimBLE HCI reasons | The earlier raw reason 531 is `0x213`. The decoder handled plain HCI codes but not NimBLE's `0x200` namespace. | Preserve the raw code and decode only the HCI namespace. `0x213` is remote-host termination; `0x208` is supervision timeout. | Decoding is definitive. Remote-host termination does not identify why the phone ended the connection. |
 | App logs could not separate hardware boot from browser setup time | The boot timing existed only on serial; no retained duration/stage/parameters for the last link were exposed. | Chakshu diagnostics v3 retains boot/media initialization time and the previous connection's duration, stage and negotiated parameters. The PWA takes one deferred idle snapshot after reconnect and logs slow requests with separate queue/native durations. | Enables follow-up with the existing Copy diagnostics workflow. Timing values are measured by the device, not estimated by the app. |
@@ -21,14 +58,14 @@ app-requested disconnects and disconnects originating outside the app.
 
 | Area | Standard S3 | Chakshu after this change |
 | --- | --- | --- |
-| BLE integration | Arduino ESP32 3.3.5 core BLE wrapper | NimBLE-Arduino 2.3.6; no application data-length or connection-parameter request at connect |
+| BLE integration | Arduino ESP32 3.3.5 core BLE wrapper | NimBLE-Arduino 2.3.6; host-owned DLE, bounded timeout correction from the control task |
 | Required setup | Microphone, queues, recovery and BLE | Same owners plus camera/SD workers; all required queues/tasks exist before advertising |
 | Microphone | External I2S, 32-bit input converted to PCM16 | Onboard PDM on GPIO42/41, native PCM16 |
 | Audio | 16 kHz mono; PCM at sufficient MTU, ADPCM fallback for smaller MTU | Same transport contract; no local voice model or firmware DSP |
 | CPU | 80 MHz idle / 240 MHz active | 240 MHz idle and active; no clock transition during connection setup |
 | Camera/SD | Absent | Camera uses LCD_CAM, PDM uses I2S0; media work runs outside BLE callbacks and the control loop |
 | Advertising | Existing target behavior | Fixed 20 ms interval while advertising; automatic reconnect advertising remains host-owned |
-| Diagnostics | Existing 48-byte v2 packet | 72-byte v3 packet, preserving the first 48 bytes' meanings |
+| Diagnostics | Existing 48-byte v2 packet | 84-byte v4 packet, preserving the preceding v2/v3 fields |
 
 No standard-S3 or C3 firmware module/profile/sketch behavior is changed by this
 patch. The shared PWA queue correction applies to all pendants. A wrapper change
@@ -60,9 +97,9 @@ and notification-ownership fixes remain necessary and covered by tests.
 
 ## Diagnostic contract
 
-Magic `0xD6`, version 3, exactly 72 bytes. Integers are little-endian.
-Existing v1/v2 readers remain supported by the updated PWA. Only Chakshu emits
-v3. Firmware byte 2 still reports streaming/capture state independently of the
+Magic `0xD6`, version 4, exactly 84 bytes. Integers are little-endian.
+The updated PWA also decodes v1/v2/v3 packets. Only Chakshu emits
+v4. Firmware byte 2 still reports streaming/capture state independently of the
 link stage; a buffered stream waiting for RESUME is not counted as streaming on
 the newly connected link.
 
@@ -78,6 +115,13 @@ the newly connected link.
 | 66 | u8 | Last link stage |
 | 67 | u8 | Current link stage |
 | 68 | u32 | Current link duration, milliseconds; zero when disconnected |
+| 72 | u16 | Current interval, units of 1.25 ms; zero when disconnected |
+| 74 | u16 | Current peripheral latency; zero when disconnected |
+| 76 | u16 | Current supervision timeout, units of 10 ms; zero when disconnected |
+| 78 | u8 | Current link's native parameter-request attempts |
+| 79 | u8 | Last disconnected link's native parameter-request attempts |
+| 80 | u16 | Current request return code; `0xFFFF` means no completed submission |
+| 82 | u16 | Last disconnected link's request return code; same sentinel |
 
 Stages: 0 disconnected, 1 connected, 2 audio subscribed, 3 valid GET_STATUS
 received, 4 streaming with recovery no longer waiting. Stage 3 records receipt
@@ -95,6 +139,12 @@ and reconnects; a reboot clears it and supplies a new reset reason/uptime.
 - `tests/chakshu-link.cjs`: actual production callbacks over 30 links, stranger
   rejection, recovery preservation, diagnostic encoding and clock rollover;
   compiled pinned host code confirms the automatic data-length request.
+- `tests/chakshu-supervision.cjs`: deferred requests using production callbacks
+  and the production control-task function; central acceptance/replacement,
+  already adequate settings, bounded busy/already-pending retries, permanent
+  errors, disconnected/stale/recycled handles and clock rollover.
+- `tests/pendant-diagnostics.cjs`: v4 submission result versus measured timeout,
+  retained v3 fields, nonzero buffer offsets and truncated packet rejection.
 - Existing complete firmware/PWA suites and all three firmware builds are
   required before release. Camera, storage, recovery and browser workflow CI
   remain release checks.
@@ -122,6 +172,8 @@ it is not required for BLE audio or photo transfer.
 - [Apple advertising/connection guidance, QA1931](https://developer.apple.com/library/archive/qa/qa1931/_index.html)
 - [Seeed XIAO ESP32S3 Bluetooth antenna installation](https://wiki.seeedstudio.com/xiao_esp32s3_bluetooth/#installation-of-antenna)
 
-QA1931 supports the fixed 20 ms advertising choice. Its older connection-timeout
-range is not used to reject modern central-selected parameters; the firmware
-now leaves those parameters to the central.
+QA1931 supports the fixed 20 ms advertising choice. Its older 2–6 second
+supervision guidance and Apple's [April 2026 engineering guidance](https://developer.apple.com/forums/thread/822187)
+(6–18 seconds) both admit this six-second request. Both also require consistent
+interval/latency values. The central may decline or replace the request; there
+is no continuous renegotiation loop.

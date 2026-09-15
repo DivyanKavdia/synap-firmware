@@ -18,15 +18,16 @@ function materializeBle(source) {
   replace('#include <atomic>','#include <atomic>\nstd::atomic<uint16_t> chakshuConnectionHandle{BLE_HS_CONN_HANDLE_NONE};\nstd::atomic<bool> chakshuAudioSubscribed{false};\nstd::atomic<uint32_t> chakshuAudioReplayGeneration{0};','Chakshu connection ownership');
   replace('#include <atomic>','#include <atomic>\n'+readTemplate('xiao-sense','ble-health.cpp'),'Retained Chakshu link diagnostics');
   // Diagnostics are defined before the recovery implementation in the shared
-  // sketch. Declare this flag before the v3 encoder reads it.
+  // sketch. Declare this flag before the extended encoder reads it.
   replace('#include <atomic>','#include <atomic>\nextern std::atomic<bool> recoveryWaiting;','Recovery state for early diagnostic encoder');
-  out=replaceFunctionBlock(out,'class ServerCallbacks :','class ControlCallbacks :',readTemplate('xiao-sense','ble-server.cpp')+'\n','Chakshu server callbacks');
+  out=replaceFunctionBlock(out,'class ServerCallbacks :','class ControlCallbacks :',readTemplate('xiao-sense','ble-link.cpp')+'\n'+readTemplate('xiao-sense','ble-server.cpp')+'\n','Chakshu server callbacks');
+  replace('    reconcileConnection();','    reconcileConnection();\n    serviceChakshuLink();','Deferred bounded supervision request');
   out=replaceFunctionBlock(out,'class AudioCallbacks :','class DiagnosticsCallbacks :',readTemplate('xiao-sense','ble-audio.cpp')+'\n','Chakshu audio notifications');
   out=replaceFunctionBlock(out,'class ControlCallbacks :','class AudioCallbacks :',readTemplate('xiao-sense','ble-control.cpp')+'\n','Chakshu command/status separation');
   replace('    queueEvent(EventType::COMMAND, command, version, streamGeneration.load());',
     '    if (command==CMD_GET_STATUS && version==PROTOCOL_VERSION) ChakshuLink::statusSeen=true;\n    queueEvent(EventType::COMMAND, command, version, streamGeneration.load());','Observe core handshake without extra GATT traffic');
-  replace('constexpr uint8_t DIAGNOSTICS_VERSION = 2;','constexpr uint8_t DIAGNOSTICS_VERSION = 3;','Chakshu link diagnostics version');
-  replace('  uint8_t value[48] = {};','  uint8_t value[72] = {};','Chakshu link diagnostics size');
+  replace('constexpr uint8_t DIAGNOSTICS_VERSION = 2;','constexpr uint8_t DIAGNOSTICS_VERSION = 4;','Chakshu link diagnostics version');
+  replace('  uint8_t value[48] = {};','  uint8_t value[84] = {};','Chakshu link diagnostics size');
   replace('  diagnosticsCharacteristic->setValue(value,sizeof(value));',
     '  ChakshuLink::append(value,deviceConnected.load(),streamingEnabled.load()&&!recoveryWaiting.load(),chakshuAudioSubscribed.load(),millis());\n  diagnosticsCharacteristic->setValue(value,sizeof(value));','Append boot and last-link evidence');
   replace('  controlCharacteristic=service->createCharacteristic(CONTROL_CHAR_UUID,\n    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE |\n    BLECharacteristic::PROPERTY_WRITE_NR | BLECharacteristic::PROPERTY_NOTIFY);\n  controlCharacteristic->setCallbacks(new ControlCallbacks());',
