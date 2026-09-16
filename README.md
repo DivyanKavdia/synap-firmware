@@ -25,6 +25,8 @@ node tools/materialize-target.cjs xiao-esp32s3-sense-8m synap_esp32s3/synap_esp3
 
 The checked-in S3 `.ino` is generated. Edit its owners, then regenerate it. Keep each complete Arduino sketch in its own folder; two complete `.ino` files in one folder are compiled together and cause duplicate definitions.
 
+Before a local Arduino build, run `node tools/patch-arduino-ble.cjs <esp32-3.3.5/libraries/BLE/src>`. CI runs the same checksum-verified patch. It fixes short reads and passes incoming S3/C3 commands directly to the command queue before status or battery telemetry can overwrite them. Callbacks enqueue work without waiting for capture or OTA. See [S3/C3 touch and GATT audit](docs/s3-c3-touch-gatt-audit.md).
+
 CI pins Arduino ESP32 **3.3.5**, Adafruit NeoPixel **1.15.2**, and NimBLE-Arduino **2.3.6**. It compiles every target without local speech recognition, and retains prepared source plus application and factory binaries. Eligible `main` builds publish OTA releases as `synap-os1-build#`; unpublished local builds identify as build0. First installation uses USB; OTA subsequently writes the inactive application slot. Never interchange target binaries.
 
 Audio capture is 16 kHz mono PCM16 without software filtering or gain. BLE prefers PCM at MTU185 or above and uses ADPCM on smaller supported links. Ordinary recording remains available when optional camera, SD or voice setup fails. Host tests and successful compilation do not establish microphone quality, radio endurance or battery accuracy on physical boards.

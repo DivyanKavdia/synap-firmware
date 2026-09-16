@@ -36,10 +36,12 @@ jobs:
           arduino-cli core install esp32:esp32@3.3.5 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli lib install "Adafruit NeoPixel@1.15.2"
           arduino-cli lib install "NimBLE-Arduino@2.3.6"
+      - name: Fix pinned Arduino BLE request ownership and live reads
+        run: node tools/patch-arduino-ble.cjs "$HOME/.arduino15/packages/esp32/hardware/esp32/3.3.5/libraries/BLE/src"
       - name: Test production source, audio, OTA and hardware contracts
         run: |
           node tools/assemble-source.cjs --check
-          SYNAP_NIMBLE_SRC="$HOME/Arduino/libraries/NimBLE-Arduino/src" node --test tests/*.cjs
+          SYNAP_ARDUINO_BLE_SRC="$HOME/.arduino15/packages/esp32/hardware/esp32/3.3.5/libraries/BLE/src" SYNAP_NIMBLE_SRC="$HOME/Arduino/libraries/NimBLE-Arduino/src" node --test tests/*.cjs
       - name: Prepare auditable S3, C3 and Chakshu production sources
         run: |
           mkdir -p prepared/synap_esp32s3 prepared/synap_esp32c3 prepared/synap_chakshu

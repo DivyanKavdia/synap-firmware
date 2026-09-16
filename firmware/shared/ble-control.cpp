@@ -59,6 +59,22 @@ class ServerCallbacks : public BLEServerCallbacks {
 #endif
 };
 class ControlCallbacks : public BLECharacteristicCallbacks {
+  void onRead(BLECharacteristic*) override { updateStatusCharacteristic(false); }
+#if defined(CONFIG_NIMBLE_ENABLED)
+  // Installed by tools/patch-arduino-ble.cjs. Never parse the mutable status
+  // characteristic: battery/status publication can replace it during a write.
+  void onWriteValue(BLECharacteristic*, ble_gap_conn_desc*, const uint8_t* data, size_t length) override {
+    const uint8_t command = length == 2 && data ? data[0] : 0xFF;
+    const uint8_t version = length == 2 && data ? data[1] : 0;
+    queueEvent(EventType::COMMAND, command, version, streamGeneration.load());
+  }
+#elif defined(CONFIG_BLUEDROID_ENABLED)
+  void onWrite(BLECharacteristic*, esp_ble_gatts_cb_param_t* param) override {
+    // Protocol commands are exactly two bytes, never prepared/long writes.
+    if (!param || param->write.is_prep || param->write.len != 2) return;
+    queueEvent(EventType::COMMAND, param->write.value[0], param->write.value[1], streamGeneration.load());
+  }
+#else
   void onWrite(BLECharacteristic* characteristic) override {
     const size_t length = characteristic->getLength();
     const uint8_t* data = characteristic->getData();
@@ -67,6 +83,7 @@ class ControlCallbacks : public BLECharacteristicCallbacks {
     // Defer work so synchronous GATT writes return promptly.
     queueEvent(EventType::COMMAND, command, version, streamGeneration.load());
   }
+#endif
 };
 class AudioCallbacks : public BLECharacteristicCallbacks {
   void onStatus(BLECharacteristic* characteristic, Status status, uint32_t code) override {
@@ -203,4 +220,3 @@ void controlTask(void* parameter) {
     updateStatusLed();
   }
 }
-
