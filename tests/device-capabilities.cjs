@@ -40,7 +40,7 @@ int main(){
   assert(bool(word(p+6)&SYNAP_CAP_PHOTO)==bool(hardware&2));
   assert(bool(word(p+6)&SYNAP_CAP_SDAUDIO)==((hardware&5)==5));
   assert(!(word(p+4)&(SYNAP_CAP_TOUCH|SYNAP_CAP_BATTERY|SYNAP_CAP_STANDBY)));
-  assert(p[14]==1 && p[15]==0 && p[16]==15);
+  assert(p[14]==1 && p[15]==0 && p[16]==31);
 #else
   assert(!(word(p+4)&(SYNAP_CAP_CAMERA|SYNAP_CAP_SD|SYNAP_CAP_PHOTO|SYNAP_CAP_VIDEO)));
   assert(p[14]==0 && p[15]==0 && p[16]==0);

@@ -6,8 +6,15 @@ bool ready=false;
 uint16_t sensorPid=0;
 framesize_t frameSize=FRAMESIZE_VGA;
 int jpegQuality=12;
+bool continuousCapture=false;
+struct VideoProfile { framesize_t size;uint16_t width,height;uint8_t fps; };
+bool videoProfile(uint32_t id,VideoProfile& profile) {
+  if(id==0){profile={FRAMESIZE_HD,1280,720,10};return true;}
+  if(id==1){profile={FRAMESIZE_VGA,640,480,20};return true;}
+  return false;
+}
 bool configure(bool preview) {
-  if (!ready) return false;
+  if (!ready || continuousCapture) return false;
   const framesize_t next=preview?FRAMESIZE_QVGA:FRAMESIZE_VGA;
   const int quality=preview?22:12;
   if (next==frameSize && quality==jpegQuality) return true;
@@ -23,14 +30,12 @@ bool configure(bool preview) {
   }
   return true;
 }
-bool begin() {
-  if (ready) {
-    camera_fb_t* probe=esp_camera_fb_get();
-    const bool healthy=probe && probe->format==PIXFORMAT_JPEG && probe->len>4;
-    if (probe) esp_camera_fb_return(probe);
-    if (healthy) return true;
-    esp_camera_deinit();ready=false;
-  }
+// Allocate at the recording resolution. Changing only the sensor size leaves
+// VGA-sized buffers behind and can truncate a larger JPEG. Continuous capture
+// is reserved for SD: phone preview retains its inexpensive single buffer.
+bool initialize(framesize_t size,bool continuous) {
+  if(ready)esp_camera_deinit();
+  ready=false;continuousCapture=false;
   if (!psramFound()) return false;
   camera_config_t config{};
   config.ledc_channel=LEDC_CHANNEL_0;
@@ -42,17 +47,17 @@ bool begin() {
   config.pin_vsync=38; config.pin_href=47; config.pin_pclk=13;
   config.xclk_freq_hz=20000000;
   config.pixel_format=PIXFORMAT_JPEG;
-  config.frame_size=FRAMESIZE_VGA;
+  config.frame_size=size;
   config.jpeg_quality=12;
-  config.fb_count=1;
-  config.grab_mode=CAMERA_GRAB_WHEN_EMPTY;
+  config.fb_count=continuous?2:1;
+  config.grab_mode=continuous?CAMERA_GRAB_LATEST:CAMERA_GRAB_WHEN_EMPTY;
   config.fb_location=CAMERA_FB_IN_PSRAM;
   const esp_err_t error=esp_camera_init(&config);
   if (error!=ESP_OK) {
     Serial.printf("[CHAKSHU] camera init failed: 0x%x\n",unsigned(error));
     return false;
   }
-  frameSize=FRAMESIZE_VGA;jpegQuality=12;
+  frameSize=size;jpegQuality=12;continuousCapture=continuous;
   sensor_t* sensor=esp_camera_sensor_get();
   sensorPid=sensor?uint16_t(sensor->id.PID):0;
   camera_fb_t* frame=esp_camera_fb_get();
@@ -62,4 +67,17 @@ bool begin() {
   Serial.printf("[CHAKSHU] camera pid=0x%04x ready=%u\n",unsigned(sensorPid),unsigned(ready));
   return ready;
 }
+bool begin() {
+  if(ready && !continuousCapture) {
+    camera_fb_t* probe=esp_camera_fb_get();
+    const bool healthy=probe && probe->format==PIXFORMAT_JPEG && probe->len>4;
+    if(probe)esp_camera_fb_return(probe);
+    if(healthy)return true;
+  }
+  return initialize(FRAMESIZE_VGA,false);
+}
+bool beginVideo(uint32_t id,VideoProfile& profile) {
+  return videoProfile(id,profile) && initialize(profile.size,true);
+}
+void endVideo() { initialize(FRAMESIZE_VGA,false); }
 }

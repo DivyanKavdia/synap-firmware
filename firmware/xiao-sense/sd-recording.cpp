@@ -1,7 +1,7 @@
 // Audio acquisition never waits for the camera or filesystem. The writer owns
 // every SD handle; camera congestion drops visual frames with real timestamps.
 namespace ChakshuRecorder {
-constexpr uint32_t AUDIO_LIMIT=1920000, VIDEO_LIMIT=32u*1024u*1024u, VIDEO_INTERVAL_MS=100, JPEG_LIMIT=96000;
+constexpr uint32_t AUDIO_LIMIT=1920000, VIDEO_LIMIT=32u*1024u*1024u, JPEG_LIMIT=256u*1024u;
 struct Pcm { size_t size;uint8_t bytes[1600]; };
 struct Jpeg { size_t size;uint32_t atMs;uint8_t bytes[JPEG_LIMIT]; };
 struct Session {
@@ -10,11 +10,11 @@ struct Session {
   std::atomic<bool> running{true},audioDone{false},videoDone{true};
   std::atomic<uint8_t> error{0};
   std::atomic<uint32_t> capturedBytes{0},droppedFrames{0};
-  uint32_t started=0;
+  uint32_t started=0,intervalMs=100,audioLimit=AUDIO_LIMIT;
 };
 void audioTask(void* argument) {
   auto& s=*static_cast<Session*>(argument);
-  while(s.running.load() && s.capturedBytes.load()<AUDIO_LIMIT) {
+  while(s.running.load() && s.capturedBytes.load()<s.audioLimit) {
     Pcm* slot=s.audio.reserve();
     if(!slot){s.error=9;break;}
     slot->size=0;
@@ -40,17 +40,20 @@ void cameraTask(void* argument) {
       camera_fb_t* frame=esp_camera_fb_get();
       if(!frame){s.error=ChakshuMedia::CAPTURE_ERROR;break;}
       const uint32_t captured=uint32_t(uint64_t(frame->timestamp.tv_sec)*1000u+frame->timestamp.tv_usec/1000u);
-      if(frame->format!=PIXFORMAT_JPEG || frame->len<4 || frame->len>JPEG_LIMIT) {
+      if(frame->format!=PIXFORMAT_JPEG || frame->len<4) {
         esp_camera_fb_return(frame);s.error=ChakshuMedia::CAPTURE_ERROR;break;
       }
-      if(int32_t(captured-s.started)>=0) {
+      if(frame->len>JPEG_LIMIT)++s.droppedFrames;
+      else if(int32_t(captured-s.started)>=0) {
         slot->size=frame->len;
         slot->atMs=std::min(captured-s.started,s.capturedBytes.load()/32u);
         memcpy(slot->bytes,frame->buf,frame->len);s.video.publish();
       }
       esp_camera_fb_return(frame);
     }
-    vTaskDelayUntil(&wake,pdMS_TO_TICKS(VIDEO_INTERVAL_MS));
+    // Do not burst to catch up after a slow exposure or a stalled card.
+    if(xTaskGetTickCount()-wake>=pdMS_TO_TICKS(s.intervalMs))wake=xTaskGetTickCount();
+    vTaskDelayUntil(&wake,pdMS_TO_TICKS(s.intervalMs));
   }
   s.videoDone=true;
   vTaskDelete(nullptr);
@@ -59,14 +62,24 @@ void record(ChakshuMedia::Snapshot& status,bool withVideo,std::atomic<bool>& sto
             void (*progress)(const ChakshuMedia::Snapshot&)) {
   using namespace ChakshuMedia;
   Session s;
+  status.clipLimitMs=std::min<uint32_t>(status.clipLimitMs,60000u);
+  s.audioLimit=status.clipLimitMs*32u;
   File audio,video,index;
   uint8_t header[44],error=0;
-  bool audioCreated=false;
+  bool audioCreated=false,cameraChanged=false;
   uint32_t audioBytes=0,videoBytes=0,frames=0,nextProgress=0;
   char audioPath[64]{},indexPath[64]{};
   if(!ChakshuStorage::ready)error=NO_SD;
   else if(withVideo && !ChakshuCamera::ready)error=NO_CAMERA;
-  else if(withVideo && !ChakshuCamera::configure(true))error=CAPTURE_ERROR;
+  else if(withVideo) {
+    ChakshuCamera::VideoProfile profile;
+    if(!ChakshuCamera::videoProfile(status.videoProfile,profile))error=BAD_COMMAND;
+    else {
+      cameraChanged=true;
+      if(!ChakshuCamera::beginVideo(status.videoProfile,profile))error=CAPTURE_ERROR;
+      else {status.width=profile.width;status.height=profile.height;status.targetFps=profile.fps;s.intervalMs=1000u/profile.fps;}
+    }
+  }
   if(!error) {
     s.audio.slots=static_cast<Pcm*>(ps_malloc(sizeof(Pcm)*40));
     if(withVideo)s.video.slots=static_cast<Jpeg*>(ps_malloc(sizeof(Jpeg)*2));
@@ -101,7 +114,7 @@ void record(ChakshuMedia::Snapshot& status,bool withVideo,std::atomic<bool>& sto
   if(!audioCreated)s.audioDone=true;
   uint64_t remaining=ChakshuStorage::freeBytes;
   while(!error) {
-    if(stop.load() || s.error.load() || s.audioDone.load() || millis()-s.started>=65000u)s.running=false;
+    if(stop.load() || s.error.load() || s.audioDone.load() || millis()-s.started>=status.clipLimitMs+5000u)s.running=false;
     bool wrote=false;
     while(Pcm* slot=s.audio.peek()) {
       if(remaining<slot->size+ChakshuStorage::RESERVE_BYTES){error=NO_SPACE;break;}
@@ -128,7 +141,7 @@ void record(ChakshuMedia::Snapshot& status,bool withVideo,std::atomic<bool>& sto
     if(millis()-nextProgress>=250u) {
       nextProgress=millis();status.bytes=withVideo?videoBytes:audioBytes;
       status.audioMs=audioBytes/32u;status.frames=frames;status.droppedFrames=s.droppedFrames;
-      status.progress=uint8_t(std::min<uint32_t>(audioBytes/19200u,99));progress(status);
+      status.progress=uint8_t(std::min<uint32_t>(audioBytes*100u/std::max<uint32_t>(s.audioLimit,1u),99));progress(status);
     }
     if(s.audioDone.load() && s.videoDone.load() && !s.audio.peek() && !s.video.peek())break;
     if(!wrote)vTaskDelay(1);
@@ -144,12 +157,14 @@ void record(ChakshuMedia::Snapshot& status,bool withVideo,std::atomic<bool>& sto
     audio.flush();audio.close();
   }
   if(index) {
-    if(!index.printf("],\"durationMs\":%lu,\"audio\":\"%s\",\"droppedFrames\":%lu}",
-       (unsigned long)(audioBytes/32u),audioPath,(unsigned long)s.droppedFrames.load()))error=IO_ERROR;
+    if(!index.printf("],\"durationMs\":%lu,\"audio\":\"%s\",\"droppedFrames\":%lu,\"width\":%u,\"height\":%u,\"targetFps\":%u,\"frames\":%lu,\"videoProfile\":%u}",
+       (unsigned long)(audioBytes/32u),audioPath,(unsigned long)s.droppedFrames.load(),
+       status.width,status.height,status.targetFps,(unsigned long)frames,status.videoProfile))error=IO_ERROR;
     index.flush();index.close();
   }
   if(video){video.flush();video.close();}
   stopMicrophone();free(s.audio.slots);free(s.video.slots);
+  if(cameraChanged)ChakshuCamera::endVideo();
   if(!error && (!audioBytes || (withVideo&&!frames)))error=CAPTURE_ERROR;
   if(error==IO_ERROR || error==NO_SD)ChakshuStorage::ready=false;
   status.bytes=withVideo?videoBytes:audioBytes;status.audioMs=audioBytes/32u;

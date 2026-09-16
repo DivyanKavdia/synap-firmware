@@ -17,8 +17,8 @@ void encodeModuleCapabilities(uint8_t* p) {
   sensor=status.sensor;
   p[14]=ChakshuTransfer::requests?1:0;
   // Additive media-v1 features: paced notifications, saved photo preview,
-  // Wi-Fi downloads, independent SD audio/video workers.
-  p[16]=ChakshuTransfer::requests?15:0;
+  // Wi-Fi downloads, independent SD workers, native SD video quality profiles.
+  p[16]=ChakshuTransfer::requests?31:0;
 #endif
   ready &= supported;
   p[4]=supported&255;p[5]=supported>>8;p[6]=ready&255;p[7]=ready>>8;

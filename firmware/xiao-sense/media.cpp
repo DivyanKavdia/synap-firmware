@@ -7,6 +7,9 @@ struct Snapshot {
   uint8_t operation=0,id=0,state=0,error=0,ready=0,progress=0;
   uint32_t totalMiB=0,freeMiB=0,bytes=0,connection=0;
   uint32_t audioMs=0,frames=0,droppedFrames=0;
+  uint16_t width=0,height=0;
+  uint8_t targetFps=0,videoProfile=0;
+  uint32_t clipLimitMs=60000;
   uint16_t sensor=0;
   char path[64]{};
 };

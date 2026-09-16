@@ -202,8 +202,13 @@ void worker(void*) {
     if(selectedConnection!=request.connection){clearSelection();originalPath[0]=0;selectedConnection=request.connection;}
     if(request.operation==5||request.operation==10) {
       if(streamingEnabled.load()||remoteStandby){replyFor(request,1);continue;}
+      ChakshuCamera::VideoProfile profile;
+      const uint32_t seconds=request.offset>>8;
+      if(request.operation==5 && (!ChakshuCamera::videoProfile(request.offset&255,profile) || (seconds && seconds!=15 && seconds!=30 && seconds!=60))){replyFor(request,ChakshuMedia::BAD_COMMAND);continue;}
       clearSelection();stopRequested.store(false);photoRequested.store(false);offlineMode.store(request.operation);offline.store(true);
-      ChakshuMedia::Snapshot s;s.state=1;s.operation=request.operation==5?4:3;saveOffline(s);
+      ChakshuMedia::Snapshot s;s.state=1;s.operation=request.operation==5?4:3;
+      if(request.operation==5){s.videoProfile=uint8_t(request.offset);s.width=profile.width;s.height=profile.height;s.targetFps=profile.fps;s.clipLimitMs=(seconds?seconds:60u)*1000u;}
+      saveOffline(s);
       replyFor(request,0);recordOffline(request.operation==5);continue;
     }
     if(request.operation==20) {
@@ -265,7 +270,7 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
     }
     if(request.operation==9) {
       ChakshuMedia::Snapshot s;portENTER_CRITICAL(&mux);s=offlineStatus;portEXIT_CRITICAL(&mux);
-      char json[256];const int size=snprintf(json,sizeof(json),"{\"active\":%s,\"state\":%u,\"error\":%u,\"progress\":%u,\"path\":\"%s\",\"audioMs\":%lu,\"frames\":%lu,\"droppedFrames\":%lu}",offline.load()?"true":"false",s.state,s.error,s.progress,s.path,(unsigned long)s.audioMs,(unsigned long)s.frames,(unsigned long)s.droppedFrames);
+      char json[384];const int size=snprintf(json,sizeof(json),"{\"active\":%s,\"state\":%u,\"error\":%u,\"progress\":%u,\"path\":\"%s\",\"audioMs\":%lu,\"frames\":%lu,\"droppedFrames\":%lu,\"width\":%u,\"height\":%u,\"targetFps\":%u,\"videoProfile\":%u,\"clipLimitMs\":%lu}",offline.load()?"true":"false",s.state,s.error,s.progress,s.path,(unsigned long)s.audioMs,(unsigned long)s.frames,(unsigned long)s.droppedFrames,s.width,s.height,s.targetFps,s.videoProfile,(unsigned long)s.clipLimitMs);
       replyFor(request,0,size,0,reinterpret_cast<const uint8_t*>(json),size);return;
     }
     if(offline.load()||!requests||xQueueSend(requests,&request,0)!=pdTRUE)replyFor(request,1);
