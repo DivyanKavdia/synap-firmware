@@ -3,12 +3,12 @@
 // Keep the stack/version pinned; do not silently apply this to another release.
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const hashes = {
-  'BLECharacteristic.cpp': 'a9256c5b09e9dfac35415860101d8099b4a5cdead2bbca10a386a7a87aa15cc8',
-  'BLECharacteristic.h': '0124ddf91dd59807cdc3e232be4343390c34999a538c6398dd8c8db53dbcf772',
+  'BLECharacteristic.cpp': '570f904653fd9862ec9342904581702780ce41c9274059f607e33bacf890e644',
+  'BLECharacteristic.h': '1957fa5b9607c1cb092f307989712868f3972efe2b8cdbe73d7f259d6fe5634e',
 };
 const patchedHashes = {
-  "BLECharacteristic.cpp": "3abccdb98cb43eee55075324d6f8ca1bd6f761531d418eb0279a28022acfd707",
-  "BLECharacteristic.h": "232fe57488d6e80d8d8bf7663299331a31ccfc3e3925fef000a690dbed4edc07"
+  "BLECharacteristic.cpp": "4e19b177c7295a865a14c8c455508f98ad9239cc2a6ef3e961a602d1490594b1",
+  "BLECharacteristic.h": "5d93e5cd3d340ea7127ff851a8b195a241ad818799083189e4f7e8e6ec4009d5"
 };
 function replaceOnce(source, before, after) {
   if (source.split(before).length !== 2) throw Error('Pinned BLE patch no longer matches');
