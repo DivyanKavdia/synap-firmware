@@ -16,10 +16,21 @@ size_t freeHeap=180000;bool psram=true;
 void* heap_caps_malloc(size_t size,int caps){if((caps&MALLOC_CAP_SPIRAM)&&!psram)return nullptr;return malloc(size);}
 size_t heap_caps_get_free_size(int){return freeHeap;}
 struct AudioFrame{uint32_t generation;uint16_t sequence;int16_t samples[800];};
-enum class DeviceState{STREAMING};enum class ErrorCode{NONE,TRANSPORT_CHANGED};
+enum class DeviceState{DISCONNECTED,CONNECTED_IDLE,STREAMING,ERROR};
+enum class ErrorCode{NONE,TRANSPORT_CHANGED,PROTOCOL_MISMATCH,BAD_COMMAND,AUDIO_NOT_SUBSCRIBED,MTU_TOO_SMALL,AUDIO_SOURCE_FAILED};
+constexpr uint8_t PROTOCOL_VERSION=2,CMD_STOP=0,CMD_START=1,CMD_GET_STATUS=2,CMD_STANDBY=3,CMD_WAKE=4,POWER_STATE_AWAKE=1;
 std::atomic<bool> streamingEnabled{false},deviceConnected{true};
 std::atomic<uint32_t> streamGeneration{1},connectionGeneration{1},captureDrops{0};
 std::atomic<uint32_t> notifyRejected{0};
+std::atomic<uint32_t> capturedFrames{0};
+std::atomic<bool> transmitterActive{false};
+int audioFrameQueue=1,captureTaskHandle=1;
+void xQueueReset(int){}void xTaskNotifyGive(int){}
+void applyCpuPowerProfile(bool){}
+bool remoteStandby=false;
+bool exitRemoteStandby(){remoteStandby=false;return true;}
+void enterRemoteStandby(){remoteStandby=true;}
+void publishPowerEvent(uint8_t){}void sampleBattery(bool){}
 unsigned congestionWaits=0;
 unsigned pdMS_TO_TICKS(unsigned ms){return ms;}
 void vTaskDelay(unsigned ticks){assert(ticks==30);++congestionWaits;}
@@ -32,6 +43,8 @@ unsigned transportConfigurations=0;
 bool configureTransportFromPeerMtu(){++transportConfigurations;return transport;}
 unsigned microphoneStops=0;
 void stopMicrophone(){++microphoneStops;}
+bool startMicrophone(){return true;}
+void stopStreaming(ErrorCode reason=ErrorCode::NONE);
 void requestStreamError(ErrorCode,uint32_t){assert(false);}
 void setDeviceState(DeviceState,ErrorCode){}
 void updateStatusCharacteristic(bool){}
@@ -40,6 +53,7 @@ auto* audioCccd=&cccd;
 struct BLECharacteristic{std::vector<uint8_t> bytes;unsigned notifications=0;uint8_t* getData(){return bytes.data();}size_t getLength(){return bytes.size();}void setValue(const uint8_t* value,size_t n){bytes.assign(value,value+n);}void notify(){++notifications;}};
 struct BLECharacteristicCallbacks{virtual ~BLECharacteristicCallbacks()=default;virtual void onRead(BLECharacteristic*){}virtual void onWrite(BLECharacteristic*){}};
 // INSERT RECOVERY
+// INSERT RECORDING COMMANDS
 void encodeImaAdpcm(const int16_t*,uint8_t*){assert(false && "Recovery must retain original PCM");}
 uint16_t emitted=0;uint32_t lastPace=0;
 bool rejectNotification=false;
@@ -107,8 +121,48 @@ int main(){
   resetRecovery(true);assert(!recoveryEnabled && !recoveryFinishing && !recoveryRing.count);
   request(1,9,0);assert(!recoveryEnabled);streamingEnabled=false;request(1,9,0);assert(recoveryEnabled);
   characteristic.bytes.assign(9,1);callback->onWrite(&characteristic);++connectionGeneration;processRecoveryRequest();assert(recoveryToken[0]==9);
+  auto offlineStop=[&](bool expire){
+    startStreaming(PROTOCOL_VERSION);
+    AudioFrame frame{};frame.generation=streamGeneration;frame.sequence=0;
+    for(unsigned i=0;i<800;i++)frame.samples[i]=int16_t(i-32768);
+    retainRecoveryFrame(frame);
+    deviceConnected=false;recoveryWaiting=true;
+    const auto held=recoveryRing.count;
+    const auto stops=microphoneStops;
+    processCommand(CMD_STOP,PROTOCOL_VERSION);
+    assert(streamingEnabled && recoveryFinishing && recoveryWaiting && recoveryRing.count==held);
+    assert(microphoneStops==stops+1);
+    callback->onRead(&characteristic);
+    assert((characteristic.bytes[2]&0x20) && (characteristic.bytes[2]&8));
+    const auto ownerHash=std::vector<uint8_t>(characteristic.bytes.begin()+12,characteristic.bytes.end());
+    if(!expire){
+      deviceConnected=true;request(2,9,0xffff);
+      assert(!recoveryWaiting && recoveryFinishing && streamingEnabled);
+      assert(sendRecoveryFrame() && emitted==0 && !recoveryCanSend());
+      assert(microphoneStops==stops+1);
+      stopStreaming();request(1,9,0);
+      return;
+    }
+    // Even after the bounded drain expires, the same owner must learn Stop.
+    stopStreaming(ErrorCode::TRANSPORT_CHANGED);
+    callback->onRead(&characteristic);
+    assert(!streamingEnabled && !recoveryFinishing && !recoveryWaiting && !recoveryEnabled && !recoveryRing.count);
+    assert((characteristic.bytes[2]&0x20) && std::vector<uint8_t>(characteristic.bytes.begin()+12,characteristic.bytes.end())==ownerHash);
+    deviceConnected=true;
+    stopStreaming(); // Reconciliation may stop the idle transport again.
+    callback->onRead(&characteristic);assert(characteristic.bytes[2]&0x20);
+    request(1,9,0);callback->onRead(&characteristic);
+    assert(recoveryEnabled && !(characteristic.bytes[2]&0x20));
+    startStreaming(PROTOCOL_VERSION);processCommand(CMD_STOP,PROTOCOL_VERSION);
+    assert(recoveryFinishing);
+    stopStreaming();startStreaming(PROTOCOL_VERSION);
+    callback->onRead(&characteristic);assert(!(characteristic.bytes[2]&0x20));
+    stopStreaming();
+  };
+  offlineStop(false);offlineStop(true);
   free(recoveryRing.frames);recoveryRing.frames=nullptr;recoveryRing.capacity=0;psram=false;
   initializeRecovery();assert(recoveryRing.capacity==25);
+  request(1,9,0);offlineStop(false);offlineStop(true);
   free(recoveryRing.frames);recoveryRing.frames=nullptr;recoveryRing.capacity=0;freeHeap=120000;
   initializeRecovery();assert(!recoveryRing.frames && recoveryRing.capacity==0);
   std::cout<<"PASS recovery: wrap, bounded overflow, ownership, stale writes, transport, drain and low-memory fallback\n";

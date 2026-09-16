@@ -106,7 +106,15 @@ void processCommand(uint8_t command, uint8_t version) {
   if (command==CMD_STANDBY) { publishPowerEvent(POWER_STATE_AWAKE);updateStatusCharacteristic(true);return; }
 #endif
   if (sleepPending) return;
-  if (!deviceConnected.load()) { if(command==CMD_STOP && streamingEnabled.load())stopStreaming(); return; }
+  if (!deviceConnected.load()) {
+    if(command==CMD_STOP && streamingEnabled.load()) {
+      // A physical Stop during link loss ends capture but keeps negotiated
+      // audio and its Stop receipt for the same journal's reconnect.
+      if(recoveryEnabled.load())finishBufferedRecording();
+      else stopStreaming();
+    }
+    return;
+  }
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
   if (version != PROTOCOL_VERSION) { stopStreaming(ErrorCode::PROTOCOL_MISMATCH); return; }
   switch (command) {

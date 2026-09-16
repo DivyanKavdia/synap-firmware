@@ -14,7 +14,7 @@ std::atomic<bool> streamingEnabled{true},deviceConnected{true},transmitterActive
 std::atomic<uint32_t> streamGeneration{1};
 std::atomic<uint32_t> notifyRejected{0},captureDrops{0};
 std::atomic<bool> recoveryEnabled{false};
-void resetRecovery(bool){}
+void resetRecovery(bool,bool){}
 int pdMS_TO_TICKS(int ms){return ms;}
 bool recoveryCanSend(){return false;}
 bool sendRecoveryFrame(){return false;}

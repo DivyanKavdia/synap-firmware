@@ -1214,6 +1214,8 @@ class Ring {
 SynapRecovery::Ring recoveryRing;
 SemaphoreHandle_t recoveryMutex=nullptr;
 std::atomic<bool> recoveryEnabled{false}, recoveryWaiting{false}, recoveryFinishing{false};
+// Keep Stop intent after volatile audio expires; only its owner may consume it.
+std::atomic<bool> recoveryStopRequested{false};
 uint32_t recoveryFinishAt=0;
 std::atomic<uint32_t> recoveryWaitingAt{0};
 BLECharacteristic* recoveryCharacteristic=nullptr;
@@ -1244,11 +1246,16 @@ void initializeRecovery() {
     if(recoveryRing.frames)recoveryRing.capacity=25;
   }
 }
-void resetRecovery(bool disarm=false);
-void resetRecovery(bool disarm) {
+void resetRecovery(bool disarm=false, bool preserveStop=false);
+void resetRecovery(bool disarm, bool preserveStop) {
   recoveryWaiting=false; recoveryWaitingAt=0; recoveryFinishing=false; recoveryFinishAt=0;
   if(disarm)recoveryEnabled=false;
-  if(recoveryMutex) { RecoveryGuard guard; recoveryRing.reset(); recoveryReplayAck=0; if(disarm)memset(recoveryToken,0,sizeof(recoveryToken)); }
+  if(recoveryMutex) {
+    RecoveryGuard guard;
+    const bool keepStop=preserveStop && recoveryStopRequested.load();
+    recoveryRing.reset(); recoveryReplayAck=0; recoveryStopRequested=keepStop;
+    if(disarm && !keepStop)memset(recoveryToken,0,sizeof(recoveryToken));
+  }
 }
 void retainRecoveryFrame(const AudioFrame& frame) {
   if(!recoveryEnabled.load())return;
@@ -1282,7 +1289,7 @@ void processRecoveryRequest() {
   { RecoveryGuard guard; request=recoveryRequest; recoveryRequest.command=0; }
   if(!request.command || request.connection!=connectionGeneration.load() || !deviceConnected.load() || otaBusy() || sleepPending)return;
   if(request.command==1 && !streamingEnabled.load() && recoveryRing.capacity) {
-    RecoveryGuard guard; memcpy(recoveryToken,request.token,8); recoveryEnabled=true; recoveryRing.reset(); recoveryReplayAck=0;
+    RecoveryGuard guard; memcpy(recoveryToken,request.token,8); recoveryEnabled=true; recoveryRing.reset(); recoveryReplayAck=0; recoveryStopRequested=false;
   } else if(request.command==2 && recoveryEnabled.load() && recoveryWaiting.load() && streamingEnabled.load()) {
     { RecoveryGuard guard; if(memcmp(request.token,recoveryToken,8)!=0)return; }
 #if defined(CONFIG_BLUEDROID_ENABLED)
@@ -1311,7 +1318,7 @@ void updateRecoveryStatus(BLECharacteristic* characteristic,bool notify) {
     uint8_t value[16]={0x52,1,0,0};
     if(recoveryMutex) {
       RecoveryGuard guard;
-      value[2]=(recoveryRing.capacity?0x11:0)|(recoveryEnabled.load()?2:0)|(recoveryWaiting.load()?4:0)|(recoveryFinishing.load()?8:0);
+      value[2]=(recoveryRing.capacity?0x11:0)|(recoveryEnabled.load()?2:0)|(recoveryWaiting.load()?4:0)|(recoveryFinishing.load()?8:0)|(recoveryStopRequested.load()?0x20:0);
       value[3]=recoveryReplayAck;
       value[4]=recoveryRing.capacity&255; value[5]=recoveryRing.capacity>>8;
       const uint16_t pending=recoveryRing.count-recoveryRing.cursor;
@@ -1327,6 +1334,7 @@ void updateRecoveryStatus(BLECharacteristic* characteristic,bool notify) {
 }
 void finishBufferedRecording() {
   if(recoveryFinishing.load())return;
+  recoveryStopRequested=true;
   recoveryFinishing=true;recoveryFinishAt=millis();
 #if USE_REAL_I2S_MIC
   stopMicrophone();
@@ -1355,7 +1363,7 @@ void stopStreaming(ErrorCode reason) {
 #endif
   // Acknowledge STOP only after the final in-flight notification has returned.
   while (transmitterActive.load()) vTaskDelay(1);
-  resetRecovery(!deviceConnected.load());
+  resetRecovery(!deviceConnected.load(),true);
   applyCpuPowerProfile(false);
   if (!deviceConnected.load()) setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
   else if (reason == ErrorCode::NONE) setDeviceState(DeviceState::CONNECTED_IDLE, reason);
@@ -1519,7 +1527,15 @@ void processCommand(uint8_t command, uint8_t version) {
   if (command==CMD_STANDBY) { publishPowerEvent(POWER_STATE_AWAKE);updateStatusCharacteristic(true);return; }
 #endif
   if (sleepPending) return;
-  if (!deviceConnected.load()) { if(command==CMD_STOP && streamingEnabled.load())stopStreaming(); return; }
+  if (!deviceConnected.load()) {
+    if(command==CMD_STOP && streamingEnabled.load()) {
+      // A physical Stop during link loss ends capture but keeps negotiated
+      // audio and its Stop receipt for the same journal's reconnect.
+      if(recoveryEnabled.load())finishBufferedRecording();
+      else stopStreaming();
+    }
+    return;
+  }
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
   if (version != PROTOCOL_VERSION) { stopStreaming(ErrorCode::PROTOCOL_MISMATCH); return; }
   switch (command) {
