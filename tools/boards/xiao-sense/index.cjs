@@ -41,6 +41,11 @@ function materializeChakshu(source,target) {
   replace('    const int32_t sample=raw[i] >> 16;','    const int32_t sample=raw[i];','Preserve onboard PCM samples');
   replace('// SYNAP_BOARD_FEATURES',
     ['model-contract.cpp','model-flash.cpp','voice-contract.cpp','camera.cpp','sd-storage.cpp','media.cpp','media-buffers.cpp','sd-recording.cpp','wifi-downloads.cpp','media-transfer.cpp','voice.cpp'].map(name=>readTemplate('xiao-sense',name)).join('\n'),'Camera, SD and local voice drivers');
+  // SD owns the PDM reader while offline recording. Feed the recognizer the
+  // exact PCM copy already captured for the WAV, never a competing microphone read.
+  replace('if(slot->size){s.capturedBytes.fetch_add(slot->size);s.audio.publish();}',
+    'if(slot->size){ChakshuVoice::feed(reinterpret_cast<const int16_t*>(slot->bytes),slot->size/2);s.capturedBytes.fetch_add(slot->size);s.audio.publish();}',
+    'Copy SD PCM to command recognizer');
   // The normal BLE recording path remains authoritative. Voice gets only a
   // copy of completed PCM frames and cannot alter transport bytes.
   replace('  return true;\n}\nvoid acquisitionTask',
