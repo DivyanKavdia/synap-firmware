@@ -1,7 +1,7 @@
 // Audio acquisition never waits for the camera or filesystem. The writer owns
 // every SD handle; camera congestion drops visual frames with real timestamps.
 namespace ChakshuRecorder {
-constexpr uint32_t AUDIO_LIMIT=1920000, VIDEO_LIMIT=32u*1024u*1024u, JPEG_LIMIT=256u*1024u;
+constexpr uint32_t AUDIO_LIMIT=1920000, VIDEO_LIMIT=32u*1024u*1024u, JPEG_LIMIT=768u*1024u;
 struct Pcm { size_t size;uint8_t bytes[1600]; };
 struct Jpeg { size_t size;uint32_t atMs;uint8_t bytes[JPEG_LIMIT]; };
 struct Session {
@@ -62,11 +62,11 @@ void record(ChakshuMedia::Snapshot& status,bool withVideo,std::atomic<bool>& sto
             void (*progress)(const ChakshuMedia::Snapshot&)) {
   using namespace ChakshuMedia;
   Session s;
-  status.clipLimitMs=std::min<uint32_t>(status.clipLimitMs,60000u);
+  status.clipLimitMs=std::max<uint32_t>(1000u,std::min<uint32_t>(status.clipLimitMs,600000u));
   s.audioLimit=status.clipLimitMs*32u;
   File audio,video,index;
   uint8_t header[44],error=0;
-  bool audioCreated=false,cameraChanged=false;
+  bool audioCreated=false,cameraChanged=false,protectedCapture=false;
   uint32_t audioBytes=0,videoBytes=0,frames=0,nextProgress=0;
   char audioPath[64]{},indexPath[64]{};
   if(!ChakshuStorage::ready)error=NO_SD;
@@ -81,6 +81,11 @@ void record(ChakshuMedia::Snapshot& status,bool withVideo,std::atomic<bool>& sto
     }
   }
   if(!error) {
+    const uint64_t estimatedVideo=withVideo?std::min<uint64_t>(VIDEO_LIMIT,uint64_t(status.clipLimitMs)*768u):0u;
+    const uint64_t expected=uint64_t(s.audioLimit)+estimatedVideo;
+    if(!ChakshuStorage::ensureSpace(expected))error=NO_SPACE;
+  }
+  if(!error) {
     s.audio.slots=static_cast<Pcm*>(ps_malloc(sizeof(Pcm)*40));
     if(withVideo)s.video.slots=static_cast<Jpeg*>(ps_malloc(sizeof(Jpeg)*2));
     if(!s.audio.slots || (withVideo&&!s.video.slots))error=CAPTURE_ERROR;
@@ -89,17 +94,20 @@ void record(ChakshuMedia::Snapshot& status,bool withVideo,std::atomic<bool>& sto
   if(!error) {
     File primary=ChakshuStorage::create(status.path,sizeof(status.path),withVideo?"mjpeg":"wav");
     if(!primary)error=ChakshuStorage::freeBytes<ChakshuStorage::RESERVE_BYTES?NO_SPACE:IO_ERROR;
-    else if(withVideo) {
-      video=primary;
-      snprintf(audioPath,sizeof(audioPath),"%.*s.wav",int(strlen(status.path)-6),status.path);
-      snprintf(indexPath,sizeof(indexPath),"%.*s.json",int(strlen(status.path)-6),status.path);
-      audio=SD.open(audioPath,FILE_WRITE);index=SD.open(indexPath,FILE_WRITE);
-      if(!audio||!index)error=IO_ERROR;
-      else {
-        constexpr char prefix[]="{\"schema\":1,\"frameTimesMs\":[";
-        if(index.print(prefix)!=sizeof(prefix)-1)error=IO_ERROR;
-      }
-    } else {audio=primary;snprintf(audioPath,sizeof(audioPath),"%s",status.path);}
+    else {
+      ChakshuStorage::protect(status.path);protectedCapture=true;
+      if(withVideo) {
+        video=primary;
+        snprintf(audioPath,sizeof(audioPath),"%.*s.wav",int(strlen(status.path)-6),status.path);
+        snprintf(indexPath,sizeof(indexPath),"%.*s.json",int(strlen(status.path)-6),status.path);
+        audio=SD.open(audioPath,FILE_WRITE);index=SD.open(indexPath,FILE_WRITE);
+        if(!audio||!index)error=IO_ERROR;
+        else {
+          constexpr char prefix[]="{\"schema\":1,\"frameTimesMs\":[";
+          if(index.print(prefix)!=sizeof(prefix)-1)error=IO_ERROR;
+        }
+      } else {audio=primary;snprintf(audioPath,sizeof(audioPath),"%s",status.path);}
+    }
     if(!error){ChakshuStorage::wavHeader(header,0);if(audio.write(header,44)!=44)error=IO_ERROR;}
   }
   s.started=millis();
@@ -163,10 +171,12 @@ void record(ChakshuMedia::Snapshot& status,bool withVideo,std::atomic<bool>& sto
     index.flush();index.close();
   }
   if(video){video.flush();video.close();}
+  if(protectedCapture)ChakshuStorage::clearProtection();
   stopMicrophone();free(s.audio.slots);free(s.video.slots);
   if(cameraChanged)ChakshuCamera::endVideo();
   if(!error && (!audioBytes || (withVideo&&!frames)))error=CAPTURE_ERROR;
   if(error==IO_ERROR || error==NO_SD)ChakshuStorage::ready=false;
+  ChakshuStorage::refresh();
   status.bytes=withVideo?videoBytes:audioBytes;status.audioMs=audioBytes/32u;
   status.frames=frames;status.droppedFrames=s.droppedFrames;
   status.error=error;status.state=error?3:2;status.progress=error?status.progress:100;
