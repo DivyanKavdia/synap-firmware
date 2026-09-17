@@ -13,6 +13,7 @@ inline uint16_t durationSeconds(uint8_t command) {
   static constexpr uint16_t tail[]={150,180,210,240,270,300,330,360,390,420,450,480,510,540,570,600};
   return index<120+sizeof(tail)/sizeof(tail[0])?tail[index-120]:0;
 }
+inline void put16le(uint8_t* p,uint16_t value){p[0]=uint8_t(value);p[1]=uint8_t(value>>8);}
 class Gate {
   bool armed=false;uint32_t armedAt=0,lastAction=0;bool acted=false;
 public:
