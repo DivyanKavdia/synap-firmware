@@ -88,7 +88,7 @@ bool removeCapture(const char* path) {
   return ok;
 }
 
-bool oldestCapture(char* out,size_t length) {
+bool oldestCapture(char* out,size_t length,bool includeEmpty=false) {
   if(!ready || !out || !length)return false;
   out[0]=0;
   File root=SD.open("/synap");
@@ -99,10 +99,14 @@ bool oldestCapture(char* out,size_t length) {
     if(file.isDirectory()){file.close();continue;}
     String path=file.path();
     const time_t written=file.getLastWrite();
+    const size_t bytes=file.size();
     file.close();
     if(!capturePath(path.c_str()))continue;
     const String stem=stemFor(path.c_str());
     if(isProtected(stem))continue;
+    // A zero-byte primary can be the file just opened by an in-progress capture.
+    // FIFO never removes it. Manual Clear SD may remove stale empty captures.
+    if(!includeEmpty && bytes==0)continue;
     // Treat a video bundle as one FIFO entry; its WAV/JSON companions never
     // compete independently with the primary MJPEG.
     if(path.endsWith(".json"))continue;
@@ -126,7 +130,7 @@ bool ensureSpace(uint64_t expectedBytes=0) {
   uint16_t removed=0;
   while(freeBytes<required) {
     char oldest[96];
-    if(!oldestCapture(oldest,sizeof(oldest)) || !removeCapture(oldest))return false;
+    if(!oldestCapture(oldest,sizeof(oldest),false) || !removeCapture(oldest))return false;
     if(++removed>1000)return false;
   }
   if(removed)Serial.printf("[CHAKSHU] sd fifo removed=%u free=%llu required=%llu\n",
@@ -138,7 +142,7 @@ uint16_t clearCaptures() {
   if(!ready)return 0;
   uint16_t removed=0;
   char oldest[96];
-  while(oldestCapture(oldest,sizeof(oldest))) {
+  while(oldestCapture(oldest,sizeof(oldest),true)) {
     if(!removeCapture(oldest))break;
     if(++removed==0xFFFF)break;
   }
