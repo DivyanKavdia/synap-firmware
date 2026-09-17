@@ -24,10 +24,10 @@ bool videoProfile(uint32_t id,VideoProfile& profile) {
   return false;
 }
 
-bool configure(bool preview,bool original=false) {
+bool configure(bool preview) {
   if (!ready || continuousCapture) return false;
-  const framesize_t next=preview?FRAMESIZE_QVGA:(original?(ov3660()?FRAMESIZE_QXGA:FRAMESIZE_UXGA):FRAMESIZE_VGA);
-  const int quality=preview?22:(original?8:12);
+  const framesize_t next=preview?FRAMESIZE_QVGA:FRAMESIZE_VGA;
+  const int quality=preview?22:12;
   if (next==frameSize && quality==jpegQuality) return true;
   sensor_t* sensor=esp_camera_sensor_get();
   if (!sensor) return false;
@@ -81,7 +81,7 @@ bool initialize(framesize_t size,bool continuous,int quality=12) {
 }
 
 bool begin() {
-  if(ready && !continuousCapture) {
+  if(ready && !continuousCapture && frameSize==FRAMESIZE_VGA) {
     camera_fb_t* probe=esp_camera_fb_get();
     const bool healthy=probe && probe->format==PIXFORMAT_JPEG && probe->len>4;
     if(probe)esp_camera_fb_return(probe);
@@ -89,6 +89,16 @@ bool begin() {
   }
   return initialize(FRAMESIZE_VGA,false,12);
 }
+
+// Full-resolution stills need their framebuffer allocated at the requested
+// sensor size. This is used only for explicit original/photo operations and is
+// restored to the lightweight VGA phone path immediately afterward.
+bool beginOriginal() {
+  const framesize_t size=ov3660()?FRAMESIZE_QXGA:FRAMESIZE_UXGA;
+  const int quality=ov3660()?8:10;
+  return initialize(size,false,quality);
+}
+void endOriginal(){initialize(FRAMESIZE_VGA,false,12);}
 
 bool beginVideo(uint32_t id,VideoProfile& profile) {
   return videoProfile(id,profile) && initialize(profile.size,true,profile.quality);
