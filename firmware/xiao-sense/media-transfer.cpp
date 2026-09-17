@@ -37,14 +37,18 @@ void readResponse(uint8_t* value,size_t& size) {
 void saveOffline(const ChakshuMedia::Snapshot& value) {
   portENTER_CRITICAL(&mux);offlineStatus=value;portEXIT_CRITICAL(&mux);
 }
-void clearSelection() { selectedPath[0]=0;free(buffer);buffer=nullptr;bufferSize=0; }
+void clearSelection() {
+  selectedPath[0]=0;ChakshuStorage::clearProtection();
+  free(buffer);buffer=nullptr;bufferSize=0;
+}
 // File handles never outlive a resource lease: a hardware check can remount SD
 // between BLE reads. Retain the path and reopen only while the gate is held.
 uint8_t selectFile(const char* path,uint32_t& total) {
   if(!ChakshuStorage::ready)return ChakshuMedia::NO_SD;
   File file=SD.open(path,FILE_READ);
   if(!file||file.isDirectory()){file.close();return ChakshuMedia::NO_SD;}
-  total=file.size();file.close();snprintf(selectedPath,sizeof(selectedPath),"%s",path);return 0;
+  total=file.size();file.close();snprintf(selectedPath,sizeof(selectedPath),"%s",path);
+  ChakshuStorage::protect(path);return 0;
 }
 uint8_t readSelection(uint32_t offset,uint32_t& total,uint8_t* bytes,size_t& size) {
   if(selectedPath[0]) {
@@ -84,46 +88,62 @@ uint8_t captureFrame(bool preview=false) {
   esp_camera_fb_return(frame);return error;
 }
 struct PreviewJpeg { uint8_t* bytes;size_t size=0;bool failed=false; };
-bool decodePreview(uint8_t* rgb) {
-  esp_jpeg_image_cfg_t config{};
-  config.indata=buffer;config.indata_size=bufferSize;
-  config.outbuf=rgb;config.outbuf_size=320u*240u*2u;
-  config.out_format=JPEG_IMAGE_FORMAT_RGB565;config.out_scale=JPEG_IMAGE_SCALE_1_2;
-  // fmt2jpg expects the high RGB565 byte first. The decoder defaults to the
-  // opposite order. Inspect dimensions before writing the bounded output buffer.
-  config.flags.swap_color_bytes=1;
-  esp_jpeg_image_output_t decoded{};
-  return esp_jpeg_get_image_info(&config,&decoded)==ESP_OK &&
-    decoded.width==320 && decoded.height==240 && decoded.output_len==config.outbuf_size &&
-    esp_jpeg_decode(&config,&decoded)==ESP_OK;
-}
 size_t previewChunk(void* argument,size_t offset,const void* bytes,size_t size) {
   auto& jpeg=*static_cast<PreviewJpeg*>(argument);
   if(!bytes)return 0;
-  if(offset>64000 || size>64000-offset){jpeg.failed=true;return 0;}
+  if(offset>96000 || size>96000-offset){jpeg.failed=true;return 0;}
   memcpy(jpeg.bytes+offset,bytes,size);jpeg.size=offset+size;return size;
 }
+bool makePreviewFromOriginal() {
+  if(!buffer||bufferSize<4)return false;
+  esp_jpeg_image_cfg_t config{};
+  config.indata=buffer;config.indata_size=bufferSize;
+  config.out_format=JPEG_IMAGE_FORMAT_RGB565;config.out_scale=JPEG_IMAGE_SCALE_1_8;
+  config.flags.swap_color_bytes=1;
+  esp_jpeg_image_output_t info{};
+  if(esp_jpeg_get_image_info(&config,&info)!=ESP_OK || !info.width || !info.height ||
+     info.width>320 || info.height>240)return false;
+  const size_t rgbBytes=size_t(info.width)*info.height*2u;
+  uint8_t* rgb=static_cast<uint8_t*>(ps_malloc(rgbBytes));
+  PreviewJpeg jpeg{static_cast<uint8_t*>(ps_malloc(96000))};
+  if(!rgb||!jpeg.bytes){free(rgb);free(jpeg.bytes);return false;}
+  config.outbuf=rgb;config.outbuf_size=rgbBytes;
+  esp_jpeg_image_output_t decoded{};
+  const bool ok=esp_jpeg_decode(&config,&decoded)==ESP_OK && decoded.width==info.width &&
+    decoded.height==info.height && decoded.output_len==rgbBytes &&
+    fmt2jpg_cb(rgb,rgbBytes,info.width,info.height,PIXFORMAT_RGB565,70,previewChunk,&jpeg) &&
+    !jpeg.failed && jpeg.size>4 && jpeg.size<bufferSize;
+  free(rgb);
+  if(ok){free(buffer);buffer=jpeg.bytes;bufferSize=jpeg.size;jpeg.bytes=nullptr;}
+  free(jpeg.bytes);return ok;
+}
 uint8_t captureSavedPreview() {
-  originalPath[0]=0;
+  clearSelection();originalPath[0]=0;
   if(!ChakshuStorage::ready)return ChakshuMedia::NO_SD;
-  uint8_t error=captureFrame(false);if(error)return error;
-  ChakshuStorage::refresh();
-  if(ChakshuStorage::freeBytes<bufferSize+ChakshuStorage::RESERVE_BYTES)return ChakshuMedia::NO_SPACE;
-  File original=ChakshuStorage::create(originalPath,sizeof(originalPath),"jpg");
-  if(!original){originalPath[0]=0;return ChakshuMedia::IO_ERROR;}
-  const bool saved=original.write(buffer,bufferSize)==bufferSize;
-  original.flush();original.close();
-  if(!saved){ChakshuStorage::ready=false;originalPath[0]=0;return ChakshuMedia::IO_ERROR;}
-  // Derive the preview from this same exposure, never a second photo. On
-  // conversion failure the complete original can still be transferred.
-  uint8_t* rgb=static_cast<uint8_t*>(ps_malloc(320u*240u*2u));
-  PreviewJpeg jpeg{static_cast<uint8_t*>(ps_malloc(64000))};
-  if(rgb && jpeg.bytes && decodePreview(rgb) &&
-     fmt2jpg_cb(rgb,320u*240u*2u,320,240,PIXFORMAT_RGB565,60,previewChunk,&jpeg) &&
-     !jpeg.failed && jpeg.size>4 && jpeg.size<bufferSize) {
-    free(buffer);buffer=jpeg.bytes;bufferSize=jpeg.size;jpeg.bytes=nullptr;
+  if(!ChakshuCamera::beginOriginal())return ChakshuMedia::CAPTURE_ERROR;
+  // Discard the stale frame after the mode switch, then retain one full-quality exposure.
+  camera_fb_t* frame=esp_camera_fb_get();if(frame)esp_camera_fb_return(frame);
+  frame=esp_camera_fb_get();
+  uint8_t error=ChakshuMedia::OK;
+  if(!frame||frame->format!=PIXFORMAT_JPEG||frame->len<4||frame->len>2u*1024u*1024u)error=ChakshuMedia::CAPTURE_ERROR;
+  else {
+    buffer=static_cast<uint8_t*>(ps_malloc(frame->len));
+    if(!buffer)error=ChakshuMedia::CAPTURE_ERROR;
+    else {memcpy(buffer,frame->buf,frame->len);bufferSize=frame->len;}
   }
-  free(rgb);free(jpeg.bytes);return 0;
+  if(frame)esp_camera_fb_return(frame);
+  if(error){ChakshuCamera::endOriginal();return error;}
+  if(!ChakshuStorage::ensureSpace(bufferSize)){ChakshuCamera::endOriginal();clearSelection();return ChakshuMedia::NO_SPACE;}
+  File original=ChakshuStorage::create(originalPath,sizeof(originalPath),"jpg");
+  if(!original){ChakshuCamera::endOriginal();clearSelection();originalPath[0]=0;return ChakshuMedia::IO_ERROR;}
+  ChakshuStorage::protect(originalPath);
+  const bool saved=original.write(buffer,bufferSize)==bufferSize;
+  original.flush();original.close();ChakshuStorage::clearProtection();
+  if(!saved){ChakshuStorage::ready=false;originalPath[0]=0;ChakshuCamera::endOriginal();clearSelection();return ChakshuMedia::IO_ERROR;}
+  // Derive the preview from this exact full-resolution exposure. The original
+  // stays on SD until the app durably verifies and acknowledges its move.
+  makePreviewFromOriginal();
+  ChakshuCamera::endOriginal();return 0;
 }
 uint8_t catalogue() {
   clearSelection();if(!ChakshuStorage::ready)return ChakshuMedia::NO_SD;
@@ -203,11 +223,13 @@ void worker(void*) {
     if(request.operation==5||request.operation==10) {
       if(streamingEnabled.load()||remoteStandby){replyFor(request,1);continue;}
       ChakshuCamera::VideoProfile profile;
-      const uint32_t seconds=request.offset>>8;
-      if(request.operation==5 && (!ChakshuCamera::videoProfile(request.offset&255,profile) || (seconds && seconds!=15 && seconds!=30 && seconds!=60))){replyFor(request,ChakshuMedia::BAD_COMMAND);continue;}
+      const uint32_t seconds=request.operation==5?(request.offset>>8):request.offset;
+      if(seconds>600u){replyFor(request,ChakshuMedia::BAD_COMMAND);continue;}
+      if(request.operation==5 && !ChakshuCamera::videoProfile(request.offset&255,profile)){replyFor(request,ChakshuMedia::BAD_COMMAND);continue;}
       clearSelection();stopRequested.store(false);photoRequested.store(false);offlineMode.store(request.operation);offline.store(true);
       ChakshuMedia::Snapshot s;s.state=1;s.operation=request.operation==5?4:3;
-      if(request.operation==5){s.videoProfile=uint8_t(request.offset);s.width=profile.width;s.height=profile.height;s.targetFps=profile.fps;s.clipLimitMs=(seconds?seconds:60u)*1000u;}
+      if(request.operation==5){s.videoProfile=uint8_t(request.offset&255);s.width=profile.width;s.height=profile.height;s.targetFps=profile.fps;s.clipLimitMs=(seconds?seconds:10u)*1000u;}
+      else s.clipLimitMs=(seconds?seconds:600u)*1000u;
       saveOffline(s);
       replyFor(request,0);recordOffline(request.operation==5);continue;
     }
@@ -229,7 +251,17 @@ void worker(void*) {
       case 15:total=size=strlen(originalPath);memcpy(bytes,originalPath,size);break;
       case 11: {
         ChakshuMedia::Snapshot s;
-        error=!ChakshuStorage::ready?ChakshuMedia::NO_SD:!ChakshuCamera::ready?ChakshuMedia::NO_CAMERA:ChakshuMedia::captureCamera(s,false);
+        if(!ChakshuStorage::ready)error=ChakshuMedia::NO_SD;
+        else if(!ChakshuCamera::beginOriginal())error=ChakshuMedia::NO_CAMERA;
+        else {
+          File file=ChakshuStorage::create(s.path,sizeof(s.path),"jpg");
+          camera_fb_t* frame=esp_camera_fb_get();if(frame)esp_camera_fb_return(frame);
+          frame=esp_camera_fb_get();
+          if(!file||!frame||frame->format!=PIXFORMAT_JPEG||frame->len<4)error=ChakshuMedia::CAPTURE_ERROR;
+          else if(!ChakshuStorage::ensureSpace(frame->len)||file.write(frame->buf,frame->len)!=frame->len)error=ChakshuMedia::IO_ERROR;
+          if(frame)esp_camera_fb_return(frame);if(file){file.flush();file.close();}
+          ChakshuCamera::endOriginal();
+        }
         s.operation=2;s.state=error?3:2;s.error=error;ChakshuMedia::refresh(s);ChakshuMedia::save(s);break;
       }
       case 2:case 4:
@@ -244,6 +276,18 @@ void worker(void*) {
         if(streamingEnabled.load()){error=ChakshuMedia::BUSY;break;}
         error=ChakshuStorage::begin(true)?0:ChakshuMedia::NO_SD;
         ChakshuMedia::Snapshot s;ChakshuMedia::copy(s);ChakshuMedia::refresh(s);ChakshuMedia::save(s);
+        break;
+      }
+      case 17: {
+        if(!validPath(request.path)){error=ChakshuMedia::BAD_COMMAND;break;}
+        clearSelection();
+        error=ChakshuStorage::removeCapture(request.path)?0:ChakshuMedia::IO_ERROR;
+        break;
+      }
+      case 18: {
+        if(streamingEnabled.load()){error=ChakshuMedia::BUSY;break;}
+        clearSelection();
+        total=ChakshuStorage::clearCaptures();
         break;
       }
       case 7:error=catalogue();total=bufferSize;break;
