@@ -21,7 +21,7 @@ enum class ErrorCode{NONE,TRANSPORT_CHANGED,PROTOCOL_MISMATCH,BAD_COMMAND,AUDIO_
 constexpr uint8_t PROTOCOL_VERSION=2,CMD_STOP=0,CMD_START=1,CMD_GET_STATUS=2,CMD_STANDBY=3,CMD_WAKE=4,POWER_STATE_AWAKE=1;
 std::atomic<bool> streamingEnabled{false},deviceConnected{true};
 std::atomic<uint32_t> streamGeneration{1},connectionGeneration{1},captureDrops{0};
-std::atomic<uint32_t> notifyRejected{0};
+std::atomic<uint32_t> notifyRejected{0},audioReplayGeneration{0};
 std::atomic<uint32_t> capturedFrames{0};
 std::atomic<bool> transmitterActive{false};
 int audioFrameQueue=1,captureTaskHandle=1;

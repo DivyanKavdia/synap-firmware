@@ -4,24 +4,6 @@ class AudioCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
-// Only the transmitter task owns this cursor. A congested fragment is retried
-// in place; restarting at zero can starve the tail of every PCM frame.
-class ChakshuAudioProgress {
-  uint32_t generation=0, connection=0, replay=0;
-  uint16_t sequence=0, payload=0;
-  uint8_t chunks=0, next=0;
-  bool pcm=false, valid=false;
- public:
-  uint8_t begin(uint32_t g,uint32_t c,uint32_t r,uint16_t s,uint8_t n,uint16_t p,bool raw) {
-    if (!valid || generation!=g || connection!=c || replay!=r || sequence!=s || chunks!=n || payload!=p || pcm!=raw) {
-      generation=g;connection=c;replay=r;sequence=s;chunks=n;payload=p;pcm=raw;next=0;valid=true;
-    }
-    return next;
-  }
-  void accept(uint8_t index) { next=index+1; }
-  void reset() { valid=false; }
-} chakshuAudioProgress;
-
 bool sendChakshuAudio(const uint8_t* bytes,size_t length) {
   const uint16_t connection=chakshuConnectionHandle.load();
   if(!deviceConnected.load()||!chakshuAudioSubscribed.load()||connection==BLE_HS_CONN_HANDLE_NONE)return false;

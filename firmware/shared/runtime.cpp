@@ -142,6 +142,7 @@ TaskHandle_t captureTaskHandle = nullptr;
 std::atomic<bool> deviceConnected{false}, streamingEnabled{false};
 std::atomic<bool> connectionEventPending{false}, transmitterActive{false};
 std::atomic<uint32_t> connectionGeneration{0}, streamGeneration{0};
+std::atomic<uint32_t> audioReplayGeneration{0};
 std::atomic<uint32_t> capturedFrames{0}, captureDrops{0}, notifyRejected{0}, controlDrops{0};
 // Retained across recording starts/reconnects, cleared only by a device reboot.
 std::atomic<uint32_t> linkDisconnects{0}, lastDisconnectAt{0}, lastNotifyError{0};

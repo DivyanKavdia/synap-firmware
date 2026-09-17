@@ -126,14 +126,30 @@ bool recoveryCanSend() {
 }
 bool sendRecoveryFrame() {
   const uint32_t connection=connectionGeneration.load();
-  SynapRecovery::StoredFrame frame; uint16_t pending=0;
-  { RecoveryGuard guard; if(!recoveryRing.peek(frame))return false; pending=recoveryRing.count-recoveryRing.cursor; }
+  // A producer may evict the ring head while BLE is retrying its fragments.
+  // Keep this frame's PCM until its last fragment is accepted. Otherwise every
+  // eviction restarts chunk zero and a slow link can stop completing frames.
+  static SynapRecovery::StoredFrame frame;
+  static bool held=false;
+  static uint32_t heldConnection=0,heldReplay=0;
+  const uint32_t replay=audioReplayGeneration.load();
+  uint16_t pending=0;
+  {
+    RecoveryGuard guard;
+    if(!held || heldConnection!=connection || heldReplay!=replay || frame.generation!=streamGeneration.load()) {
+      held=false;
+      if(!recoveryRing.peek(frame))return false;
+      held=true;heldConnection=connection;heldReplay=replay;
+    }
+    pending=recoveryRing.count-recoveryRing.cursor;
+  }
   if(recoveryWaiting.load() || !streamingEnabled.load() || !deviceConnected.load())return false;
   const uint32_t pace=pending>4 && chunksPerFrame.load()<=5 ? 30000u : 45000u;
   const uint32_t rejectedBefore=notifyRejected.load();
   const bool sent=sendCapturedFrame(frame,pace);
-  if(sent && !recoveryWaiting.load() && connection==connectionGeneration.load()) { RecoveryGuard guard; recoveryRing.sent(frame.sequence); }
-  else if(!sent && !recoveryWaiting.load() && deviceConnected.load() && streamingEnabled.load() && frame.generation==streamGeneration.load() && connection==connectionGeneration.load()) {
+  if(sent)held=false;
+  if(sent && replay==audioReplayGeneration.load() && !recoveryWaiting.load() && connection==connectionGeneration.load()) { RecoveryGuard guard; recoveryRing.sent(frame.sequence); }
+  else if(!sent && replay==audioReplayGeneration.load() && !recoveryWaiting.load() && deviceConnected.load() && streamingEnabled.load() && frame.generation==streamGeneration.load() && connection==connectionGeneration.load()) {
     // A full controller queue is temporary. Retain this frame for a later send;
     // advancing the cursor here would discard audio the BLE stack never accepted.
     if(notifyRejected.load()!=rejectedBefore)vTaskDelay(pdMS_TO_TICKS(30));
@@ -170,6 +186,7 @@ void processRecoveryRequest() {
     if(memcmp(request.token,recoveryToken,8)!=0)return;
     recoveryRing.after(request.sequence);
     ++recoveryReplayAck;
+    ++audioReplayGeneration;
   }
 }
 void updateRecoveryStatus(BLECharacteristic* characteristic,bool notify) {

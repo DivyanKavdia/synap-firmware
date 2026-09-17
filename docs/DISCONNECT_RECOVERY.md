@@ -47,3 +47,16 @@ queue is full or the connection epoch changes during recovery. A stopped or newe
 take ignores stale producer errors. The native control-task test injects queue
 saturation, reconnect and stale-generation faults; both board builds remain CI
 gates. These checks do not replace the physical acceptance runs above.
+
+## Congested PCM delivery
+
+All three boards retain the first unsent audio fragment across controller-queue
+retries. The sender holds the current PCM frame even when new capture evicts its
+ring slot. A stream change, reconnect, or explicit replay invalidates that cursor.
+This prevents congestion from repeatedly sending fragment zero or mixing bytes
+from different captured frames. The S3/C3 pinned BLE patch reports an exhausted
+notification buffer as a rejection instead of passing a null buffer to NimBLE.
+
+Native regressions exercise partial sends, replay, ring overflow, and unchanged
+PCM bytes. Real Bluefy throughput still needs a pendant recording after OTA;
+queue acceptance alone does not prove phone delivery.

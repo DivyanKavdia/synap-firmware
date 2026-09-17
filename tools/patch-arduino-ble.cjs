@@ -7,7 +7,7 @@ const hashes = {
   'BLECharacteristic.h': '1957fa5b9607c1cb092f307989712868f3972efe2b8cdbe73d7f259d6fe5634e',
 };
 const patchedHashes = {
-  "BLECharacteristic.cpp": "4e19b177c7295a865a14c8c455508f98ad9239cc2a6ef3e961a602d1490594b1",
+  "BLECharacteristic.cpp": "585414817bcf851f6c57c739e0aaa132de25aacf3766dde521f291880d2cf938",
   "BLECharacteristic.h": "5d93e5cd3d340ea7127ff851a8b195a241ad818799083189e4f7e8e6ec4009d5"
 };
 function replaceOnce(source, before, after) {
@@ -17,7 +17,8 @@ function replaceOnce(source, before, after) {
 function patch(name, source) {
   const digest = crypto.createHash('sha256').update(source).digest('hex');
   if (digest === patchedHashes[name]) return source;
-  if (digest !== hashes[name])
+  const ownedWrites = name === 'BLECharacteristic.cpp' && digest === '4e19b177c7295a865a14c8c455508f98ad9239cc2a6ef3e961a602d1490594b1';
+  if (digest !== hashes[name] && !ownedWrites)
     throw Error('Unsupported Arduino BLE source: ' + name + '. Expected ESP32 3.3.5.');
   if (name.endsWith('.h')) return replaceOnce(source,
     '  virtual void onWrite(BLECharacteristic *pCharacteristic, ble_gap_conn_desc *desc);',
@@ -29,17 +30,27 @@ function patch(name, source) {
     characteristic->setValue(bytes, length);
     onWrite(characteristic, desc);
   }`);
-  source = replaceOnce(source,
-    'if (ctxt->om->om_pkthdr_len > 8)',
-    'if (conn_handle != BLE_HS_CONN_HANDLE_NONE && ctxt->om->om_len > 0)');
-  const start = source.indexOf('        pCharacteristic->setValue(buf, len);');
-  const end = source.indexOf('        return 0;', start);
-  if (start < 0 || end < 0) throw Error('Missing pinned NimBLE write handler');
-  return source.slice(0, start) + `        // SYNAP_OWNED_GATT_WRITES: the delayed callback could observe a newer
+  if (!ownedWrites) {
+    source = replaceOnce(source,
+      'if (ctxt->om->om_pkthdr_len > 8)',
+      'if (conn_handle != BLE_HS_CONN_HANDLE_NONE && ctxt->om->om_len > 0)');
+    const start = source.indexOf('        pCharacteristic->setValue(buf, len);');
+    const end = source.indexOf('        return 0;', start);
+    if (start < 0 || end < 0) throw Error('Missing pinned NimBLE write handler');
+    source = source.slice(0, start) + `        // SYNAP_OWNED_GATT_WRITES: the delayed callback could observe a newer
         // command, status or battery value. Pass this request's bytes now.
         pCharacteristic->m_pCallbacks->onWriteValue(pCharacteristic, &desc, buf, len);
 
 ` + source.slice(end);
+  }
+  const allocation = '    os_mbuf *om = ble_hs_mbuf_from_flat((uint8_t *)value.c_str(), length);';
+  return replaceOnce(source, allocation, allocation + `
+    // A null mbuf asks NimBLE to read the characteristic again. Allocation
+    // failure is congestion, not permission to enqueue different/stale bytes.
+    if (om == nullptr) {
+      m_pCallbacks->onStatus(this, BLECharacteristicCallbacks::Status::ERROR_GATT, BLE_HS_ENOMEM);
+      return;
+    }`);
 }
 function install(directory) {
   // Validate both inputs before changing either file.

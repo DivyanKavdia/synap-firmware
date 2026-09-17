@@ -35,6 +35,24 @@ void encodeImaAdpcm(const int16_t* samples, uint8_t* output) {
   }
 }
 
+// Only the transmitter task owns this cursor. A congested fragment is retried
+// in place; restarting at zero can starve the tail of every PCM frame.
+class AudioSendProgress {
+  uint32_t generation=0, connection=0, replay=0;
+  uint16_t sequence=0, payload=0;
+  uint8_t chunks=0, next=0;
+  bool pcm=false, valid=false;
+ public:
+  uint8_t begin(uint32_t g,uint32_t c,uint32_t r,uint16_t s,uint8_t n,uint16_t p,bool raw) {
+    if (!valid || generation!=g || connection!=c || replay!=r || sequence!=s || chunks!=n || payload!=p || pcm!=raw) {
+      generation=g;connection=c;replay=r;sequence=s;chunks=n;payload=p;pcm=raw;next=0;valid=true;
+    }
+    return next;
+  }
+  void accept(uint8_t index) { next=index+1; }
+  void reset() { valid=false; }
+} audioSendProgress;
+
 bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t* encoded,uint32_t paceUs,bool pcm) {
   const uint16_t frameBytes=pcm?AUDIO_BYTES_PER_FRAME:ADPCM_BYTES_PER_FRAME;
   const uint8_t chunks=chunksPerFrame;
@@ -44,9 +62,11 @@ bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t* encod
       uint32_t(chunks)*payload<frameBytes || uint32_t(chunks-1)*payload>=frameBytes) return false;
   static uint8_t packet[AUDIO_HEADER_BYTES+MAX_AUDIO_PAYLOAD_BYTES];
   const uint32_t connection=connectionGeneration.load();
-  for (uint8_t index=0; index<chunks; ++index) {
+  const uint32_t replay=audioReplayGeneration.load();
+  const uint8_t first=audioSendProgress.begin(generation,connection,replay,sequence,chunks,payload,pcm);
+  for (uint8_t index=first; index<chunks; ++index) {
     if (!streamingEnabled.load() || !deviceConnected.load() ||
-        generation != streamGeneration.load() || connection != connectionGeneration.load()) return false;
+        generation != streamGeneration.load() || connection != connectionGeneration.load() || replay != audioReplayGeneration.load()) return false;
     const uint16_t offset=index*payload;
     if(offset>=frameBytes)return false;
     const uint16_t remaining=frameBytes-offset;
@@ -61,7 +81,7 @@ bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t* encod
     for(uint8_t attempt=0;attempt<4;++attempt) {
       if(attempt)vTaskDelay(pdMS_TO_TICKS(15u*attempt));
       if(!streamingEnabled.load() || !deviceConnected.load() ||
-          generation!=streamGeneration.load() || connection!=connectionGeneration.load())return false;
+          generation!=streamGeneration.load() || connection!=connectionGeneration.load() || replay!=audioReplayGeneration.load())return false;
       const uint32_t rejectedBefore=notifyRejected.load();
       // In the pinned Arduino BLE library, onStatus runs before notify returns.
       // SUCCESS_NOTIFY means queued locally, not persisted by the phone.
@@ -69,6 +89,7 @@ bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t* encod
       if(notifyRejected.load()==rejectedBefore) { accepted=true;break; }
     }
     if(!accepted)return false;
+    audioSendProgress.accept(index);
     // Pace from the completed attempt. An overdue notification must never cause
     // the remaining fragments to burst into the controller's congested queue.
     const uint32_t slot=static_cast<uint32_t>(index+1)*paceUs/chunks-static_cast<uint32_t>(index)*paceUs/chunks;
@@ -81,7 +102,8 @@ bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t* encod
       while (static_cast<int32_t>(target-micros()) > 0) delayMicroseconds(50);
     }
   }
-  return generation == streamGeneration.load() && deviceConnected.load() && connection == connectionGeneration.load();
+  audioSendProgress.reset();
+  return generation == streamGeneration.load() && deviceConnected.load() && connection == connectionGeneration.load() && replay == audioReplayGeneration.load();
 }
 bool sendCapturedFrame(const AudioFrame& frame, uint32_t paceUs) {
   if(pcmTransport.load()) {

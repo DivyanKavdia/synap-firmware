@@ -14,7 +14,7 @@ constexpr uint8_t AUDIO_CODEC_IMA_ADPCM=1, AUDIO_HEADER_BYTES=8, AUDIO_PACKET_MA
 constexpr uint8_t AUDIO_PROTOCOL_VERSION=3, MIN_CHUNKS_PER_FRAME=1, MAX_CHUNKS_PER_FRAME=20;
 struct AudioFrame { uint32_t generation; uint16_t sequence; int16_t samples[800]; };
 std::atomic<bool> streamingEnabled{true},deviceConnected{true};
-std::atomic<uint32_t> streamGeneration{1};
+std::atomic<uint32_t> streamGeneration{1},audioReplayGeneration{0};
 std::atomic<uint32_t> connectionGeneration{1},notifyRejected{0};
 std::atomic<uint16_t> audioPayloadBytes{404},attValueCapacity{514};
 std::atomic<uint16_t> peerMtu{23};
@@ -25,6 +25,7 @@ uint32_t clockNow=0,spinMicros=0;
 bool cancelOnNotify=false;
 bool reconnectOnNotify=false;
 unsigned rejectRemaining=0,notifyCalls=0,notifyDelayUs=0;
+int packetBudget=-1;
 uint32_t micros(){return clockNow;}
 unsigned pdMS_TO_TICKS(unsigned ms){return ms;}
 void vTaskDelay(unsigned ticks){clockNow+=ticks*1000;}
@@ -36,6 +37,8 @@ struct Characteristic {
   void setValue(const uint8_t* p,unsigned n){pending.assign(p,p+n);}
   void notify(){
     ++notifyCalls;
+    if(packetBudget==0){++notifyRejected;return;}
+    if(packetBudget>0)--packetBudget;
     if(rejectRemaining){--rejectRemaining;++notifyRejected;return;}
     packets.push_back({clockNow,pending});clockNow+=notifyDelayUs;
     if(cancelOnNotify)++streamGeneration;
@@ -113,6 +116,18 @@ int main(){
   characteristic.packets.clear();notifyCalls=0;rejectRemaining=100;
   assert(!sendAudioFrame(frame));assert(notifyCalls==4 && characteristic.packets.empty() && streamingEnabled);
   rejectRemaining=0;
+  // Repeated controller exhaustion must complete a PCM frame without duplicating
+  // its already accepted fragments, including on the shared S3/C3 transport.
+  server.mtu=517;assert(configureTransportFromPeerMtu());
+  characteristic.packets.clear();packetBudget=2;
+  assert(!sendAudioFrame(frame));assert(characteristic.packets.size()==2);
+  for(int i=2;i<4;++i){packetBudget=1;assert(sendAudioFrame(frame)==(i==3));}
+  assert(characteristic.packets.size()==4);
+  for(int i=0;i<4;++i)assert(characteristic.packets[i].bytes[4]==i);
+  packetBudget=1;assert(!sendAudioFrame(frame));
+  ++audioReplayGeneration;packetBudget=1;assert(!sendAudioFrame(frame));
+  assert(characteristic.packets.back().bytes[4]==0);
+  ++audioReplayGeneration;packetBudget=-1;
   // A delayed native notification must not compress the next fragment's spacing.
   for(uint32_t initial: {0u,0xFFFFF000u}){
     clockNow=initial;notifyDelayUs=80000;characteristic.packets.clear();

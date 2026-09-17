@@ -15,7 +15,7 @@ function materializeBle(source) {
     'identity->setValue(reinterpret_cast<const uint8_t*>(SYNAP_FIRMWARE_ID),sizeof(SYNAP_FIRMWARE_ID)-1);','Firmware identity text bytes');
   replace('characteristic->setValue(s.path);',
     'characteristic->setValue(reinterpret_cast<const uint8_t*>(s.path),strlen(s.path));','SD path text bytes');
-  replace('#include <atomic>','#include <atomic>\nstd::atomic<uint16_t> chakshuConnectionHandle{BLE_HS_CONN_HANDLE_NONE};\nstd::atomic<bool> chakshuAudioSubscribed{false};\nstd::atomic<uint32_t> chakshuAudioReplayGeneration{0};','Chakshu connection ownership');
+  replace('#include <atomic>','#include <atomic>\nstd::atomic<uint16_t> chakshuConnectionHandle{BLE_HS_CONN_HANDLE_NONE};\nstd::atomic<bool> chakshuAudioSubscribed{false};','Chakshu connection ownership');
   replace('#include <atomic>','#include <atomic>\n'+readTemplate('xiao-sense','ble-health.cpp'),'Retained Chakshu link diagnostics');
   // Diagnostics are defined before the recovery implementation in the shared
   // sketch. Declare this flag before the extended encoder reads it.
@@ -57,19 +57,6 @@ function materializeBle(source) {
   replace('  if (!configureTransportFromPeerMtu()) { stopStreaming(ErrorCode::MTU_TOO_SMALL); return; }',
     '  if (!chakshuAudioSubscribed.load()) { stopStreaming(ErrorCode::AUDIO_NOT_SUBSCRIBED);return; }\n  if (!configureTransportFromPeerMtu()) { stopStreaming(ErrorCode::MTU_TOO_SMALL); return; }','Require actual audio subscription');
   replace('    audioCharacteristic->setValue(packet, AUDIO_HEADER_BYTES+length);','    // Send this immutable packet to the current subscribed connection.','Owned audio payload');
-  replace('    ++recoveryReplayAck;', '    ++recoveryReplayAck;\n    ++chakshuAudioReplayGeneration;', 'Invalidate fragment progress for connected replay');
-  replace('  SynapRecovery::StoredFrame frame; uint16_t pending=0;\n  { RecoveryGuard guard; if(!recoveryRing.peek(frame))return false; pending=recoveryRing.count-recoveryRing.cursor; }',
-    readTemplate('xiao-sense','recovery-frame.cpp').trimEnd(),'Retain in-flight PCM through ring eviction');
-  replace('  const bool sent=sendCapturedFrame(frame,pace);',
-    '  const bool sent=sendCapturedFrame(frame,pace);\n  if(sent)held=false;','Release completed recovery frame');
-  replace('if(sent && !recoveryWaiting.load() && connection==connectionGeneration.load())',
-    'if(sent && replay==chakshuAudioReplayGeneration.load() && !recoveryWaiting.load() && connection==connectionGeneration.load())','Do not skip a rewound in-flight frame');
-  replace('  for (uint8_t index=0; index<chunks; ++index) {',
-    '  const uint8_t first=chakshuAudioProgress.begin(generation,connection,chakshuAudioReplayGeneration.load(),sequence,chunks,payload,pcm);\n  for (uint8_t index=first; index<chunks; ++index) {','Resume partial audio frame');
-  replace('    if(!accepted)return false;',
-    '    if(!accepted)return false;\n    chakshuAudioProgress.accept(index);','Retain accepted fragment progress');
-  replace('  return generation == streamGeneration.load() && deviceConnected.load() && connection == connectionGeneration.load();',
-    '  chakshuAudioProgress.reset();\n  return generation == streamGeneration.load() && deviceConnected.load() && connection == connectionGeneration.load();','Complete partial audio frame');
   replace('      const uint32_t rejectedBefore=notifyRejected.load();\n      // In the pinned Arduino BLE library, onStatus runs before notify returns.\n      // SUCCESS_NOTIFY means queued locally, not persisted by the phone.\n      audioCharacteristic->notify();\n      if(notifyRejected.load()==rejectedBefore) { accepted=true;break; }',
     '      if(sendChakshuAudio(packet,AUDIO_HEADER_BYTES+length)) { accepted=true;break; }','Native audio acceptance');
   // Required capture state must exist before the first client can send START.

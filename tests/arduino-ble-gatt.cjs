@@ -6,6 +6,15 @@ const { patch } = require('../tools/patch-arduino-ble.cjs');
 test('unsupported BLE library cannot be silently patched', () => {
   assert.throws(() => patch('BLECharacteristic.cpp', 'other release'), /Unsupported Arduino BLE source/);
 });
+test('pinned NimBLE allocation failure cannot become a fallback characteristic read',
+  { skip: !process.env.SYNAP_ARDUINO_BLE_SRC }, () => {
+    const library = fs.readFileSync(path.join(process.env.SYNAP_ARDUINO_BLE_SRC, 'BLECharacteristic.cpp'), 'utf8');
+    const fixed = patch('BLECharacteristic.cpp', library);
+    const start = fixed.lastIndexOf('void BLECharacteristic::notify(bool is_notification) {');
+    const notify = fixed.slice(start, fixed.indexOf('\n}  // Notify', start) + 2);
+    const fixture = fs.readFileSync(path.join(__dirname, 'arduino-ble-notify.cpp'), 'utf8');
+    assert.match(nativeTest(fixture.replace('// INSERT NOTIFY', notify), ['-Wno-sign-compare']), /PASS allocation failure/);
+  });
 test('pinned S3/C3 GATT handler reads live status and preserves every original command',
   { skip: !process.env.SYNAP_ARDUINO_BLE_SRC }, () => {
     const library = fs.readFileSync(path.join(process.env.SYNAP_ARDUINO_BLE_SRC, 'BLECharacteristic.cpp'), 'utf8');

@@ -80,36 +80,32 @@ test('Chakshu native submission preserves PCM, frame pacing, retries and cancell
   const codec=source.slice(source.indexOf('static const uint16_t IMA_STEP_TABLE'),source.indexOf('void transmitterTask(void* parameter) {'));
   const transport=source.slice(source.indexOf('bool configureTransportFromPeerMtu() {'),source.indexOf('void startStreaming(uint8_t version) {'));
   let fixture=fs.readFileSync('tests/audio-runtime.cpp','utf8');
-  const progress=source.slice(source.indexOf('class ChakshuAudioProgress {'),source.indexOf('bool sendChakshuAudio('));
   // The host enqueue implementation is covered above; exercise the generated
   // packetizer against a host that accepts, delays or rejects each exact packet.
   const host=`std::atomic<uint16_t> chakshuConnectionHandle{0};
-std::atomic<uint32_t> chakshuAudioReplayGeneration{0};
 bool sendChakshuAudio(const uint8_t* bytes,size_t length){
   const auto before=notifyRejected.load();
   characteristic.setValue(bytes,length);characteristic.notify();
   return before==notifyRejected.load();
 }
 `;
-  fixture=fixture.replace('// INSERT CODEC AND TRANSPORT',progress+host+transport+codec);
+  fixture=fixture.replace('// INSERT CODEC AND TRANSPORT',host+transport+codec);
   assert.match(nativeTest(fixture),/PASS runtime; codec golden=3749bea1db6af550/);
 });
 
 test('Chakshu congested frame retries continue at the first unsent fragment and reset for a new owner',()=>{
   const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
-  const progress=source.slice(source.indexOf('class ChakshuAudioProgress {'),source.indexOf('bool sendChakshuAudio('));
   const codec=source.slice(source.indexOf('static const uint16_t IMA_STEP_TABLE'),source.indexOf('void transmitterTask(void* parameter) {'));
   const transport=source.slice(source.indexOf('bool configureTransportFromPeerMtu() {'),source.indexOf('void startStreaming(uint8_t version) {'));
   let fixture=fs.readFileSync('tests/audio-runtime.cpp','utf8').split('int main(){')[0];
   const host=`std::atomic<uint16_t> chakshuConnectionHandle{0};
-std::atomic<uint32_t> chakshuAudioReplayGeneration{0};
 int budget=2;
 bool sendChakshuAudio(const uint8_t* bytes,size_t length){
  if(budget==0){++notifyRejected;return false;}--budget;
  characteristic.setValue(bytes,length);characteristic.notify();return true;
 }
 `;
-  fixture=fixture.replace('// INSERT CODEC AND TRANSPORT',progress+host+transport+codec)+`
+  fixture=fixture.replace('// INSERT CODEC AND TRANSPORT',host+transport+codec)+`
 int main(){
  server.mtu=517;assert(configureTransportFromPeerMtu());assert(chunksPerFrame==4);
  AudioFrame frame{1,7,{}};for(int i=0;i<800;++i)frame.samples[i]=i-400;
@@ -120,7 +116,7 @@ int main(){
    assert(!memcmp(p.data()+8,reinterpret_cast<uint8_t*>(frame.samples)+i*400,400));}
  // Completed frames can be intentionally replayed in full.
  budget=1;assert(!sendAudioFrame(frame));assert(characteristic.packets.back().bytes[4]==0);
- ++chakshuAudioReplayGeneration;budget=1;assert(!sendAudioFrame(frame));assert(characteristic.packets.back().bytes[4]==0);
+ ++audioReplayGeneration;budget=1;assert(!sendAudioFrame(frame));assert(characteristic.packets.back().bytes[4]==0);
  ++connectionGeneration;budget=1;assert(!sendAudioFrame(frame));assert(characteristic.packets.back().bytes[4]==0);
  ++streamGeneration;frame.generation=streamGeneration;budget=1;
  assert(!sendAudioFrame(frame));assert(characteristic.packets.back().bytes[4]==0);
@@ -187,7 +183,7 @@ struct AudioFrame {uint32_t generation;uint16_t sequence;int16_t samples[800];};
 ${ring}
 SynapRecovery::Ring recoveryRing;
 struct RecoveryGuard {};
-std::atomic<uint32_t> connectionGeneration{1},streamGeneration{1},notifyRejected{0},chakshuAudioReplayGeneration{0};
+std::atomic<uint32_t> connectionGeneration{1},streamGeneration{1},notifyRejected{0},audioReplayGeneration{0};
 std::atomic<bool> recoveryWaiting{false},streamingEnabled{true},deviceConnected{true};
 std::atomic<uint8_t> chunksPerFrame{4};
 enum class ErrorCode{TRANSPORT_CHANGED};
@@ -195,7 +191,7 @@ void requestStreamError(ErrorCode,uint32_t){assert(false);}
 int pdMS_TO_TICKS(int n){return n;}void vTaskDelay(int){}
 bool replay=true;
 bool sendCapturedFrame(const AudioFrame&,uint32_t){
- if(replay){replay=false;recoveryRing.after(9);++chakshuAudioReplayGeneration;}return true;
+ if(replay){replay=false;recoveryRing.after(9);++audioReplayGeneration;}return true;
 }
 ${send}
 int main(){
@@ -265,11 +261,11 @@ int main(){
   assert.match(nativeTest(fixture,['-Wno-unused-parameter']),/PASS exact GATT text bytes/);
 });
 
-test('a full recovery ring cannot evict the PCM of a partially transmitted Chakshu frame',()=>{
- const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
+for (const target of ['esp32s3-fh4r2-qspi-4m','esp32c3-supermini-4m','xiao-esp32s3-sense-8m']) test(target + ': ring eviction preserves partially sent PCM',()=>{
+ const source=materialize(assemble(),target);
  const ring=source.slice(source.indexOf('namespace SynapRecovery {'),source.indexOf('SynapRecovery::Ring recoveryRing;'));
  const send=source.slice(source.indexOf('bool sendRecoveryFrame() {'),source.indexOf('void processRecoveryRequest() {'));
- const progress=source.slice(source.indexOf('class ChakshuAudioProgress {'),source.indexOf('bool sendChakshuAudio('));
+ const progress=source.slice(source.indexOf('class AudioSendProgress {'),source.indexOf('bool sendEncodedFrame(uint32_t generation,uint16_t sequence,const uint8_t* encoded,uint32_t paceUs,bool pcm) {'));
  const fixture=`#include <atomic>
 #include <cassert>
 #include <cstdint>
@@ -280,7 +276,7 @@ ${ring}
 ${progress}
 SynapRecovery::Ring recoveryRing;
 struct RecoveryGuard {};
-std::atomic<uint32_t> connectionGeneration{1},streamGeneration{1},notifyRejected{0},chakshuAudioReplayGeneration{0};
+std::atomic<uint32_t> connectionGeneration{1},streamGeneration{1},notifyRejected{0},audioReplayGeneration{0};
 std::atomic<bool> recoveryWaiting{false},streamingEnabled{true},deviceConnected{true};
 std::atomic<uint8_t> chunksPerFrame{4};
 enum class ErrorCode {TRANSPORT_CHANGED};
@@ -289,11 +285,11 @@ int pdMS_TO_TICKS(int n){return n;}void vTaskDelay(int){}
 std::vector<int16_t> delivered;
 std::vector<uint16_t> sequences;
 bool sendCapturedFrame(const AudioFrame& frame,uint32_t){
- const auto chunk=chakshuAudioProgress.begin(frame.generation,connectionGeneration,chakshuAudioReplayGeneration,frame.sequence,4,400,true);
+ const auto chunk=audioSendProgress.begin(frame.generation,connectionGeneration,audioReplayGeneration,frame.sequence,4,400,true);
  sequences.push_back(frame.sequence);
  delivered.insert(delivered.end(),frame.samples+chunk*200,frame.samples+(chunk+1)*200);
- chakshuAudioProgress.accept(chunk);
- if(chunk==3){chakshuAudioProgress.reset();return true;}
+ audioSendProgress.accept(chunk);
+ if(chunk==3){audioSendProgress.reset();return true;}
  ++notifyRejected;return false;
 }
 ${send}
@@ -312,7 +308,7 @@ int main(){
  // Sending the evicted frame must not acknowledge unsent newer ring frames.
  assert(recoveryRing.cursor==0);
  assert(!sendRecoveryFrame()&&sequences.back()>9);
- const auto old=sequences.back();++chakshuAudioReplayGeneration;recoveryRing.after(frame.sequence);
+ const auto old=sequences.back();++audioReplayGeneration;recoveryRing.after(frame.sequence);
  assert(!sendRecoveryFrame());assert(sequences.back()==old); // Empty replay: no stale held-frame send.
  puts("PASS complete frame survives ring overflow");
 }`;
