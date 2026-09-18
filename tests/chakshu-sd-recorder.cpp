@@ -138,6 +138,6 @@ int main(){
  reset();cameraReady=false;s=record(true);assert(s.error==8 && cameraRestores==1);
  reset();micReady=false;s=record(true);assert(s.error==5 && !created);
  reset();cameraDelay=1;cardDelay=0;frame.len=sizeof(jpeg);stopAt=10000000;
- s=record(true);assert(!s.error && s.bytes<=32u*1024u*1024u && s.audioMs<60000 && s.droppedFrames>0);verifyAudio(s);
+ s=record(true,1);assert(!s.error && s.bytes<=32u*1024u*1024u && s.audioMs<60000 && s.droppedFrames>0);verifyAudio(s);
  reset();puts("PASS independent SD capture, PCM integrity, stop drain, overflow, card and worker failures");
 }
