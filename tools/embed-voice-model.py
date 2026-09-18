@@ -1,4 +1,4 @@
-"""Embed a pinned, losslessly compressed WakeNet + MultiNet model pack in Chakshu."""
+"""Embed a pinned, losslessly compressed MultiNet command pack in Chakshu."""
 import hashlib
 import pathlib
 import re
@@ -11,11 +11,6 @@ except ImportError:
     zopfli_compress = None
 
 EXPECTED_MODELS = {
-    'wn9s_hiesp': {
-        '_MODEL_INFO_':'f1356d7a9d138464ac7a6a20b42a9d020df65e34',
-        'wn9_data':'9b0c90d6ce4c3160f08d7ddfb2cd9935e702f9ee',
-        'wn9_index':'e52727fbeeddd00fddee1eaf5e435253976f041f',
-    },
     'mn5q8_en': {
         '_MODEL_INFO_':'2488263ce5dd4d27a50d07604792e233f2c248c6',
         'mn5q8_data':'ccafc8b30bc5cd6cb8cc103cccc943959fc688eb',
@@ -97,7 +92,7 @@ def embed(sketch, model):
     ) + '};'
     source = source.replace(marker, array).replace('#define SYNAP_VOICE_FLASH 0', '#define SYNAP_VOICE_FLASH 1')
     sketch.write_text(source)
-    print(f'Embedded Chakshu production voice models: {len(packed)} flash bytes -> {size} identical PSRAM bytes; SHA-256 {digest}')
+    print(f'Embedded Chakshu production command model: {len(packed)} flash bytes -> {size} identical PSRAM bytes; SHA-256 {digest}')
 
 
 if __name__ == '__main__':
