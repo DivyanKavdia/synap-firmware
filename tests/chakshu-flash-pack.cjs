@@ -25,7 +25,7 @@ test('pinned model round-trips through prepared source, is required in linked im
     fs.writeFileSync(sketch,materialize(shared,target));
     execFileSync('python3',['tools/embed-voice-model.py',sketch,model]);
     const source=fs.readFileSync(sketch,'utf8'),packed=embeddedBytes(source);
-    assert(packed.length<1600000);assert(zlib.inflateRawSync(packed).equals(weights));
+    assert(packed.length<1500000);assert(zlib.inflateRawSync(packed).equals(weights));
     const image=Buffer.concat([Buffer.alloc(1300000),packed]);verify(image,source,weights);
     assert.throws(()=>verify(Buffer.alloc(1300000),source,weights),/missing/);
     const overflow=0x330000-image.length+1;
