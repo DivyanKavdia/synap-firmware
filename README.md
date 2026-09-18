@@ -111,3 +111,5 @@ Build/test success validates software contracts but does not establish real-worl
 `main` is the only current development baseline. New work should branch from current `main`; do not revive old audit branches or superseded implementation paths.
 
 Detailed history belongs in Git commits, merged pull requests and published releases. Keep this README focused on the current production truth.
+
+<!-- release-trigger: voice-production -->
