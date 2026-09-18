@@ -20,7 +20,7 @@ QueueHandle_t pcmQueue=nullptr,commandQueue=nullptr;
 TaskHandle_t feedHandle=nullptr,detectHandle=nullptr,idleHandle=nullptr,feedbackHandle=nullptr;
 const esp_afe_sr_iface_t* afe=nullptr;esp_afe_sr_data_t* afeData=nullptr;
 esp_mn_iface_t* mn=nullptr;model_iface_data_t* mnData=nullptr;char* wakeModel=nullptr;
-srmodel_list_t* models=nullptr;void* weights=nullptr;int16_t* afeInput=nullptr;int feedSize=0;
+srmodel_list_t* models=nullptr;srmodel_list_t* wakeModels=nullptr;void* weights=nullptr;int16_t* afeInput=nullptr;int feedSize=0;
 BLECharacteristic* events=nullptr;
 portMUX_TYPE stateMux=portMUX_INITIALIZER_UNLOCKED;
 uint32_t serial=0,lastAt=0;uint8_t lastCommand=0,lastResult=0;uint16_t lastValue=0;
@@ -182,6 +182,7 @@ void cleanup() {
   if(mnData){mn->destroy(mnData);mnData=nullptr;}
   if(afeData){afe->destroy(afeData);afeData=nullptr;}
   if(models){esp_srmodel_deinit(models);models=nullptr;}
+  if(wakeModels){esp_srmodel_deinit(wakeModels);wakeModels=nullptr;}
   free(weights);weights=nullptr;free(afeInput);afeInput=nullptr;
 }
 void initialize() {
@@ -201,7 +202,10 @@ void initialize() {
   if(strcmp(hex,MODEL_SHA256)){status=MODEL_ERROR;cleanup();return;}
   models=srmodel_load(weights);
   if(!models){status=MODEL_ERROR;cleanup();return;}
-  wakeModel=esp_srmodel_filter(models,ESP_WN_PREFIX,"hiesp");
+  // WakeNet9s Hi ESP is linked by ESP-SR and physically proven on Chakshu.
+  // MultiNet remains in the verified compressed command pack.
+  wakeModels=srmodel_load(nullptr);
+  wakeModel=wakeModels?esp_srmodel_filter(wakeModels,ESP_WN_PREFIX,"hiesp"):nullptr;
   char* name=esp_srmodel_filter(models,"mn5q8","en");
   if(!wakeModel||!name||(mn=esp_mn_handle_from_name(name))==nullptr){status=MODEL_ERROR;cleanup();return;}
   mnData=mn->create(name,8000);
