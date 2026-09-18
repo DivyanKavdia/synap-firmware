@@ -43,7 +43,7 @@ A successful BLE notification enqueue is not proof that the browser persisted th
 
 ## Chakshu production baseline
 
-The current Chakshu baseline includes the approved offline media lifecycle. **Temporary OTA diagnostic:** local command recognition is replaced by Espressif WakeNet9 `Hi ESP` solely to validate microphone → AFE → WakeNet → LED/BLE wake signalling. The PWA is unchanged.
+The current Chakshu baseline includes the approved offline media lifecycle and a proper two-stage local voice pipeline: Espressif WakeNet detects `Hi ESP`, then MultiNet listens for one supported command for up to 8 seconds. Chakshu uses a dedicated 8 MB dual-OTA partition layout (two 0x3E0000 app slots plus NVS/OTA metadata/coredump); no internal SPIFFS partition is retained because media storage is on microSD.
 
 - Synap-owned SD FIFO cleanup when reserve space is needed.
 - App-triggered clear of Synap capture files.
@@ -53,9 +53,10 @@ The current Chakshu baseline includes the approved offline media lifecycle. **Te
 - Default video duration of 10 seconds.
 - Explicit requested video durations, within production limits.
 - High-quality/native camera capture profiles for the supported camera.
-- Stock `Hi ESP` WakeNet diagnostic using the embedded pinned speech model.
-- Voice protocol v2; wake events remain compatible with the existing PWA.
-- Follow-up local voice commands are intentionally unavailable in this diagnostic OTA.
+- Local `Hi ESP` WakeNet detection using the embedded pinned speech model.
+- Voice protocol v2; wake events remain compatible with the companion app.
+- MultiNet commands are enabled only after WakeNet and time out after 8 seconds.
+- Supported photo, video, audio and visual-description commands retain their local/online routing.
 - Wake detection remains available while compatible SD recording feeds PCM copies.
 
 After offline audio is moved to the companion app, cloud transcription and memory processing are owned by the PWA/backend repository.
@@ -97,7 +98,7 @@ Build/test success validates software contracts but does not establish real-worl
 
 - sustained microphone/BLE recording,
 - reconnect and recovery,
-- stock `Hi ESP` WakeNet diagnostic acknowledgement,
+- `Hi ESP` WakeNet acknowledgement and follow-up MultiNet command recognition,
 - photo quality,
 - timed video capture,
 - long SD recording,

@@ -25,21 +25,31 @@ test('Chakshu uses onboard PDM and does not configure absent hardware',()=>{
 test('Chakshu has separate release paths, OTA marker and dual 8MB slots',()=>{
   const target=getTarget('xiao-esp32s3-sense-8m');
   assert.equal(target.family,'esp32s3');
-  assert.equal(target.slotSize,0x330000);
+  assert.equal(target.slotSize,0x3E0000);
   assert.equal(target.psramBytes,8388608);
-  assert.equal(target.partition,'default_8MB');
+  assert.equal(target.partition,'synap_chakshu_ota_8mb');
   assert.equal(target.assetStem,'chakshu');
   assert.notEqual(target.productMarker,getTarget('esp32s3-fh4r2-qspi-4m').productMarker);
 });
 
 
-test('Hi ESP WakeNet diagnostic is observable and the shared SD-CS LED stays gated safely',()=>{
+test('WakeNet gates the MultiNet command window and wake feedback stays SD-safe',()=>{
   const voice=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice.cpp'),'utf8');
-  assert.match(voice,/esp_srmodel_filter\(models,ESP_WN_PREFIX,"hiesp"\)/);
+  assert.match(voice,/wakeModels\?esp_srmodel_filter\(wakeModels,ESP_WN_PREFIX,"hiesp"\):nullptr/);
+  assert.match(voice,/esp_srmodel_filter\(models,"mn5q8","en"\)/);
+  assert.match(voice,/mn->create\(name,8000\)/);
   assert.match(voice,/config->wakenet_init=true/);
   assert.match(voice,/config->wakenet_mode=DET_MODE_95/);
   assert.match(voice,/result->wakeup_state==WAKENET_DETECTED/);
-  assert.doesNotMatch(voice,/mn->detect|addPhrase\(WAKE|esp_mn_/);
+  assert.match(voice,/gate\.accept\(WAKE,1\.0f,now\);commandWindow=true/);
+  assert.match(voice,/if\(!commandWindow\|\|!result->data\)continue;/);
+  assert.match(voice,/const auto detected=mn->detect\(mnData,result->data\)/);
+  assert.match(voice,/afe->enable_wakenet\(afeData\)/);
+  assert.doesNotMatch(voice,/addPhrase\(WAKE/);
+  const wake=voice.indexOf('result->wakeup_state==WAKENET_DETECTED');
+  const gate=voice.indexOf('if(!commandWindow||!result->data)continue;',wake);
+  const multi=voice.indexOf('mn->detect(mnData,result->data)',gate);
+  assert(wake>=0 && gate>wake && multi>gate);
   assert.match(voice,/constexpr uint8_t WAKE_LED_PIN=21;/);
   assert.match(voice,/ChakshuResources::Lease admission;/);
   assert.match(voice,/if\(!admission\)return false; \/\/ Never toggle shared SD CS during recording\/transfer\./);
@@ -48,6 +58,6 @@ test('Hi ESP WakeNet diagnostic is observable and the shared SD-CS LED stays gat
   const ledOff=voice.indexOf('digitalWrite(WAKE_LED_PIN,HIGH);',ledOn);
   assert(acquire>=0 && ledOn>acquire && ledOff>ledOn);
   assert.match(voice,/lastCommand=WAKE;lastResult=online\?2:0/);
-  assert.match(voice,/\[VOICE-DIAG\] Hi ESP detected/);
+  assert.match(voice,/\[VOICE\] Hi ESP detected/);
   assert.match(voice,/events->notify\(\)/);
 });

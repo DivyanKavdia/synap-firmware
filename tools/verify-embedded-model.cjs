@@ -15,9 +15,9 @@ function verify(binary,source,weights){
   if(size<=0||weights.length!==size||crypto.createHash('sha256').update(weights).digest('hex')!==hash)
     throw Error('Unverified reference model');
   if(!zlib.inflateRawSync(packed,{maxOutputLength:size}).equals(weights))throw Error('Embedded weights changed');
-  if(binary.length>0x330000)throw Error('Chakshu model and firmware exceed the existing OTA slot');
+  if(binary.length>0x3E0000)throw Error('Chakshu model and firmware exceed the enlarged dual-OTA slot');
   if(!binary.includes(packed))throw Error('Linked firmware is missing the complete compressed model');
-  console.log(`Verified embedded voice model in OTA image: ${binary.length}/3342336 bytes, ${packed.length} model bytes`);
+  console.log(`Verified embedded voice model in OTA image: ${binary.length}/4063232 bytes, ${packed.length} model bytes`);
 }
 if(require.main===module){
   const [binary,source,weights]=process.argv.slice(2);
