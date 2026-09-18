@@ -60,7 +60,7 @@ test('OTA admission excludes media through flash begin and publishes the worker 
   const power=source.slice(source.indexOf('bool otaNeedsActiveCpu() {'),source.indexOf('class OtaWriteCallbacks'));
   const tick=source.slice(source.indexOf('void otaTick() {'),source.indexOf('// XIAO Sense camera owns'));
   let fixture=fs.readFileSync('tests/ota-runtime.cpp','utf8');
-  fixture=fixture.replace('// INSERT ENGINE',`#define SYNAP_CHAKSHU 1\n${ownership}\n${engine}`)
+  fixture=fixture.replace('// INSERT ENGINE',`#define SYNAP_CHAKSHU 1\nstruct NimBLEService;\n${ownership}\n${engine}`)
     .replace('// INSERT POWER',power).replace('// INSERT PUBLISH',publish).replace('// INSERT TICK',tick)
     .replace('assert(cpuActive);++begins;', 'assert(cpuActive);ChakshuResources::Lease media;assert(!media);++begins;')
     .replace('uint32_t clockNow=100,', 'std::atomic<uint16_t> chakshuConnectionHandle{0};\nuint32_t clockNow=100,');
