@@ -19,7 +19,7 @@ def build(out):
         group=[]
         for name, expected in files.items():
             data=download(f'model/{family}/{model}/{name}')
-            actual=hashlib.sha1(f'blob {len(data)}\\0'.encode()+data).hexdigest()
+            actual=hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest()
             if actual!=expected: raise ValueError(f'Unexpected model content: {model}/{name}')
             group.append((name,data))
         entries.append((model,group))
@@ -32,14 +32,14 @@ def build(out):
     packed=header+body
     digest=hashlib.sha256(packed).hexdigest()
     manifest={'schema':1,'purpose':'wakenet-diagnostic','source':REV,'models':list(FILES),'bytes':len(packed),'sha256':digest}
-    (out/'model.json').write_text(json.dumps(manifest,indent=2)+'\\n')
+    (out/'model.json').write_text(json.dumps(manifest,indent=2)+'\n')
     (out/'srmodels.bin').write_bytes(packed)
     license=download('LICENSE')
     (out/'ESPRESSIF-LICENSE.txt').write_bytes(license)
     with zipfile.ZipFile(out/'chakshu-voice-model.zip','w',zipfile.ZIP_DEFLATED) as z:
         z.writestr('synap/models/srmodels.bin',packed)
-        z.writestr('synap/models/model.json',json.dumps(manifest,indent=2)+'\\n')
+        z.writestr('synap/models/model.json',json.dumps(manifest,indent=2)+'\n')
         z.writestr('ESPRESSIF-LICENSE.txt',license)
-        z.writestr('README.txt','Temporary Synap Chakshu WakeNet diagnostic. Say Hi ESP and verify the orange wake acknowledgement. MultiNet command recognition is intentionally absent from this diagnostic OTA. Model weights: '+REV+'\\n')
+        z.writestr('README.txt','Temporary Synap Chakshu WakeNet diagnostic. Say Hi ESP and verify the orange wake acknowledgement. MultiNet command recognition is intentionally absent from this diagnostic OTA. Model weights: '+REV+'\n')
     print(json.dumps(manifest))
 if __name__=='__main__':build(pathlib.Path(sys.argv[1] if len(sys.argv)>1 else 'voice-model'))
