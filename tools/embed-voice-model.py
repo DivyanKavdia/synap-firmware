@@ -1,16 +1,25 @@
-"""Embed a pinned, losslessly compressed WakeNet diagnostic model in Chakshu."""
+"""Embed a pinned, losslessly compressed WakeNet + MultiNet model pack in Chakshu."""
 import hashlib
 import pathlib
 import re
 import struct
 import sys
 import zlib
+try:
+    from zopfli.zlib import compress as zopfli_compress
+except ImportError:
+    zopfli_compress = None
 
 EXPECTED_MODELS = {
-    'wn9_hiesp': {
-        '_MODEL_INFO_':'0373ecf1e9f2f8fbb6ad168adee3d87849b8ad71',
-        'wn9_data':'7d99255f8c8f82cdbacad7e065fd63a9be1e3c0a',
-        'wn9_index':'3845b374a1b96d54d5c1574f6456403ea45f9f81',
+    'wn9s_hiesp': {
+        '_MODEL_INFO_':'f1356d7a9d138464ac7a6a20b42a9d020df65e34',
+        'wn9_data':'9b0c90d6ce4c3160f08d7ddfb2cd9935e702f9ee',
+        'wn9_index':'e52727fbeeddd00fddee1eaf5e435253976f041f',
+    },
+    'mn5q8_en': {
+        '_MODEL_INFO_':'2488263ce5dd4d27a50d07604792e233f2c248c6',
+        'mn5q8_data':'ccafc8b30bc5cd6cb8cc103cccc943959fc688eb',
+        'mn5q8_index':'f17c77e331bd51e88d566db7f80aacb821bef153',
     },
 }
 
@@ -71,7 +80,13 @@ def embed(sketch, model):
         compressor = zlib.compressobj(level=9,method=zlib.DEFLATED,wbits=-15,memLevel=9,strategy=strategy)
         return compressor.compress(weights) + compressor.flush()
     strategies = (zlib.Z_DEFAULT_STRATEGY, zlib.Z_FILTERED, zlib.Z_RLE, zlib.Z_HUFFMAN_ONLY)
-    packed = min((deflate(strategy) for strategy in strategies), key=len)
+    candidates = [deflate(strategy) for strategy in strategies]
+    if zopfli_compress is not None:
+        wrapped = zopfli_compress(weights, numiterations=10, blocksplitting=1, blocksplittinglast=0, blocksplittingmax=15)
+        if len(wrapped) < 7:
+            raise ValueError('Zopfli returned a truncated zlib stream')
+        candidates.append(wrapped[2:-4])  # Strip RFC1950 wrapper; runtime expects raw RFC1951 DEFLATE.
+    packed = min(candidates, key=len)
     if zlib.decompress(packed, -15) != weights:
         raise ValueError('Lossless voice model round trip failed')
     if len(packed) > 1600000:
@@ -82,7 +97,7 @@ def embed(sketch, model):
     ) + '};'
     source = source.replace(marker, array).replace('#define SYNAP_VOICE_FLASH 0', '#define SYNAP_VOICE_FLASH 1')
     sketch.write_text(source)
-    print(f'Embedded Chakshu diagnostic model: {len(packed)} flash bytes -> {size} identical PSRAM bytes; SHA-256 {digest}')
+    print(f'Embedded Chakshu production voice models: {len(packed)} flash bytes -> {size} identical PSRAM bytes; SHA-256 {digest}')
 
 
 if __name__ == '__main__':
