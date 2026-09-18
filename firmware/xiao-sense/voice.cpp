@@ -15,7 +15,7 @@ std::atomic<uint32_t> discontinuities{0},leaseAt{0},leaseConnection{0};
 struct Block { uint16_t count;int16_t samples[800]; };
 struct PendingCommand { uint8_t command;uint32_t epoch,at; };
 QueueHandle_t pcmQueue=nullptr,commandQueue=nullptr;
-TaskHandle_t feedHandle=nullptr,detectHandle=nullptr,idleHandle=nullptr;
+TaskHandle_t feedHandle=nullptr,detectHandle=nullptr,idleHandle=nullptr,feedbackHandle=nullptr;
 const esp_afe_sr_iface_t* afe=nullptr;esp_afe_sr_data_t* afeData=nullptr;
 esp_mn_iface_t* mn=nullptr;model_iface_data_t* mnData=nullptr;
 srmodel_list_t* models=nullptr;void* weights=nullptr;int16_t* afeInput=nullptr;int feedSize=0;
@@ -23,6 +23,10 @@ BLECharacteristic* events=nullptr;
 portMUX_TYPE stateMux=portMUX_INITIALIZER_UNLOCKED;
 uint32_t serial=0,lastAt=0;uint8_t lastCommand=0,lastResult=0;uint16_t lastValue=0;
 Gate gate;
+// On XIAO ESP32S3 Sense GPIO21 is both the active-low USER LED and SD CS.
+// Wake feedback must therefore own the media gate and return the pin HIGH.
+constexpr uint8_t WAKE_LED_PIN=21;
+constexpr uint16_t WAKE_LED_MS=90;
 constexpr size_t MAX_PHRASES=170;
 esp_mn_phrase_t commands[MAX_PHRASES]{};esp_mn_node_t nodes[MAX_PHRASES+1]{};
 char phraseStorage[MAX_PHRASES][80]{};size_t phraseCount=0;
@@ -120,6 +124,19 @@ void detectTask(void*) {
     }else if(detected==ESP_MN_STATE_TIMEOUT){gate.reset();mn->clean(mnData);}
   }
 }
+bool pulseWakeLed() {
+  if(!active()||otaBusy())return false;
+  ChakshuResources::Lease admission;
+  if(!admission)return false; // Never toggle shared SD CS during recording/transfer.
+  pinMode(WAKE_LED_PIN,OUTPUT);
+  digitalWrite(WAKE_LED_PIN,LOW);
+  vTaskDelay(pdMS_TO_TICKS(WAKE_LED_MS));
+  digitalWrite(WAKE_LED_PIN,HIGH);
+  return true;
+}
+void feedbackTask(void*) {
+  for(;;){ulTaskNotifyTake(pdTRUE,portMAX_DELAY);pulseWakeLed();}
+}
 void idleTask(void*) {
   ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
   int16_t samples[800];
@@ -139,6 +156,7 @@ void cleanup() {
   if(feedHandle){vTaskDelete(feedHandle);feedHandle=nullptr;}
   if(detectHandle){vTaskDelete(detectHandle);detectHandle=nullptr;}
   if(idleHandle){vTaskDelete(idleHandle);idleHandle=nullptr;}
+  if(feedbackHandle){vTaskDelete(feedbackHandle);feedbackHandle=nullptr;}
   if(pcmQueue){vQueueDelete(pcmQueue);pcmQueue=nullptr;}
   if(commandQueue){vQueueDelete(commandQueue);commandQueue=nullptr;}
   if(mnData){mn->destroy(mnData);mnData=nullptr;}
@@ -183,7 +201,8 @@ void initialize() {
   if(!afeInput||!pcmQueue||!commandQueue||
      xTaskCreatePinnedToCore(feedTask,"voice-feed",4096,nullptr,2,&feedHandle,0)!=pdPASS||
      xTaskCreatePinnedToCore(detectTask,"voice-detect",8192,nullptr,1,&detectHandle,1)!=pdPASS||
-     xTaskCreatePinnedToCore(idleTask,"voice-idle",4096,nullptr,1,&idleHandle,0)!=pdPASS){status=NO_MEMORY;cleanup();return;}
+     xTaskCreatePinnedToCore(idleTask,"voice-idle",4096,nullptr,1,&idleHandle,0)!=pdPASS||
+     xTaskCreatePinnedToCore(feedbackTask,"voice-led",2048,nullptr,1,&feedbackHandle,0)!=pdPASS){status=NO_MEMORY;cleanup();return;}
   status=enabled.load()?LISTENING:VOICE_DISABLED;
   xTaskNotifyGive(feedHandle);xTaskNotifyGive(detectHandle);xTaskNotifyGive(idleHandle);
   Serial.printf("[VOICE] Hey Synap ready=%u phrases=%u psram=%lu\n",unsigned(active()),unsigned(phraseCount),(unsigned long)ESP.getFreePsram());
@@ -210,6 +229,13 @@ void tick() {
   const uint16_t value=durationCommand(command)?durationSeconds(command):0;
   const bool online=deviceConnected.load()&&leaseConnection.load()==connectionGeneration.load()&&
     leaseAt.load()!=0&&uint32_t(millis()-leaseAt.load())<6000u;
+  if(command==WAKE){
+    portENTER_CRITICAL(&stateMux);++serial;lastCommand=WAKE;lastResult=online?2:0;lastAt=millis();lastValue=0;portEXIT_CRITICAL(&stateMux);
+    if(feedbackHandle)xTaskNotifyGive(feedbackHandle);
+    if(deviceConnected.load()&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
+    Serial.printf("[VOICE] Hey Synap detected online=%u\\n",unsigned(online));
+    return;
+  }
   uint8_t result=0;
   if(!online){
     using namespace ChakshuTransfer;
