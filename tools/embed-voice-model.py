@@ -21,8 +21,21 @@ def embed(sketch, model):
     weights = model.read_bytes()
     if len(weights) != size or hashlib.sha256(weights).hexdigest() != digest:
         raise ValueError('Voice model does not match the pinned size and SHA-256')
-    compressor = zlib.compressobj(9, zlib.DEFLATED, -15)
-    packed = compressor.compress(weights) + compressor.flush()
+    def deflate(strategy):
+        compressor = zlib.compressobj(
+            level=9,
+            method=zlib.DEFLATED,
+            wbits=-15,
+            memLevel=9,
+            strategy=strategy,
+        )
+        return compressor.compress(weights) + compressor.flush()
+
+    # A larger compressor hash table costs nothing on the pendant and can save
+    # precious OTA-slot bytes. Pick the smallest deterministic raw-DEFLATE
+    # stream accepted by the same miniz decoder used at runtime.
+    strategies = (zlib.Z_DEFAULT_STRATEGY, zlib.Z_FILTERED, zlib.Z_RLE, zlib.Z_HUFFMAN_ONLY)
+    packed = min((deflate(strategy) for strategy in strategies), key=len)
     if zlib.decompress(packed, -15) != weights:
         raise ValueError('Lossless voice model round trip failed')
     if len(packed) > 1600000:
