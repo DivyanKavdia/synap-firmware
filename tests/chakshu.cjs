@@ -33,7 +33,7 @@ test('Chakshu has separate release paths, OTA marker and dual 8MB slots',()=>{
 });
 
 
-test('Hey Synap wake is observable and the shared SD-CS LED is gated safely',()=>{
+test('Hey Snap wake is observable and the shared SD-CS LED is gated safely',()=>{
   const contract=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice-contract.cpp'),'utf8');
   const voice=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice.cpp'),'utf8');
   assert.match(contract,/command==WAKE\)\{armed=true;armedAt=now;return WAKE;/);
