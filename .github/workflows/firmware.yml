@@ -49,6 +49,7 @@ jobs:
           node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3/synap_esp32c3.ino
           node tools/materialize-target.cjs xiao-esp32s3-sense-8m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_chakshu/synap_chakshu.ino
           cp firmware/xiao-sense/partitions.csv prepared/synap_chakshu/partitions.csv
+          cp firmware/xiao-sense/partitions.csv prepared/synap_chakshu/partitions.csv
           test "$(git status --porcelain -- synap_esp32s3)" = ""
       - name: Embed and verify pinned local voice model in Chakshu only
         run: |
