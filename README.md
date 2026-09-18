@@ -43,7 +43,7 @@ A successful BLE notification enqueue is not proof that the browser persisted th
 
 ## Chakshu production baseline
 
-The current Chakshu baseline includes the approved offline media lifecycle and a proper two-stage local voice pipeline: Espressif WakeNet detects `Hi ESP`, then MultiNet listens for one supported command for up to 8 seconds.
+The current Chakshu baseline includes the approved offline media lifecycle and a proper two-stage local voice pipeline: Espressif WakeNet detects `Hi ESP`, then MultiNet listens for one supported command for up to 8 seconds. Chakshu uses a dedicated 8 MB dual-OTA partition layout (two 0x3E0000 app slots plus NVS/OTA metadata/coredump); no internal SPIFFS partition is retained because media storage is on microSD.
 
 - Synap-owned SD FIFO cleanup when reserve space is needed.
 - App-triggered clear of Synap capture files.
