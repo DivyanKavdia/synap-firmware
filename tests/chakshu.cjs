@@ -25,9 +25,9 @@ test('Chakshu uses onboard PDM and does not configure absent hardware',()=>{
 test('Chakshu has separate release paths, OTA marker and dual 8MB slots',()=>{
   const target=getTarget('xiao-esp32s3-sense-8m');
   assert.equal(target.family,'esp32s3');
-  assert.equal(target.slotSize,0x330000);
+  assert.equal(target.slotSize,0x3E0000);
   assert.equal(target.psramBytes,8388608);
-  assert.equal(target.partition,'default_8MB');
+  assert.equal(target.partition,'synap_chakshu_ota_8mb');
   assert.equal(target.assetStem,'chakshu');
   assert.notEqual(target.productMarker,getTarget('esp32s3-fh4r2-qspi-4m').productMarker);
 });
