@@ -20,7 +20,7 @@ public:
   void reset(){armed=false;}
   uint8_t accept(uint8_t command,float confidence,uint32_t now) {
     if(confidence<0.90f||confidence>1.0f||!(confidence>=0.90f))return 0;
-    if(command==WAKE){armed=true;armedAt=now;return 0;}
+    if(command==WAKE){armed=true;armedAt=now;return WAKE;}
     const bool recognized=(command>=PHOTO&&command<=DESCRIBE)||durationCommand(command);
     const bool allowed=armed&&uint32_t(now-armedAt)<=8000u&&recognized;
     armed=false;
