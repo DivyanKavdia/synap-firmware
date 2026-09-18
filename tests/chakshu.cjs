@@ -33,12 +33,13 @@ test('Chakshu has separate release paths, OTA marker and dual 8MB slots',()=>{
 });
 
 
-test('Hey Snap wake is observable and the shared SD-CS LED is gated safely',()=>{
-  const contract=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice-contract.cpp'),'utf8');
+test('Hi ESP WakeNet diagnostic is observable and the shared SD-CS LED stays gated safely',()=>{
   const voice=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice.cpp'),'utf8');
-  assert.match(contract,/command==WAKE\)\{armed=true;armedAt=now;return WAKE;/);
-  assert.match(voice,/addPhrase\(WAKE,"hd SNaP"\)/);
-  assert.doesNotMatch(voice,/SgNaP|Hi Synap|Hey Synap/);
+  assert.match(voice,/esp_srmodel_filter\(models,ESP_WN_PREFIX,"hiesp"\)/);
+  assert.match(voice,/config->wakenet_init=true/);
+  assert.match(voice,/config->wakenet_mode=DET_MODE_95/);
+  assert.match(voice,/result->wakeup_state==WAKENET_DETECTED/);
+  assert.doesNotMatch(voice,/mn->detect|addPhrase\(WAKE|esp_mn_/);
   assert.match(voice,/constexpr uint8_t WAKE_LED_PIN=21;/);
   assert.match(voice,/ChakshuResources::Lease admission;/);
   assert.match(voice,/if\(!admission\)return false; \/\/ Never toggle shared SD CS during recording\/transfer\./);
@@ -47,5 +48,6 @@ test('Hey Snap wake is observable and the shared SD-CS LED is gated safely',()=>
   const ledOff=voice.indexOf('digitalWrite(WAKE_LED_PIN,HIGH);',ledOn);
   assert(acquire>=0 && ledOn>acquire && ledOff>ledOn);
   assert.match(voice,/lastCommand=WAKE;lastResult=online\?2:0/);
+  assert.match(voice,/\[VOICE-DIAG\] Hi ESP detected/);
   assert.match(voice,/events->notify\(\)/);
 });
