@@ -1,4 +1,4 @@
-// MultiNet command IDs and activation gate shared by firmware and native tests.
+// WakeNet-gated MultiNet command IDs and activation gate shared by firmware and native tests.
 namespace ChakshuVoice {
 enum Command : uint8_t {
   WAKE=1, PHOTO=2, VIDEO_START=3, VIDEO_STOP=4, AUDIO_ON=5, AUDIO_OFF=6, DESCRIBE=7,
