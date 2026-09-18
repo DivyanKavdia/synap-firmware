@@ -31,3 +31,19 @@ test('Chakshu has separate release paths, OTA marker and dual 8MB slots',()=>{
   assert.equal(target.assetStem,'chakshu');
   assert.notEqual(target.productMarker,getTarget('esp32s3-fh4r2-qspi-4m').productMarker);
 });
+
+
+test('Hey Synap wake is observable and the shared SD-CS LED is gated safely',()=>{
+  const contract=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice-contract.cpp'),'utf8');
+  const voice=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice.cpp'),'utf8');
+  assert.match(contract,/command==WAKE\)\{armed=true;armedAt=now;return WAKE;/);
+  assert.match(voice,/constexpr uint8_t WAKE_LED_PIN=21;/);
+  assert.match(voice,/ChakshuResources::Lease admission;/);
+  assert.match(voice,/if\(!admission\)return false; \/\/ Never toggle shared SD CS during recording\/transfer\./);
+  const acquire=voice.indexOf('ChakshuResources::Lease admission;');
+  const ledOn=voice.indexOf('digitalWrite(WAKE_LED_PIN,LOW);',acquire);
+  const ledOff=voice.indexOf('digitalWrite(WAKE_LED_PIN,HIGH);',ledOn);
+  assert(acquire>=0 && ledOn>acquire && ledOff>ledOn);
+  assert.match(voice,/lastCommand=WAKE;lastResult=online\?2:0/);
+  assert.match(voice,/events->notify\(\)/);
+});
