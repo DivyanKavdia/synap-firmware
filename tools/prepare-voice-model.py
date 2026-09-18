@@ -39,6 +39,6 @@ def build(out):
         z.writestr('synap/models/srmodels.bin',packed)
         z.writestr('synap/models/model.json',json.dumps(manifest,indent=2)+'\n')
         z.writestr('ESPRESSIF-LICENSE.txt',license)
-        z.writestr('README.txt','The Synap Chakshu OTA embeds these pinned ESP-SR weights. Say Hey Synap, pause, then take a snap / record a video / stop video / start audio / stop audio / what do you see. Recognition is local; Gemini is contacted only for the explicit visual-description command while the Synap app is connected. Model weights: '+REV+'\n')
+        z.writestr('README.txt','The Synap Chakshu OTA embeds these pinned ESP-SR weights. Say Hey Snap, pause, then take a snap / record a video / stop video / start audio / stop audio / what do you see. Recognition is local; Gemini is contacted only for the explicit visual-description command while the Synap app is connected. Model weights: '+REV+'\n')
     print(json.dumps(manifest))
 if __name__=='__main__':build(pathlib.Path(sys.argv[1] if len(sys.argv)>1 else 'voice-model'))

@@ -71,7 +71,7 @@ bool addPhrase(uint8_t id,const String& phoneme) {
 }
 bool configurePhrases() {
   phraseCount=0;memset(commands,0,sizeof(commands));memset(nodes,0,sizeof(nodes));memset(phraseStorage,0,sizeof(phraseStorage));
-  if(!addPhrase(WAKE,"hd SgNaP") || !addPhrase(WAKE,"hi SgNaP") ||
+  if(!addPhrase(WAKE,"hd SNaP") ||
      !addPhrase(PHOTO,"TdK c SNaP") || !addPhrase(VIDEO_START,"RcKeRD c VgDmb") ||
      !addPhrase(VIDEO_STOP,"STnP VgDmb") || !addPhrase(AUDIO_ON,"STnRT eDmb") ||
      !addPhrase(AUDIO_OFF,"STnP eDmb") || !addPhrase(DESCRIBE,"WcT Do Yo Sm"))return false;
@@ -205,7 +205,7 @@ void initialize() {
      xTaskCreatePinnedToCore(feedbackTask,"voice-led",2048,nullptr,1,&feedbackHandle,0)!=pdPASS){status=NO_MEMORY;cleanup();return;}
   status=enabled.load()?LISTENING:VOICE_DISABLED;
   xTaskNotifyGive(feedHandle);xTaskNotifyGive(detectHandle);xTaskNotifyGive(idleHandle);
-  Serial.printf("[VOICE] Hey Synap ready=%u phrases=%u psram=%lu\n",unsigned(active()),unsigned(phraseCount),(unsigned long)ESP.getFreePsram());
+  Serial.printf("[VOICE] Hey Snap ready=%u phrases=%u psram=%lu\n",unsigned(active()),unsigned(phraseCount),(unsigned long)ESP.getFreePsram());
 }
 void encode(uint8_t* bytes,size_t length=22){
   memset(bytes,0,length);bytes[0]=0xCD;bytes[1]=2;bytes[2]=status.load();bytes[3]=enabled.load()?1:0;
@@ -233,7 +233,7 @@ void tick() {
     portENTER_CRITICAL(&stateMux);++serial;lastCommand=WAKE;lastResult=online?2:0;lastAt=millis();lastValue=0;portEXIT_CRITICAL(&stateMux);
     if(feedbackHandle)xTaskNotifyGive(feedbackHandle);
     if(deviceConnected.load()&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
-    Serial.printf("[VOICE] Hey Synap detected online=%u\\n",unsigned(online));
+    Serial.printf("[VOICE] Hey Snap detected online=%u\\n",unsigned(online));
     return;
   }
   uint8_t result=0;
