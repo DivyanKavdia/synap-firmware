@@ -79,7 +79,7 @@ def embed(sketch, model):
     def deflate(strategy):
         compressor = zlib.compressobj(level=9,method=zlib.DEFLATED,wbits=-15,memLevel=9,strategy=strategy)
         return compressor.compress(weights) + compressor.flush()
-    strategies = (zlib.Z_DEFAULT_STRATEGY, zlib.Z_FILTERED, zlib.Z_RLE, zlib.Z_HUFFMAN_ONLY)
+    strategies = (zlib.Z_DEFAULT_STRATEGY, zlib.Z_FILTERED, zlib.Z_RLE, zlib.Z_HUFFMAN_ONLY, zlib.Z_FIXED)
     candidates = [deflate(strategy) for strategy in strategies]
     if zopfli_compress is not None:
         wrapped = zopfli_compress(weights, numiterations=10, blocksplitting=1, blocksplittinglast=0, blocksplittingmax=15)
@@ -89,7 +89,7 @@ def embed(sketch, model):
     packed = min(candidates, key=len)
     if zlib.decompress(packed, -15) != weights:
         raise ValueError('Lossless voice model round trip failed')
-    if len(packed) > 1600000:
+    if len(packed) > 1580000:
         raise ValueError('Compressed model exceeds the release size budget')
     array = 'alignas(4) static const uint8_t DATA[]={\n' + ''.join(
         ','.join(f'0x{b:02x}' for b in packed[i:i + 24]) + ',\n'
