@@ -35,7 +35,7 @@ test('Chakshu has separate release paths, OTA marker and dual 8MB slots',()=>{
 
 test('WakeNet gates the MultiNet command window and wake feedback stays SD-safe',()=>{
   const voice=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice.cpp'),'utf8');
-  assert.match(voice,/esp_srmodel_filter\\(wakeModels,ESP_WN_PREFIX,"hiesp"\\)/);
+  assert.match(voice,/esp_srmodel_filter\(wakeModels,ESP_WN_PREFIX,"hiesp"\)/);
   assert.match(voice,/esp_srmodel_filter\(models,"mn5q8","en"\)/);
   assert.match(voice,/mn->create\(name,8000\)/);
   assert.match(voice,/config->wakenet_init=true/);
