@@ -129,7 +129,7 @@ void initialize() {
   config->memory_alloc_mode=AFE_MEMORY_ALLOC_MORE_PSRAM;
   afe=esp_afe_handle_from_config(config);afeData=afe?afe->create_from_config(config):nullptr;afe_config_free(config);
   if(!afeData){status=NO_MEMORY;cleanup();return;}
-  if(afe->set_wakenet_threshold(afeData,1,0.80f)!=1){status=MODEL_ERROR;cleanup();return;}
+  // Use the model-trained Hi ESP threshold for the diagnostic; do not tighten it manually.\n  if(afe->reset_wakenet_threshold(afeData,1)!=1){status=MODEL_ERROR;cleanup();return;}
   feedSize=afe->get_feed_chunksize(afeData);
   if(feedSize<=0||feedSize>2048||afe->get_feed_channel_num(afeData)!=1||afe->get_samp_rate(afeData)!=SAMPLE_RATE){
     status=MODEL_ERROR;cleanup();return;
