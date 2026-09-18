@@ -1,39 +1,75 @@
-"""Embed verified, losslessly compressed weights in the Chakshu OTA application."""
+"""Embed a pinned, losslessly compressed WakeNet diagnostic model in Chakshu."""
 import hashlib
 import pathlib
 import re
+import struct
 import sys
 import zlib
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+EXPECTED_MODELS = {
+    'wn9_hiesp': {
+        '_MODEL_INFO_':'0373ecf1e9f2f8fbb6ad168adee3d87849b8ad71',
+        'wn9_data':'7d99255f8c8f82cdbacad7e065fd63a9be1e3c0a',
+        'wn9_index':'3845b374a1b96d54d5c1574f6456403ea45f9f81',
+    },
+}
+
+
+def git_blob_sha(data):
+    return hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest()
+
+
+def verify_pack(weights):
+    if len(weights)<4:
+        raise ValueError('Voice model pack is truncated')
+    count=struct.unpack_from('<I',weights,0)[0]
+    if count!=len(EXPECTED_MODELS):
+        raise ValueError('Voice model pack has unexpected model count')
+    at=4; files=[]
+    for expected_model,expected_files in EXPECTED_MODELS.items():
+        if at+36>len(weights):
+            raise ValueError('Voice model header is truncated')
+        raw_name,file_count=struct.unpack_from('<32sI',weights,at);at+=36
+        model=raw_name.split(b'\0',1)[0].decode('ascii')
+        if model!=expected_model or file_count!=len(expected_files):
+            raise ValueError('Voice model pack has unexpected model metadata')
+        for expected_name,expected_sha in expected_files.items():
+            if at+40>len(weights):
+                raise ValueError('Voice model file table is truncated')
+            raw_file,offset,size=struct.unpack_from('<32sII',weights,at);at+=40
+            name=raw_file.split(b'\0',1)[0].decode('ascii')
+            if name!=expected_name:
+                raise ValueError('Voice model file order changed')
+            files.append((offset,size,expected_sha))
+    cursor=at
+    for offset,size,expected_sha in files:
+        if offset!=cursor or offset+size>len(weights):
+            raise ValueError('Voice model data layout is invalid')
+        data=weights[offset:offset+size]
+        if git_blob_sha(data)!=expected_sha:
+            raise ValueError('Voice model file content changed')
+        cursor+=size
+    if cursor!=len(weights):
+        raise ValueError('Voice model pack has trailing data')
 
 
 def embed(sketch, model):
     source = sketch.read_text()
-    contract = (ROOT / 'firmware/xiao-sense/model-contract.cpp').read_text()
-    size = int(re.search(r'MODEL_BYTES=(\d+);', contract)[1])
-    digest = re.search(r'MODEL_SHA256\[\]="([a-f0-9]{64})"', contract)[1]
     if '#define SYNAP_CHAKSHU 1' not in source or 'SYNAP-CHAKSHU-OTA-ID-V3' not in source:
         raise ValueError('Embedded voice weights are only supported on Chakshu')
     marker = '// SYNAP_EMBEDDED_VOICE_MODEL'
     if source.count(marker) != 1 or source.count('#define SYNAP_VOICE_FLASH 0') != 1:
         raise ValueError('Missing or already populated Chakshu model anchor')
     weights = model.read_bytes()
-    if len(weights) != size or hashlib.sha256(weights).hexdigest() != digest:
-        raise ValueError('Voice model does not match the pinned size and SHA-256')
+    verify_pack(weights)
+    size=len(weights);digest=hashlib.sha256(weights).hexdigest()
+    if len(re.findall(r'MODEL_BYTES=\d+;',source))!=1 or len(re.findall(r'MODEL_SHA256\[\]="[a-f0-9]{64}"',source))!=1:
+        raise ValueError('Missing unique Chakshu model contract')
+    source=re.sub(r'MODEL_BYTES=\d+;',f'MODEL_BYTES={size};',source,count=1)
+    source=re.sub(r'MODEL_SHA256\[\]="[a-f0-9]{64}"',f'MODEL_SHA256[]="{digest}"',source,count=1)
     def deflate(strategy):
-        compressor = zlib.compressobj(
-            level=9,
-            method=zlib.DEFLATED,
-            wbits=-15,
-            memLevel=9,
-            strategy=strategy,
-        )
+        compressor = zlib.compressobj(level=9,method=zlib.DEFLATED,wbits=-15,memLevel=9,strategy=strategy)
         return compressor.compress(weights) + compressor.flush()
-
-    # A larger compressor hash table costs nothing on the pendant and can save
-    # precious OTA-slot bytes. Pick the smallest deterministic raw-DEFLATE
-    # stream accepted by the same miniz decoder used at runtime.
     strategies = (zlib.Z_DEFAULT_STRATEGY, zlib.Z_FILTERED, zlib.Z_RLE, zlib.Z_HUFFMAN_ONLY)
     packed = min((deflate(strategy) for strategy in strategies), key=len)
     if zlib.decompress(packed, -15) != weights:
@@ -46,7 +82,7 @@ def embed(sketch, model):
     ) + '};'
     source = source.replace(marker, array).replace('#define SYNAP_VOICE_FLASH 0', '#define SYNAP_VOICE_FLASH 1')
     sketch.write_text(source)
-    print(f'Embedded Chakshu model: {len(packed)} flash bytes -> {size} identical PSRAM bytes; SHA-256 {digest}')
+    print(f'Embedded Chakshu diagnostic model: {len(packed)} flash bytes -> {size} identical PSRAM bytes; SHA-256 {digest}')
 
 
 if __name__ == '__main__':
