@@ -7,6 +7,7 @@ const {profileBlock}=require('../tools/device-profile.cjs');
 const {nativeTest}=require('./support/native.cjs');
 for(const target of Object.values(TARGETS)) {
   test(`${target.name} advertises only its supported and initialized hardware`,()=>{
+    if(target.adapter==='xiao-sense')assert.equal(target.protocols.voice,2);
     const source=materialize(assemble(),target.id);
     const start=source.indexOf('void encodeModuleCapabilities(uint8_t* p) {');
     const encode=source.slice(start,source.indexOf('class ModuleCapabilitiesCallbacks',start));
