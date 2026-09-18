@@ -51,6 +51,7 @@ jobs:
           test "$(git status --porcelain -- synap_esp32s3)" = ""
       - name: Embed and verify pinned local voice model in Chakshu only
         run: |
+          python3 -m pip install --disable-pip-version-check --no-deps zopfli==0.4.3
           python3 tools/prepare-voice-model.py bundle/voice-model
           python3 tools/embed-voice-model.py prepared/synap_chakshu/synap_chakshu.ino bundle/voice-model/srmodels.bin
           SYNAP_MODEL_PACK=bundle/voice-model/srmodels.bin node --test tests/chakshu-flash-pack.cjs
