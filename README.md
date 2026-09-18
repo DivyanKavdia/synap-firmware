@@ -53,7 +53,7 @@ Build 1262 includes the approved Chakshu offline media and local voice lifecycle
 - Default video duration of 10 seconds.
 - Explicit requested video durations, within production limits.
 - High-quality/native camera capture profiles for the supported camera.
-- Local `Hey Synap` recognition using the embedded pinned speech model.
+- Local `Hey Snap` recognition using the embedded pinned speech model.
 - Voice protocol v2.
 - Commands for photo capture and timed video capture.
 - Local voice remains available while compatible SD recording is active.
@@ -97,7 +97,7 @@ Build/test success validates software contracts but does not establish real-worl
 
 - sustained microphone/BLE recording,
 - reconnect and recovery,
-- local `Hey Synap` recognition,
+- local `Hey Snap` recognition,
 - photo quality,
 - timed video capture,
 - long SD recording,
