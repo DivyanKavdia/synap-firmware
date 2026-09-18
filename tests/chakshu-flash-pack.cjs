@@ -28,7 +28,8 @@ test('pinned model round-trips through prepared source, is required in linked im
     assert(packed.length<1600000);assert(zlib.inflateRawSync(packed).equals(weights));
     const image=Buffer.concat([Buffer.alloc(1300000),packed]);verify(image,source,weights);
     assert.throws(()=>verify(Buffer.alloc(1300000),source,weights),/missing/);
-    assert.throws(()=>verify(Buffer.concat([image,Buffer.alloc(700000)]),source,weights),/OTA slot/);
+    const overflow=0x330000-image.length+1;
+    assert(overflow>0);assert.throws(()=>verify(Buffer.concat([image,Buffer.alloc(overflow)]),source,weights),/OTA slot/);
     assert.throws(()=>execFileSync('python3',['tools/embed-voice-model.py',sketch,model],{stdio:'pipe'}));
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });

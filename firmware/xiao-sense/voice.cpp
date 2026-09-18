@@ -1,7 +1,8 @@
-// Local English command recognition. AFE receives a copy; saved/streamed PCM is untouched.
+// Temporary OTA diagnostic: stock WakeNet "Hi ESP" validates microphone -> AFE -> WakeNet.
+// AFE receives a copy; saved/streamed PCM is untouched.
 #include <esp_afe_sr_iface.h>
 #include <esp_afe_sr_models.h>
-#include <esp_mn_models.h>
+#include <esp_wn_models.h>
 #include <model_path.h>
 #include <mbedtls/sha256.h>
 namespace ChakshuVoice {
@@ -17,76 +18,17 @@ struct PendingCommand { uint8_t command;uint32_t epoch,at; };
 QueueHandle_t pcmQueue=nullptr,commandQueue=nullptr;
 TaskHandle_t feedHandle=nullptr,detectHandle=nullptr,idleHandle=nullptr,feedbackHandle=nullptr;
 const esp_afe_sr_iface_t* afe=nullptr;esp_afe_sr_data_t* afeData=nullptr;
-esp_mn_iface_t* mn=nullptr;model_iface_data_t* mnData=nullptr;
+char* wakeModel=nullptr;
 srmodel_list_t* models=nullptr;void* weights=nullptr;int16_t* afeInput=nullptr;int feedSize=0;
 BLECharacteristic* events=nullptr;
 portMUX_TYPE stateMux=portMUX_INITIALIZER_UNLOCKED;
 uint32_t serial=0,lastAt=0;uint8_t lastCommand=0,lastResult=0;uint16_t lastValue=0;
-Gate gate;
 // On XIAO ESP32S3 Sense GPIO21 is both the active-low USER LED and SD CS.
 // Wake feedback must therefore own the media gate and return the pin HIGH.
 constexpr uint8_t WAKE_LED_PIN=21;
 constexpr uint16_t WAKE_LED_MS=90;
-constexpr size_t MAX_PHRASES=170;
-esp_mn_phrase_t commands[MAX_PHRASES]{};esp_mn_node_t nodes[MAX_PHRASES+1]{};
-char phraseStorage[MAX_PHRASES][80]{};size_t phraseCount=0;
 
 bool active(){return status.load()==LISTENING&&enabled.load()&&ChakshuFlashModel::present();}
-
-const char* smallNumber(uint16_t n) {
-  static const char* const values[]={"","WcN","To","vRm","FeR","FiV","SgKS","SfVcN","dT","NiN","TfN","gLfVcN","TWfLV","vkTmN","FeRTmN","FgFTmN","SgKSTmN","SfVcNTmN","dTmN","NiNTmN"};
-  return n<20?values[n]:"";
-}
-const char* tensNumber(uint16_t n) {
-  static const char* const values[]={"","","TWfNTm","vkDm","FeRTm","FgFTm","SgKSTm","SfVcNTm","dTm","NiNTm"};
-  return n<10?values[n]:"";
-}
-String numberPhoneme(uint16_t value) {
-  if(!value||value>600)return String();
-  String out;
-  if(value>=100) {
-    out+=smallNumber(value/100);out+=" hcNDRcD";value%=100;
-    if(value)out+=' ';
-  }
-  if(value>=20) {
-    out+=tensNumber(value/10);value%=10;
-    if(value){out+=' ';out+=smallNumber(value);}
-  } else if(value) out+=smallNumber(value);
-  return out;
-}
-uint8_t durationId(uint16_t seconds) {
-  for(uint16_t command=DURATION_BASE;command<=DURATION_LAST;++command)
-    if(durationSeconds(uint8_t(command))==seconds)return uint8_t(command);
-  return 0;
-}
-bool addPhrase(uint8_t id,const String& phoneme) {
-  if(!id||!phoneme.length()||phraseCount>=MAX_PHRASES)return false;
-  snprintf(phraseStorage[phraseCount],sizeof(phraseStorage[phraseCount]),"%s",phoneme.c_str());
-  commands[phraseCount].command_id=id;
-  commands[phraseCount].string=phraseStorage[phraseCount];
-  commands[phraseCount].phonemes=phraseStorage[phraseCount];
-  nodes[phraseCount+1].phrase=&commands[phraseCount];
-  nodes[phraseCount].next=&nodes[phraseCount+1];
-  ++phraseCount;return true;
-}
-bool configurePhrases() {
-  phraseCount=0;memset(commands,0,sizeof(commands));memset(nodes,0,sizeof(nodes));memset(phraseStorage,0,sizeof(phraseStorage));
-  if(!addPhrase(WAKE,"hd SNaP") ||
-     !addPhrase(PHOTO,"TdK c SNaP") || !addPhrase(VIDEO_START,"RcKeRD c VgDmb") ||
-     !addPhrase(VIDEO_STOP,"STnP VgDmb") || !addPhrase(AUDIO_ON,"STnRT eDmb") ||
-     !addPhrase(AUDIO_OFF,"STnP eDmb") || !addPhrase(DESCRIBE,"WcT Do Yo Sm"))return false;
-  for(uint16_t command=DURATION_BASE;command<=DURATION_LAST;++command) {
-    const uint16_t seconds=durationSeconds(uint8_t(command));
-    const String number=numberPhoneme(seconds);
-    if(!number.length() || !addPhrase(uint8_t(command),String("RcKeRD FeR ")+number+" SfKcNDZ"))return false;
-  }
-  // Natural minute aliases for long durations without consuming additional command IDs.
-  for(uint16_t minutes=2;minutes<=10;++minutes) {
-    const uint16_t seconds=minutes*60u;const uint8_t id=durationId(seconds);
-    if(id && !addPhrase(id,String("RcKeRD FeR ")+numberPhoneme(minutes)+" MgNcTS"))return false;
-  }
-  return phraseCount<=MAX_PHRASES;
-}
 
 void feed(const int16_t* samples,size_t count) {
   if(!active()||!pcmQueue||!samples)return;
@@ -112,16 +54,14 @@ void detectTask(void*) {
   for(;;){
     afe_fetch_result_t* result=afe->fetch_with_delay(afeData,pdMS_TO_TICKS(100));
     if(!active()||otaBusy()||epoch!=discontinuities.load()){
-      epoch=discontinuities.load();gate.reset();mn->clean(mnData);afe->reset_buffer(afeData);continue;
+      epoch=discontinuities.load();afe->reset_buffer(afeData);continue;
     }
-    if(!result||result->ret_value!=ESP_OK||!result->data)continue;
-    const auto detected=mn->detect(mnData,result->data);
-    if(detected==ESP_MN_STATE_DETECTED){
-      const auto* matches=mn->get_results(mnData);
-      if(matches&&matches->num>0){const uint8_t command=gate.accept(matches->command_id[0],matches->prob[0],millis());
-        if(command){PendingCommand pending{command,epoch,millis()};xQueueSend(commandQueue,&pending,0);}}
-      mn->clean(mnData);
-    }else if(detected==ESP_MN_STATE_TIMEOUT){gate.reset();mn->clean(mnData);}
+    if(!result||result->ret_value!=ESP_OK)continue;
+    if(result->wakeup_state==WAKENET_DETECTED){
+      PendingCommand pending{WAKE,epoch,millis()};
+      if(xQueueSend(commandQueue,&pending,0)!=pdTRUE)++discontinuities;
+      afe->reset_buffer(afeData);
+    }
   }
 }
 bool pulseWakeLed() {
@@ -159,7 +99,6 @@ void cleanup() {
   if(feedbackHandle){vTaskDelete(feedbackHandle);feedbackHandle=nullptr;}
   if(pcmQueue){vQueueDelete(pcmQueue);pcmQueue=nullptr;}
   if(commandQueue){vQueueDelete(commandQueue);commandQueue=nullptr;}
-  if(mnData){mn->destroy(mnData);mnData=nullptr;}
   if(afeData){afe->destroy(afeData);afeData=nullptr;}
   if(models){esp_srmodel_deinit(models);models=nullptr;}
   free(weights);weights=nullptr;free(afeInput);afeInput=nullptr;
@@ -181,20 +120,18 @@ void initialize() {
   if(strcmp(hex,MODEL_SHA256)){status=MODEL_ERROR;cleanup();return;}
   models=srmodel_load(weights);
   if(!models){status=MODEL_ERROR;cleanup();return;}
-  char* name=esp_srmodel_filter(models,"mn5q8","en");
-  if(!name||(mn=esp_mn_handle_from_name(name))==nullptr){status=MODEL_ERROR;cleanup();return;}
-  mnData=mn->create(name,8000);
-  if(!mnData||!configurePhrases()){status=NO_MEMORY;cleanup();return;}
-  if(mn->set_speech_commands(mnData,&nodes[0])!=nullptr){status=MODEL_ERROR;cleanup();return;}
-  mn->set_det_threshold(mnData,0.90f);
+  wakeModel=esp_srmodel_filter(models,ESP_WN_PREFIX,"hiesp");
+  if(!wakeModel){status=MODEL_ERROR;cleanup();return;}
   afe_config_t* config=afe_config_init("M",models,AFE_TYPE_SR,AFE_MODE_LOW_COST);
   if(!config){status=NO_MEMORY;cleanup();return;}
-  config->wakenet_init=false;config->aec_init=false;config->se_init=false;
+  config->wakenet_init=true;config->wakenet_model_name=wakeModel;config->wakenet_mode=DET_MODE_95;
+  config->aec_init=false;config->se_init=false;config->ns_init=false;config->vad_init=false;
   config->memory_alloc_mode=AFE_MEMORY_ALLOC_MORE_PSRAM;
   afe=esp_afe_handle_from_config(config);afeData=afe?afe->create_from_config(config):nullptr;afe_config_free(config);
   if(!afeData){status=NO_MEMORY;cleanup();return;}
+  // Use the model-trained Hi ESP threshold for the diagnostic; do not tighten it manually.\n  if(afe->reset_wakenet_threshold(afeData,1)!=1){status=MODEL_ERROR;cleanup();return;}
   feedSize=afe->get_feed_chunksize(afeData);
-  if(feedSize<=0||feedSize>2048||afe->get_feed_channel_num(afeData)!=1||afe->get_fetch_chunksize(afeData)!=mn->get_samp_chunksize(mnData)){
+  if(feedSize<=0||feedSize>2048||afe->get_feed_channel_num(afeData)!=1||afe->get_samp_rate(afeData)!=SAMPLE_RATE){
     status=MODEL_ERROR;cleanup();return;
   }
   afeInput=static_cast<int16_t*>(ps_malloc(feedSize*2));pcmQueue=xQueueCreate(8,sizeof(Block));commandQueue=xQueueCreate(4,sizeof(PendingCommand));
@@ -205,7 +142,7 @@ void initialize() {
      xTaskCreatePinnedToCore(feedbackTask,"voice-led",2048,nullptr,1,&feedbackHandle,0)!=pdPASS){status=NO_MEMORY;cleanup();return;}
   status=enabled.load()?LISTENING:VOICE_DISABLED;
   xTaskNotifyGive(feedHandle);xTaskNotifyGive(detectHandle);xTaskNotifyGive(idleHandle);
-  Serial.printf("[VOICE] Hey Snap ready=%u phrases=%u psram=%lu\n",unsigned(active()),unsigned(phraseCount),(unsigned long)ESP.getFreePsram());
+  Serial.printf("[VOICE-DIAG] Hi ESP ready=%u model=%s psram=%lu\n",unsigned(active()),wakeModel?wakeModel:"none",(unsigned long)ESP.getFreePsram());
 }
 void encode(uint8_t* bytes,size_t length=22){
   memset(bytes,0,length);bytes[0]=0xCD;bytes[1]=2;bytes[2]=status.load();bytes[3]=enabled.load()?1:0;
@@ -233,7 +170,7 @@ void tick() {
     portENTER_CRITICAL(&stateMux);++serial;lastCommand=WAKE;lastResult=online?2:0;lastAt=millis();lastValue=0;portEXIT_CRITICAL(&stateMux);
     if(feedbackHandle)xTaskNotifyGive(feedbackHandle);
     if(deviceConnected.load()&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
-    Serial.printf("[VOICE] Hey Snap detected online=%u\\n",unsigned(online));
+    Serial.printf("[VOICE-DIAG] Hi ESP detected online=%u\\n",unsigned(online));
     return;
   }
   uint8_t result=0;
@@ -263,7 +200,7 @@ class Callbacks : public BLECharacteristicCallbacks {
     if(op==3){leaseAt=0;return;}
     if(op>1)return;
     enabled=op==1;persistEnabled=op;++discontinuities;leaseAt=0;
-    if(mnData)status=enabled?LISTENING:VOICE_DISABLED;
+    if(afeData)status=enabled?LISTENING:VOICE_DISABLED;
   }
 };
 void ble(BLEService* service){

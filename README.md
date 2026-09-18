@@ -43,7 +43,7 @@ A successful BLE notification enqueue is not proof that the browser persisted th
 
 ## Chakshu production baseline
 
-Build 1262 includes the approved Chakshu offline media and local voice lifecycle:
+The current Chakshu baseline includes the approved offline media lifecycle. **Temporary OTA diagnostic:** local command recognition is replaced by Espressif WakeNet9 `Hi ESP` solely to validate microphone → AFE → WakeNet → LED/BLE wake signalling. The PWA is unchanged.
 
 - Synap-owned SD FIFO cleanup when reserve space is needed.
 - App-triggered clear of Synap capture files.
@@ -53,10 +53,10 @@ Build 1262 includes the approved Chakshu offline media and local voice lifecycle
 - Default video duration of 10 seconds.
 - Explicit requested video durations, within production limits.
 - High-quality/native camera capture profiles for the supported camera.
-- Local `Hey Snap` recognition using the embedded pinned speech model.
-- Voice protocol v2.
-- Commands for photo capture and timed video capture.
-- Local voice remains available while compatible SD recording is active.
+- Stock `Hi ESP` WakeNet diagnostic using the embedded pinned speech model.
+- Voice protocol v2; wake events remain compatible with the existing PWA.
+- Follow-up local voice commands are intentionally unavailable in this diagnostic OTA.
+- Wake detection remains available while compatible SD recording feeds PCM copies.
 
 After offline audio is moved to the companion app, cloud transcription and memory processing are owned by the PWA/backend repository.
 
@@ -93,11 +93,11 @@ Production CI additionally:
 
 ## Physical acceptance boundary
 
-Build/test success validates software contracts but does not establish real-world hardware quality. Build 1262 should be physically accepted for:
+Build/test success validates software contracts but does not establish real-world hardware quality. The current production candidate should be physically accepted for:
 
 - sustained microphone/BLE recording,
 - reconnect and recovery,
-- local `Hey Snap` recognition,
+- stock `Hi ESP` WakeNet diagnostic acknowledgement,
 - photo quality,
 - timed video capture,
 - long SD recording,

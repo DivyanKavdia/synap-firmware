@@ -9,9 +9,10 @@ function embeddedBytes(source){
 }
 function verify(binary,source,weights){
   const packed=embeddedBytes(source);
-  const contract=fs.readFileSync(require('node:path').join(__dirname,'../firmware/xiao-sense/model-contract.cpp'),'utf8');
-  const size=Number(contract.match(/MODEL_BYTES=(\d+);/)[1]),hash=contract.match(/MODEL_SHA256\[\]="([a-f0-9]{64})"/)[1];
-  if(weights.length!==size||crypto.createHash('sha256').update(weights).digest('hex')!==hash)
+  const sizeMatch=source.match(/MODEL_BYTES=(\d+);/),hashMatch=source.match(/MODEL_SHA256\[\]="([a-f0-9]{64})"/);
+  if(!sizeMatch||!hashMatch)throw Error('Prepared source is missing its model contract');
+  const size=Number(sizeMatch[1]),hash=hashMatch[1];
+  if(size<=0||weights.length!==size||crypto.createHash('sha256').update(weights).digest('hex')!==hash)
     throw Error('Unverified reference model');
   if(!zlib.inflateRawSync(packed,{maxOutputLength:size}).equals(weights))throw Error('Embedded weights changed');
   if(binary.length>0x330000)throw Error('Chakshu model and firmware exceed the existing OTA slot');
