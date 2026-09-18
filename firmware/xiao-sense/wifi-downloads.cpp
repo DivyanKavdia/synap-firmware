@@ -1,6 +1,6 @@
 // Wi-Fi is powered only for an explicit, idle SD download session. The transfer
 // worker retains the media lease, excluding recording, card remounts and OTA.
-// A tiny HTTP/1.1 handler avoids pulling the full Arduino WebServer stack into
+// A tiny HTTP/1.1 handler avoids pulling the full Arduino HTTP server stack into
 // the space-constrained Chakshu OTA image while keeping the same download URLs.
 #include <WiFi.h>
 #include <new>
