@@ -5,6 +5,10 @@ import re
 import struct
 import sys
 import zlib
+try:
+    from zopfli.zlib import compress as zopfli_compress
+except ImportError:
+    zopfli_compress = None
 
 EXPECTED_MODELS = {
     'wn9s_hiesp': {
@@ -76,7 +80,13 @@ def embed(sketch, model):
         compressor = zlib.compressobj(level=9,method=zlib.DEFLATED,wbits=-15,memLevel=9,strategy=strategy)
         return compressor.compress(weights) + compressor.flush()
     strategies = (zlib.Z_DEFAULT_STRATEGY, zlib.Z_FILTERED, zlib.Z_RLE, zlib.Z_HUFFMAN_ONLY)
-    packed = min((deflate(strategy) for strategy in strategies), key=len)
+    candidates = [deflate(strategy) for strategy in strategies]
+    if zopfli_compress is not None:
+        wrapped = zopfli_compress(weights, numiterations=10, blocksplitting=1, blocksplittinglast=0, blocksplittingmax=15)
+        if len(wrapped) < 7:
+            raise ValueError('Zopfli returned a truncated zlib stream')
+        candidates.append(wrapped[2:-4])  # Strip RFC1950 wrapper; runtime expects raw RFC1951 DEFLATE.
+    packed = min(candidates, key=len)
     if zlib.decompress(packed, -15) != weights:
         raise ValueError('Lossless voice model round trip failed')
     if len(packed) > 1600000:
