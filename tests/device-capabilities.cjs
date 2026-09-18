@@ -7,6 +7,7 @@ const {profileBlock}=require('../tools/device-profile.cjs');
 const {nativeTest}=require('./support/native.cjs');
 for(const target of Object.values(TARGETS)) {
   test(`${target.name} advertises only its supported and initialized hardware`,()=>{
+    if(target.adapter==='xiao-sense')assert.equal(target.protocols.voice,2);
     const source=materialize(assemble(),target.id);
     const start=source.indexOf('void encodeModuleCapabilities(uint8_t* p) {');
     const encode=source.slice(start,source.indexOf('class ModuleCapabilitiesCallbacks',start));
@@ -40,7 +41,7 @@ int main(){
   assert(bool(word(p+6)&SYNAP_CAP_PHOTO)==bool(hardware&2));
   assert(bool(word(p+6)&SYNAP_CAP_SDAUDIO)==((hardware&5)==5));
   assert(!(word(p+4)&(SYNAP_CAP_TOUCH|SYNAP_CAP_BATTERY|SYNAP_CAP_STANDBY)));
-  assert(p[14]==1 && p[15]==0 && p[16]==31);
+  assert(p[14]==1 && p[15]==2 && p[16]==31);
 #else
   assert(!(word(p+4)&(SYNAP_CAP_CAMERA|SYNAP_CAP_SD|SYNAP_CAP_PHOTO|SYNAP_CAP_VIDEO)));
   assert(p[14]==0 && p[15]==0 && p[16]==0);

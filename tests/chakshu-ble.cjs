@@ -12,12 +12,15 @@ test('Chakshu alone uses native callbacks, owned commands and synchronous audio 
   assert.match(source,/memcpy\(message.data,written.data\(\),size\)/);
   assert.match(source,/sendChakshuAudio\(packet,AUDIO_HEADER_BYTES\+length\)/);
   const boot=source.slice(source.indexOf('void setup() {'));
-  assert.doesNotMatch(source,/ChakshuVoice|ChakshuModel|esp_afe|esp_mn|srmodels|4fa1235[6789]-/);
+  assert.match(source,/namespace ChakshuVoice/);
+  assert.match(source,/#include <esp_afe_sr_iface.h>/);
+  assert.match(source,/4fa12356-0000-1000-8000-00805f9b34fb/);
+  assert.match(source,/4fa12357-0000-1000-8000-00805f9b34fb/);
   assert(boot.indexOf('xTaskCreatePinnedToCore(acquisitionTask')<boot.indexOf('initializeBLE();'));
   for(const target of ['esp32s3-fh4r2-qspi-4m','esp32c3-supermini-4m']) {
     const other=materialize(assemble(),target);
     assert.match(other,/#include <BLEDevice.h>/);
-    assert.doesNotMatch(other,/NimBLEDevice.h|sendChakshuAudio/);
+    assert.doesNotMatch(other,/NimBLEDevice.h|sendChakshuAudio|ChakshuVoice|ChakshuModel|esp_afe|esp_mn|srmodels|4fa1235[67]-/);
   }
 });
 

@@ -9,6 +9,9 @@ for(const target of ['esp32s3-fh4r2-qspi-4m','esp32c3-supermini-4m','xiao-esp32s
     const prepared=materialize(source,target);
     const capture=prepared.slice(prepared.indexOf('bool acquireAudioFrame(AudioFrame& frame) {'),prepared.indexOf('void acquisitionTask(void* parameter) {'));
     const fixture=fs.readFileSync(path.join(__dirname,'audio-capture.cpp'),'utf8');
-    assert.match(nativeTest(fixture.replace('// INSERT PRODUCTION ACQUIRE',capture),target==='xiao-esp32s3-sense-8m'?['-DPDM_FIXTURE=1']:[]),/PASS: exact production capture/);
+    const voiceStub=target==='xiao-esp32s3-sense-8m'
+      ? 'namespace ChakshuVoice { void feed(const int16_t*,size_t) {} }\n'
+      : '';
+    assert.match(nativeTest(fixture.replace('// INSERT PRODUCTION ACQUIRE',voiceStub+capture),target==='xiao-esp32s3-sense-8m'?['-DPDM_FIXTURE=1']:[]),/PASS: exact production capture/);
   });
 }

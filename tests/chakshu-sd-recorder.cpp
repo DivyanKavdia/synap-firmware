@@ -53,8 +53,8 @@ camera_fb_t* esp_camera_fb_get(){
 void esp_camera_fb_return(camera_fb_t*){}
 namespace ChakshuCamera {
  bool ready=true;
- struct VideoProfile {int size;uint16_t width,height;uint8_t fps;};
- bool videoProfile(uint32_t id,VideoProfile& p){if(id>1)return false;p=id==0?VideoProfile{3,1280,720,10}:VideoProfile{2,640,480,20};return true;}
+ struct VideoProfile {int size;uint16_t width,height;uint8_t fps,quality;};
+ bool videoProfile(uint32_t id,VideoProfile& p){if(id>1)return false;p=id==0?VideoProfile{5,2048,1536,4,8}:VideoProfile{3,1280,720,10,10};return true;}
  bool beginVideo(uint32_t id,VideoProfile& p){++cameraStarts;return videoProfile(id,p)&&cameraReady;}
  void endVideo(){++cameraRestores;}
 }
@@ -86,6 +86,11 @@ struct Storage {
 void put32le(uint8_t* p,uint32_t n){for(int i=0;i<4;++i)p[i]=n>>(8*i);}
 namespace ChakshuStorage {
  bool ready=true;constexpr uint32_t RESERVE_BYTES=4*1024*1024;uint64_t freeBytes=64*1024*1024;
+ bool protectedCapture=false;
+ void refresh(){}
+ bool ensureSpace(uint64_t expected=0){return ready && freeBytes>=uint64_t(RESERVE_BYTES)+expected;}
+ void protect(const char*){protectedCapture=true;}
+ void clearProtection(){protectedCapture=false;}
  File create(char* path,size_t n,const char* ext){snprintf(path,n,"/synap/00000001-00000001.%s",ext);return SD.open(path,FILE_WRITE);}
  // INSERT WAV HEADER
 }
@@ -104,7 +109,7 @@ void reset(){
 }
 ChakshuMedia::Snapshot record(bool video,uint8_t profile=0,uint32_t limit=60000){
  ChakshuMedia::Snapshot s;s.videoProfile=profile;s.clipLimitMs=limit;ChakshuRecorder::record(s,video,stop,progress);
- for(auto& t:tasks)t.join();tasks.clear();assert(!micRunning);return s;
+ for(auto& t:tasks)t.join();tasks.clear();assert(!micRunning);assert(!ChakshuStorage::protectedCapture);return s;
 }
 void verifyAudio(const ChakshuMedia::Snapshot& s){
  const auto& bytes=files.at("/synap/00000001-00000001.wav")->bytes;
@@ -115,13 +120,13 @@ void verifyAudio(const ChakshuMedia::Snapshot& s){
 int main(){
  jpeg[sizeof(jpeg)-2]=0xff;jpeg[sizeof(jpeg)-1]=0xd9;
  auto s=record(true);assert(!s.error && s.state==2 && s.frames>1 && s.audioMs>=2000);verifyAudio(s);
- assert(s.width==1280 && s.height==720 && s.targetFps==10 && cameraStarts==1 && cameraRestores==1);
+ assert(s.width==2048 && s.height==1536 && s.targetFps==4 && cameraStarts==1 && cameraRestores==1);
  auto& index=files.at("/synap/00000001-00000001.json")->bytes;
  assert(index.back()=='}' && std::string(index.begin(),index.end()).find("\"audio\":\"/synap/00000001-00000001.wav\"")!=std::string::npos);
- assert(std::string(index.begin(),index.end()).find("\"width\":1280,\"height\":720,\"targetFps\":10")!=std::string::npos);
+ assert(std::string(index.begin(),index.end()).find("\"width\":2048,\"height\":1536,\"targetFps\":4")!=std::string::npos);
  assert(files.at("/synap/00000001-00000001.mjpeg")->bytes.size()==s.frames*frame.len);
  reset();s=record(false);assert(!s.error && s.frames==0 && !cameraStarts && !cameraRestores);verifyAudio(s);
- reset();stopAt=10000000;s=record(true,1,15000);assert(!s.error && s.audioMs==15000 && s.width==640 && s.height==480 && s.targetFps==20 && cameraRestores==1);verifyAudio(s);
+ reset();stopAt=10000000;s=record(true,1,15000);assert(!s.error && s.audioMs==15000 && s.width==1280 && s.height==720 && s.targetFps==10 && cameraRestores==1);verifyAudio(s);
  reset();s=record(true,2);assert(s.error==2 && !created && files.empty() && !cameraStarts);
  reset();cardDelay=120;stopAt=1000000;s=record(true);assert(s.error==9 && s.audioMs>0);verifyAudio(s);
  reset();shortWrite=true;s=record(false);assert(s.error==7 && !ChakshuStorage::ready);verifyAudio(s);
@@ -133,6 +138,6 @@ int main(){
  reset();cameraReady=false;s=record(true);assert(s.error==8 && cameraRestores==1);
  reset();micReady=false;s=record(true);assert(s.error==5 && !created);
  reset();cameraDelay=1;cardDelay=0;frame.len=sizeof(jpeg);stopAt=10000000;
- s=record(true);assert(!s.error && s.bytes<=32u*1024u*1024u && s.audioMs<60000 && s.droppedFrames>0);verifyAudio(s);
+ s=record(true,1);assert(!s.error && s.bytes<=32u*1024u*1024u && s.audioMs<60000 && s.droppedFrames>0);verifyAudio(s);
  reset();puts("PASS independent SD capture, PCM integrity, stop drain, overflow, card and worker failures");
 }

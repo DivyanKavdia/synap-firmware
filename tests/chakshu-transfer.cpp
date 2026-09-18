@@ -6,7 +6,7 @@
 #include <cstring>
 #include <vector>
 namespace ChakshuMedia {enum {NO_SD=3,IO_ERROR=7};}
-namespace ChakshuStorage {bool ready=true;}
+namespace ChakshuStorage {bool ready=true;bool protectedCapture=false;void protect(const char*){protectedCapture=true;}void clearProtection(){protectedCapture=false;}}
 constexpr int FILE_READ=0;
 unsigned mounted=1,handles=0;
 bool exists=true,shortRead=false,canSeek=true,directory=false;
@@ -29,7 +29,7 @@ char selectedPath[64]{};uint8_t* buffer=nullptr;size_t bufferSize=0;
 int main(){
  for(size_t i=0;i<disk.size();++i)disk[i]=uint8_t(i);
  uint32_t total=0;uint8_t bytes[480];size_t size=0;
- assert(selectFile("/synap/12345678-12345678.wav",total)==0&&total==1000&&handles==0);
+ assert(selectFile("/synap/12345678-12345678.wav",total)==0&&total==1000&&handles==0&&ChakshuStorage::protectedCapture);
  assert(readSelection(0,total,bytes,size)==0&&size==480&&bytes[479]==uint8_t(479)&&handles==0);
  // Hardware refresh/remount while the PWA waits for the next chunk.
  ++mounted;
@@ -42,6 +42,6 @@ int main(){
  ChakshuStorage::ready=false;assert(readSelection(0,total,bytes,size)==3&&handles==0);
  clearSelection();buffer=static_cast<uint8_t*>(malloc(3));bufferSize=3;memcpy(buffer,"jpg",3);
  assert(readSelection(1,total,bytes,size)==0&&total==3&&size==2&&bytes[0]=='p');clearSelection();
- assert(!buffer&&!bufferSize&&!selectedPath[0]&&handles==0);
+ assert(!buffer&&!bufferSize&&!selectedPath[0]&&handles==0&&!ChakshuStorage::protectedCapture);
  puts("PASS SD remount, bounds, missing card, failure cleanup and RAM photo reads");
 }
