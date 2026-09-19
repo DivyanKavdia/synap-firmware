@@ -13,7 +13,9 @@ test('Chakshu alone uses native callbacks, owned commands and synchronous audio 
   assert.match(source,/sendChakshuAudio\(packet,AUDIO_HEADER_BYTES\+length\)/);
   const boot=source.slice(source.indexOf('void setup() {'));
   assert.match(source,/namespace ChakshuVoice/);
-  assert.match(source,/#include <esp_afe_sr_iface.h>/);
+  assert.match(source,/namespace ChakshuTinyModel/);
+  assert.match(source,/LEARNED_WEIGHT_BYTES/);
+  assert.doesNotMatch(source,/esp_afe_sr|esp_mn_|model_path|SYNAP_EMBEDDED_SR_MODEL_START/);
   assert.match(source,/4fa12356-0000-1000-8000-00805f9b34fb/);
   assert.match(source,/4fa12357-0000-1000-8000-00805f9b34fb/);
   assert(boot.indexOf('xTaskCreatePinnedToCore(acquisitionTask')<boot.indexOf('initializeBLE();'));
