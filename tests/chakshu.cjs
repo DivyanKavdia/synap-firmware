@@ -39,9 +39,9 @@ test('Chakshu TinyML starts only after BLE and uses no ESP-SR runtime',()=>{
   const schedule=source.indexOf('  ChakshuVoice::scheduleInitialize();',ble);
   assert(ble>=0 && schedule>ble);
   assert.match(source,/TinyML remains optional and starts only after the proven BLE\/OTA\/media boot path is healthy/);
-  assert.match(source,/WINDOW_SAMPLES=15360/);
+  assert.match(source,/WINDOW_SAMPLES=24000/);
   assert.match(source,/LEARNED_WEIGHT_BYTES=sizeof\(C1_WEIGHT\)\+sizeof\(C2_WEIGHT\)\+sizeof\(FC_WEIGHT\)/);
-  assert.match(source,/xTaskCreatePinnedToCore\(workerTask,"tiny-voice",8192/);
+  assert.match(source,/xTaskCreatePinnedToCore\(workerTask,"tiny-voice",12288/);
   assert.match(source,/xTaskCreatePinnedToCore\(idleTask,"tiny-listen",4096/);
   assert.doesNotMatch(source,/esp_afe_sr|esp_mn_|model_path|SYNAP_EMBEDDED_SR_MODEL_START/);
   assert.match(source,/4fa12356-0000-1000-8000-00805f9b34fb/);
@@ -49,16 +49,16 @@ test('Chakshu TinyML starts only after BLE and uses no ESP-SR runtime',()=>{
   assert.match(source,/4fa12358-0000-1000-8000-00805f9b34fb/);
 });
 
-test('TinyML v1 keeps actions deliberately small and SD-first',()=>{
+test('TinyML v2 keeps actions deliberately small and SD-first',()=>{
   const voice=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice.cpp'),'utf8');
   const model=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/tiny-voice-model.h'),'utf8');
   const contract=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice-contract.cpp'),'utf8');
   assert.match(model,/CLASSES=6/);
   assert.match(model,/NOISE=0, UNKNOWN=1, HEY_SNAP=2, PHOTO=3, VIDEO=4, STOP=5/);
-  assert.match(model,/C1_WEIGHT\[576\]/);
-  assert.match(model,/C2_WEIGHT\[768\]/);
-  assert.match(model,/FC_WEIGHT\[192\]/);
-  assert.match(model,/Synthetic held-out quantized accuracy: 88\.2%/);
+  assert.match(model,/C1_WEIGHT\[720\]/);
+  assert.match(model,/C2_WEIGHT\[1200\]/);
+  assert.match(model,/FC_WEIGHT\[240\]/);
+  assert.match(model,/Real-device runtime-window fit: Hey Snap 97\.8%, Photo 100%, Video 96\.2%, Stop 94\.4%/);
   assert.match(voice,/streakCount<2/);
   assert.match(voice,/command==WAKE\?0\.72f:0\.76f/);
   assert.match(voice,/result\.margin<0\.10f/);
