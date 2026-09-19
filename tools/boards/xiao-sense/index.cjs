@@ -54,7 +54,7 @@ function materializeChakshu(source,target) {
       out.includes('analogSetPinAttenuation(') || out.includes('esp_deep_sleep_start()'))
     throw Error('Chakshu still accesses absent hardware');
   replace('  ChakshuMedia::initialize();',
-    '  const uint32_t mediaStarted=millis();\n  ChakshuMedia::initialize();\n  ChakshuLink::mediaBootMs=millis()-mediaStarted;\n  ChakshuVoice::initialize();','Measure media boot cost and start optional local voice');
+    '  const uint32_t mediaStarted=millis();\n  ChakshuMedia::initialize();\n  ChakshuLink::mediaBootMs=millis()-mediaStarted;\n  // Recovery invariant: BLE must become available even if local speech models are unhealthy.\n  // Voice initialization is intentionally deferred/disabled in this recovery build.','Measure media boot cost without blocking BLE on local voice');
   replace('    ChakshuMedia::tick();','    ChakshuMedia::tick();\n    ChakshuVoice::tick();','Dispatch local voice commands');
   out=materializeBle(out);
   replace('  ChakshuTransfer::ble(service);','  ChakshuTransfer::ble(service);\n  ChakshuVoice::ble(service);','Register local voice service');

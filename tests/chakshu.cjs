@@ -33,6 +33,15 @@ test('Chakshu keeps separate release paths, OTA marker and the deployed default 
 });
 
 
+test('Chakshu recovery boot never initializes local voice before BLE advertising',()=>{
+  const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
+  const ble=source.indexOf('initializeBLE();');
+  const voice=source.indexOf('ChakshuVoice::initialize();');
+  assert(ble>=0);
+  assert.equal(voice,-1);
+  assert.match(source,/Recovery invariant: BLE must become available/);
+});
+
 test('WakeNet gates the MultiNet command window and wake feedback stays SD-safe',()=>{
   const voice=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice.cpp'),'utf8');
   assert.match(voice,/wakeModels\?esp_srmodel_filter\(wakeModels,ESP_WN_PREFIX,"hiesp"\):nullptr/);
