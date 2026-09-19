@@ -11,6 +11,7 @@ std::atomic<uint32_t> discontinuities{0},leaseAt{0},leaseConnection{0};
 std::atomic<uint16_t> audioMeanAbs{0},audioPeak{0},candidateConfidence{0};
 std::atomic<uint8_t> candidateId{0};
 std::atomic<uint32_t> candidateAt{0},candidateCount{0};
+std::atomic<uint32_t> mediaCompletion{0};
 struct Block { uint16_t count;int16_t samples[800]; };
 struct PendingCommand { uint8_t command;uint32_t epoch,at; };
 struct Inference { uint8_t cls;float confidence,margin; };
@@ -105,10 +106,10 @@ Inference infer(){
   return {best,bestExp/fmaxf(denom,1e-6f),(bestExp-secondExp)/fmaxf(denom,1e-6f)};
 }
 uint8_t classCommand(uint8_t cls){
-  if(cls==HEY_SNAP)return WAKE;
-  if(cls==PHOTO)return PHOTO;
-  if(cls==VIDEO)return VIDEO_START;
-  if(cls==STOP)return STOP;
+  if(cls==ChakshuTinyModel::HEY_SNAP)return WAKE;
+  if(cls==ChakshuTinyModel::PHOTO)return PHOTO;
+  if(cls==ChakshuTinyModel::VIDEO)return VIDEO_START;
+  if(cls==ChakshuTinyModel::STOP)return STOP;
   return 0;
 }
 void consider(const Inference& result,uint32_t now,uint32_t epoch){
@@ -231,14 +232,25 @@ bool queueLocal(uint8_t operation,uint32_t offset=0){
   if(offline.load())stopRequested.store(true);
   return true;
 }
+void mediaCompleted(uint8_t operation,uint8_t error){
+  const uint8_t command=operation==11?PHOTO:operation==5?VIDEO_START:0;
+  if(command)mediaCompletion.store(0x10000u|(uint32_t(command)<<8)|error);
+}
 void tick(){
   if(!otaBusy()){const int pending=persistEnabled.exchange(-1);if(pending>=0){
     Preferences settings;if(settings.begin("chakshu-voice",false)){settings.putBool("enabled",pending==1);settings.end();}
   }}
+  // Publish completion only after the SD worker has closed the capture files.
+  const uint32_t completed=mediaCompletion.exchange(0);
+  if(completed){
+    const uint8_t error=uint8_t(completed);
+    portENTER_CRITICAL(&stateMux);++serial;lastCommand=uint8_t(completed>>8);lastResult=error?1:3;lastAt=millis();lastValue=error;portEXIT_CRITICAL(&stateMux);
+    if(deviceConnected.load()&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
+  }
   PendingCommand pending;if(!commandQueue||xQueueReceive(commandQueue,&pending,0)!=pdTRUE)return;
   if(!active()||otaBusy()||pending.epoch!=discontinuities.load()||uint32_t(millis()-pending.at)>2200u)return;
   const uint8_t command=pending.command;
-  const uint16_t value=command==VIDEO_START?25:0;
+  const uint16_t value=command==VIDEO_START?10:0;
   const bool online=deviceConnected.load()&&leaseConnection.load()==connectionGeneration.load()&&
     leaseAt.load()!=0&&uint32_t(millis()-leaseAt.load())<6000u;
   if(command==WAKE){
@@ -248,9 +260,9 @@ void tick(){
   }
   uint8_t result=0;using namespace ChakshuTransfer;
   if(command==STOP){++localEpoch;if(offline.load())stopRequested.store(true);if(streamingEnabled.load())stopStreaming();}
-  else if(command==PHOTO){if(offline.load()||!queueLocal(11))result=1;}
-  else if(command==VIDEO_START){if(!exitRemoteStandby()||!queueLocal(5,uint32_t(25u)<<8))result=1;}
-  portENTER_CRITICAL(&stateMux);++serial;lastCommand=command;lastResult=result?result:(online?2:0);lastAt=millis();lastValue=value;portEXIT_CRITICAL(&stateMux);
+  else if(command==PHOTO){if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;else if(offline.load()||!queueLocal(11))result=ChakshuMedia::BUSY;}
+  else if(command==VIDEO_START){if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;else if(!exitRemoteStandby()||!queueLocal(5,uint32_t(10u)<<8))result=ChakshuMedia::BUSY;}
+  portENTER_CRITICAL(&stateMux);++serial;lastCommand=command;lastResult=result?1:(online?2:0);lastAt=millis();lastValue=result?result:value;portEXIT_CRITICAL(&stateMux);
   if(online&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
 }
 class Callbacks : public BLECharacteristicCallbacks {

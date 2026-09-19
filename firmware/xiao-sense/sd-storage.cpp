@@ -38,7 +38,7 @@ bool begin(bool remount) {
 bool capturePath(const char* path) {
   if(!path || strncmp(path,"/synap/",7)!=0)return false;
   const char* name=path+7;
-  if(strlen(name)<22)return false;
+  if(strlen(name)<21)return false;
   // Synap captures are intentionally narrow: XXXXXXXX-XXXXXXXX.ext. Models,
   // temporary files and anything copied to the card by the user never match.
   for(int i=0;i<17;++i) {
@@ -46,8 +46,8 @@ bool capturePath(const char* path) {
     const char c=name[i];
     if(!((c>='0'&&c<='9')||(c>='a'&&c<='f')||(c>='A'&&c<='F')))return false;
   }
-  const char* ext=strrchr(name,'.');
-  return ext && (!strcmp(ext,".jpg")||!strcmp(ext,".mjpeg")||!strcmp(ext,".wav")||!strcmp(ext,".json"));
+  const char* ext=name+17;
+  return !strcmp(ext,".jpg")||!strcmp(ext,".mjpeg")||!strcmp(ext,".wav")||!strcmp(ext,".json");
 }
 
 String stemFor(const char* path) {
