@@ -36,3 +36,13 @@ int main(){
 }`;
   assert.match(nativeTest(fixture),/PASS connection-scoped hardware status/);
 });
+
+test('catalogue remounts a present card after transient readiness loss',()=>{
+  const source=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/media-transfer.cpp'),'utf8');
+  const start=source.indexOf('uint8_t catalogue()');
+  const end=source.indexOf('\n}\n\nvoid recordOffline',start)+2;
+  assert(start>=0&&end>start);
+  const catalogue=source.slice(start,end);
+  assert.match(catalogue,/!ChakshuStorage::ready&&!ChakshuStorage::begin\(false\)/);
+  assert.match(catalogue,/return ChakshuMedia::NO_SD/);
+});

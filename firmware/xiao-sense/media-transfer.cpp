@@ -26,6 +26,10 @@ void reply(uint32_t id,uint8_t error,uint32_t total=0,uint32_t offset=0,const ui
   portEXIT_CRITICAL(&mux);
 }
 void replyFor(const Request& request,uint8_t error,uint32_t total=0,uint32_t offset=0,const uint8_t* bytes=nullptr,size_t size=0) {
+  if(request.local){
+    if(error||request.operation==11)ChakshuVoice::mediaCompleted(request.operation,error);
+    return;
+  }
   reply(request.id,error,total,offset,bytes,size,request.connection);
 }
 void readResponse(uint8_t* value,size_t& size) {
@@ -146,7 +150,12 @@ uint8_t captureSavedPreview() {
   ChakshuCamera::endOriginal();return 0;
 }
 uint8_t catalogue() {
-  clearSelection();if(!ChakshuStorage::ready)return ChakshuMedia::NO_SD;
+  clearSelection();
+  // The module-status bit can be stale for a few milliseconds around a local
+  // capture/remount. Catalogue is serialized by the media lease, so one
+  // non-destructive remount attempt is safe and avoids reporting a present card
+  // as "SD file unavailable".
+  if(!ChakshuStorage::ready&&!ChakshuStorage::begin(false))return ChakshuMedia::NO_SD;
   File directory=SD.open("/synap");if(!directory)return ChakshuMedia::IO_ERROR;
   String json="[";unsigned count=0;
   for(File entry=directory.openNextFile();entry;entry=directory.openNextFile()) {
@@ -231,7 +240,9 @@ void worker(void*) {
       if(request.operation==5){s.videoProfile=uint8_t(request.offset&255);s.width=profile.width;s.height=profile.height;s.targetFps=profile.fps;s.clipLimitMs=(seconds?seconds:10u)*1000u;}
       else s.clipLimitMs=(seconds?seconds:600u)*1000u;
       saveOffline(s);
-      replyFor(request,0);recordOffline(request.operation==5);continue;
+      replyFor(request,0);recordOffline(request.operation==5);
+      if(request.local){ChakshuMedia::Snapshot done;portENTER_CRITICAL(&mux);done=offlineStatus;portEXIT_CRITICAL(&mux);ChakshuVoice::mediaCompleted(request.operation,done.error);}
+      continue;
     }
     if(request.operation==20) {
       if(streamingEnabled.load()||remoteStandby){replyFor(request,1);continue;}

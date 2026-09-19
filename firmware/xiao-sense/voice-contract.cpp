@@ -28,5 +28,6 @@ bool active();
 void initialize();
 void scheduleInitialize();
 void tick();
+void mediaCompleted(uint8_t operation,uint8_t error);
 void ble(BLEService* service);
 }
