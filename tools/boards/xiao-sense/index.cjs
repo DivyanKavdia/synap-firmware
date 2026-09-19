@@ -54,7 +54,7 @@ function materializeChakshu(source,target) {
       out.includes('analogSetPinAttenuation(') || out.includes('esp_deep_sleep_start()'))
     throw Error('Chakshu still accesses absent hardware');
   replace('  ChakshuMedia::initialize();',
-    '  const uint32_t mediaStarted=millis();\n  ChakshuMedia::initialize();\n  ChakshuLink::mediaBootMs=millis()-mediaStarted;\n  // Recovery invariant: BLE must become available even if local speech models are unhealthy.\n  // Voice initialization is intentionally deferred/disabled in this recovery build.','Measure media boot cost without blocking BLE on local voice');
+    '  const uint32_t mediaStarted=millis();\n  ChakshuMedia::initialize();\n  ChakshuLink::mediaBootMs=millis()-mediaStarted;\n  // Voice remains deferred: BLE/OTA/media must become available before model loading.','Measure media boot cost without blocking BLE on local voice');
   replace('    ChakshuMedia::tick();','    ChakshuMedia::tick();\n    ChakshuVoice::tick();','Dispatch local voice commands');
   out=materializeBle(out);
   replace('  ChakshuTransfer::ble(service);','  ChakshuTransfer::ble(service);\n  ChakshuVoice::ble(service);','Register local voice service');
@@ -63,7 +63,7 @@ function materializeChakshu(source,target) {
     'bool ChakshuTransfer::chakshuAudioHasBacklog() {\n  if (!recoveryMutex) return false;\n  RecoveryGuard guard;\n  return recoveryFinishing.load() || recoveryRing.count-recoveryRing.cursor>2;\n}\nbool sendRecoveryFrame() {','Prioritize audio over camera notifications');
   replace('void controlTask(void* parameter) {',
     'void controlTask(void* parameter) {\n  while (!ChakshuResources::runtimeReady.load()) vTaskDelay(1);','Wait for complete BLE initialization');
-  replace('  initializeBLE();','  initializeBLE();\n  ChakshuLink::bootReadyMs=millis();\n  ChakshuResources::runtimeReady.store(true);\n  Serial.printf("[CHAKSHU] ready_ms=%lu media_ms=%lu heap=%lu psram=%lu voice=%u\\n",(unsigned long)ChakshuLink::bootReadyMs.load(),(unsigned long)ChakshuLink::mediaBootMs.load(),(unsigned long)ESP.getFreeHeap(),(unsigned long)ESP.getFreePsram(),unsigned(ChakshuVoice::active()));','Publish initialized runtime');
+  replace('  initializeBLE();','  initializeBLE();\n  ChakshuLink::bootReadyMs=millis();\n  ChakshuResources::runtimeReady.store(true);\n  ChakshuVoice::scheduleInitialize();\n  Serial.printf("[CHAKSHU] ready_ms=%lu media_ms=%lu heap=%lu psram=%lu voice=%u\\n",(unsigned long)ChakshuLink::bootReadyMs.load(),(unsigned long)ChakshuLink::mediaBootMs.load(),(unsigned long)ESP.getFreeHeap(),(unsigned long)ESP.getFreePsram(),unsigned(ChakshuVoice::active()));','Publish initialized runtime before deferred voice');
   return out;
 }
 module.exports={materializeChakshu};

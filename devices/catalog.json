@@ -88,7 +88,7 @@
         "touch": 3,
         "battery": 1,
         "led": 8,
-        "ledDriver": "gpio",
+        "ledDriver": "neopixel",
         "idleMHz": 80,
         "activeMHz": 160,
         "batteryAdcMv": 1,

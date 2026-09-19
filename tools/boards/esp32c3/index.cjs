@@ -1,14 +1,10 @@
 'use strict';
 const {PRIMARY_TARGET}=require('../../targets.cjs');
 const {replaceOnce}=require('../../target-source.cjs');
-const led=require('./led.cjs');
-
 function materializeC3(source,target){
   let out=replaceOnce(source,'p[21]!=9 || p[22]!=0',`p[21]!=${target.chip} || p[22]!=0`,'ESP image chip ID');
   out=replaceOnce(out,'analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_6db);',
     `analogSetPinAttenuation(BATTERY_ADC_PIN, ${target.hardware.batteryAttenuation});`,'ADC input range');
-
-  out=led.apply(out);
 
   const taskBefore=`  if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
       xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, &captureTaskHandle, 0) != pdPASS ||
