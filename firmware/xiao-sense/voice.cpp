@@ -11,6 +11,9 @@ std::atomic<uint32_t> discontinuities{0},leaseAt{0},leaseConnection{0};
 std::atomic<uint16_t> audioMeanAbs{0},audioPeak{0},candidateConfidence{0};
 std::atomic<uint8_t> candidateId{0};
 std::atomic<uint32_t> candidateAt{0},candidateCount{0};
+std::atomic<uint16_t> diagnosticNoiseFloor{0},diagnosticThreshold{0},diagnosticMaxMeanAbs{0},acceptedConfidence{0};
+std::atomic<uint8_t> diagnosticVadRun{0},diagnosticHoldActive{0},acceptedCommand{0};
+std::atomic<uint32_t> diagnosticVadOpenCount{0},acceptedAt{0},acceptedCount{0};
 std::atomic<uint32_t> mediaCompletion{0};
 struct Block { uint16_t count;int16_t samples[800]; };
 struct PendingCommand { uint8_t command;uint32_t epoch,at; };
@@ -35,6 +38,7 @@ bool active(){return status.load()==LISTENING&&enabled.load()&&ring&&workerHandl
 
 void resetWindow(){
   writeAt=0;samplesSeen=0;samplesSinceInference=0;speechHoldUntil=0;vadRun=0;
+  diagnosticVadRun=0;diagnosticHoldActive=0;diagnosticMaxMeanAbs=0;
   streakClass=NOISE;streakCount=0;streakAt=0;gate.reset();
 }
 inline int16_t sampleAt(size_t relative){
@@ -159,7 +163,12 @@ void consider(const Inference& result,uint32_t now,uint32_t epoch){
   if(streakCount<2)return;
   streakCount=0;
   const uint8_t accepted=gate.accept(command,result.confidence,now);
-  if(accepted){PendingCommand pending{accepted,epoch,now};xQueueSend(commandQueue,&pending,0);}
+  if(accepted){
+    acceptedCommand=accepted;
+    acceptedConfidence=uint16_t(fminf(1.0f,fmaxf(0.0f,result.confidence))*1000.0f);
+    acceptedAt=now;++acceptedCount;
+    PendingCommand pending{accepted,epoch,now};xQueueSend(commandQueue,&pending,0);
+  }
 }
 void feed(const int16_t* samples,size_t count){
   if(!active()||!pcmQueue||!samples)return;
@@ -191,8 +200,13 @@ void workerTask(void*){
     const bool held=int32_t(speechHoldUntil-now)>0;
     noiseFloor=updateNoiseFloor(noiseFloor,meanAbs,held);
     const float speechThreshold=voiceThreshold(noiseFloor);
+    diagnosticNoiseFloor=uint16_t(fminf(65535.0f,fmaxf(0.0f,noiseFloor)));
+    diagnosticThreshold=uint16_t(fminf(65535.0f,fmaxf(0.0f,speechThreshold)));
+    uint16_t observed=diagnosticMaxMeanAbs.load();
+    while(meanAbs>observed&&!diagnosticMaxMeanAbs.compare_exchange_weak(observed,meanAbs)){}
     if(float(meanAbs)>speechThreshold) {
       if(vadRun<255)++vadRun;
+      if(vadRun==2)++diagnosticVadOpenCount;
       if(vadRun>=2)speechHoldUntil=now+1000u;
     } else {
       vadRun=0;
@@ -201,6 +215,8 @@ void workerTask(void*){
         streakClass=NOISE;streakCount=0;
       }
     }
+    diagnosticVadRun=vadRun;
+    diagnosticHoldActive=int32_t(speechHoldUntil-now)>0?1:0;
     samplesSinceInference+=block.count;
     if(samplesSeen>=WINDOW_SAMPLES&&samplesSinceInference>=3200u&&int32_t(speechHoldUntil-now)>0){
       samplesSinceInference=0;consider(infer(),now,epoch);
@@ -259,14 +275,19 @@ void encode(uint8_t* bytes,size_t length=22){
   portENTER_CRITICAL(&stateMux);put32le(bytes+4,serial);bytes[8]=lastCommand;bytes[9]=lastResult;put32le(bytes+10,lastAt);put16le(bytes+20,lastValue);portEXIT_CRITICAL(&stateMux);
   put32le(bytes+14,discontinuities.load());bytes[18]=ChakshuTransfer::offline.load()?1:0;
 }
-void encodeDiagnostics(uint8_t* bytes,size_t length=20){
-  memset(bytes,0,length);bytes[0]=0xCE;bytes[1]=1;bytes[2]=status.load();bytes[3]=enabled.load()?1:0;
+void encodeDiagnostics(uint8_t* bytes,size_t length=44){
+  memset(bytes,0,length);bytes[0]=0xCE;bytes[1]=2;bytes[2]=status.load();bytes[3]=enabled.load()?1:0;
   put16le(bytes+4,audioMeanAbs.load());put16le(bytes+6,audioPeak.load());bytes[8]=candidateId.load();
   put16le(bytes+9,candidateConfidence.load());put32le(bytes+11,candidateAt.load());put32le(bytes+15,candidateCount.load());
   bytes[19]=active()?1:0;
+  put16le(bytes+20,diagnosticNoiseFloor.load());put16le(bytes+22,diagnosticThreshold.load());
+  bytes[24]=diagnosticVadRun.load();bytes[25]=diagnosticHoldActive.load();
+  put16le(bytes+26,diagnosticMaxMeanAbs.exchange(audioMeanAbs.load()));
+  put32le(bytes+28,diagnosticVadOpenCount.load());bytes[32]=acceptedCommand.load();
+  put16le(bytes+33,acceptedConfidence.load());put32le(bytes+35,acceptedAt.load());put32le(bytes+39,acceptedCount.load());
 }
 class DiagnosticCallbacks : public BLECharacteristicCallbacks {
-  void onRead(BLECharacteristic* c)override{uint8_t bytes[20];encodeDiagnostics(bytes,sizeof(bytes));c->setValue(bytes,sizeof(bytes));}
+  void onRead(BLECharacteristic* c)override{uint8_t bytes[44];encodeDiagnostics(bytes,sizeof(bytes));c->setValue(bytes,sizeof(bytes));}
 };
 bool queueLocal(uint8_t operation,uint32_t offset=0){
   using namespace ChakshuTransfer;
