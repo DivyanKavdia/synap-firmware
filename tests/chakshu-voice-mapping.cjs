@@ -53,8 +53,34 @@ int main(){
  assert(extreme.meanAbs==32767&&extreme.peak==32768);
  puts("PASS dc-centred voice level");
 }`), /PASS dc-centred voice level/);
-  assert.match(voice, /const float speechThreshold=fmaxf\(55\.0f,noiseFloor\*2\.6f\)/);
+  assert.match(voice, /float noiseFloor=180\.0f/);
+  assert.match(voice, /const float speechThreshold=voiceThreshold\(noiseFloor\)/);
+  assert.match(voice, /if\(vadRun>=2\)speechHoldUntil=now\+1000u/);
   assert.match(voice, /candidateId=0;candidateConfidence=0/);
+  const noiseStart=voice.indexOf('float updateNoiseFloor(');
+  const noiseEnd=voice.indexOf('Inference infer()',noiseStart);
+  assert(noiseStart>=0&&noiseEnd>noiseStart);
+  const noiseHelpers=voice.slice(noiseStart,noiseEnd);
+  assert.match(nativeTest(`#include <cstdint>
+#include <cmath>
+#include <cassert>
+#include <cstdio>
+${noiseHelpers}
+int main(){
+  float floor=180.0f;
+  assert(voiceThreshold(floor)==440.0f);
+  floor=updateNoiseFloor(floor,181,false);
+  assert(floor>180.0f&&floor<181.0f);
+  const float before=floor;
+  floor=updateNoiseFloor(floor,600,false);
+  assert(floor==before);
+  assert(updateNoiseFloor(floor,50,true)==floor);
+  assert(voiceThreshold(50.0f)==220.0f);
+  puts("PASS adaptive AC voice gate");
+}`), /PASS adaptive AC voice gate/);
+  const gain=voice.slice(voice.indexOf('float windowGain()'),voice.indexOf('float updateNoiseFloor('));
+  assert.match(gain,/const double mean=sum\/double\(WINDOW_SAMPLES\)/);
+  assert.match(gain,/double\(sampleAt\(i\)\)-mean/);
 });
 
 test('SD cleanup recognizes exact generated photo/audio paths without admitting other files', () => {
