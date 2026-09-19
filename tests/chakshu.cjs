@@ -33,38 +33,18 @@ test('Chakshu keeps separate release paths, OTA marker and the deployed default 
 });
 
 
-test('Chakshu advertises BLE before scheduling local voice model initialization',()=>{
+test('Chakshu recovery never starts the local voice model at runtime',()=>{
   const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
-  const ble=source.indexOf('initializeBLE();');
-  const schedule=source.indexOf('ChakshuVoice::scheduleInitialize();');
-  const direct=source.indexOf('ChakshuVoice::initialize();');
-  assert(ble>=0 && schedule>ble);
-  assert.equal(direct,-1);
-  assert.match(source,/Voice remains deferred: BLE\/OTA\/media must become available before model loading/);
+  assert.match(source,/initializeBLE\(\);/);
+  assert.doesNotMatch(source,/ChakshuVoice::scheduleInitialize\(\);/);
+  assert.doesNotMatch(source,/ChakshuVoice::initialize\(\);/);
+  assert.match(source,/local voice model initialization is disabled because it destabilized BLE on 1319/);
+  // GATT contract remains present so the PWA can report disabled/model-missing rather than misclassify the device.
+  assert.match(source,/4fa12356-0000-1000-8000-00805f9b34fb/);
+  assert.match(source,/4fa12357-0000-1000-8000-00805f9b34fb/);
+  assert.match(source,/4fa12358-0000-1000-8000-00805f9b34fb/);
 });
 
-test('one MultiNet model classifies Hey Snap and commands behind a five-second firmware gate',()=>{
-  const voice=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice.cpp'),'utf8');
-  const contract=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice-contract.cpp'),'utf8');
-  assert.match(voice,/addPhrase\(WAKE,"hd SNaP"\)/);
-  assert.match(voice,/addPhrase\(PHOTO,"TdK c SNaP"\)/);
-  assert.match(voice,/addPhrase\(VIDEO_START,"RcKeRD c VgDmb"\)/);
-  assert.match(voice,/addPhrase\(AUDIO_ON,"RcKeRD eDmb"\)/);
-  assert.match(voice,/esp_srmodel_filter\(models,"mn5q8","en"\)/);
-  assert.match(voice,/mn->create\(name,5000\)/);
-  assert.match(voice,/config->wakenet_init=false/);
-  assert.doesNotMatch(voice,/esp_wn_models|WAKENET_DETECTED|wakeModels/);
-  assert.match(contract,/uint32_t\(now-armedAt\)<=5000u/);
-  assert.match(contract,/confidence<0\.55f/);
-  assert.match(contract,/confidence<0\.72f/);
-  assert.match(voice,/mn->set_det_threshold\(mnData,0\.45f\)/);
-  assert.match(voice,/4fa12358-0000-1000-8000-00805f9b34fb/);
-  assert.match(voice,/audioMeanAbs/);
-  assert.match(voice,/candidateConfidence/);
-  assert.match(voice,/queueLocal\(5,uint32_t\(25u\)<<8\)/);
-  assert.match(voice,/Voice always performs local SD-first actions/);
-  assert.match(voice,/while\(millis\(\)<8000u \|\| otaBusy\(\) \|\| mediaBusy\(\)\)/);
-  assert.match(voice,/ChakshuResources::Lease admission;/);
-});
+
 
 
