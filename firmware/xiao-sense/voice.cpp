@@ -303,8 +303,14 @@ void tick(){
   }
   uint8_t result=0;using namespace ChakshuTransfer;
   if(command==STOP){++localEpoch;if(offline.load())stopRequested.store(true);if(streamingEnabled.load())stopStreaming();}
-  else if(command==PHOTO){if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;else if(offline.load()||!queueLocal(11))result=ChakshuMedia::BUSY;}
-  else if(command==VIDEO_START){if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;else if(!exitRemoteStandby()||!queueLocal(5,uint32_t(10u)<<8))result=ChakshuMedia::BUSY;}
+  else if(command==PHOTO){
+    if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;
+    else if(streamingEnabled.load()||offline.load()||!queueLocal(11))result=ChakshuMedia::BUSY;
+  }
+  else if(command==VIDEO_START){
+    if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;
+    else if(streamingEnabled.load()||!exitRemoteStandby()||!queueLocal(5,uint32_t(10u)<<8))result=ChakshuMedia::BUSY;
+  }
   portENTER_CRITICAL(&stateMux);++serial;lastCommand=command;lastResult=result?1:(online?2:0);lastAt=millis();lastValue=result?result:value;portEXIT_CRITICAL(&stateMux);
   if(online&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
 }
