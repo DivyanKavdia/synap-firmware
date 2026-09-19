@@ -1,9 +1,7 @@
-// Production local voice: WakeNet gates an 8-second MultiNet command window.
-// AFE receives a copy; saved/streamed PCM is untouched.
+// Simplistic single-model local command recognition. MultiNet classifies both wake and commands; firmware gates actions.
 #include <esp_afe_sr_iface.h>
 #include <esp_afe_sr_models.h>
 #include <esp_mn_models.h>
-#include <esp_wn_models.h>
 #include <model_path.h>
 #include <mbedtls/sha256.h>
 namespace ChakshuVoice {
@@ -17,10 +15,10 @@ std::atomic<uint32_t> discontinuities{0},leaseAt{0},leaseConnection{0};
 struct Block { uint16_t count;int16_t samples[800]; };
 struct PendingCommand { uint8_t command;uint32_t epoch,at; };
 QueueHandle_t pcmQueue=nullptr,commandQueue=nullptr;
-TaskHandle_t feedHandle=nullptr,detectHandle=nullptr,idleHandle=nullptr,feedbackHandle=nullptr;
+TaskHandle_t feedHandle=nullptr,detectHandle=nullptr,idleHandle=nullptr,feedbackHandle=nullptr,initHandle=nullptr;
 const esp_afe_sr_iface_t* afe=nullptr;esp_afe_sr_data_t* afeData=nullptr;
-esp_mn_iface_t* mn=nullptr;model_iface_data_t* mnData=nullptr;char* wakeModel=nullptr;
-srmodel_list_t* models=nullptr;srmodel_list_t* wakeModels=nullptr;void* weights=nullptr;int16_t* afeInput=nullptr;int feedSize=0;
+esp_mn_iface_t* mn=nullptr;model_iface_data_t* mnData=nullptr;
+srmodel_list_t* models=nullptr;void* weights=nullptr;int16_t* afeInput=nullptr;int feedSize=0;
 BLECharacteristic* events=nullptr;
 portMUX_TYPE stateMux=portMUX_INITIALIZER_UNLOCKED;
 uint32_t serial=0,lastAt=0;uint8_t lastCommand=0,lastResult=0;uint16_t lastValue=0;
@@ -29,7 +27,7 @@ Gate gate;
 // Wake feedback must therefore own the media gate and return the pin HIGH.
 constexpr uint8_t WAKE_LED_PIN=21;
 constexpr uint16_t WAKE_LED_MS=90;
-constexpr size_t MAX_PHRASES=170;
+constexpr size_t MAX_PHRASES=12;
 esp_mn_phrase_t commands[MAX_PHRASES]{};esp_mn_node_t nodes[MAX_PHRASES+1]{};
 char phraseStorage[MAX_PHRASES][80]{};size_t phraseCount=0;
 
@@ -73,20 +71,16 @@ bool addPhrase(uint8_t id,const String& phoneme) {
 }
 bool configurePhrases() {
   phraseCount=0;memset(commands,0,sizeof(commands));memset(nodes,0,sizeof(nodes));memset(phraseStorage,0,sizeof(phraseStorage));
-  if(!addPhrase(PHOTO,"TdK c SNaP") || !addPhrase(VIDEO_START,"RcKeRD c VgDmb") ||
-     !addPhrase(VIDEO_STOP,"STnP VgDmb") || !addPhrase(AUDIO_ON,"STnRT eDmb") ||
-     !addPhrase(AUDIO_OFF,"STnP eDmb") || !addPhrase(DESCRIBE,"WcT Do Yo Sm"))return false;
-  for(uint16_t command=DURATION_BASE;command<=DURATION_LAST;++command) {
-    const uint16_t seconds=durationSeconds(uint8_t(command));
-    const String number=numberPhoneme(seconds);
-    if(!number.length() || !addPhrase(uint8_t(command),String("RcKeRD FeR ")+number+" SfKcNDZ"))return false;
-  }
-  // Natural minute aliases for long durations without consuming additional command IDs.
-  for(uint16_t minutes=2;minutes<=10;++minutes) {
-    const uint16_t seconds=minutes*60u;const uint8_t id=durationId(seconds);
-    if(id && !addPhrase(id,String("RcKeRD FeR ")+numberPhoneme(minutes)+" MgNcTS"))return false;
-  }
-  return phraseCount<=MAX_PHRASES;
+  // One MultiNet model emits all labels. Firmware only accepts commands after WAKE.
+  return addPhrase(WAKE,"hd SNaP") &&
+    addPhrase(PHOTO,"TdK c SNaP") &&
+    addPhrase(PHOTO,"TdK c FoTo") &&
+    addPhrase(VIDEO_START,"RcKeRD c VgDmb") &&
+    addPhrase(VIDEO_STOP,"STnP VgDmb") &&
+    addPhrase(AUDIO_ON,"RcKeRD eDmb") &&
+    addPhrase(AUDIO_OFF,"STnP eDmb") &&
+    addPhrase(STOP,"STnP") &&
+    addPhrase(DESCRIBE,"WcT Do Yo Sm");
 }
 
 void feed(const int16_t* samples,size_t count) {
@@ -107,41 +101,22 @@ void feedTask(void*) {
       if(filled==size_t(feedSize)){afe->feed(afeData,afeInput);filled=0;}}
   }
 }
-void returnToWake(bool& commandWindow) {
-  commandWindow=false;gate.reset();
-  if(mnData)mn->clean(mnData);
-  if(afeData)afe->enable_wakenet(afeData);
-}
 void detectTask(void*) {
   ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
-  uint32_t epoch=discontinuities.load();bool commandWindow=false;
+  uint32_t epoch=discontinuities.load();
   for(;;){
     afe_fetch_result_t* result=afe->fetch_with_delay(afeData,pdMS_TO_TICKS(100));
     if(!active()||otaBusy()||epoch!=discontinuities.load()){
-      epoch=discontinuities.load();returnToWake(commandWindow);afe->reset_buffer(afeData);continue;
+      epoch=discontinuities.load();gate.reset();mn->clean(mnData);afe->reset_buffer(afeData);continue;
     }
-    if(!result||result->ret_value!=ESP_OK)continue;
-    const uint32_t now=millis();
-    if(result->wakeup_state==WAKENET_DETECTED){
-      gate.accept(WAKE,1.0f,now);commandWindow=true;mn->clean(mnData);
-      PendingCommand pending{WAKE,epoch,now};
-      if(xQueueSend(commandQueue,&pending,0)!=pdTRUE)++discontinuities;
-    }
-    if(!commandWindow||!result->data)continue;
+    if(!result||result->ret_value!=ESP_OK||!result->data)continue;
     const auto detected=mn->detect(mnData,result->data);
     if(detected==ESP_MN_STATE_DETECTED){
       const auto* matches=mn->get_results(mnData);
-      uint8_t command=0;
-      if(matches&&matches->num>0)command=gate.accept(matches->command_id[0],matches->prob[0],millis());
+      if(matches&&matches->num>0){const uint8_t command=gate.accept(matches->command_id[0],matches->prob[0],millis());
+        if(command){PendingCommand pending{command,epoch,millis()};xQueueSend(commandQueue,&pending,0);}}
       mn->clean(mnData);
-      if(command){
-        PendingCommand pending{command,epoch,millis()};
-        if(xQueueSend(commandQueue,&pending,0)!=pdTRUE)++discontinuities;
-        returnToWake(commandWindow);
-      }
-    }else if(detected==ESP_MN_STATE_TIMEOUT){
-      returnToWake(commandWindow);
-    }
+    }else if(detected==ESP_MN_STATE_TIMEOUT){gate.reset();mn->clean(mnData);}
   }
 }
 bool pulseWakeLed() {
@@ -182,7 +157,6 @@ void cleanup() {
   if(mnData){mn->destroy(mnData);mnData=nullptr;}
   if(afeData){afe->destroy(afeData);afeData=nullptr;}
   if(models){esp_srmodel_deinit(models);models=nullptr;}
-  if(wakeModels){esp_srmodel_deinit(wakeModels);wakeModels=nullptr;}
   free(weights);weights=nullptr;free(afeInput);afeInput=nullptr;
 }
 void initialize() {
@@ -202,27 +176,20 @@ void initialize() {
   if(strcmp(hex,MODEL_SHA256)){status=MODEL_ERROR;cleanup();return;}
   models=srmodel_load(weights);
   if(!models){status=MODEL_ERROR;cleanup();return;}
-  // WakeNet9s Hi ESP is linked by ESP-SR and physically proven on Chakshu.
-  // MultiNet remains in the verified compressed command pack.
-  wakeModels=srmodel_load(nullptr);
-  wakeModel=wakeModels?esp_srmodel_filter(wakeModels,ESP_WN_PREFIX,"hiesp"):nullptr;
   char* name=esp_srmodel_filter(models,"mn5q8","en");
-  if(!wakeModel||!name||(mn=esp_mn_handle_from_name(name))==nullptr){status=MODEL_ERROR;cleanup();return;}
-  mnData=mn->create(name,8000);
+  if(!name||(mn=esp_mn_handle_from_name(name))==nullptr){status=MODEL_ERROR;cleanup();return;}
+  mnData=mn->create(name,5000);
   if(!mnData||!configurePhrases()){status=NO_MEMORY;cleanup();return;}
   if(mn->set_speech_commands(mnData,&nodes[0])!=nullptr){status=MODEL_ERROR;cleanup();return;}
-  mn->set_det_threshold(mnData,0.90f);
+  mn->set_det_threshold(mnData,0.85f);
   afe_config_t* config=afe_config_init("M",models,AFE_TYPE_SR,AFE_MODE_LOW_COST);
   if(!config){status=NO_MEMORY;cleanup();return;}
-  config->wakenet_init=true;config->wakenet_model_name=wakeModel;config->wakenet_mode=DET_MODE_95;
-  config->aec_init=false;config->se_init=false;config->ns_init=false;config->vad_init=false;
+  config->wakenet_init=false;config->aec_init=false;config->se_init=false;config->ns_init=false;config->vad_init=false;
   config->memory_alloc_mode=AFE_MEMORY_ALLOC_MORE_PSRAM;
   afe=esp_afe_handle_from_config(config);afeData=afe?afe->create_from_config(config):nullptr;afe_config_free(config);
   if(!afeData){status=NO_MEMORY;cleanup();return;}
-  if(afe->reset_wakenet_threshold(afeData,1)!=1){status=MODEL_ERROR;cleanup();return;}
   feedSize=afe->get_feed_chunksize(afeData);
-  if(feedSize<=0||feedSize>2048||afe->get_feed_channel_num(afeData)!=1||
-     afe->get_samp_rate(afeData)!=SAMPLE_RATE||afe->get_fetch_chunksize(afeData)!=mn->get_samp_chunksize(mnData)){
+  if(feedSize<=0||feedSize>2048||afe->get_feed_channel_num(afeData)!=1||afe->get_fetch_chunksize(afeData)!=mn->get_samp_chunksize(mnData)){
     status=MODEL_ERROR;cleanup();return;
   }
   afeInput=static_cast<int16_t*>(ps_malloc(feedSize*2));pcmQueue=xQueueCreate(8,sizeof(Block));commandQueue=xQueueCreate(4,sizeof(PendingCommand));
@@ -233,8 +200,20 @@ void initialize() {
      xTaskCreatePinnedToCore(feedbackTask,"voice-led",2048,nullptr,1,&feedbackHandle,0)!=pdPASS){status=NO_MEMORY;cleanup();return;}
   status=enabled.load()?LISTENING:VOICE_DISABLED;
   xTaskNotifyGive(feedHandle);xTaskNotifyGive(detectHandle);xTaskNotifyGive(idleHandle);
-  Serial.printf("[VOICE] Hi ESP ready=%u wake=%s commands=%u psram=%lu\n",unsigned(active()),wakeModel?wakeModel:"none",unsigned(phraseCount),(unsigned long)ESP.getFreePsram());
+  Serial.printf("[VOICE] one-model Hey Snap ready=%u phrases=%u psram=%lu\n",unsigned(active()),unsigned(phraseCount),(unsigned long)ESP.getFreePsram());
 }
+void initTask(void*) {
+  // OTA validation happens after 5 s. Voice starts later and never gates BLE recovery.
+  while(millis()<8000u || otaBusy() || mediaBusy()) vTaskDelay(pdMS_TO_TICKS(250));
+  initialize();
+  initHandle=nullptr;
+  vTaskDelete(nullptr);
+}
+void scheduleInitialize() {
+  if(initHandle||status.load()==STARTING||status.load()==LISTENING)return;
+  if(xTaskCreatePinnedToCore(initTask,"voice-init",8192,nullptr,1,&initHandle,1)!=pdPASS)status=NO_MEMORY;
+}
+
 void encode(uint8_t* bytes,size_t length=22){
   memset(bytes,0,length);bytes[0]=0xCD;bytes[1]=2;bytes[2]=status.load();bytes[3]=enabled.load()?1:0;
   portENTER_CRITICAL(&stateMux);put32le(bytes+4,serial);bytes[8]=lastCommand;bytes[9]=lastResult;put32le(bytes+10,lastAt);put16le(bytes+20,lastValue);portEXIT_CRITICAL(&stateMux);
@@ -254,32 +233,30 @@ void tick() {
   PendingCommand pending;if(!commandQueue||xQueueReceive(commandQueue,&pending,0)!=pdTRUE)return;
   if(!active()||otaBusy()||pending.epoch!=discontinuities.load()||uint32_t(millis()-pending.at)>2000u)return;
   const uint8_t command=pending.command;
-  const uint16_t value=durationCommand(command)?durationSeconds(command):0;
+  const uint16_t value=command==VIDEO_START?25:0;
   const bool online=deviceConnected.load()&&leaseConnection.load()==connectionGeneration.load()&&
     leaseAt.load()!=0&&uint32_t(millis()-leaseAt.load())<6000u;
   if(command==WAKE){
     portENTER_CRITICAL(&stateMux);++serial;lastCommand=WAKE;lastResult=online?2:0;lastAt=millis();lastValue=0;portEXIT_CRITICAL(&stateMux);
     if(feedbackHandle)xTaskNotifyGive(feedbackHandle);
     if(deviceConnected.load()&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
-    Serial.printf("[VOICE] Hi ESP detected online=%u\\n",unsigned(online));
+    Serial.printf("[VOICE] Hey Snap detected online=%u\\n",unsigned(online));
     return;
   }
   uint8_t result=0;
-  if(!online){
-    using namespace ChakshuTransfer;
-    if(command==VIDEO_STOP||command==AUDIO_OFF){
-      ++localEpoch;if(offline.load())stopRequested.store(true);if(streamingEnabled.load())stopStreaming();
-    } else if(command==PHOTO||command==DESCRIBE) {
-      if(!offline.load()&&!queueLocal(11))result=1;else if(offline.load())result=1;
-      if(command==DESCRIBE&&!result)result=3; // Saved locally; Gemini requires the companion app.
-    } else if(command==VIDEO_START||durationCommand(command)) {
-      const uint16_t seconds=value?value:10;
-      if(!exitRemoteStandby()||!queueLocal(5,uint32_t(seconds)<<8))result=1;
-    } else if(command==AUDIO_ON) {
-      if(!exitRemoteStandby()||!queueLocal(10,600))result=1;
-    }
+  // Voice always performs local SD-first actions. BLE/PWA presence only adds notification/sync.
+  using namespace ChakshuTransfer;
+  if(command==STOP||command==VIDEO_STOP||command==AUDIO_OFF){
+    ++localEpoch;if(offline.load())stopRequested.store(true);if(streamingEnabled.load())stopStreaming();
+  } else if(command==PHOTO||command==DESCRIBE) {
+    if(offline.load()||!queueLocal(11))result=1;
+    else if(command==DESCRIBE)result=3; // Photo is durable now; inference can occur after sync.
+  } else if(command==VIDEO_START) {
+    if(!exitRemoteStandby()||!queueLocal(5,uint32_t(25u)<<8))result=1;
+  } else if(command==AUDIO_ON) {
+    if(!exitRemoteStandby()||!queueLocal(10,600))result=1;
   }
-  portENTER_CRITICAL(&stateMux);++serial;lastCommand=command;lastResult=online?2:result;lastAt=millis();lastValue=value;portEXIT_CRITICAL(&stateMux);
+  portENTER_CRITICAL(&stateMux);++serial;lastCommand=command;lastResult=result?result:(online?2:0);lastAt=millis();lastValue=value;portEXIT_CRITICAL(&stateMux);
   if(online&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
 }
 class Callbacks : public BLECharacteristicCallbacks {
