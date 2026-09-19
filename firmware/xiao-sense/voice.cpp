@@ -21,7 +21,8 @@ TaskHandle_t workerHandle=nullptr,idleHandle=nullptr,initHandle=nullptr;
 int16_t* ring=nullptr;
 size_t writeAt=0,samplesSeen=0;
 uint32_t samplesSinceInference=0,speechHoldUntil=0;
-float noiseFloor=20.0f;
+float noiseFloor=180.0f;
+uint8_t vadRun=0;
 uint8_t streakClass=NOISE,streakCount=0;
 uint32_t streakAt=0;
 BLECharacteristic* events=nullptr;
@@ -33,7 +34,7 @@ Gate gate;
 bool active(){return status.load()==LISTENING&&enabled.load()&&ring&&workerHandle;}
 
 void resetWindow(){
-  writeAt=0;samplesSeen=0;samplesSinceInference=0;speechHoldUntil=0;
+  writeAt=0;samplesSeen=0;samplesSinceInference=0;speechHoldUntil=0;vadRun=0;
   streakClass=NOISE;streakCount=0;streakAt=0;gate.reset();
 }
 inline int16_t sampleAt(size_t relative){
@@ -55,10 +56,26 @@ AcLevel measureAcLevel(const int16_t* samples,uint16_t count){
 }
 float windowGain(){
   double sum=0.0;
-  for(size_t i=0;i<WINDOW_SAMPLES;++i){const float v=float(sampleAt(i))/32768.0f;sum+=double(v)*double(v);}
-  const float rms=sqrtf(float(sum/double(WINDOW_SAMPLES))+1e-12f);
+  for(size_t i=0;i<WINDOW_SAMPLES;++i)sum+=double(sampleAt(i));
+  const double mean=sum/double(WINDOW_SAMPLES);
+  double power=0.0;
+  for(size_t i=0;i<WINDOW_SAMPLES;++i){
+    const double centered=(double(sampleAt(i))-mean)/32768.0;
+    power+=centered*centered;
+  }
+  const float rms=sqrtf(float(power/double(WINDOW_SAMPLES))+1e-12f);
   if(rms<0.004f)return 1.0f;
   return fminf(10.0f,0.10f/rms);
+}
+float updateNoiseFloor(float floor,uint16_t meanAbs,bool held){
+  if(held)return floor;
+  const float level=float(meanAbs);
+  if(level<floor)return floor*0.90f+level*0.10f;
+  if(level<floor*1.60f)return floor*0.995f+level*0.005f;
+  return floor;
+}
+float voiceThreshold(float floor){
+  return fmaxf(220.0f,floor*2.0f+80.0f);
 }
 Inference infer(){
   float input[TIME_FRAMES][BANDS];
@@ -172,13 +189,17 @@ void workerTask(void*){
     audioMeanAbs=meanAbs;audioPeak=level.peak;
     const uint32_t now=millis();
     const bool held=int32_t(speechHoldUntil-now)>0;
-    if(!held&&float(meanAbs)<noiseFloor*4.0f)
-      noiseFloor=noiseFloor*0.97f+float(meanAbs)*0.03f;
-    const float speechThreshold=fmaxf(55.0f,noiseFloor*2.6f);
-    if(float(meanAbs)>speechThreshold)speechHoldUntil=now+1000u;
-    else if(!held){
-      candidateId=0;candidateConfidence=0;
-      streakClass=NOISE;streakCount=0;
+    noiseFloor=updateNoiseFloor(noiseFloor,meanAbs,held);
+    const float speechThreshold=voiceThreshold(noiseFloor);
+    if(float(meanAbs)>speechThreshold) {
+      if(vadRun<255)++vadRun;
+      if(vadRun>=2)speechHoldUntil=now+1000u;
+    } else {
+      vadRun=0;
+      if(!held){
+        candidateId=0;candidateConfidence=0;
+        streakClass=NOISE;streakCount=0;
+      }
     }
     samplesSinceInference+=block.count;
     if(samplesSeen>=WINDOW_SAMPLES&&samplesSinceInference>=3200u&&int32_t(speechHoldUntil-now)>0){
