@@ -63,7 +63,7 @@ function materializeChakshu(source,target) {
     'bool ChakshuTransfer::chakshuAudioHasBacklog() {\n  if (!recoveryMutex) return false;\n  RecoveryGuard guard;\n  return recoveryFinishing.load() || recoveryRing.count-recoveryRing.cursor>2;\n}\nbool sendRecoveryFrame() {','Prioritize audio over camera notifications');
   replace('void controlTask(void* parameter) {',
     'void controlTask(void* parameter) {\n  while (!ChakshuResources::runtimeReady.load()) vTaskDelay(1);','Wait for complete BLE initialization');
-  replace('  initializeBLE();','  initializeBLE();\n  ChakshuLink::bootReadyMs=millis();\n  ChakshuResources::runtimeReady.store(true);\n  ChakshuVoice::scheduleInitialize();\n  Serial.printf("[CHAKSHU] ready_ms=%lu media_ms=%lu heap=%lu psram=%lu voice=%u\\n",(unsigned long)ChakshuLink::bootReadyMs.load(),(unsigned long)ChakshuLink::mediaBootMs.load(),(unsigned long)ESP.getFreeHeap(),(unsigned long)ESP.getFreePsram(),unsigned(ChakshuVoice::active()));','Publish initialized runtime before deferred voice');
+  replace('  initializeBLE();','  initializeBLE();\n  ChakshuLink::bootReadyMs=millis();\n  ChakshuResources::runtimeReady.store(true);\n  // Recovery invariant: local voice model initialization is disabled because it destabilized BLE on 1319.\n  Serial.printf("[CHAKSHU] ready_ms=%lu media_ms=%lu heap=%lu psram=%lu voice=%u\\n",(unsigned long)ChakshuLink::bootReadyMs.load(),(unsigned long)ChakshuLink::mediaBootMs.load(),(unsigned long)ESP.getFreeHeap(),(unsigned long)ESP.getFreePsram(),unsigned(ChakshuVoice::active()));','Publish initialized runtime without local voice');
   return out;
 }
 module.exports={materializeChakshu};
