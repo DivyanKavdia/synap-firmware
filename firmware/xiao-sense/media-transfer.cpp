@@ -48,24 +48,38 @@ void clearSelection() {
 // File handles never outlive a resource lease: a hardware check can remount SD
 // between BLE reads. Retain the path and reopen only while the gate is held.
 uint8_t selectFile(const char* path,uint32_t& total) {
-  if(!ChakshuStorage::ready)return ChakshuMedia::NO_SD;
-  File file=SD.open(path,FILE_READ);
-  if(!file||file.isDirectory()){file.close();return ChakshuMedia::NO_SD;}
-  total=file.size();file.close();snprintf(selectedPath,sizeof(selectedPath),"%s",path);
-  ChakshuStorage::protect(path);return 0;
+  if(!ChakshuStorage::ready&&!ChakshuStorage::begin(false))return ChakshuMedia::NO_SD;
+  for(uint8_t attempt=0;attempt<2;++attempt) {
+    File file=SD.open(path,FILE_READ);
+    if(file&&!file.isDirectory()) {
+      total=file.size();file.close();snprintf(selectedPath,sizeof(selectedPath),"%s",path);
+      ChakshuStorage::protect(path);return 0;
+    }
+    file.close();
+    if(attempt==0&&ChakshuStorage::recoverIO())continue;
+    return ChakshuStorage::ready?ChakshuMedia::IO_ERROR:ChakshuMedia::NO_SD;
+  }
+  return ChakshuMedia::IO_ERROR;
 }
 uint8_t readSelection(uint32_t offset,uint32_t& total,uint8_t* bytes,size_t& size) {
   if(selectedPath[0]) {
-    if(!ChakshuStorage::ready)return ChakshuMedia::NO_SD;
-    File file=SD.open(selectedPath,FILE_READ);
-    if(!file||file.isDirectory()){file.close();return ChakshuMedia::IO_ERROR;}
-    total=file.size();
-    uint8_t error=ChakshuMedia::IO_ERROR;
-    if(offset<total){
-      size=std::min(size_t(480),size_t(total-offset));
-      if(file.seek(offset)&&file.read(bytes,size)==int(size))error=0;
+    if(!ChakshuStorage::ready&&!ChakshuStorage::begin(false))return ChakshuMedia::NO_SD;
+    for(uint8_t attempt=0;attempt<2;++attempt) {
+      File file=SD.open(selectedPath,FILE_READ);
+      if(file&&!file.isDirectory()) {
+        total=file.size();
+        if(offset<total) {
+          const size_t wanted=std::min(size_t(480),size_t(total-offset));
+          if(file.seek(offset)&&file.read(bytes,wanted)==int(wanted)) {
+            size=wanted;file.close();return 0;
+          }
+        }
+      }
+      file.close();
+      if(attempt==0&&ChakshuStorage::recoverIO())continue;
+      return ChakshuStorage::ready?ChakshuMedia::IO_ERROR:ChakshuMedia::NO_SD;
     }
-    file.close();return error;
+    return ChakshuMedia::IO_ERROR;
   }
   total=bufferSize;
   if(!buffer||offset>=total)return ChakshuMedia::IO_ERROR;
@@ -151,12 +165,16 @@ uint8_t captureSavedPreview() {
 }
 uint8_t catalogue() {
   clearSelection();
-  // The module-status bit can be stale for a few milliseconds around a local
-  // capture/remount. Catalogue is serialized by the media lease, so one
-  // non-destructive remount attempt is safe and avoids reporting a present card
-  // as "SD file unavailable".
+  // Catalogue is serialized by the media lease. Recover a mounted-but-unstable
+  // card once at a conservative SPI clock before surfacing an I/O error.
   if(!ChakshuStorage::ready&&!ChakshuStorage::begin(false))return ChakshuMedia::NO_SD;
-  File directory=SD.open("/synap");if(!directory)return ChakshuMedia::IO_ERROR;
+  File directory=SD.open("/synap");
+  if(!directory) {
+    directory.close();
+    if(!ChakshuStorage::recoverIO())return ChakshuMedia::NO_SD;
+    directory=SD.open("/synap");
+    if(!directory){directory.close();return ChakshuMedia::IO_ERROR;}
+  }
   String json="[";unsigned count=0;
   for(File entry=directory.openNextFile();entry;entry=directory.openNextFile()) {
     String path=entry.path();
