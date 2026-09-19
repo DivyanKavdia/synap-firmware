@@ -28,6 +28,33 @@ int main(){
  puts("PASS class mapping and wake gate");
 }`), /PASS class mapping/);
 });
+test('voice activity uses DC-centred acoustic energy rather than microphone offset', () => {
+  const voice = fs.readFileSync('firmware/xiao-sense/voice.cpp', 'utf8');
+  const start = voice.indexOf('struct AcLevel');
+  const end = voice.indexOf('float windowGain()', start);
+  assert(start >= 0 && end > start);
+  const helper = voice.slice(start, end);
+  assert.match(nativeTest(`#include <cstdint>
+#include <cstddef>
+#include <cassert>
+#include <cstdio>
+${helper}
+int main(){
+ const int16_t dc[]={1250,1250,1250,1250,1250,1250,1250,1250};
+ const auto silent=measureAcLevel(dc,8);
+ assert(silent.meanAbs==0&&silent.peak==0);
+ const int16_t speech[]={900,1100,900,1100,900,1100,900,1100};
+ const auto active=measureAcLevel(speech,8);
+ assert(active.meanAbs==100&&active.peak==100);
+ const int16_t rail[]={-32768,32767};
+ const auto extreme=measureAcLevel(rail,2);
+ assert(extreme.meanAbs==32767&&extreme.peak==32768);
+ puts("PASS dc-centred voice level");
+}`), /PASS dc-centred voice level/);
+  assert.match(voice, /const float speechThreshold=fmaxf\(55\.0f,noiseFloor\*2\.6f\)/);
+  assert.match(voice, /candidateId=0;candidateConfidence=0/);
+});
+
 test('SD cleanup recognizes exact generated photo/audio paths without admitting other files', () => {
   const source = fs.readFileSync('firmware/xiao-sense/sd-storage.cpp', 'utf8');
   const validator = source.slice(source.indexOf('bool capturePath('), source.indexOf('String stemFor('));
