@@ -150,18 +150,20 @@ uint8_t captureSavedPreview() {
     else {memcpy(buffer,frame->buf,frame->len);bufferSize=frame->len;}
   }
   if(frame)esp_camera_fb_return(frame);
-  if(error){ChakshuCamera::endOriginal();return error;}
-  if(!ChakshuStorage::ensureSpace(bufferSize)){ChakshuCamera::endOriginal();clearSelection();return ChakshuMedia::NO_SPACE;}
+  // Release the expensive full-resolution camera mode before touching SD.
+  // The JPEG now lives in PSRAM, so storage work does not need the sensor/framebuffer.
+  ChakshuCamera::endOriginal();
+  if(error)return error;
+  if(!ChakshuStorage::ensureSpace(bufferSize)){clearSelection();return ChakshuStorage::ready?ChakshuMedia::NO_SPACE:ChakshuMedia::NO_SD;}
   File original=ChakshuStorage::create(originalPath,sizeof(originalPath),"jpg");
-  if(!original){ChakshuCamera::endOriginal();clearSelection();originalPath[0]=0;return ChakshuMedia::IO_ERROR;}
+  if(!original){ChakshuStorage::ready=false;clearSelection();originalPath[0]=0;return ChakshuMedia::IO_ERROR;}
   ChakshuStorage::protect(originalPath);
   const bool saved=original.write(buffer,bufferSize)==bufferSize;
   original.flush();original.close();ChakshuStorage::clearProtection();
-  if(!saved){ChakshuStorage::ready=false;originalPath[0]=0;ChakshuCamera::endOriginal();clearSelection();return ChakshuMedia::IO_ERROR;}
+  if(!saved){ChakshuStorage::ready=false;originalPath[0]=0;clearSelection();return ChakshuMedia::IO_ERROR;}
   // Derive the preview from this exact full-resolution exposure. The original
   // stays on SD until the app durably verifies and acknowledges its move.
-  makePreviewFromOriginal();
-  ChakshuCamera::endOriginal();return 0;
+  makePreviewFromOriginal();return 0;
 }
 uint8_t catalogue() {
   clearSelection();
@@ -280,16 +282,10 @@ void worker(void*) {
       case 15:total=size=strlen(originalPath);memcpy(bytes,originalPath,size);break;
       case 11: {
         ChakshuMedia::Snapshot s;
-        if(!ChakshuStorage::ready)error=ChakshuMedia::NO_SD;
-        else if(!ChakshuCamera::beginOriginal())error=ChakshuMedia::NO_CAMERA;
+        if(streamingEnabled.load())error=ChakshuMedia::BUSY;
         else {
-          File file=ChakshuStorage::create(s.path,sizeof(s.path),"jpg");
-          camera_fb_t* frame=esp_camera_fb_get();if(frame)esp_camera_fb_return(frame);
-          frame=esp_camera_fb_get();
-          if(!file||!frame||frame->format!=PIXFORMAT_JPEG||frame->len<4)error=ChakshuMedia::CAPTURE_ERROR;
-          else if(!ChakshuStorage::ensureSpace(frame->len)||file.write(frame->buf,frame->len)!=frame->len)error=ChakshuMedia::IO_ERROR;
-          if(frame)esp_camera_fb_return(frame);if(file){file.flush();file.close();}
-          ChakshuCamera::endOriginal();
+          error=captureSavedPreview();
+          if(!error)snprintf(s.path,sizeof(s.path),"%s",originalPath);
         }
         s.operation=2;s.state=error?3:2;s.error=error;ChakshuMedia::refresh(s);ChakshuMedia::save(s);break;
       }
@@ -323,6 +319,7 @@ void worker(void*) {
       case 8:total=bufferSize;break;
       default:error=2;
     }
+    if(error==ChakshuMedia::IO_ERROR||error==ChakshuMedia::NO_SD)ChakshuStorage::ready=false;
     replyFor(request,error,total,request.offset,bytes,error?0:size);
     if(!streamingEnabled.load())stopMicrophone();
   }
