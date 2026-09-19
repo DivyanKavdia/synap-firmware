@@ -56,8 +56,8 @@ The current Chakshu recovery baseline prioritizes BLE/OTA availability after a p
 - Local wake-word recognition is temporarily disabled in the BLE-first recovery build.
 - Voice protocol v2; wake events remain compatible with the companion app.
 - WakeNet/MultiNet will be reintroduced only behind a post-BLE fault-contained activation path.
-- Supported photo, video, audio and visual-description commands retain their local/online routing.
-- Wake detection remains available while compatible SD recording feeds PCM copies.
+- Photo, video, audio and visual-description capabilities remain available through the companion app and offline media flows.
+- Disabled local voice consumes no boot-time model memory and cannot block BLE recovery.
 
 After offline audio is moved to the companion app, cloud transcription and memory processing are owned by the PWA/backend repository.
 
