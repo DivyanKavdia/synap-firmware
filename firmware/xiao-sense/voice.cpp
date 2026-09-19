@@ -186,7 +186,7 @@ void cleanup(){
 void initialize(){
   status=STARTING;
   Preferences settings;if(settings.begin("chakshu-voice",true)){enabled.store(settings.getBool("enabled",true));settings.end();}
-  if(SAMPLE_RATE!=16000||LEARNED_WEIGHT_BYTES>2048u){status=MODEL_ERROR;return;}
+  if(MODEL_SAMPLE_RATE!=16000||LEARNED_WEIGHT_BYTES>2048u){status=MODEL_ERROR;return;}
   if(ESP.getFreePsram()<256u*1024u||ESP.getFreeHeap()<32000u){status=NO_MEMORY;return;}
   ring=static_cast<int16_t*>(ps_malloc(size_t(WINDOW_SAMPLES)*sizeof(int16_t)));
   pcmQueue=xQueueCreate(6,sizeof(Block));commandQueue=xQueueCreate(4,sizeof(PendingCommand));
