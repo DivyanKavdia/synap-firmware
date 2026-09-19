@@ -112,10 +112,10 @@ uint8_t classCommand(uint8_t cls){
   return 0;
 }
 void consider(const Inference& result,uint32_t now,uint32_t epoch){
-  candidateId=result.cls;
+  const uint8_t command=classCommand(result.cls);
+  candidateId=command;
   candidateConfidence=uint16_t(fminf(1.0f,fmaxf(0.0f,result.confidence))*1000.0f);
   candidateAt=now;++candidateCount;
-  const uint8_t command=classCommand(result.cls);
   const float threshold=command==WAKE?0.72f:0.76f;
   if(!command||result.confidence<threshold||result.margin<0.10f){
     streakClass=NOISE;streakCount=0;return;
