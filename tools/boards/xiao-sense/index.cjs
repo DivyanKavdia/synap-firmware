@@ -40,7 +40,7 @@ function materializeChakshu(source,target) {
   replace('  static int32_t raw[SAMPLES_PER_FRAME];','  static int16_t raw[SAMPLES_PER_FRAME];','Native PCM16 capture buffer');
   replace('    const int32_t sample=raw[i] >> 16;','    const int32_t sample=raw[i];','Preserve onboard PCM samples');
   replace('// SYNAP_BOARD_FEATURES',
-    ['model-contract.cpp','model-flash.cpp','voice-contract.cpp','camera.cpp','sd-storage.cpp','media.cpp','media-buffers.cpp','sd-recording.cpp','wifi-downloads.cpp','media-transfer.cpp','voice.cpp'].map(name=>readTemplate('xiao-sense',name)).join('\n'),'Camera, SD and local voice drivers');
+    ['voice-contract.cpp','camera.cpp','sd-storage.cpp','media.cpp','media-buffers.cpp','sd-recording.cpp','wifi-downloads.cpp','media-transfer.cpp','kws-model.cpp','voice.cpp'].map(name=>readTemplate('xiao-sense',name)).join('\n'),'Camera, SD and local voice drivers');
   // SD owns the PDM reader while offline recording. Feed the recognizer the
   // exact PCM copy already captured for the WAV, never a competing microphone read.
   replace('if(slot->size){s.capturedBytes.fetch_add(slot->size);s.audio.publish();}',
@@ -54,7 +54,7 @@ function materializeChakshu(source,target) {
       out.includes('analogSetPinAttenuation(') || out.includes('esp_deep_sleep_start()'))
     throw Error('Chakshu still accesses absent hardware');
   replace('  ChakshuMedia::initialize();',
-    '  const uint32_t mediaStarted=millis();\n  ChakshuMedia::initialize();\n  ChakshuLink::mediaBootMs=millis()-mediaStarted;\n  // Recovery invariant: BLE must become available even if local speech models are unhealthy.\n  // Voice initialization is intentionally deferred/disabled in this recovery build.','Measure media boot cost without blocking BLE on local voice');
+    '  const uint32_t mediaStarted=millis();\n  ChakshuMedia::initialize();\n  ChakshuLink::mediaBootMs=millis()-mediaStarted;\n  // Voice is intentionally not initialized in setup. ChakshuVoice::tick() starts it only after BLE/OTA boot validation.','Measure media boot cost without blocking BLE on local voice');
   replace('    ChakshuMedia::tick();','    ChakshuMedia::tick();\n    ChakshuVoice::tick();','Dispatch local voice commands');
   out=materializeBle(out);
   replace('  ChakshuTransfer::ble(service);','  ChakshuTransfer::ble(service);\n  ChakshuVoice::ble(service);','Register local voice service');
