@@ -35,10 +35,11 @@ test('Chakshu keeps separate release paths, OTA marker and the deployed default 
 
 test('Chakshu starts one-model voice only after BLE-safe runtime readiness',()=>{
   const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
-  const ble=source.indexOf('initializeBLE();');
   const setup=source.indexOf('void setup()');
   const loop=source.indexOf('void loop()');
-  const lazy=source.indexOf('millis()>=START_AFTER_MS');
+  const ble=source.indexOf('\n  initializeBLE();',setup);
+  const lazy=source.indexOf('millis()>=START_AFTER_MS',loop);
+  assert(setup>=0 && loop>setup);
   assert(ble>setup && ble<loop);
   assert(lazy>loop);
   assert.match(source,/constexpr uint32_t START_AFTER_MS=8000/);
