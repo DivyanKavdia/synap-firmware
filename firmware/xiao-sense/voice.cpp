@@ -33,32 +33,6 @@ char phraseStorage[MAX_PHRASES][80]{};size_t phraseCount=0;
 
 bool active(){return status.load()==LISTENING&&enabled.load()&&ChakshuFlashModel::present();}
 
-const char* smallNumber(uint16_t n) {
-  static const char* const values[]={"","WcN","To","vRm","FeR","FiV","SgKS","SfVcN","dT","NiN","TfN","gLfVcN","TWfLV","vkTmN","FeRTmN","FgFTmN","SgKSTmN","SfVcNTmN","dTmN","NiNTmN"};
-  return n<20?values[n]:"";
-}
-const char* tensNumber(uint16_t n) {
-  static const char* const values[]={"","","TWfNTm","vkDm","FeRTm","FgFTm","SgKSTm","SfVcNTm","dTm","NiNTm"};
-  return n<10?values[n]:"";
-}
-String numberPhoneme(uint16_t value) {
-  if(!value||value>600)return String();
-  String out;
-  if(value>=100) {
-    out+=smallNumber(value/100);out+=" hcNDRcD";value%=100;
-    if(value)out+=' ';
-  }
-  if(value>=20) {
-    out+=tensNumber(value/10);value%=10;
-    if(value){out+=' ';out+=smallNumber(value);}
-  } else if(value) out+=smallNumber(value);
-  return out;
-}
-uint8_t durationId(uint16_t seconds) {
-  for(uint16_t command=DURATION_BASE;command<=DURATION_LAST;++command)
-    if(durationSeconds(uint8_t(command))==seconds)return uint8_t(command);
-  return 0;
-}
 bool addPhrase(uint8_t id,const String& phoneme) {
   if(!id||!phoneme.length()||phraseCount>=MAX_PHRASES)return false;
   snprintf(phraseStorage[phraseCount],sizeof(phraseStorage[phraseCount]),"%s",phoneme.c_str());
