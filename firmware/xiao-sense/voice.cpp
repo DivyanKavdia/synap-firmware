@@ -15,12 +15,13 @@ std::atomic<uint32_t> mediaCompletion{0};
 struct Block { uint16_t count;int16_t samples[800]; };
 struct PendingCommand { uint8_t command;uint32_t epoch,at; };
 struct Inference { uint8_t cls;float confidence,margin; };
+struct AcLevel { uint16_t meanAbs,peak; };
 QueueHandle_t pcmQueue=nullptr,commandQueue=nullptr;
 TaskHandle_t workerHandle=nullptr,idleHandle=nullptr,initHandle=nullptr;
 int16_t* ring=nullptr;
 size_t writeAt=0,samplesSeen=0;
 uint32_t samplesSinceInference=0,speechHoldUntil=0;
-float noiseFloor=90.0f;
+float noiseFloor=20.0f;
 uint8_t streakClass=NOISE,streakCount=0;
 uint32_t streakAt=0;
 BLECharacteristic* events=nullptr;
@@ -37,6 +38,20 @@ void resetWindow(){
 }
 inline int16_t sampleAt(size_t relative){
   return ring[(writeAt+relative)%WINDOW_SAMPLES];
+}
+AcLevel measureAcLevel(const int16_t* samples,uint16_t count){
+  if(!samples||!count)return {0,0};
+  int64_t sum=0;
+  for(uint16_t i=0;i<count;++i)sum+=samples[i];
+  const int32_t mean=int32_t(sum/int64_t(count));
+  uint64_t absSum=0;uint32_t peak=0;
+  for(uint16_t i=0;i<count;++i){
+    const int32_t centered=int32_t(samples[i])-mean;
+    const uint32_t magnitude=uint32_t(centered<0?-int64_t(centered):centered);
+    absSum+=magnitude;if(magnitude>peak)peak=magnitude;
+  }
+  const uint64_t meanAbs=absSum/count;
+  return {uint16_t(meanAbs>65535u?65535u:meanAbs),uint16_t(peak>65535u?65535u:peak)};
 }
 float windowGain(){
   double sum=0.0;
@@ -145,20 +160,27 @@ void workerTask(void*){
     if(xQueueReceive(pcmQueue,&block,pdMS_TO_TICKS(200))!=pdTRUE)continue;
     if(!active()||otaBusy())continue;
     if(epoch!=discontinuities.load()){epoch=discontinuities.load();resetWindow();xQueueReset(pcmQueue);}
-    uint64_t absSum=0;uint32_t peak=0;
     for(uint16_t i=0;i<block.count;++i){
-      const int32_t s=block.samples[i];const uint32_t a=uint32_t(s<0?-s:s);
-      absSum+=a;if(a>peak)peak=a;
       ring[writeAt]=block.samples[i];writeAt=(writeAt+1)%WINDOW_SAMPLES;
       if(samplesSeen<WINDOW_SAMPLES)++samplesSeen;
     }
-    const uint16_t meanAbs=uint16_t(std::min<uint64_t>(65535,absSum/std::max<uint16_t>(1,block.count)));
-    audioMeanAbs=meanAbs;audioPeak=uint16_t(std::min<uint32_t>(65535,peak));
-    if(float(meanAbs)<noiseFloor*1.8f)noiseFloor=noiseFloor*0.985f+float(meanAbs)*0.015f;
-    const float speechThreshold=fmaxf(100.0f,noiseFloor*2.4f);
-    if(float(meanAbs)>speechThreshold)speechHoldUntil=millis()+1200u;
-    samplesSinceInference+=block.count;
+    // INMP441/board paths can carry a sizeable DC offset. The model removes
+    // per-frame DC before spectral inference, so VAD and diagnostics must use
+    // the same AC-only signal or silence can look like permanent speech.
+    const AcLevel level=measureAcLevel(block.samples,block.count);
+    const uint16_t meanAbs=level.meanAbs;
+    audioMeanAbs=meanAbs;audioPeak=level.peak;
     const uint32_t now=millis();
+    const bool held=int32_t(speechHoldUntil-now)>0;
+    if(!held&&float(meanAbs)<noiseFloor*4.0f)
+      noiseFloor=noiseFloor*0.97f+float(meanAbs)*0.03f;
+    const float speechThreshold=fmaxf(55.0f,noiseFloor*2.6f);
+    if(float(meanAbs)>speechThreshold)speechHoldUntil=now+1000u;
+    else if(!held){
+      candidateId=0;candidateConfidence=0;
+      streakClass=NOISE;streakCount=0;
+    }
+    samplesSinceInference+=block.count;
     if(samplesSeen>=WINDOW_SAMPLES&&samplesSinceInference>=3200u&&int32_t(speechHoldUntil-now)>0){
       samplesSinceInference=0;consider(infer(),now,epoch);
     }
