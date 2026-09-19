@@ -2,7 +2,6 @@
 // Architecture: 12 spectral bins x 20 time frames -> Conv16 -> Conv16 -> max+mean pool -> 6 classes.
 // Learned weights: 1,536 bytes int8. Synthetic held-out quantized accuracy: 88.2%.
 // Bootstrap-only: real pendant utterances should replace/augment synthetic training data.
-#pragma once
 #include <stdint.h>
 namespace ChakshuTinyModel {
 constexpr uint16_t SAMPLE_RATE=16000;
