@@ -49,10 +49,12 @@ jobs:
           node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3/synap_esp32c3.ino
           node tools/materialize-target.cjs xiao-esp32s3-sense-8m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_chakshu/synap_chakshu.ino
           test "$(git status --porcelain -- synap_esp32s3)" = ""
-      - name: Verify BLE-first Chakshu recovery source excludes local model payload
+      - name: Verify BLE-first single-model Chakshu voice contract
         run: |
-          grep -q '^#define SYNAP_VOICE_FLASH 0$' prepared/synap_chakshu/synap_chakshu.ino
-          ! grep -q 'ChakshuVoice::initialize();' prepared/synap_chakshu/synap_chakshu.ino
+          grep -q 'single-model v%u ready' prepared/synap_chakshu/synap_chakshu.ino
+          grep -q 'START_AFTER_MS=8000' prepared/synap_chakshu/synap_chakshu.ino
+          grep -q 'a9985b4e30f11bc855e4dbe818d6f2432272d0a994592d594f8b5dcf78e77bbb' prepared/synap_chakshu/synap_chakshu.ino
+          ! grep -Eq 'esp_afe_sr_iface|esp_mn_models|esp_wn_models|srmodel_load' prepared/synap_chakshu/synap_chakshu.ino
       - name: Compile S3, C3 and Chakshu application targets with one build number
         env:
           RUN_NUMBER: ${{ github.run_number }}
