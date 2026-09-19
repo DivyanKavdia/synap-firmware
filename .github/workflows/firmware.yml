@@ -49,9 +49,13 @@ jobs:
           node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3/synap_esp32c3.ino
           node tools/materialize-target.cjs xiao-esp32s3-sense-8m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_chakshu/synap_chakshu.ino
           test "$(git status --porcelain -- synap_esp32s3)" = ""
-      - name: Verify BLE-safe Chakshu recovery excludes local model startup and payload
+      - name: Verify lightweight TinyML Chakshu source
         run: |
-          ! grep -q 'ChakshuVoice::scheduleInitialize();' prepared/synap_chakshu/synap_chakshu.ino
+          grep -q 'ChakshuVoice::scheduleInitialize();' prepared/synap_chakshu/synap_chakshu.ino
+          grep -q 'LEARNED_WEIGHT_BYTES' prepared/synap_chakshu/synap_chakshu.ino
+          grep -q 'WINDOW_SAMPLES=15360' prepared/synap_chakshu/synap_chakshu.ino
+          ! grep -q 'esp_afe_sr' prepared/synap_chakshu/synap_chakshu.ino
+          ! grep -q 'esp_mn_' prepared/synap_chakshu/synap_chakshu.ino
           ! grep -q 'SYNAP_EMBEDDED_SR_MODEL_START' prepared/synap_chakshu/synap_chakshu.ino
       - name: Compile S3, C3 and Chakshu application targets with one build number
         env:
