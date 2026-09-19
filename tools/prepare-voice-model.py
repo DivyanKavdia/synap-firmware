@@ -1,4 +1,4 @@
-"""Build the reproducible MultiNet command pack used after WakeNet."""
+"""Build the reproducible single MultiNet model pack used for wake and commands."""
 import hashlib, json, pathlib, struct, zipfile, sys, subprocess
 
 REV = '27da4f945f779bab2d238889924622f7988b1b1c'
@@ -37,13 +37,13 @@ def build(out):
     digest=hashlib.sha256(packed).hexdigest()
     manifest={
       'schema':1,
-      'purpose':'wakenet-multinet-command',
+      'purpose':'single-multinet-wake-command',
       'source':REV,
       'models':list(FILES),
       'bytes':len(packed),
       'sha256':digest,
-      'wake_word':'Hi ESP',
-      'wake_model':'wn9_hiesp',
+      'wake_word':'Hey Snap',
+      'wake_model':'mn5q8_en',
       'command_window_ms':5000,
     }
     (out/'model.json').write_text(json.dumps(manifest,indent=2)+'\n')
@@ -54,7 +54,7 @@ def build(out):
         z.writestr('synap/models/srmodels.bin',packed)
         z.writestr('synap/models/model.json',json.dumps(manifest,indent=2)+'\n')
         z.writestr('ESPRESSIF-LICENSE.txt',license)
-        z.writestr('README.txt','Synap Chakshu local command pack. WakeNet Hi ESP opens a five-second MultiNet command window. Model weights: '+REV+'\n')
+        z.writestr('README.txt','Synap Chakshu single-model local voice pack. Say Hey Snap, then a supported command within 5 seconds. One MultiNet model classifies both wake and commands; firmware gates actions. Model weights: '+REV+'\n')
     print(json.dumps(manifest))
 
 if __name__=='__main__':

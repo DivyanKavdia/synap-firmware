@@ -9,8 +9,12 @@ class Gate {
 public:
   void reset(){armed=false;}
   uint8_t accept(uint8_t command,float confidence,uint32_t now) {
-    if(confidence<0.85f||confidence>1.0f||!(confidence>=0.85f))return 0;
-    if(command==WAKE){armed=true;armedAt=now;return WAKE;}
+    if(confidence>1.0f||!(confidence>=0.0f))return 0;
+    if(command==WAKE){
+      if(confidence<0.55f)return 0;
+      armed=true;armedAt=now;return WAKE;
+    }
+    if(confidence<0.72f)return 0;
     const bool recognized=command>=PHOTO&&command<=STOP;
     const bool allowed=armed&&uint32_t(now-armedAt)<=5000u&&recognized;
     if(!allowed)return 0;
