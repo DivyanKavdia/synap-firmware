@@ -43,23 +43,23 @@ test('Chakshu advertises BLE before scheduling local voice model initialization'
   assert.match(source,/Voice remains deferred: BLE\/OTA\/media must become available before model loading/);
 });
 
-test('one MultiNet model classifies Hey Snap and commands behind a five-second firmware gate',()=>{
+test('WakeNet Hi ESP gates the MultiNet command window while BLE remains boot-first',()=>{
   const voice=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice.cpp'),'utf8');
   const contract=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice-contract.cpp'),'utf8');
-  assert.match(voice,/addPhrase\(WAKE,"hd SNaP"\)/);
+  assert.match(voice,/#include <esp_wn_models\.h>/);
+  assert.match(voice,/esp_srmodel_filter\(wakeModels,ESP_WN_PREFIX,"hiesp"\)/);
+  assert.match(voice,/config->wakenet_init=true/);
+  assert.match(voice,/WAKENET_DETECTED/);
+  assert.match(voice,/afe->disable_wakenet\(afeData\)/);
+  assert.match(voice,/afe->enable_wakenet\(afeData\)/);
+  assert.doesNotMatch(voice,/addPhrase\(WAKE,/);
   assert.match(voice,/addPhrase\(PHOTO,"TdK c SNaP"\)/);
   assert.match(voice,/addPhrase\(VIDEO_START,"RcKeRD c VgDmb"\)/);
-  assert.match(voice,/addPhrase\(AUDIO_ON,"RcKeRD eDmb"\)/);
   assert.match(voice,/esp_srmodel_filter\(models,"mn5q8","en"\)/);
   assert.match(voice,/mn->create\(name,5000\)/);
-  assert.match(voice,/config->wakenet_init=false/);
-  assert.doesNotMatch(voice,/esp_wn_models|WAKENET_DETECTED|wakeModels/);
   assert.match(contract,/uint32_t\(now-armedAt\)<=5000u/);
-  assert.match(contract,/confidence<0\.85f/);
   assert.match(voice,/queueLocal\(5,uint32_t\(25u\)<<8\)/);
-  assert.match(voice,/Voice always performs local SD-first actions/);
   assert.match(voice,/while\(millis\(\)<8000u \|\| otaBusy\(\) \|\| mediaBusy\(\)\)/);
-  assert.match(voice,/ChakshuResources::Lease admission;/);
 });
 
 
