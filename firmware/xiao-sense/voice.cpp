@@ -1,7 +1,9 @@
-// Simplistic single-model local command recognition. MultiNet classifies both wake and commands; firmware gates actions.
+// Supported local voice flow: WakeNet "Hi ESP" gates a small MultiNet command window.
+// Voice remains optional and starts only after BLE/runtime readiness.
 #include <esp_afe_sr_iface.h>
 #include <esp_afe_sr_models.h>
 #include <esp_mn_models.h>
+#include <esp_wn_models.h>
 #include <model_path.h>
 #include <mbedtls/sha256.h>
 namespace ChakshuVoice {
@@ -17,8 +19,8 @@ struct PendingCommand { uint8_t command;uint32_t epoch,at; };
 QueueHandle_t pcmQueue=nullptr,commandQueue=nullptr;
 TaskHandle_t feedHandle=nullptr,detectHandle=nullptr,idleHandle=nullptr,feedbackHandle=nullptr,initHandle=nullptr;
 const esp_afe_sr_iface_t* afe=nullptr;esp_afe_sr_data_t* afeData=nullptr;
-esp_mn_iface_t* mn=nullptr;model_iface_data_t* mnData=nullptr;
-srmodel_list_t* models=nullptr;void* weights=nullptr;int16_t* afeInput=nullptr;int feedSize=0;
+esp_mn_iface_t* mn=nullptr;model_iface_data_t* mnData=nullptr;char* wakeModel=nullptr;
+srmodel_list_t* models=nullptr;srmodel_list_t* wakeModels=nullptr;void* weights=nullptr;int16_t* afeInput=nullptr;int feedSize=0;
 BLECharacteristic* events=nullptr;
 portMUX_TYPE stateMux=portMUX_INITIALIZER_UNLOCKED;
 uint32_t serial=0,lastAt=0;uint8_t lastCommand=0,lastResult=0;uint16_t lastValue=0;
@@ -45,9 +47,8 @@ bool addPhrase(uint8_t id,const String& phoneme) {
 }
 bool configurePhrases() {
   phraseCount=0;memset(commands,0,sizeof(commands));memset(nodes,0,sizeof(nodes));memset(phraseStorage,0,sizeof(phraseStorage));
-  // One MultiNet model emits all labels. Firmware only accepts commands after WAKE.
-  return addPhrase(WAKE,"hd SNaP") &&
-    addPhrase(PHOTO,"TdK c SNaP") &&
+  // MultiNet is only active after WakeNet. It never owns the wake phrase.
+  return addPhrase(PHOTO,"TdK c SNaP") &&
     addPhrase(PHOTO,"TdK c FoTo") &&
     addPhrase(VIDEO_START,"RcKeRD c VgDmb") &&
     addPhrase(VIDEO_STOP,"STnP VgDmb") &&
@@ -75,22 +76,43 @@ void feedTask(void*) {
       if(filled==size_t(feedSize)){afe->feed(afeData,afeInput);filled=0;}}
   }
 }
+void returnToWake(bool& commandWindow) {
+  commandWindow=false;gate.reset();
+  if(mnData)mn->clean(mnData);
+  if(afeData)afe->enable_wakenet(afeData);
+}
 void detectTask(void*) {
   ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
-  uint32_t epoch=discontinuities.load();
+  uint32_t epoch=discontinuities.load();bool commandWindow=false;
   for(;;){
     afe_fetch_result_t* result=afe->fetch_with_delay(afeData,pdMS_TO_TICKS(100));
     if(!active()||otaBusy()||epoch!=discontinuities.load()){
-      epoch=discontinuities.load();gate.reset();mn->clean(mnData);afe->reset_buffer(afeData);continue;
+      epoch=discontinuities.load();returnToWake(commandWindow);afe->reset_buffer(afeData);continue;
     }
-    if(!result||result->ret_value!=ESP_OK||!result->data)continue;
+    if(!result||result->ret_value!=ESP_OK)continue;
+    const uint32_t now=millis();
+    if(result->wakeup_state==WAKENET_DETECTED){
+      gate.accept(WAKE,1.0f,now);commandWindow=true;mn->clean(mnData);
+      afe->disable_wakenet(afeData);
+      PendingCommand pending{WAKE,epoch,now};
+      if(xQueueSend(commandQueue,&pending,0)!=pdTRUE)++discontinuities;
+      continue;
+    }
+    if(!commandWindow||!result->data)continue;
     const auto detected=mn->detect(mnData,result->data);
     if(detected==ESP_MN_STATE_DETECTED){
       const auto* matches=mn->get_results(mnData);
-      if(matches&&matches->num>0){const uint8_t command=gate.accept(matches->command_id[0],matches->prob[0],millis());
-        if(command){PendingCommand pending{command,epoch,millis()};xQueueSend(commandQueue,&pending,0);}}
+      uint8_t command=0;
+      if(matches&&matches->num>0)command=gate.accept(matches->command_id[0],matches->prob[0],millis());
       mn->clean(mnData);
-    }else if(detected==ESP_MN_STATE_TIMEOUT){gate.reset();mn->clean(mnData);}
+      if(command){
+        PendingCommand pending{command,epoch,millis()};
+        if(xQueueSend(commandQueue,&pending,0)!=pdTRUE)++discontinuities;
+        returnToWake(commandWindow);
+      }
+    }else if(detected==ESP_MN_STATE_TIMEOUT){
+      returnToWake(commandWindow);
+    }
   }
 }
 bool pulseWakeLed() {
@@ -131,6 +153,7 @@ void cleanup() {
   if(mnData){mn->destroy(mnData);mnData=nullptr;}
   if(afeData){afe->destroy(afeData);afeData=nullptr;}
   if(models){esp_srmodel_deinit(models);models=nullptr;}
+  if(wakeModels){esp_srmodel_deinit(wakeModels);wakeModels=nullptr;}
   free(weights);weights=nullptr;free(afeInput);afeInput=nullptr;
 }
 void initialize() {
@@ -150,18 +173,22 @@ void initialize() {
   if(strcmp(hex,MODEL_SHA256)){status=MODEL_ERROR;cleanup();return;}
   models=srmodel_load(weights);
   if(!models){status=MODEL_ERROR;cleanup();return;}
+  wakeModels=srmodel_load(nullptr);
+  wakeModel=wakeModels?esp_srmodel_filter(wakeModels,ESP_WN_PREFIX,"hiesp"):nullptr;
   char* name=esp_srmodel_filter(models,"mn5q8","en");
-  if(!name||(mn=esp_mn_handle_from_name(name))==nullptr){status=MODEL_ERROR;cleanup();return;}
+  if(!wakeModel||!name||(mn=esp_mn_handle_from_name(name))==nullptr){status=MODEL_ERROR;cleanup();return;}
   mnData=mn->create(name,5000);
   if(!mnData||!configurePhrases()){status=NO_MEMORY;cleanup();return;}
   if(mn->set_speech_commands(mnData,&nodes[0])!=nullptr){status=MODEL_ERROR;cleanup();return;}
-  mn->set_det_threshold(mnData,0.85f);
+  mn->set_det_threshold(mnData,0.82f);
   afe_config_t* config=afe_config_init("M",models,AFE_TYPE_SR,AFE_MODE_LOW_COST);
   if(!config){status=NO_MEMORY;cleanup();return;}
-  config->wakenet_init=false;config->aec_init=false;config->se_init=false;config->ns_init=false;config->vad_init=false;
+  config->wakenet_init=true;config->wakenet_model_name=wakeModel;config->wakenet_mode=DET_MODE_90;
+  config->aec_init=false;config->se_init=false;config->ns_init=false;config->vad_init=false;
   config->memory_alloc_mode=AFE_MEMORY_ALLOC_MORE_PSRAM;
   afe=esp_afe_handle_from_config(config);afeData=afe?afe->create_from_config(config):nullptr;afe_config_free(config);
   if(!afeData){status=NO_MEMORY;cleanup();return;}
+  if(afe->reset_wakenet_threshold(afeData,1)!=1){status=MODEL_ERROR;cleanup();return;}
   feedSize=afe->get_feed_chunksize(afeData);
   if(feedSize<=0||feedSize>2048||afe->get_feed_channel_num(afeData)!=1||afe->get_fetch_chunksize(afeData)!=mn->get_samp_chunksize(mnData)){
     status=MODEL_ERROR;cleanup();return;
@@ -174,7 +201,7 @@ void initialize() {
      xTaskCreatePinnedToCore(feedbackTask,"voice-led",2048,nullptr,1,&feedbackHandle,0)!=pdPASS){status=NO_MEMORY;cleanup();return;}
   status=enabled.load()?LISTENING:VOICE_DISABLED;
   xTaskNotifyGive(feedHandle);xTaskNotifyGive(detectHandle);xTaskNotifyGive(idleHandle);
-  Serial.printf("[VOICE] one-model Hey Snap ready=%u phrases=%u psram=%lu\n",unsigned(active()),unsigned(phraseCount),(unsigned long)ESP.getFreePsram());
+  Serial.printf("[VOICE] Hi ESP ready=%u wake=%s commands=%u psram=%lu\n",unsigned(active()),wakeModel?wakeModel:"none",unsigned(phraseCount),(unsigned long)ESP.getFreePsram());
 }
 void initTask(void*) {
   // OTA validation happens after 5 s. Voice starts later and never gates BLE recovery.
@@ -214,7 +241,7 @@ void tick() {
     portENTER_CRITICAL(&stateMux);++serial;lastCommand=WAKE;lastResult=online?2:0;lastAt=millis();lastValue=0;portEXIT_CRITICAL(&stateMux);
     if(feedbackHandle)xTaskNotifyGive(feedbackHandle);
     if(deviceConnected.load()&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
-    Serial.printf("[VOICE] Hey Snap detected online=%u\\n",unsigned(online));
+    Serial.printf("[VOICE] Hi ESP detected online=%u\\n",unsigned(online));
     return;
   }
   uint8_t result=0;
