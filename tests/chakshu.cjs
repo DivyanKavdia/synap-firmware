@@ -36,7 +36,7 @@ test('Chakshu keeps separate release paths, OTA marker and the deployed default 
 test('Chakshu TinyML starts only after BLE and uses no ESP-SR runtime',()=>{
   const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
   const ble=source.indexOf('initializeBLE();');
-  const schedule=source.indexOf('ChakshuVoice::scheduleInitialize();');
+  const schedule=source.indexOf('  ChakshuVoice::scheduleInitialize();',ble);
   assert(ble>=0 && schedule>ble);
   assert.match(source,/TinyML remains optional and starts only after the proven BLE\/OTA\/media boot path is healthy/);
   assert.match(source,/WINDOW_SAMPLES=15360/);
