@@ -53,7 +53,7 @@ jobs:
         run: |
           grep -q 'ChakshuVoice::scheduleInitialize();' prepared/synap_chakshu/synap_chakshu.ino
           grep -q 'LEARNED_WEIGHT_BYTES' prepared/synap_chakshu/synap_chakshu.ino
-          grep -q 'WINDOW_SAMPLES=15360' prepared/synap_chakshu/synap_chakshu.ino
+          grep -q 'WINDOW_SAMPLES=24000' prepared/synap_chakshu/synap_chakshu.ino
           ! grep -q 'esp_afe_sr' prepared/synap_chakshu/synap_chakshu.ino
           ! grep -q 'esp_mn_' prepared/synap_chakshu/synap_chakshu.ino
           ! grep -q 'SYNAP_EMBEDDED_SR_MODEL_START' prepared/synap_chakshu/synap_chakshu.ino

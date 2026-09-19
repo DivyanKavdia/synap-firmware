@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the bootstrap Chakshu TinyML v1 keyword classifier.
+"""Train a Chakshu TinyML keyword classifier using the current v2 architecture.
 
 This is an offline developer tool, not a firmware build dependency.
 Requires: espeak, numpy, scipy, scikit-learn, torch.
@@ -20,10 +20,10 @@ import torch.nn as nn
 
 SEED=7
 FS=16000
-WINDOW=15360
-TIME=20
+WINDOW=24000
+TIME=30
 FRAME=512
-HOP=768
+HOP=800
 BINS=np.array([8,12,18,26,38,54,76,106,140,180,220,248],dtype=np.int64)
 LABELS=["noise","unknown","hey_snap","photo","video","stop"]
 PHRASES={
@@ -109,9 +109,9 @@ def dataset(count):
 class Net(nn.Module):
     def __init__(self):
         super().__init__()
-        self.c1=nn.Conv1d(12,16,3,padding=1)
-        self.c2=nn.Conv1d(16,16,3,padding=1)
-        self.fc=nn.Linear(32,6)
+        self.c1=nn.Conv1d(12,20,3,padding=1)
+        self.c2=nn.Conv1d(20,20,3,padding=1)
+        self.fc=nn.Linear(40,6)
     def forward(self,x):
         x=x.transpose(1,2)
         x=torch.relu(self.c1(x));x=torch.relu(self.c2(x))
@@ -132,19 +132,19 @@ def emit_header(path,net,mean,invstd,accuracy):
     q1,s1=quantize(net.c1.weight);q2,s2=quantize(net.c2.weight);qf,sf=quantize(net.fc.weight)
     coeff=np.array([2*math.cos(2*math.pi*int(b)/FRAME) for b in BINS],np.float32)
     out=f"""// Generated bootstrap TinyML model for Chakshu local voice v1.
-// Architecture: 12 spectral bins x 20 time frames -> Conv16 -> Conv16 -> max+mean pool -> 6 classes.
-// Learned weights: 1,536 bytes int8. Synthetic held-out quantized accuracy: {accuracy*100:.1f}%.
+// Architecture: 12 spectral bins x 30 time frames -> Conv20 -> Conv20 -> max+mean pool -> 6 classes.
+// Learned weights: 2,160 bytes int8. Synthetic held-out quantized accuracy: {accuracy*100:.1f}%.
 // Bootstrap-only: real pendant utterances should replace/augment synthetic training data.
 #pragma once
 #include <stdint.h>
 namespace ChakshuTinyModel {{
 constexpr uint16_t MODEL_SAMPLE_RATE=16000;
-constexpr uint16_t WINDOW_SAMPLES=15360;
+constexpr uint16_t WINDOW_SAMPLES=24000;
 constexpr uint16_t FRAME_SAMPLES=512;
-constexpr uint16_t FRAME_HOP=768;
-constexpr uint8_t TIME_FRAMES=20;
+constexpr uint16_t FRAME_HOP=800;
+constexpr uint8_t TIME_FRAMES=30;
 constexpr uint8_t BANDS=12;
-constexpr uint8_t CHANNELS=16;
+constexpr uint8_t CHANNELS=20;
 constexpr uint8_t CLASSES=6;
 enum Class : uint8_t {{ NOISE=0, UNKNOWN=1, HEY_SNAP=2, PHOTO=3, VIDEO=4, STOP=5 }};
 """

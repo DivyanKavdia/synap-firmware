@@ -1,5 +1,5 @@
 // Lightweight Chakshu TinyML voice runtime.
-// No ESP-SR, AFE, TFLite Micro or external model payload: ~1.5 KB int8 learned weights.
+// No ESP-SR, AFE, TFLite Micro or external model payload: ~2.2 KB int8 learned weights.
 #include <math.h>
 namespace ChakshuVoice {
 using namespace ChakshuTinyModel;
@@ -186,12 +186,12 @@ void cleanup(){
 void initialize(){
   status=STARTING;
   Preferences settings;if(settings.begin("chakshu-voice",true)){enabled.store(settings.getBool("enabled",true));settings.end();}
-  if(MODEL_SAMPLE_RATE!=16000||LEARNED_WEIGHT_BYTES>2048u){status=MODEL_ERROR;return;}
+  if(MODEL_SAMPLE_RATE!=16000||LEARNED_WEIGHT_BYTES>3072u){status=MODEL_ERROR;return;}
   if(ESP.getFreePsram()<256u*1024u||ESP.getFreeHeap()<32000u){status=NO_MEMORY;return;}
   ring=static_cast<int16_t*>(ps_malloc(size_t(WINDOW_SAMPLES)*sizeof(int16_t)));
   pcmQueue=xQueueCreate(6,sizeof(Block));commandQueue=xQueueCreate(4,sizeof(PendingCommand));
   if(!ring||!pcmQueue||!commandQueue||
-     xTaskCreatePinnedToCore(workerTask,"tiny-voice",8192,nullptr,1,&workerHandle,1)!=pdPASS||
+     xTaskCreatePinnedToCore(workerTask,"tiny-voice",12288,nullptr,1,&workerHandle,1)!=pdPASS||
      xTaskCreatePinnedToCore(idleTask,"tiny-listen",4096,nullptr,1,&idleHandle,1)!=pdPASS){
     status=NO_MEMORY;cleanup();return;
   }
