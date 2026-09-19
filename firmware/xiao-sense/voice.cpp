@@ -158,7 +158,7 @@ void workerTask(void*){
     if(float(meanAbs)>speechThreshold)speechHoldUntil=millis()+1200u;
     samplesSinceInference+=block.count;
     const uint32_t now=millis();
-    if(samplesSeen>=WINDOW_SAMPLES&&samplesSinceInference>=3200u&&int32_t(speechHoldUntil-now)>0&&!mediaBusy()){
+    if(samplesSeen>=WINDOW_SAMPLES&&samplesSinceInference>=3200u&&int32_t(speechHoldUntil-now)>0){
       samplesSinceInference=0;consider(infer(),now,epoch);
     }
   }
