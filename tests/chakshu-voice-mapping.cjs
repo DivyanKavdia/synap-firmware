@@ -30,10 +30,12 @@ int main(){
 });
 test('voice activity uses DC-centred acoustic energy rather than microphone offset', () => {
   const voice = fs.readFileSync('firmware/xiao-sense/voice.cpp', 'utf8');
-  const start = voice.indexOf('struct AcLevel');
-  const end = voice.indexOf('float windowGain()', start);
-  assert(start >= 0 && end > start);
-  const helper = voice.slice(start, end);
+  const structStart = voice.indexOf('struct AcLevel');
+  const structEnd = voice.indexOf('\n', structStart) + 1;
+  const functionStart = voice.indexOf('AcLevel measureAcLevel');
+  const functionEnd = voice.indexOf('float windowGain()', functionStart);
+  assert(structStart >= 0 && structEnd > structStart && functionStart >= 0 && functionEnd > functionStart);
+  const helper = voice.slice(structStart, structEnd) + voice.slice(functionStart, functionEnd);
   assert.match(nativeTest(`#include <cstdint>
 #include <cstddef>
 #include <cassert>
