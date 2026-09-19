@@ -138,7 +138,7 @@ def emit_header(path,net,mean,invstd,accuracy):
 #pragma once
 #include <stdint.h>
 namespace ChakshuTinyModel {{
-constexpr uint16_t SAMPLE_RATE=16000;
+constexpr uint16_t MODEL_SAMPLE_RATE=16000;
 constexpr uint16_t WINDOW_SAMPLES=15360;
 constexpr uint16_t FRAME_SAMPLES=512;
 constexpr uint16_t FRAME_HOP=768;
