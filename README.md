@@ -43,7 +43,7 @@ A successful BLE notification enqueue is not proof that the browser persisted th
 
 ## Chakshu production baseline
 
-The current Chakshu baseline includes the approved offline media lifecycle and a proper two-stage local voice pipeline: Espressif WakeNet detects `Hi ESP`, then MultiNet listens for one supported command for up to 8 seconds. Chakshu remains on the installed Arduino `default_8MB` dual-OTA partition layout so routine releases stay OTA-compatible with deployed devices. The optimized WakeNet→MultiNet image must remain within the existing 0x330000 inactive application slot.
+The current Chakshu recovery baseline prioritizes BLE/OTA availability after a physical boot failure observed with the local speech-model startup path. Chakshu remains on the installed Arduino `default_8MB` dual-OTA partition layout. Local WakeNet/MultiNet initialization and its embedded model payload are temporarily disabled; BLE, audio, camera, SD, offline media and OTA remain available.
 
 - Synap-owned SD FIFO cleanup when reserve space is needed.
 - App-triggered clear of Synap capture files.
@@ -53,9 +53,9 @@ The current Chakshu baseline includes the approved offline media lifecycle and a
 - Default video duration of 10 seconds.
 - Explicit requested video durations, within production limits.
 - High-quality/native camera capture profiles for the supported camera.
-- Local `Hi ESP` WakeNet detection using the embedded pinned speech model.
+- Local wake-word recognition is temporarily disabled in the BLE-first recovery build.
 - Voice protocol v2; wake events remain compatible with the companion app.
-- MultiNet commands are enabled only after WakeNet and time out after 8 seconds.
+- WakeNet/MultiNet will be reintroduced only behind a post-BLE fault-contained activation path.
 - Supported photo, video, audio and visual-description commands retain their local/online routing.
 - Wake detection remains available while compatible SD recording feeds PCM copies.
 
