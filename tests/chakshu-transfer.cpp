@@ -6,8 +6,15 @@
 #include <cstring>
 #include <vector>
 namespace ChakshuMedia {enum {NO_SD=3,IO_ERROR=7};}
-namespace ChakshuStorage {bool ready=true;bool protectedCapture=false;void protect(const char*){protectedCapture=true;}void clearProtection(){protectedCapture=false;}}
+namespace ChakshuStorage {
+bool ready=true;bool protectedCapture=false;
+void protect(const char*){protectedCapture=true;}
+void clearProtection(){protectedCapture=false;}
+bool begin(bool){return ready;}
+bool recoverIO(){if(!ready)return false;++mounted;return true;}
+}
 constexpr int FILE_READ=0;
+unsigned mounted=1,handles=0;
 unsigned mounted=1,handles=0;
 bool exists=true,shortRead=false,canSeek=true,directory=false;
 std::vector<uint8_t> disk(1000);
