@@ -35,6 +35,25 @@ bool begin(bool remount) {
   return ready;
 }
 
+bool recoverIO() {
+  ready=false;
+  SD.end();
+  SPI.begin(7,8,9,21);
+  // A card that mounts at 10 MHz can still fail sustained reads/writes because
+  // of contact quality or long expansion-board traces. After a real I/O error,
+  // recover at conservative clocks rather than immediately returning to 10 MHz.
+  for(const uint32_t hz:{4000000u,1000000u}) {
+    ready=SD.begin(21,SPI,hz,"/sd",5,false) && SD.cardType()!=CARD_NONE;
+    if(ready)break;
+    SD.end();
+  }
+  if(ready && !SD.exists("/synap")) ready=SD.mkdir("/synap");
+  refresh();
+  Serial.printf("[CHAKSHU] sd io-recovery ready=%u total=%llu free=%llu\n",
+    unsigned(ready),(unsigned long long)capacity,(unsigned long long)freeBytes);
+  return ready;
+}
+
 bool capturePath(const char* path) {
   if(!path || strncmp(path,"/synap/",7)!=0)return false;
   const char* name=path+7;
