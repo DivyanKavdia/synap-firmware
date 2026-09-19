@@ -101,3 +101,26 @@ int main(){
  puts("PASS capture paths");
 }`), /PASS capture paths/);
 });
+
+
+test('voice diagnostics v2 separate raw candidates, VAD state and accepted commands', () => {
+  const voice = fs.readFileSync('firmware/xiao-sense/voice.cpp', 'utf8');
+  const encodeStart = voice.indexOf('void encodeDiagnostics(');
+  const encodeEnd = voice.indexOf('class DiagnosticCallbacks', encodeStart);
+  assert(encodeStart >= 0 && encodeEnd > encodeStart);
+  const diag = voice.slice(encodeStart, encodeEnd);
+  assert.match(diag, /bytes\[1\]=2/);
+  assert.match(diag, /put16le\(bytes\+20,diagnosticNoiseFloor\.load\(\)\)/);
+  assert.match(diag, /put16le\(bytes\+22,diagnosticThreshold\.load\(\)\)/);
+  assert.match(diag, /bytes\[24\]=diagnosticVadRun\.load\(\)/);
+  assert.match(diag, /bytes\[25\]=diagnosticHoldActive\.load\(\)/);
+  assert.match(diag, /put16le\(bytes\+26,diagnosticMaxMeanAbs\.exchange\(audioMeanAbs\.load\(\)\)\)/);
+  assert.match(diag, /put32le\(bytes\+28,diagnosticVadOpenCount\.load\(\)\)/);
+  assert.match(diag, /bytes\[32\]=acceptedCommand\.load\(\)/);
+  assert.match(diag, /put16le\(bytes\+33,acceptedConfidence\.load\(\)\)/);
+  assert.match(diag, /put32le\(bytes\+35,acceptedAt\.load\(\)\)/);
+  assert.match(diag, /put32le\(bytes\+39,acceptedCount\.load\(\)\)/);
+  assert.match(voice, /if\(vadRun==2\)\+\+diagnosticVadOpenCount/);
+  assert.match(voice, /acceptedCommand=accepted/);
+  assert.match(voice, /acceptedAt=now;\+\+acceptedCount/);
+});
