@@ -150,7 +150,12 @@ uint8_t captureSavedPreview() {
   ChakshuCamera::endOriginal();return 0;
 }
 uint8_t catalogue() {
-  clearSelection();if(!ChakshuStorage::ready)return ChakshuMedia::NO_SD;
+  clearSelection();
+  // The module-status bit can be stale for a few milliseconds around a local
+  // capture/remount. Catalogue is serialized by the media lease, so one
+  // non-destructive remount attempt is safe and avoids reporting a present card
+  // as "SD file unavailable".
+  if(!ChakshuStorage::ready&&!ChakshuStorage::begin(false))return ChakshuMedia::NO_SD;
   File directory=SD.open("/synap");if(!directory)return ChakshuMedia::IO_ERROR;
   String json="[";unsigned count=0;
   for(File entry=directory.openNextFile();entry;entry=directory.openNextFile()) {
