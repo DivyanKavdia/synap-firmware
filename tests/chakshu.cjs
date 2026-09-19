@@ -33,17 +33,43 @@ test('Chakshu keeps separate release paths, OTA marker and the deployed default 
 });
 
 
-test('Chakshu recovery never starts the local voice model at runtime',()=>{
+test('Chakshu TinyML starts only after BLE and uses no ESP-SR runtime',()=>{
   const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
-  assert.match(source,/initializeBLE\(\);/);
-  assert.doesNotMatch(source,/ChakshuVoice::scheduleInitialize\(\);/);
-  assert.doesNotMatch(source,/ChakshuVoice::initialize\(\);/);
-  assert.match(source,/local voice model initialization is disabled because it destabilized BLE on 1319/);
-  // GATT contract remains present so the PWA can report disabled/model-missing rather than misclassify the device.
+  const ble=source.indexOf('initializeBLE();');
+  const schedule=source.indexOf('  ChakshuVoice::scheduleInitialize();',ble);
+  assert(ble>=0 && schedule>ble);
+  assert.match(source,/TinyML remains optional and starts only after the proven BLE\/OTA\/media boot path is healthy/);
+  assert.match(source,/WINDOW_SAMPLES=15360/);
+  assert.match(source,/LEARNED_WEIGHT_BYTES=sizeof\(C1_WEIGHT\)\+sizeof\(C2_WEIGHT\)\+sizeof\(FC_WEIGHT\)/);
+  assert.match(source,/xTaskCreatePinnedToCore\(workerTask,"tiny-voice",8192/);
+  assert.match(source,/xTaskCreatePinnedToCore\(idleTask,"tiny-listen",4096/);
+  assert.doesNotMatch(source,/esp_afe_sr|esp_mn_|model_path|SYNAP_EMBEDDED_SR_MODEL_START/);
   assert.match(source,/4fa12356-0000-1000-8000-00805f9b34fb/);
   assert.match(source,/4fa12357-0000-1000-8000-00805f9b34fb/);
   assert.match(source,/4fa12358-0000-1000-8000-00805f9b34fb/);
 });
+
+test('TinyML v1 keeps actions deliberately small and SD-first',()=>{
+  const voice=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice.cpp'),'utf8');
+  const model=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/tiny-voice-model.h'),'utf8');
+  const contract=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice-contract.cpp'),'utf8');
+  assert.match(model,/CLASSES=6/);
+  assert.match(model,/NOISE=0, UNKNOWN=1, HEY_SNAP=2, PHOTO=3, VIDEO=4, STOP=5/);
+  assert.match(model,/C1_WEIGHT\[576\]/);
+  assert.match(model,/C2_WEIGHT\[768\]/);
+  assert.match(model,/FC_WEIGHT\[192\]/);
+  assert.match(model,/Synthetic held-out quantized accuracy: 88\.2%/);
+  assert.match(voice,/streakCount<2/);
+  assert.match(voice,/command==WAKE\?0\.72f:0\.76f/);
+  assert.match(voice,/result\.margin<0\.10f/);
+  assert.match(voice,/queueLocal\(11\)/);
+  assert.match(voice,/queueLocal\(5,uint32_t\(25u\)<<8\)/);
+  assert.doesNotMatch(voice,/speechHoldUntil-now\)>0&&!mediaBusy\(\)/);
+  assert.doesNotMatch(voice,/queueLocal\(10/);
+  assert.match(contract,/confidence<0\.70f/);
+  assert.match(contract,/confidence<0\.74f/);
+});
+
 
 
 

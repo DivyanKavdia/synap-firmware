@@ -1,4 +1,4 @@
-// Single-model local command IDs and wake gate shared by firmware and native tests.
+// TinyML command IDs and wake gate shared by firmware and native tests.
 namespace ChakshuVoice {
 enum Command : uint8_t {
   WAKE=1, PHOTO=2, VIDEO_START=3, VIDEO_STOP=4, AUDIO_ON=5, AUDIO_OFF=6, DESCRIBE=7, STOP=8
@@ -11,10 +11,10 @@ public:
   uint8_t accept(uint8_t command,float confidence,uint32_t now) {
     if(confidence>1.0f||!(confidence>=0.0f))return 0;
     if(command==WAKE){
-      if(confidence<0.55f)return 0;
+      if(confidence<0.70f)return 0;
       armed=true;armedAt=now;return WAKE;
     }
-    if(confidence<0.72f)return 0;
+    if(confidence<0.74f)return 0;
     const bool recognized=command>=PHOTO&&command<=STOP;
     const bool allowed=armed&&uint32_t(now-armedAt)<=5000u&&recognized;
     if(!allowed)return 0;

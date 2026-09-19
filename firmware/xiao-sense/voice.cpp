@@ -1,12 +1,8 @@
-// Simplistic single-model local command recognition. MultiNet classifies both wake and commands; firmware gates actions.
-#include <esp_afe_sr_iface.h>
-#include <esp_afe_sr_models.h>
-#include <esp_mn_models.h>
-#include <model_path.h>
-#include <mbedtls/sha256.h>
+// Lightweight Chakshu TinyML voice runtime.
+// No ESP-SR, AFE, TFLite Micro or external model payload: ~1.5 KB int8 learned weights.
+#include <math.h>
 namespace ChakshuVoice {
-using ChakshuModel::MODEL_BYTES;
-using ChakshuModel::MODEL_SHA256;
+using namespace ChakshuTinyModel;
 enum Status : uint8_t { STARTING=0,LISTENING=1,MODEL_MISSING=2,NO_MEMORY=3,MODEL_ERROR=4,VOICE_DISABLED=5 };
 std::atomic<uint8_t> status{MODEL_MISSING};
 std::atomic<bool> enabled{true};
@@ -17,195 +13,203 @@ std::atomic<uint8_t> candidateId{0};
 std::atomic<uint32_t> candidateAt{0},candidateCount{0};
 struct Block { uint16_t count;int16_t samples[800]; };
 struct PendingCommand { uint8_t command;uint32_t epoch,at; };
+struct Inference { uint8_t cls;float confidence,margin; };
 QueueHandle_t pcmQueue=nullptr,commandQueue=nullptr;
-TaskHandle_t feedHandle=nullptr,detectHandle=nullptr,idleHandle=nullptr,feedbackHandle=nullptr,initHandle=nullptr;
-const esp_afe_sr_iface_t* afe=nullptr;esp_afe_sr_data_t* afeData=nullptr;
-esp_mn_iface_t* mn=nullptr;model_iface_data_t* mnData=nullptr;
-srmodel_list_t* models=nullptr;void* weights=nullptr;int16_t* afeInput=nullptr;int feedSize=0;
+TaskHandle_t workerHandle=nullptr,idleHandle=nullptr,initHandle=nullptr;
+int16_t* ring=nullptr;
+size_t writeAt=0,samplesSeen=0;
+uint32_t samplesSinceInference=0,speechHoldUntil=0;
+float noiseFloor=90.0f;
+uint8_t streakClass=NOISE,streakCount=0;
+uint32_t streakAt=0;
 BLECharacteristic* events=nullptr;
 BLECharacteristic* diagnostics=nullptr;
 portMUX_TYPE stateMux=portMUX_INITIALIZER_UNLOCKED;
 uint32_t serial=0,lastAt=0;uint8_t lastCommand=0,lastResult=0;uint16_t lastValue=0;
 Gate gate;
-// On XIAO ESP32S3 Sense GPIO21 is both the active-low USER LED and SD CS.
-// Wake feedback must therefore own the media gate and return the pin HIGH.
-constexpr uint8_t WAKE_LED_PIN=21;
-constexpr uint16_t WAKE_LED_MS=90;
-constexpr size_t MAX_PHRASES=12;
-esp_mn_phrase_t commands[MAX_PHRASES]{};esp_mn_node_t nodes[MAX_PHRASES+1]{};
-char phraseStorage[MAX_PHRASES][80]{};size_t phraseCount=0;
 
-bool active(){return status.load()==LISTENING&&enabled.load()&&ChakshuFlashModel::present();}
+bool active(){return status.load()==LISTENING&&enabled.load()&&ring&&workerHandle;}
 
-bool addPhrase(uint8_t id,const String& phoneme) {
-  if(!id||!phoneme.length()||phraseCount>=MAX_PHRASES)return false;
-  snprintf(phraseStorage[phraseCount],sizeof(phraseStorage[phraseCount]),"%s",phoneme.c_str());
-  commands[phraseCount].command_id=id;
-  commands[phraseCount].string=phraseStorage[phraseCount];
-  commands[phraseCount].phonemes=phraseStorage[phraseCount];
-  nodes[phraseCount+1].phrase=&commands[phraseCount];
-  nodes[phraseCount].next=&nodes[phraseCount+1];
-  ++phraseCount;return true;
+void resetWindow(){
+  writeAt=0;samplesSeen=0;samplesSinceInference=0;speechHoldUntil=0;
+  streakClass=NOISE;streakCount=0;streakAt=0;gate.reset();
 }
-bool configurePhrases() {
-  phraseCount=0;memset(commands,0,sizeof(commands));memset(nodes,0,sizeof(nodes));memset(phraseStorage,0,sizeof(phraseStorage));
-  // One MultiNet model emits all labels. Firmware only accepts commands after WAKE.
-  return addPhrase(WAKE,"hd SNaP") &&
-    addPhrase(PHOTO,"TdK c SNaP") &&
-    addPhrase(PHOTO,"TdK c FoTo") &&
-    addPhrase(VIDEO_START,"RcKeRD c VgDmb") &&
-    addPhrase(VIDEO_STOP,"STnP VgDmb") &&
-    addPhrase(AUDIO_ON,"RcKeRD eDmb") &&
-    addPhrase(AUDIO_OFF,"STnP eDmb") &&
-    addPhrase(STOP,"STnP") &&
-    addPhrase(DESCRIBE,"WcT Do Yo Sm");
+inline int16_t sampleAt(size_t relative){
+  return ring[(writeAt+relative)%WINDOW_SAMPLES];
 }
-
-void feed(const int16_t* samples,size_t count) {
-  if(!active()||!pcmQueue||!samples)return;
-  while(count){Block block;block.count=std::min(count,size_t(800));memcpy(block.samples,samples,block.count*2);
-    if(xQueueSend(pcmQueue,&block,0)!=pdTRUE){++discontinuities;return;}samples+=block.count;count-=block.count;}
+float windowGain(){
+  double sum=0.0;
+  for(size_t i=0;i<WINDOW_SAMPLES;++i){const float v=float(sampleAt(i))/32768.0f;sum+=double(v)*double(v);}
+  const float rms=sqrtf(float(sum/double(WINDOW_SAMPLES))+1e-12f);
+  if(rms<0.004f)return 1.0f;
+  return fminf(10.0f,0.10f/rms);
 }
-void feedTask(void*) {
-  ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
-  Block block;size_t filled=0;uint32_t epoch=discontinuities.load();
-  for(;;){
-    if(xQueueReceive(pcmQueue,&block,pdMS_TO_TICKS(100))!=pdTRUE)continue;
-    if(!active()||otaBusy()){filled=0;continue;}
-    if(epoch!=discontinuities.load()){epoch=discontinuities.load();filled=0;xQueueReset(pcmQueue);continue;}
-    size_t at=0;
-    while(at<block.count){const size_t n=std::min(size_t(feedSize)-filled,size_t(block.count)-at);
-      memcpy(afeInput+filled,block.samples+at,n*2);at+=n;filled+=n;
-      if(filled==size_t(feedSize)){afe->feed(afeData,afeInput);filled=0;}}
-  }
-}
-void detectTask(void*) {
-  ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
-  uint32_t epoch=discontinuities.load();
-  for(;;){
-    afe_fetch_result_t* result=afe->fetch_with_delay(afeData,pdMS_TO_TICKS(100));
-    if(!active()||otaBusy()||epoch!=discontinuities.load()){
-      epoch=discontinuities.load();gate.reset();mn->clean(mnData);afe->reset_buffer(afeData);continue;
-    }
-    if(!result||result->ret_value!=ESP_OK||!result->data)continue;
-    const auto detected=mn->detect(mnData,result->data);
-    if(detected==ESP_MN_STATE_DETECTED){
-      const auto* matches=mn->get_results(mnData);
-      if(matches&&matches->num>0){
-        const uint8_t raw=matches->command_id[0];
-        const float probability=matches->prob[0];
-        candidateId=raw;
-        candidateConfidence=uint16_t(std::max(0.0f,std::min(1.0f,probability))*1000.0f);
-        candidateAt=millis();
-        ++candidateCount;
-        const uint8_t command=gate.accept(raw,probability,millis());
-        if(command){PendingCommand pending{command,epoch,millis()};xQueueSend(commandQueue,&pending,0);}
+Inference infer(){
+  float input[TIME_FRAMES][BANDS];
+  float c1[TIME_FRAMES][CHANNELS];
+  float c2[TIME_FRAMES][CHANNELS];
+  const float gain=windowGain();
+  for(uint8_t t=0;t<TIME_FRAMES;++t){
+    const size_t start=size_t(t)*FRAME_HOP;
+    float mean=0.0f;
+    for(uint16_t n=0;n<FRAME_SAMPLES;++n)mean+=float(sampleAt(start+n))/32768.0f;
+    mean/=float(FRAME_SAMPLES);
+    for(uint8_t band=0;band<BANDS;++band){
+      float q1=0.0f,q2=0.0f;
+      const float coeff=GOERTZEL_COEFF[band];
+      for(uint16_t n=0;n<FRAME_SAMPLES;++n){
+        const float x=(float(sampleAt(start+n))/32768.0f-mean)*gain;
+        const float q0=coeff*q1-q2+x;q2=q1;q1=q0;
       }
-      mn->clean(mnData);
-    }else if(detected==ESP_MN_STATE_TIMEOUT){gate.reset();mn->clean(mnData);}
+      const float power=fmaxf(0.0f,q1*q1+q2*q2-coeff*q1*q2)/
+        float(uint32_t(FRAME_SAMPLES)*uint32_t(FRAME_SAMPLES));
+      const float feature=log1pf(power*100000.0f);
+      input[t][band]=(feature-FEATURE_MEAN[band])*FEATURE_INV_STD[band];
+    }
+  }
+  for(uint8_t t=0;t<TIME_FRAMES;++t)for(uint8_t out=0;out<CHANNELS;++out){
+    float sum=C1_BIAS[out];
+    for(uint8_t in=0;in<BANDS;++in)for(uint8_t k=0;k<3;++k){
+      const int ti=int(t)+int(k)-1;if(ti<0||ti>=TIME_FRAMES)continue;
+      const size_t wi=(size_t(out)*BANDS+in)*3u+k;
+      sum+=C1_SCALE*float(C1_WEIGHT[wi])*input[ti][in];
+    }
+    c1[t][out]=fmaxf(0.0f,sum);
+  }
+  for(uint8_t t=0;t<TIME_FRAMES;++t)for(uint8_t out=0;out<CHANNELS;++out){
+    float sum=C2_BIAS[out];
+    for(uint8_t in=0;in<CHANNELS;++in)for(uint8_t k=0;k<3;++k){
+      const int ti=int(t)+int(k)-1;if(ti<0||ti>=TIME_FRAMES)continue;
+      const size_t wi=(size_t(out)*CHANNELS+in)*3u+k;
+      sum+=C2_SCALE*float(C2_WEIGHT[wi])*c1[ti][in];
+    }
+    c2[t][out]=fmaxf(0.0f,sum);
+  }
+  float pooled[CHANNELS*2];
+  for(uint8_t ch=0;ch<CHANNELS;++ch){
+    float maximum=c2[0][ch],mean=0.0f;
+    for(uint8_t t=0;t<TIME_FRAMES;++t){maximum=fmaxf(maximum,c2[t][ch]);mean+=c2[t][ch];}
+    pooled[ch]=maximum;pooled[CHANNELS+ch]=mean/float(TIME_FRAMES);
+  }
+  float logits[CLASSES],top=-1e30f,second=-1e30f;
+  uint8_t best=0;
+  for(uint8_t out=0;out<CLASSES;++out){
+    float sum=FC_BIAS[out];
+    for(uint8_t in=0;in<CHANNELS*2;++in)sum+=FC_SCALE*float(FC_WEIGHT[size_t(out)*CHANNELS*2u+in])*pooled[in];
+    logits[out]=sum;
+    if(sum>top){second=top;top=sum;best=out;}else if(sum>second)second=sum;
+  }
+  float denom=0.0f,bestExp=0.0f,secondExp=0.0f;
+  for(uint8_t i=0;i<CLASSES;++i){const float e=expf(logits[i]-top);denom+=e;if(i==best)bestExp=e;}
+  for(uint8_t i=0;i<CLASSES;++i)if(i!=best)secondExp=fmaxf(secondExp,expf(logits[i]-top));
+  return {best,bestExp/fmaxf(denom,1e-6f),(bestExp-secondExp)/fmaxf(denom,1e-6f)};
+}
+uint8_t classCommand(uint8_t cls){
+  if(cls==HEY_SNAP)return WAKE;
+  if(cls==PHOTO)return PHOTO;
+  if(cls==VIDEO)return VIDEO_START;
+  if(cls==STOP)return STOP;
+  return 0;
+}
+void consider(const Inference& result,uint32_t now,uint32_t epoch){
+  const uint8_t command=classCommand(result.cls);
+  candidateId=command;
+  candidateConfidence=uint16_t(fminf(1.0f,fmaxf(0.0f,result.confidence))*1000.0f);
+  candidateAt=now;++candidateCount;
+  const float threshold=command==WAKE?0.72f:0.76f;
+  if(!command||result.confidence<threshold||result.margin<0.10f){
+    streakClass=NOISE;streakCount=0;return;
+  }
+  if(streakClass==result.cls&&uint32_t(now-streakAt)<=800u)++streakCount;
+  else{streakClass=result.cls;streakCount=1;}
+  streakAt=now;
+  if(streakCount<2)return;
+  streakCount=0;
+  const uint8_t accepted=gate.accept(command,result.confidence,now);
+  if(accepted){PendingCommand pending{accepted,epoch,now};xQueueSend(commandQueue,&pending,0);}
+}
+void feed(const int16_t* samples,size_t count){
+  if(!active()||!pcmQueue||!samples)return;
+  while(count){
+    Block block;block.count=uint16_t(std::min(count,size_t(800)));
+    memcpy(block.samples,samples,block.count*2);
+    if(xQueueSend(pcmQueue,&block,0)!=pdTRUE){++discontinuities;return;}
+    samples+=block.count;count-=block.count;
   }
 }
-bool pulseWakeLed() {
-  if(!active()||otaBusy())return false;
-  ChakshuResources::Lease admission;
-  if(!admission)return false; // Never toggle shared SD CS during recording/transfer.
-  pinMode(WAKE_LED_PIN,OUTPUT);
-  digitalWrite(WAKE_LED_PIN,LOW);
-  vTaskDelay(pdMS_TO_TICKS(WAKE_LED_MS));
-  digitalWrite(WAKE_LED_PIN,HIGH);
-  return true;
+void workerTask(void*){
+  ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+  Block block;uint32_t epoch=discontinuities.load();
+  for(;;){
+    if(xQueueReceive(pcmQueue,&block,pdMS_TO_TICKS(200))!=pdTRUE)continue;
+    if(!active()||otaBusy())continue;
+    if(epoch!=discontinuities.load()){epoch=discontinuities.load();resetWindow();xQueueReset(pcmQueue);}
+    uint64_t absSum=0;uint32_t peak=0;
+    for(uint16_t i=0;i<block.count;++i){
+      const int32_t s=block.samples[i];const uint32_t a=uint32_t(s<0?-s:s);
+      absSum+=a;if(a>peak)peak=a;
+      ring[writeAt]=block.samples[i];writeAt=(writeAt+1)%WINDOW_SAMPLES;
+      if(samplesSeen<WINDOW_SAMPLES)++samplesSeen;
+    }
+    const uint16_t meanAbs=uint16_t(std::min<uint64_t>(65535,absSum/std::max<uint16_t>(1,block.count)));
+    audioMeanAbs=meanAbs;audioPeak=uint16_t(std::min<uint32_t>(65535,peak));
+    if(float(meanAbs)<noiseFloor*1.8f)noiseFloor=noiseFloor*0.985f+float(meanAbs)*0.015f;
+    const float speechThreshold=fmaxf(100.0f,noiseFloor*2.4f);
+    if(float(meanAbs)>speechThreshold)speechHoldUntil=millis()+1200u;
+    samplesSinceInference+=block.count;
+    const uint32_t now=millis();
+    if(samplesSeen>=WINDOW_SAMPLES&&samplesSinceInference>=3200u&&int32_t(speechHoldUntil-now)>0){
+      samplesSinceInference=0;consider(infer(),now,epoch);
+    }
+  }
 }
-void feedbackTask(void*) {
-  for(;;){ulTaskNotifyTake(pdTRUE,portMAX_DELAY);pulseWakeLed();}
-}
-void idleTask(void*) {
+void idleTask(void*){
   ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
   int16_t samples[800];
   for(;;){
-    // Streaming and SD recording paths feed their own copies. Idle listening is
-    // the only task allowed to read PDM when neither consumer owns the microphone.
     if(!active()||streamingEnabled.load()||mediaBusy()||otaBusy()||
        xSemaphoreTakeRecursive(microphoneMutex,0)!=pdTRUE){vTaskDelay(pdMS_TO_TICKS(20));continue;}
     if(active()&&!streamingEnabled.load()&&!mediaBusy()&&!otaBusy()&&startMicrophone()){
       const size_t n=microphoneI2S.readBytes(reinterpret_cast<char*>(samples),sizeof(samples));
-      if(n&&!(n&1)){
-        const size_t count=n/2;uint64_t sum=0;uint32_t peak=0;
-        for(size_t i=0;i<count;++i){const uint32_t a=uint32_t(samples[i]<0?-int32_t(samples[i]):int32_t(samples[i]));sum+=a;if(a>peak)peak=a;}
-        audioMeanAbs=uint16_t(std::min<uint64_t>(65535,sum/std::max<size_t>(size_t(1),count)));
-        audioPeak=uint16_t(std::min<uint32_t>(65535,peak));
-        feed(samples,count);
-      }else ++discontinuities;
+      if(n&&!(n&1))feed(samples,n/2);else ++discontinuities;
     }
     xSemaphoreGiveRecursive(microphoneMutex);vTaskDelay(1);
   }
 }
-void cleanup() {
-  if(feedHandle){vTaskDelete(feedHandle);feedHandle=nullptr;}
-  if(detectHandle){vTaskDelete(detectHandle);detectHandle=nullptr;}
+void cleanup(){
+  if(workerHandle){vTaskDelete(workerHandle);workerHandle=nullptr;}
   if(idleHandle){vTaskDelete(idleHandle);idleHandle=nullptr;}
-  if(feedbackHandle){vTaskDelete(feedbackHandle);feedbackHandle=nullptr;}
   if(pcmQueue){vQueueDelete(pcmQueue);pcmQueue=nullptr;}
   if(commandQueue){vQueueDelete(commandQueue);commandQueue=nullptr;}
-  if(mnData){mn->destroy(mnData);mnData=nullptr;}
-  if(afeData){afe->destroy(afeData);afeData=nullptr;}
-  if(models){esp_srmodel_deinit(models);models=nullptr;}
-  free(weights);weights=nullptr;free(afeInput);afeInput=nullptr;
+  free(ring);ring=nullptr;resetWindow();
 }
-void initialize() {
+void initialize(){
   status=STARTING;
   Preferences settings;if(settings.begin("chakshu-voice",true)){enabled.store(settings.getBool("enabled",true));settings.end();}
-  if(!ChakshuFlashModel::present()){status=MODEL_MISSING;return;}
-  // Voice is optional. Never consume the PSRAM reserve needed by core camera,
-  // BLE recovery and SD transfer if the device cannot accommodate both.
-  if(ESP.getFreePsram()<MODEL_BYTES+2u*1024u*1024u){status=NO_MEMORY;return;}
-  weights=ps_malloc(MODEL_BYTES);
-  if(!weights){status=NO_MEMORY;return;}
-  const auto loaded=ChakshuFlashModel::load(static_cast<uint8_t*>(weights),MODEL_BYTES);
-  if(loaded!=ChakshuFlashModel::LOADED){status=loaded==ChakshuFlashModel::NO_MEMORY?NO_MEMORY:MODEL_ERROR;cleanup();return;}
-  uint8_t digest[32];char hex[65]{};
-  if(mbedtls_sha256(static_cast<const unsigned char*>(weights),MODEL_BYTES,digest,0)!=0){status=MODEL_ERROR;cleanup();return;}
-  for(int i=0;i<32;++i)snprintf(hex+i*2,3,"%02x",digest[i]);
-  if(strcmp(hex,MODEL_SHA256)){status=MODEL_ERROR;cleanup();return;}
-  models=srmodel_load(weights);
-  if(!models){status=MODEL_ERROR;cleanup();return;}
-  char* name=esp_srmodel_filter(models,"mn5q8","en");
-  if(!name||(mn=esp_mn_handle_from_name(name))==nullptr){status=MODEL_ERROR;cleanup();return;}
-  mnData=mn->create(name,5000);
-  if(!mnData||!configurePhrases()){status=NO_MEMORY;cleanup();return;}
-  if(mn->set_speech_commands(mnData,&nodes[0])!=nullptr){status=MODEL_ERROR;cleanup();return;}
-  mn->set_det_threshold(mnData,0.45f);
-  afe_config_t* config=afe_config_init("M",models,AFE_TYPE_SR,AFE_MODE_LOW_COST);
-  if(!config){status=NO_MEMORY;cleanup();return;}
-  config->wakenet_init=false;config->aec_init=false;config->se_init=false;config->ns_init=false;config->vad_init=false;
-  config->memory_alloc_mode=AFE_MEMORY_ALLOC_MORE_PSRAM;
-  afe=esp_afe_handle_from_config(config);afeData=afe?afe->create_from_config(config):nullptr;afe_config_free(config);
-  if(!afeData){status=NO_MEMORY;cleanup();return;}
-  feedSize=afe->get_feed_chunksize(afeData);
-  if(feedSize<=0||feedSize>2048||afe->get_feed_channel_num(afeData)!=1||afe->get_fetch_chunksize(afeData)!=mn->get_samp_chunksize(mnData)){
-    status=MODEL_ERROR;cleanup();return;
+  if(MODEL_SAMPLE_RATE!=16000||LEARNED_WEIGHT_BYTES>2048u){status=MODEL_ERROR;return;}
+  if(ESP.getFreePsram()<256u*1024u||ESP.getFreeHeap()<32000u){status=NO_MEMORY;return;}
+  ring=static_cast<int16_t*>(ps_malloc(size_t(WINDOW_SAMPLES)*sizeof(int16_t)));
+  pcmQueue=xQueueCreate(6,sizeof(Block));commandQueue=xQueueCreate(4,sizeof(PendingCommand));
+  if(!ring||!pcmQueue||!commandQueue||
+     xTaskCreatePinnedToCore(workerTask,"tiny-voice",8192,nullptr,1,&workerHandle,1)!=pdPASS||
+     xTaskCreatePinnedToCore(idleTask,"tiny-listen",4096,nullptr,1,&idleHandle,1)!=pdPASS){
+    status=NO_MEMORY;cleanup();return;
   }
-  afeInput=static_cast<int16_t*>(ps_malloc(feedSize*2));pcmQueue=xQueueCreate(8,sizeof(Block));commandQueue=xQueueCreate(4,sizeof(PendingCommand));
-  if(!afeInput||!pcmQueue||!commandQueue||
-     xTaskCreatePinnedToCore(feedTask,"voice-feed",4096,nullptr,2,&feedHandle,0)!=pdPASS||
-     xTaskCreatePinnedToCore(detectTask,"voice-detect",8192,nullptr,1,&detectHandle,1)!=pdPASS||
-     xTaskCreatePinnedToCore(idleTask,"voice-idle",4096,nullptr,1,&idleHandle,0)!=pdPASS||
-     xTaskCreatePinnedToCore(feedbackTask,"voice-led",2048,nullptr,1,&feedbackHandle,0)!=pdPASS){status=NO_MEMORY;cleanup();return;}
+  memset(ring,0,size_t(WINDOW_SAMPLES)*sizeof(int16_t));resetWindow();
   status=enabled.load()?LISTENING:VOICE_DISABLED;
-  xTaskNotifyGive(feedHandle);xTaskNotifyGive(detectHandle);xTaskNotifyGive(idleHandle);
-  Serial.printf("[VOICE] one-model Hey Snap ready=%u phrases=%u psram=%lu\n",unsigned(active()),unsigned(phraseCount),(unsigned long)ESP.getFreePsram());
+  xTaskNotifyGive(workerHandle);xTaskNotifyGive(idleHandle);
+  Serial.printf("[VOICE] TinyML ready=%u weights=%lu ring=%lu heap=%lu psram=%lu\n",
+    unsigned(active()),(unsigned long)LEARNED_WEIGHT_BYTES,
+    (unsigned long)(WINDOW_SAMPLES*sizeof(int16_t)),(unsigned long)ESP.getFreeHeap(),(unsigned long)ESP.getFreePsram());
 }
-void initTask(void*) {
-  // OTA validation happens after 5 s. Voice starts later and never gates BLE recovery.
-  while(millis()<8000u || otaBusy() || mediaBusy()) vTaskDelay(pdMS_TO_TICKS(250));
-  initialize();
-  initHandle=nullptr;
-  vTaskDelete(nullptr);
+void initTask(void*){
+  while(millis()<12000u||otaBusy()||mediaBusy())vTaskDelay(pdMS_TO_TICKS(250));
+  initialize();initHandle=nullptr;vTaskDelete(nullptr);
 }
-void scheduleInitialize() {
+void scheduleInitialize(){
   if(initHandle||status.load()==STARTING||status.load()==LISTENING)return;
-  if(xTaskCreatePinnedToCore(initTask,"voice-init",8192,nullptr,1,&initHandle,1)!=pdPASS)status=NO_MEMORY;
+  if(xTaskCreatePinnedToCore(initTask,"tiny-init",3072,nullptr,1,&initHandle,1)!=pdPASS)status=NO_MEMORY;
 }
-
 void encode(uint8_t* bytes,size_t length=22){
   memset(bytes,0,length);bytes[0]=0xCD;bytes[1]=2;bytes[2]=status.load();bytes[3]=enabled.load()?1:0;
   portENTER_CRITICAL(&stateMux);put32le(bytes+4,serial);bytes[8]=lastCommand;bytes[9]=lastResult;put32le(bytes+10,lastAt);put16le(bytes+20,lastValue);portEXIT_CRITICAL(&stateMux);
@@ -220,43 +224,32 @@ void encodeDiagnostics(uint8_t* bytes,size_t length=20){
 class DiagnosticCallbacks : public BLECharacteristicCallbacks {
   void onRead(BLECharacteristic* c)override{uint8_t bytes[20];encodeDiagnostics(bytes,sizeof(bytes));c->setValue(bytes,sizeof(bytes));}
 };
-bool queueLocal(uint8_t operation,uint32_t offset=0) {
+bool queueLocal(uint8_t operation,uint32_t offset=0){
   using namespace ChakshuTransfer;
   Request request{};request.local=true;request.localEpoch=localEpoch.load();request.operation=operation;request.offset=offset;
   if(!requests||xQueueSend(requests,&request,0)!=pdTRUE)return false;
   if(offline.load())stopRequested.store(true);
   return true;
 }
-void tick() {
-  if(!otaBusy()) {const int pending=persistEnabled.exchange(-1);if(pending>=0){
+void tick(){
+  if(!otaBusy()){const int pending=persistEnabled.exchange(-1);if(pending>=0){
     Preferences settings;if(settings.begin("chakshu-voice",false)){settings.putBool("enabled",pending==1);settings.end();}
   }}
   PendingCommand pending;if(!commandQueue||xQueueReceive(commandQueue,&pending,0)!=pdTRUE)return;
-  if(!active()||otaBusy()||pending.epoch!=discontinuities.load()||uint32_t(millis()-pending.at)>2000u)return;
+  if(!active()||otaBusy()||pending.epoch!=discontinuities.load()||uint32_t(millis()-pending.at)>2200u)return;
   const uint8_t command=pending.command;
   const uint16_t value=command==VIDEO_START?25:0;
   const bool online=deviceConnected.load()&&leaseConnection.load()==connectionGeneration.load()&&
     leaseAt.load()!=0&&uint32_t(millis()-leaseAt.load())<6000u;
   if(command==WAKE){
     portENTER_CRITICAL(&stateMux);++serial;lastCommand=WAKE;lastResult=online?2:0;lastAt=millis();lastValue=0;portEXIT_CRITICAL(&stateMux);
-    if(feedbackHandle)xTaskNotifyGive(feedbackHandle);
     if(deviceConnected.load()&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
-    Serial.printf("[VOICE] Hey Snap detected online=%u\\n",unsigned(online));
-    return;
+    Serial.printf("[VOICE] TinyML Hey Snap confidence=%u online=%u\n",unsigned(candidateConfidence.load()),unsigned(online));return;
   }
-  uint8_t result=0;
-  // Voice always performs local SD-first actions. BLE/PWA presence only adds notification/sync.
-  using namespace ChakshuTransfer;
-  if(command==STOP||command==VIDEO_STOP||command==AUDIO_OFF){
-    ++localEpoch;if(offline.load())stopRequested.store(true);if(streamingEnabled.load())stopStreaming();
-  } else if(command==PHOTO||command==DESCRIBE) {
-    if(offline.load()||!queueLocal(11))result=1;
-    else if(command==DESCRIBE)result=3; // Photo is durable now; inference can occur after sync.
-  } else if(command==VIDEO_START) {
-    if(!exitRemoteStandby()||!queueLocal(5,uint32_t(25u)<<8))result=1;
-  } else if(command==AUDIO_ON) {
-    if(!exitRemoteStandby()||!queueLocal(10,600))result=1;
-  }
+  uint8_t result=0;using namespace ChakshuTransfer;
+  if(command==STOP){++localEpoch;if(offline.load())stopRequested.store(true);if(streamingEnabled.load())stopStreaming();}
+  else if(command==PHOTO){if(offline.load()||!queueLocal(11))result=1;}
+  else if(command==VIDEO_START){if(!exitRemoteStandby()||!queueLocal(5,uint32_t(25u)<<8))result=1;}
   portENTER_CRITICAL(&stateMux);++serial;lastCommand=command;lastResult=result?result:(online?2:0);lastAt=millis();lastValue=value;portEXIT_CRITICAL(&stateMux);
   if(online&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
 }
@@ -269,7 +262,7 @@ class Callbacks : public BLECharacteristicCallbacks {
     if(op==3){leaseAt=0;return;}
     if(op>1)return;
     enabled=op==1;persistEnabled=op;++discontinuities;leaseAt=0;
-    if(mnData)status=enabled?LISTENING:VOICE_DISABLED;
+    if(workerHandle)status=enabled?LISTENING:VOICE_DISABLED;
   }
 };
 void ble(BLEService* service){
