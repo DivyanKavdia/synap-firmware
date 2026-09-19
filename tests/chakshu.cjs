@@ -33,40 +33,33 @@ test('Chakshu keeps separate release paths, OTA marker and the deployed default 
 });
 
 
-test('Chakshu recovery boot never initializes local voice before BLE advertising',()=>{
+test('Chakshu advertises BLE before scheduling local voice model initialization',()=>{
   const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
   const ble=source.indexOf('initializeBLE();');
-  const voice=source.indexOf('ChakshuVoice::initialize();');
-  assert(ble>=0);
-  assert.equal(voice,-1);
-  assert.match(source,/Recovery invariant: BLE must become available/);
+  const schedule=source.indexOf('ChakshuVoice::scheduleInitialize();');
+  const direct=source.indexOf('ChakshuVoice::initialize();');
+  assert(ble>=0 && schedule>ble);
+  assert.equal(direct,-1);
+  assert.match(source,/Voice remains deferred: BLE\/OTA\/media must become available before model loading/);
 });
 
-test('WakeNet gates the MultiNet command window and wake feedback stays SD-safe',()=>{
+test('one MultiNet model classifies Hey Snap and commands behind a five-second firmware gate',()=>{
   const voice=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice.cpp'),'utf8');
-  assert.match(voice,/wakeModels\?esp_srmodel_filter\(wakeModels,ESP_WN_PREFIX,"hiesp"\):nullptr/);
+  const contract=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice-contract.cpp'),'utf8');
+  assert.match(voice,/addPhrase\(WAKE,"hd SNaP"\)/);
+  assert.match(voice,/addPhrase\(PHOTO,"TdK c SNaP"\)/);
+  assert.match(voice,/addPhrase\(VIDEO_START,"RcKeRD c VgDmb"\)/);
+  assert.match(voice,/addPhrase\(AUDIO_ON,"RcKeRD eDmb"\)/);
   assert.match(voice,/esp_srmodel_filter\(models,"mn5q8","en"\)/);
-  assert.match(voice,/mn->create\(name,8000\)/);
-  assert.match(voice,/config->wakenet_init=true/);
-  assert.match(voice,/config->wakenet_mode=DET_MODE_95/);
-  assert.match(voice,/result->wakeup_state==WAKENET_DETECTED/);
-  assert.match(voice,/gate\.accept\(WAKE,1\.0f,now\);commandWindow=true/);
-  assert.match(voice,/if\(!commandWindow\|\|!result->data\)continue;/);
-  assert.match(voice,/const auto detected=mn->detect\(mnData,result->data\)/);
-  assert.match(voice,/afe->enable_wakenet\(afeData\)/);
-  assert.doesNotMatch(voice,/addPhrase\(WAKE/);
-  const wake=voice.indexOf('result->wakeup_state==WAKENET_DETECTED');
-  const gate=voice.indexOf('if(!commandWindow||!result->data)continue;',wake);
-  const multi=voice.indexOf('mn->detect(mnData,result->data)',gate);
-  assert(wake>=0 && gate>wake && multi>gate);
-  assert.match(voice,/constexpr uint8_t WAKE_LED_PIN=21;/);
+  assert.match(voice,/mn->create\(name,5000\)/);
+  assert.match(voice,/config->wakenet_init=false/);
+  assert.doesNotMatch(voice,/esp_wn_models|WAKENET_DETECTED|wakeModels/);
+  assert.match(contract,/uint32_t\(now-armedAt\)<=5000u/);
+  assert.match(contract,/confidence<0\.85f/);
+  assert.match(voice,/queueLocal\(5,uint32_t\(25u\)<<8\)/);
+  assert.match(voice,/Voice always performs local SD-first actions/);
+  assert.match(voice,/while\(millis\(\)<8000u \|\| otaBusy\(\) \|\| mediaBusy\(\)\)/);
   assert.match(voice,/ChakshuResources::Lease admission;/);
-  assert.match(voice,/if\(!admission\)return false; \/\/ Never toggle shared SD CS during recording\/transfer\./);
-  const acquire=voice.indexOf('ChakshuResources::Lease admission;');
-  const ledOn=voice.indexOf('digitalWrite(WAKE_LED_PIN,LOW);',acquire);
-  const ledOff=voice.indexOf('digitalWrite(WAKE_LED_PIN,HIGH);',ledOn);
-  assert(acquire>=0 && ledOn>acquire && ledOff>ledOn);
-  assert.match(voice,/lastCommand=WAKE;lastResult=online\?2:0/);
-  assert.match(voice,/\[VOICE\] Hi ESP detected/);
-  assert.match(voice,/events->notify\(\)/);
 });
+
+
