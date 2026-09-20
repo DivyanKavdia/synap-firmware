@@ -54,8 +54,9 @@ test('transient SD I/O recovery drops to conservative SPI speeds before failing'
   const end=storage.indexOf('bool capturePath(',start);
   assert(start>=0&&end>start);
   const recovery=storage.slice(start,end);
-  assert.match(recovery,/mountAt\(1000000u\)/);
+  assert.match(recovery,/resetMountAt\(1000000u\)/);
   assert.doesNotMatch(recovery,/10000000u/);
+  assert.match(storage,/for\(const uint32_t hz:\{10000000u,4000000u,1000000u\}\)/);
   assert.match(storage,/SD\.begin\(21,SPI,hz,"\/sd",5,false\)/);
   const select=transfer.slice(transfer.indexOf('uint8_t selectFile('),transfer.indexOf('uint8_t readSelection('));
   const read=transfer.slice(transfer.indexOf('uint8_t readSelection('),transfer.indexOf('bool validPath('));
@@ -64,4 +65,11 @@ test('transient SD I/O recovery drops to conservative SPI speeds before failing'
   assert.match(read,/ChakshuStorage::recoverIO\(\)/);
   assert.match(catalogue,/ChakshuStorage::recoverIO\(\)/);
   assert.equal((read.match(/recoverIO\(\)/g)||[]).length,1,'a chunk read gets one recovery attempt');
+});
+
+test('BLE clients cannot start SD audio or video recording',()=> {
+  const source=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/media-transfer.cpp'),'utf8');
+  const worker=source.slice(source.indexOf('void worker(void*)'),source.indexOf('class CommandCallbacks'));
+  assert.match(worker,/if\(request\.operation==5\|\|request\.operation==10\)[\s\S]*if\(!request\.local\)\{replyFor\(request,ChakshuMedia::BAD_COMMAND\);continue;\}/);
+  assert.match(worker,/request\.local[\s\S]*recordOffline\(request\.operation==5\)/);
 });

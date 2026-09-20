@@ -1,7 +1,8 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs');
 const {nativeTest}=require('./support/native.cjs');
-test('SD recovery resets the bus, verifies the filesystem and retains its reduced clock',()=>{
+
+test('SD boot detection retries all clocks while I/O recovery alone becomes sticky',()=>{
  const source=fs.readFileSync('firmware/xiao-sense/sd-storage.cpp','utf8');
  const lifecycle=source.slice(source.indexOf('namespace ChakshuStorage {'),source.indexOf('bool capturePath('))+'}\n';
  assert.match(nativeTest(`#include <atomic>
@@ -23,7 +24,11 @@ struct File {
 };
 struct Spi {
  void end(){assert(!fsMounted&&handles==0);busStarted=false;++resets;}
- bool begin(int sck,int miso,int mosi,int cs){assert(!busStarted);assert(sck==7&&miso==8&&mosi==9&&cs==21);busStarted=spiHealthy;return busStarted;}
+ bool begin(int sck,int miso,int mosi,int cs){
+  assert(sck==7&&miso==8&&mosi==9&&cs==21);
+  if(busStarted)return true; // Arduino SPI.begin is a no-op on an already-started bus.
+  busStarted=spiHealthy;return busStarted;
+ }
 } SPI;
 struct Card {
  void end(){assert(handles==0);fsMounted=false;}
@@ -44,20 +49,39 @@ unsigned esp_random(){return 123;}
 ${lifecycle}
 int main(){
  using namespace ChakshuStorage;
+ // Cold detection keeps one SPI session and falls back 10 -> 4 -> 1 MHz.
  assert(begin(false)&&clockHz==4000000&&capacity==8000000&&freeBytes==7000000);
- const unsigned before=resets;assert(begin(false)&&resets==before); // healthy reads do not remount
- assert(recoverIO()&&clockHz==1000000&&resets>before&&handles==0);
- ready=false;assert(begin(false)&&lastHz==1000000); // quarantine must not raise clock
- assert(begin(true)&&lastHz==1000000); // explicit recheck must not raise clock
- clockHz=4000000;limitHz=1000000;clocks.clear();assert(begin(true));
- assert((clocks==std::vector<uint32_t>{4000000,1000000}));
- rootHealthy=false;assert(!begin(true)&&!ready&&!busStarted&&!fsMounted&&capacity==0);rootHealthy=true;
+ assert((clocks==std::vector<uint32_t>{10000000u,4000000u}));
+ assert(!recoveryClockLocked);
+ const unsigned before=resets;assert(begin(false)&&resets==before);
+
+ // A real mounted-card I/O fault is the only event that locks this boot to 1 MHz.
+ assert(recoverIO()&&clockHz==1000000&&recoveryClockLocked&&resets>before&&handles==0);
+ ready=false;clocks.clear();assert(begin(false));
+ assert((clocks==std::vector<uint32_t>{1000000u}));
+ assert(begin(true)&&lastHz==1000000u);
+
+ // A card that never mounted is not falsely treated as a recovered card.
+ ready=false;recoveryClockLocked=false;clockHz=10000000u;mountHealthy=false;clocks.clear();
+ assert(!begin(true));
+ assert((clocks==std::vector<uint32_t>{10000000u,4000000u,1000000u}));
+ assert(!recoveryClockLocked&&!busStarted&&!fsMounted);
+ mountHealthy=true;limitHz=10000000u;clocks.clear();
+ assert(begin(false)&&clockHz==10000000u);
+ assert((clocks==std::vector<uint32_t>{10000000u}));
+
+ // Mount success is insufficient: directory and capacity must also be usable.
+ rootHealthy=false;assert(!begin(true)&&!ready&&capacity==0);rootHealthy=true;
  rootDirectory=false;assert(!begin(true)&&!ready&&handles==0);rootDirectory=true;
  spaceHealthy=false;assert(!begin(true)&&!ready);spaceHealthy=true;
  rootExists=false;mkdirHealthy=false;assert(!begin(true));mkdirHealthy=true;assert(begin(true));
- mountHealthy=false;assert(!recoverIO()&&!ready&&!busStarted&&!fsMounted);mountHealthy=true;
- spiHealthy=false;const size_t calls=clocks.size();assert(!begin(false)&&clocks.size()==calls);spiHealthy=true;
- assert(begin(false)&&lastHz==1000000&&handles==0);
- puts("PASS bounded non-formatting SD recovery and sticky clock");
-}`),/PASS bounded non-formatting SD recovery/);
+
+ // A real recovery failure remains conservative rather than raising the clock.
+ recoveryClockLocked=false;assert(begin(true));mountHealthy=false;
+ assert(!recoverIO()&&recoveryClockLocked&&!ready&&!busStarted&&!fsMounted);
+ mountHealthy=true;limitHz=10000000u;clocks.clear();
+ assert(begin(false)&&lastHz==1000000u);
+ assert((clocks==std::vector<uint32_t>{1000000u}));
+ puts("PASS boot redetection and sticky I/O recovery");
+}`),/PASS boot redetection and sticky I\/O recovery/);
 });

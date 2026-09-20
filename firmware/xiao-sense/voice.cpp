@@ -6,7 +6,7 @@ using namespace ChakshuTinyModel;
 enum Status : uint8_t { STARTING=0,LISTENING=1,MODEL_MISSING=2,NO_MEMORY=3,MODEL_ERROR=4,VOICE_DISABLED=5 };
 std::atomic<uint8_t> status{MODEL_MISSING};
 std::atomic<bool> enabled{true};
-std::atomic<int> persistEnabled{-1};
+std::atomic<bool> linkStandDown{false};
 std::atomic<uint32_t> discontinuities{0},leaseAt{0},leaseConnection{0};
 std::atomic<uint16_t> audioMeanAbs{0},audioPeak{0},candidateConfidence{0};
 std::atomic<uint8_t> candidateId{0};
@@ -31,7 +31,17 @@ portMUX_TYPE stateMux=portMUX_INITIALIZER_UNLOCKED;
 uint32_t serial=0,lastAt=0;uint8_t lastCommand=0,lastResult=0;uint16_t lastValue=0;
 Gate gate;
 
-bool active(){return status.load()==LISTENING&&enabled.load()&&ring&&workerHandle;}
+bool ownershipAllowsVoice(){return enabled.load()&&!linkStandDown.load()&&!deviceConnected.load();}
+bool active(){return status.load()==LISTENING&&ownershipAllowsVoice()&&ring&&workerHandle;}
+void refreshRuntimeStatus(){
+  if(workerHandle)status=ownershipAllowsVoice()?LISTENING:VOICE_DISABLED;
+}
+void linkConnected(){
+  linkStandDown=true;leaseAt=0;++discontinuities;refreshRuntimeStatus();
+}
+void linkDisconnected(){
+  linkStandDown=false;leaseAt=0;++discontinuities;refreshRuntimeStatus();
+}
 
 void resetWindow(){
   writeAt=0;samplesSeen=0;samplesSinceInference=0;speechHoldUntil=0;vadRun=0;
@@ -229,7 +239,6 @@ void cleanup(){
 }
 void initialize(){
   status=STARTING;
-  Preferences settings;if(settings.begin("chakshu-voice",true)){enabled.store(settings.getBool("enabled",true));settings.end();}
   if(MODEL_SAMPLE_RATE!=16000||LEARNED_WEIGHT_BYTES>3072u){status=MODEL_ERROR;return;}
   if(ESP.getFreePsram()<256u*1024u||ESP.getFreeHeap()<32000u){status=NO_MEMORY;return;}
   ring=static_cast<int16_t*>(ps_malloc(size_t(WINDOW_SAMPLES)*sizeof(int16_t)));
@@ -240,7 +249,7 @@ void initialize(){
     status=NO_MEMORY;cleanup();return;
   }
   memset(ring,0,size_t(WINDOW_SAMPLES)*sizeof(int16_t));resetWindow();
-  status=enabled.load()?LISTENING:VOICE_DISABLED;
+  status=ownershipAllowsVoice()?LISTENING:VOICE_DISABLED;
   xTaskNotifyGive(workerHandle);xTaskNotifyGive(idleHandle);
   Serial.printf("[VOICE] TinyML ready=%u weights=%lu ring=%lu heap=%lu psram=%lu\n",
     unsigned(active()),(unsigned long)LEARNED_WEIGHT_BYTES,
@@ -255,12 +264,12 @@ void scheduleInitialize(){
   if(xTaskCreatePinnedToCore(initTask,"tiny-init",3072,nullptr,1,&initHandle,1)!=pdPASS)status=NO_MEMORY;
 }
 void encode(uint8_t* bytes,size_t length=22){
-  memset(bytes,0,length);bytes[0]=0xCD;bytes[1]=2;bytes[2]=status.load();bytes[3]=enabled.load()?1:0;
+  memset(bytes,0,length);bytes[0]=0xCD;bytes[1]=2;bytes[2]=status.load();bytes[3]=ownershipAllowsVoice()?1:0;
   portENTER_CRITICAL(&stateMux);put32le(bytes+4,serial);bytes[8]=lastCommand;bytes[9]=lastResult;put32le(bytes+10,lastAt);put16le(bytes+20,lastValue);portEXIT_CRITICAL(&stateMux);
   put32le(bytes+14,discontinuities.load());bytes[18]=ChakshuTransfer::offline.load()?1:0;
 }
 void encodeDiagnostics(uint8_t* bytes,size_t length=20){
-  memset(bytes,0,length);bytes[0]=0xCE;bytes[1]=1;bytes[2]=status.load();bytes[3]=enabled.load()?1:0;
+  memset(bytes,0,length);bytes[0]=0xCE;bytes[1]=1;bytes[2]=status.load();bytes[3]=ownershipAllowsVoice()?1:0;
   put16le(bytes+4,audioMeanAbs.load());put16le(bytes+6,audioPeak.load());bytes[8]=candidateId.load();
   put16le(bytes+9,candidateConfidence.load());put32le(bytes+11,candidateAt.load());put32le(bytes+15,candidateCount.load());
   bytes[19]=active()?1:0;
@@ -280,9 +289,6 @@ void mediaCompleted(uint8_t operation,uint8_t error){
   if(command)mediaCompletion.store(0x10000u|(uint32_t(command)<<8)|error);
 }
 void tick(){
-  if(!otaBusy()){const int pending=persistEnabled.exchange(-1);if(pending>=0){
-    Preferences settings;if(settings.begin("chakshu-voice",false)){settings.putBool("enabled",pending==1);settings.end();}
-  }}
   // Publish completion only after the SD worker has closed the capture files.
   const uint32_t completed=mediaCompletion.exchange(0);
   if(completed){
@@ -322,8 +328,9 @@ class Callbacks : public BLECharacteristicCallbacks {
     if(op==2){leaseConnection=connectionGeneration.load();leaseAt=millis();return;}
     if(op==3){leaseAt=0;return;}
     if(op>1)return;
-    enabled=op==1;persistEnabled=op;++discontinuities;leaseAt=0;
-    if(workerHandle)status=enabled?LISTENING:VOICE_DISABLED;
+    // 0/1 are ownership handoff opcodes, never a persistent user preference.
+    // A live BLE link always wins even if an old client writes VOICE_ON.
+    linkStandDown=op==0;++discontinuities;leaseAt=0;refreshRuntimeStatus();
   }
 };
 void ble(BLEService* service){

@@ -12,6 +12,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     ++connectionGeneration;
     if(!recoveryWaiting.load())streamingEnabled=false;
     deviceConnected=true;connectionEventPending=true;
+    ChakshuVoice::linkConnected();
     // The pinned host owns DLE; the control task defers any timeout correction.
   }
   void onDisconnect(NimBLEServer*,NimBLEConnInfo& peer,int reason) override {
@@ -32,6 +33,9 @@ class ServerCallbacks : public NimBLEServerCallbacks {
       recoveryWaiting=true;if(!recoveryWaitingAt.load())recoveryWaitingAt=millis();
     }else streamingEnabled=false;
     ++connectionGeneration;connectionEventPending=true;
+    // Re-arm standalone Hey Snap after every link loss, including unexpected
+    // out-of-range/browser drops where the PWA cannot send a release opcode.
+    ChakshuVoice::linkDisconnected();
   }
   void onConnParamsUpdate(NimBLEConnInfo& peer) override {
     if (!deviceConnected.load() || peer.getConnHandle()!=chakshuConnectionHandle.load()) return;

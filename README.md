@@ -75,7 +75,7 @@ The companion PWA now treats Chakshu as having one operational owner:
 
 This avoids voice/media work racing the same serialized BLE, microphone, camera and SD resources.
 
-The PWA re-enables Hey Snap before a disconnect that it initiates. **Unexpected-disconnect re-arm remains a firmware acceptance requirement:** an out-of-range or otherwise unclean BLE drop must leave the standalone wake engine available without requiring a second connect/disconnect cycle. Do not mark this behavior physically accepted until it is verified on hardware.
+Firmware now enforces the ownership boundary itself: any BLE connection stands the local wake engine down, and every BLE disconnect re-arms it, including unexpected out-of-range/browser drops where the PWA cannot send a release opcode. The PWA's voice on/off writes are session handoff signals rather than a persisted user preference. Physical verification of this reconnect path remains required.
 
 ### Offline media
 
@@ -87,8 +87,8 @@ Chakshu supports Synap-owned offline SD capture and recovery:
 - Offline audio stored entirely on SD until explicitly moved into the companion app.
 - Offline video stored on SD.
 - Full-resolution still capture through the hardened saved-photo path.
-- Two app-controlled SD video profiles.
-- PWA-driven offline video durations of **15, 30 or 60 seconds**.
+- Two SD video profiles used by standalone firmware capture.
+- Connected BLE clients cannot start SD audio/video recording; connected capture belongs to the PWA.
 - The local spoken **Record a video** path currently uses a **10-second default**.
 - Imported offline audio enters the normal transcription and memory pipeline after transfer to the app.
 
@@ -100,19 +100,20 @@ The current `main` contains additional SD hardening after the build-1351 field b
 
 ### Mount behavior
 
-The SD SPI bus is explicitly reset before a mount attempt. The current mount path:
+Cold boot and card re-detection use the field-proven initialization sequence:
 
-1. ends the filesystem,
-2. resets the SPI bus,
-3. mounts at the current proven clock,
-4. falls back to **1 MHz** if the current clock cannot mount,
-5. verifies the `/synap` directory,
-6. verifies that filesystem capacity is readable,
-7. only then marks the card ready.
+1. end any filesystem session,
+2. initialize the Chakshu SPI pins once,
+3. try the SD card handshake at **10 MHz**, then **4 MHz**, then **1 MHz** on that SPI session,
+4. verify the `/synap` directory,
+5. verify that filesystem capacity is readable,
+6. only then mark the card ready.
 
-The normal starting clock in the current recovery path is **4 MHz**. After a real I/O failure, recovery drops to **1 MHz** and keeps that conservative clock for the remainder of the boot instead of returning to a faster setting.
+If a card never mounts, no clock is treated as proven. The bus is left clean and a later **Check SD card** or catalogue request repeats the full 10→4→1 MHz detection sequence.
 
-No recovery path formats the card or silently replays a failed capture.
+A different path is used after a card was mounted and then suffers a real I/O fault: firmware explicitly resets the SPI bus, retries at **1 MHz**, and keeps that conservative recovery clock for the remainder of the boot. Normal catalogue retries cannot raise it again.
+
+No detection or recovery path formats the card or silently replays a failed capture.
 
 ### Failure diagnostics
 
@@ -145,11 +146,12 @@ The remaining field question is physical: whether the expansion-board/card path 
 The companion PWA owns:
 
 - connection/session control,
+- all new audio/photo/video capture while BLE is connected; connected captures save directly to the PWA,
 - disabling Hey Snap while it owns the live BLE link,
 - SD catalogue discovery after reconnect,
-- Library representation of SD-only captures,
-- explicit **Move to app**,
-- verification before deleting the SD original,
+- Library representation of unsynced SD-only audio, photo and video,
+- explicit **Sync to app** for one item or all pending offline captures,
+- byte/digest verification before deleting the SD original,
 - imported-audio transcription,
 - memory creation and downstream inference.
 
@@ -198,7 +200,7 @@ The current hardware acceptance list is:
 - sustained Odyssey S3/C3 microphone + BLE recording,
 - Chakshu BLE reconnect and recovery,
 - Hey Snap wake recognition after a clean standalone boot,
-- Hey Snap re-arm after an unexpected BLE disconnect,
+- Hey Snap automatic re-arm after an unexpected BLE disconnect,
 - Take a snap recognition and saved-photo completion,
 - Record a video recognition and durable SD completion,
 - photo quality,

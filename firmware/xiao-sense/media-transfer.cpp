@@ -170,6 +170,9 @@ uint8_t catalogue() {
   // Catalogue is serialized by the media lease. Recover a mounted-but-unstable
   // card once at a conservative SPI clock before surfacing an I/O error.
   if(!ChakshuStorage::ready&&!ChakshuStorage::begin(false))return ChakshuMedia::NO_SD;
+  // Keep the capability characteristic aligned with a successful catalogue
+  // re-detection so the PWA immediately sees SD / SD-audio readiness restored.
+  {ChakshuMedia::Snapshot state;ChakshuMedia::copy(state);ChakshuMedia::refresh(state);ChakshuMedia::save(state);}
   File directory=SD.open("/synap");
   if(!directory) {
     directory.close();
@@ -250,6 +253,9 @@ void worker(void*) {
     if(!admission||otaBusySnapshot.load()) {replyFor(request,1);continue;}
     if(selectedConnection!=request.connection){clearSelection();originalPath[0]=0;selectedConnection=request.connection;}
     if(request.operation==5||request.operation==10) {
+      // SD capture is a standalone-device operation. While BLE is connected the
+      // app owns capture and must save audio/video directly to the PWA.
+      if(!request.local){replyFor(request,ChakshuMedia::BAD_COMMAND);continue;}
       if(streamingEnabled.load()||remoteStandby){replyFor(request,1);continue;}
       ChakshuCamera::VideoProfile profile;
       const uint32_t seconds=request.operation==5?(request.offset>>8):request.offset;

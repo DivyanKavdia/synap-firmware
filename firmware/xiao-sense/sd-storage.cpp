@@ -7,10 +7,10 @@ std::atomic<bool> ready{false};
 uint64_t capacity=0,freeBytes=0;
 uint32_t sequence=0,bootId=0;
 char protectedStem[64]{};
-// Keep a recovered card at its proven clock for the rest of this boot.
-uint32_t clockHz=4000000u;
+uint32_t clockHz=10000000u;
 uint32_t mountAttempts=0;
 const char* mountStage="not-started";
+bool recoveryClockLocked=false;
 
 void refresh() {
   capacity=ready?SD.totalBytes():0;
@@ -18,17 +18,8 @@ void refresh() {
   freeBytes=used<=capacity?capacity-used:0;
 }
 
-bool mountAt(uint32_t hz) {
-  ready=false;
-  ++mountAttempts;mountStage="spi";
-  // SD.end() only releases the filesystem. SPI.begin() is a no-op on an
-  // already-started bus, so explicitly reset it before attaching the SD pins.
-  // Callers own the media lease and must close all files before this point.
-  SD.end();
-  SPI.end();
-  clockHz=hz;
-  if(!SPI.begin(7,8,9,21)){SPI.end();return false;}
-  mountStage="mount";
+bool validateMount(uint32_t hz) {
+  ++mountAttempts;mountStage="mount";
   bool usable=SD.begin(21,SPI,hz,"/sd",5,false) && SD.cardType()!=CARD_NONE;
   if(usable){mountStage="directory";if(!SD.exists("/synap"))usable=SD.mkdir("/synap");}
   if(usable) {
@@ -39,16 +30,45 @@ bool mountAt(uint32_t hz) {
   // A successful mount alone does not prove the filesystem is readable.
   if(usable){mountStage="capacity";usable=SD.totalBytes()>0;}
   ready=usable;
-  if(usable)mountStage="ready";
-  if(!usable){SD.end();SPI.end();}
+  if(usable){clockHz=hz;mountStage="ready";}
+  else SD.end();
   Serial.printf("[CHAKSHU] sd mount hz=%lu ready=%u heap=%lu\n",
     (unsigned long)hz,unsigned(ready),(unsigned long)ESP.getFreeHeap());
   return ready;
 }
 
+bool detectCard() {
+  ready=false;mountStage="spi";
+  // Preserve the field-proven cold-boot path: initialize SPI once, then retry
+  // the card handshake at lower clocks without tearing the bus down between
+  // attempts. A card that never mounted has no proven recovery clock.
+  SD.end();
+  if(!SPI.begin(7,8,9,21)){SPI.end();return false;}
+  for(const uint32_t hz:{10000000u,4000000u,1000000u}) {
+    if(validateMount(hz))return true;
+  }
+  // Leave the bus clean so a later Check SD/catalogue request can repeat the
+  // full detection sequence instead of getting pinned to a failed 1 MHz try.
+  SPI.end();
+  return false;
+}
+
+bool resetMountAt(uint32_t hz) {
+  ready=false;mountStage="spi";
+  // Only a card that was mounted and then hit a real I/O fault gets a full bus
+  // reset and a sticky conservative clock.
+  SD.end();
+  SPI.end();
+  if(!SPI.begin(7,8,9,21)){SPI.end();return false;}
+  if(validateMount(hz))return true;
+  SPI.end();
+  return false;
+}
+
 bool begin(bool remount) {
   if(remount || !ready) {
-    if(!mountAt(clockHz) && clockHz>1000000u)mountAt(1000000u);
+    if(recoveryClockLocked)resetMountAt(1000000u);
+    else detectCard();
     if(!bootId)bootId=esp_random();
   }
   refresh();
@@ -56,17 +76,19 @@ bool begin(bool remount) {
 }
 
 bool recoverIO() {
-  // A real I/O failure lowers the clock; later catalogue retries never raise it.
-  mountAt(1000000u);
+  // A real mounted-card I/O failure locks recovery to 1 MHz for this boot.
+  recoveryClockLocked=true;
+  resetMountAt(1000000u);
   refresh();
   return ready;
 }
 
 size_t diagnostics(uint8_t* bytes,size_t length) {
   const int size=snprintf(reinterpret_cast<char*>(bytes),length,
-    "{\"sdReady\":%s,\"sdClockHz\":%lu,\"sdMountStage\":\"%s\",\"sdMountAttempts\":%lu,\"freeHeap\":%lu}",
+    "{\"sdReady\":%s,\"sdClockHz\":%lu,\"sdMountStage\":\"%s\",\"sdMountAttempts\":%lu,\"sdRecoveryLocked\":%s,\"freeHeap\":%lu}",
     ready?"true":"false",(unsigned long)clockHz,mountStage,
-    (unsigned long)mountAttempts,(unsigned long)ESP.getFreeHeap());
+    (unsigned long)mountAttempts,recoveryClockLocked?"true":"false",
+    (unsigned long)ESP.getFreeHeap());
   return size>0 && size_t(size)<length?size_t(size):0;
 }
 
