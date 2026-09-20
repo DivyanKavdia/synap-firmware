@@ -1,7 +1,8 @@
 // Bounded hardware checks. BLE callbacks only copy requests; work runs off the control task.
 namespace ChakshuMedia {
 enum Error : uint8_t { OK=0, BUSY=1, BAD_COMMAND=2, NO_SD=3, NO_CAMERA=4,
-  NO_MIC=5, NO_SPACE=6, IO_ERROR=7, CAPTURE_ERROR=8, SD_TOO_SLOW=9 };
+  NO_MIC=5, NO_SPACE=6, IO_ERROR=7, CAPTURE_ERROR=8, SD_TOO_SLOW=9,
+  FILE_UNAVAILABLE=11 };
 struct Request { uint32_t connection;uint8_t operation,id; };
 struct Snapshot {
   uint8_t operation=0,id=0,state=0,error=0,ready=0,progress=0;
@@ -117,7 +118,10 @@ void worker(void*) {
     uint8_t error=OK;
     if (request.operation==1) {
       microphoneValidated=startMicrophone();
-      ChakshuCamera::begin();ChakshuStorage::begin(true);
+      // Mount storage before camera allocation. SD is the durable offline
+      // inbox and must get first ownership of its SPI pins on every hardware
+      // check; camera bring-up is independent and follows it.
+      ChakshuStorage::begin(true);ChakshuCamera::begin();
     } else if (!ChakshuStorage::ready) error=NO_SD;
     else if (request.operation==2 || request.operation==4) {
       error=ChakshuCamera::ready?captureCamera(s,request.operation==4):NO_CAMERA;
@@ -155,7 +159,10 @@ class PathCallbacks : public BLECharacteristicCallbacks {
   }
 };
 void initialize() {
-  ChakshuCamera::begin();ChakshuStorage::begin(false);
+  // Storage is a boot service, not a camera accessory. Bring it up first so
+  // the card is mounted and reported even when camera initialization is slow
+  // or fails, and so SPI pin ownership is established before other hardware.
+  ChakshuStorage::begin(false);ChakshuCamera::begin();
   Snapshot s;refresh(s);save(s);
   requests=xQueueCreate(4,sizeof(Request));jobs=xQueueCreate(1,sizeof(Request));
   if (!requests || !jobs ||
