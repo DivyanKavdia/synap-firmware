@@ -50,13 +50,13 @@ test('catalogue remounts a present card after transient readiness loss',()=>{
 test('transient SD I/O recovery drops to conservative SPI speeds before failing',()=>{
   const storage=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/sd-storage.cpp'),'utf8');
   const transfer=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/media-transfer.cpp'),'utf8');
-  const start=storage.indexOf('bool recoverIO()');
+  const start=storage.indexOf('bool recoverMount()');
   const end=storage.indexOf('bool capturePath(',start);
   assert(start>=0&&end>start);
   const recovery=storage.slice(start,end);
-  assert.match(recovery,/resetMountAt\(1000000u\)/);
-  assert.doesNotMatch(recovery,/10000000u/);
-  assert.match(storage,/for\(const uint32_t hz:\{10000000u,4000000u,1000000u\}\)/);
+  assert.match(recovery,/\{1000000u,400000u\}/);
+  assert.doesNotMatch(recovery,/10000000u|4000000u/);
+  assert.match(storage,/for\(const uint32_t hz:\{10000000u,4000000u,1000000u,400000u\}\)/);
   assert.match(storage,/SD\.begin\(21,SPI,hz,"\/sd",5,false\)/);
   const select=transfer.slice(transfer.indexOf('uint8_t selectFile('),transfer.indexOf('uint8_t readSelection('));
   const read=transfer.slice(transfer.indexOf('uint8_t readSelection('),transfer.indexOf('bool validPath('));
@@ -65,6 +65,36 @@ test('transient SD I/O recovery drops to conservative SPI speeds before failing'
   assert.match(read,/ChakshuStorage::recoverIO\(\)/);
   assert.match(catalogue,/ChakshuStorage::recoverIO\(\)/);
   assert.equal((read.match(/recoverIO\(\)/g)||[]).length,1,'a chunk read gets one recovery attempt');
+});
+
+
+test('SD owns SPI and mounts before camera on boot and hardware refresh',()=>{
+  const storage=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/sd-storage.cpp'),'utf8');
+  const media=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/media.cpp'),'utf8');
+  const detect=storage.slice(storage.indexOf('bool detectCard()'),storage.indexOf('bool resetMountAt('));
+  assert(detect.indexOf('SPI.end();')>=0&&detect.indexOf('SPI.end();')<detect.indexOf('SPI.begin(7,8,9,21)'),
+    'detection must discard inherited generic-board SPI pins');
+  const init=media.slice(media.indexOf('void initialize()'),media.indexOf('void ble(',media.indexOf('void initialize()')));
+  assert(init.indexOf('ChakshuStorage::begin(false)')<init.indexOf('ChakshuCamera::begin()'),
+    'SD must be mounted before camera allocation at boot');
+  const worker=media.slice(media.indexOf('void worker(void*)'),media.indexOf('class CommandCallbacks'));
+  const hardware=worker.slice(worker.indexOf('if (request.operation==1)'),worker.indexOf('} else if (!ChakshuStorage::ready)'));
+  assert(hardware.indexOf('ChakshuStorage::begin(true)')<hardware.indexOf('ChakshuCamera::begin()'),
+    'explicit hardware check must preserve SD-first order');
+});
+
+test('missing or stale SD files do not mark the entire card unavailable',()=>{
+  const media=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/media.cpp'),'utf8');
+  const transfer=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/media-transfer.cpp'),'utf8');
+  assert.match(media,/FILE_UNAVAILABLE=11/);
+  const select=transfer.slice(transfer.indexOf('uint8_t selectFile('),transfer.indexOf('uint8_t readSelection('));
+  const read=transfer.slice(transfer.indexOf('uint8_t readSelection('),transfer.indexOf('bool validPath('));
+  assert.match(select,/!SD\.exists\(path\)\)return ChakshuMedia::FILE_UNAVAILABLE/);
+  assert.match(read,/!SD\.exists\(selectedPath\)\)return ChakshuMedia::FILE_UNAVAILABLE/);
+  assert.match(read,/offset>=total\).*FILE_UNAVAILABLE/);
+  const worker=transfer.slice(transfer.indexOf('void worker(void*)'),transfer.indexOf('class CommandCallbacks'));
+  const invalidation=worker.slice(worker.indexOf('if(error==ChakshuMedia::IO_ERROR'));
+  assert.doesNotMatch(invalidation,/FILE_UNAVAILABLE/);
 });
 
 test('BLE clients cannot start SD audio or video recording',()=> {
