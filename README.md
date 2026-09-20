@@ -75,7 +75,7 @@ The companion PWA now treats Chakshu as having one operational owner:
 
 This avoids voice/media work racing the same serialized BLE, microphone, camera and SD resources.
 
-The PWA re-enables Hey Snap before a disconnect that it initiates. **Unexpected-disconnect re-arm remains a firmware acceptance requirement:** an out-of-range or otherwise unclean BLE drop must leave the standalone wake engine available without requiring a second connect/disconnect cycle. Do not mark this behavior physically accepted until it is verified on hardware.
+Firmware now enforces the ownership boundary itself: any BLE connection stands the local wake engine down, and every BLE disconnect re-arms it, including unexpected out-of-range/browser drops where the PWA cannot send a release opcode. The PWA's voice on/off writes are session handoff signals rather than a persisted user preference. Physical verification of this reconnect path remains required.
 
 ### Offline media
 
@@ -87,8 +87,8 @@ Chakshu supports Synap-owned offline SD capture and recovery:
 - Offline audio stored entirely on SD until explicitly moved into the companion app.
 - Offline video stored on SD.
 - Full-resolution still capture through the hardened saved-photo path.
-- Two app-controlled SD video profiles.
-- PWA-driven offline video durations of **15, 30 or 60 seconds**.
+- Two SD video profiles used by standalone firmware capture.
+- Connected BLE clients cannot start SD audio/video recording; connected capture belongs to the PWA.
 - The local spoken **Record a video** path currently uses a **10-second default**.
 - Imported offline audio enters the normal transcription and memory pipeline after transfer to the app.
 
@@ -146,11 +146,12 @@ The remaining field question is physical: whether the expansion-board/card path 
 The companion PWA owns:
 
 - connection/session control,
+- all new audio/photo/video capture while BLE is connected; connected captures save directly to the PWA,
 - disabling Hey Snap while it owns the live BLE link,
 - SD catalogue discovery after reconnect,
-- Library representation of SD-only captures,
-- explicit **Move to app**,
-- verification before deleting the SD original,
+- Library representation of unsynced SD-only audio, photo and video,
+- explicit **Sync to app** for one item or all pending offline captures,
+- byte/digest verification before deleting the SD original,
 - imported-audio transcription,
 - memory creation and downstream inference.
 
@@ -199,7 +200,7 @@ The current hardware acceptance list is:
 - sustained Odyssey S3/C3 microphone + BLE recording,
 - Chakshu BLE reconnect and recovery,
 - Hey Snap wake recognition after a clean standalone boot,
-- Hey Snap re-arm after an unexpected BLE disconnect,
+- Hey Snap automatic re-arm after an unexpected BLE disconnect,
 - Take a snap recognition and saved-photo completion,
 - Record a video recognition and durable SD completion,
 - photo quality,
