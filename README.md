@@ -78,6 +78,14 @@ This avoids voice/media work racing the same serialized BLE, microphone, camera 
 
 Firmware now enforces the ownership boundary itself: any BLE connection stands the local wake engine down, and every BLE disconnect re-arms it, including unexpected out-of-range/browser drops where the PWA cannot send a release opcode. The PWA's voice on/off writes are session handoff signals rather than a persisted user preference. Physical verification of this reconnect path remains required.
 
+### SD and recording indicator pin ownership
+
+GPIO21 is both the onboard user LED and the Sense expansion-board SD chip-select. Firmware must not drive it from a status-light task, even to keep the LED off: that can interrupt an SD transaction. A separately controllable recording blink requires an external LED on a verified unused GPIO. The proposed onboard blink was withdrawn before release.
+
+Queued standalone actions are invalidated on BLE connection and rejected while connected. Already running captures retain safe file finalization.
+
+The personalized voice model still lacks a trained start-audio phrase; offline WAV storage and sync do not establish spoken audio-start support.
+
 ### Offline media
 
 Chakshu supports Synap-owned offline SD capture and recovery:
