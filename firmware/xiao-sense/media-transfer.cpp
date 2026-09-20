@@ -319,8 +319,12 @@ void worker(void*) {
       case 8:total=bufferSize;break;
       default:error=2;
     }
-    if(error==ChakshuMedia::IO_ERROR||error==ChakshuMedia::NO_SD)ChakshuStorage::ready=false;
-    replyFor(request,error,total,request.offset,bytes,error?0:size);
+    if(error)size=0;
+    if(error==ChakshuMedia::IO_ERROR||error==ChakshuMedia::NO_SD) {
+      ChakshuStorage::ready=false;
+      size=ChakshuStorage::diagnostics(bytes,sizeof(bytes));
+    }
+    replyFor(request,error,total,request.offset,bytes,size);
     if(!streamingEnabled.load())stopMicrophone();
   }
 }

@@ -7,6 +7,10 @@ std::atomic<bool> ready{false};
 uint64_t capacity=0,freeBytes=0;
 uint32_t sequence=0,bootId=0;
 char protectedStem[64]{};
+// Keep a recovered card at its proven clock for the rest of this boot.
+uint32_t clockHz=4000000u;
+uint32_t mountAttempts=0;
+const char* mountStage="not-started";
 
 void refresh() {
   capacity=ready?SD.totalBytes():0;
@@ -14,44 +18,56 @@ void refresh() {
   freeBytes=used<=capacity?capacity-used:0;
 }
 
+bool mountAt(uint32_t hz) {
+  ready=false;
+  ++mountAttempts;mountStage="spi";
+  // SD.end() only releases the filesystem. SPI.begin() is a no-op on an
+  // already-started bus, so explicitly reset it before attaching the SD pins.
+  // Callers own the media lease and must close all files before this point.
+  SD.end();
+  SPI.end();
+  clockHz=hz;
+  if(!SPI.begin(7,8,9,21)){SPI.end();return false;}
+  mountStage="mount";
+  bool usable=SD.begin(21,SPI,hz,"/sd",5,false) && SD.cardType()!=CARD_NONE;
+  if(usable){mountStage="directory";if(!SD.exists("/synap"))usable=SD.mkdir("/synap");}
+  if(usable) {
+    File directory=SD.open("/synap");
+    usable=directory && directory.isDirectory();
+    directory.close();
+  }
+  // A successful mount alone does not prove the filesystem is readable.
+  if(usable){mountStage="capacity";usable=SD.totalBytes()>0;}
+  ready=usable;
+  if(usable)mountStage="ready";
+  if(!usable){SD.end();SPI.end();}
+  Serial.printf("[CHAKSHU] sd mount hz=%lu ready=%u heap=%lu\n",
+    (unsigned long)hz,unsigned(ready),(unsigned long)ESP.getFreeHeap());
+  return ready;
+}
+
 bool begin(bool remount) {
-  if (remount) ready=false;
-  if (!ready) {
-    SD.end();
-    SPI.begin(7,8,9,21);
-    // Older cards and expansion-board contacts may need a slower SPI clock.
-    // Mount only; format_if_empty is always false.
-    for(const uint32_t hz:{10000000u,4000000u,1000000u}) {
-      ready=SD.begin(21,SPI,hz,"/sd",5,false) && SD.cardType()!=CARD_NONE;
-      if(ready)break;
-      SD.end();
-    }
-    if (ready && !SD.exists("/synap")) ready=SD.mkdir("/synap");
-    if (!bootId) bootId=esp_random();
+  if(remount || !ready) {
+    if(!mountAt(clockHz) && clockHz>1000000u)mountAt(1000000u);
+    if(!bootId)bootId=esp_random();
   }
   refresh();
-  Serial.printf("[CHAKSHU] sd ready=%u total=%llu free=%llu\n",
-    unsigned(ready),(unsigned long long)capacity,(unsigned long long)freeBytes);
   return ready;
 }
 
 bool recoverIO() {
-  ready=false;
-  SD.end();
-  SPI.begin(7,8,9,21);
-  // A card that mounts at 10 MHz can still fail sustained reads/writes because
-  // of contact quality or long expansion-board traces. After a real I/O error,
-  // recover at conservative clocks rather than immediately returning to 10 MHz.
-  for(const uint32_t hz:{4000000u,1000000u}) {
-    ready=SD.begin(21,SPI,hz,"/sd",5,false) && SD.cardType()!=CARD_NONE;
-    if(ready)break;
-    SD.end();
-  }
-  if(ready && !SD.exists("/synap")) ready=SD.mkdir("/synap");
+  // A real I/O failure lowers the clock; later catalogue retries never raise it.
+  mountAt(1000000u);
   refresh();
-  Serial.printf("[CHAKSHU] sd io-recovery ready=%u total=%llu free=%llu\n",
-    unsigned(ready),(unsigned long long)capacity,(unsigned long long)freeBytes);
   return ready;
+}
+
+size_t diagnostics(uint8_t* bytes,size_t length) {
+  const int size=snprintf(reinterpret_cast<char*>(bytes),length,
+    "{\"sdReady\":%s,\"sdClockHz\":%lu,\"sdMountStage\":\"%s\",\"sdMountAttempts\":%lu,\"freeHeap\":%lu}",
+    ready?"true":"false",(unsigned long)clockHz,mountStage,
+    (unsigned long)mountAttempts,(unsigned long)ESP.getFreeHeap());
+  return size>0 && size_t(size)<length?size_t(size):0;
 }
 
 bool capturePath(const char* path) {
