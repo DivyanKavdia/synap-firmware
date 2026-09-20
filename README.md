@@ -1,33 +1,38 @@
 # Synap Firmware
 
-**Current production baseline — 18 September 2026**
+**Current firmware baseline — 20 September 2026**
 
 This repository owns production firmware for the Synap wearable family.
 
-## Production release
+## Release and source status
 
-- **Current production build:** **1262**
-- **Source baseline:** `8d760280d47890b762f29283d4e12a249c4e5e9b`
-- **Release channel:** `ota-releases`
-- **Production targets:** ESP32-S3 SuperMini, ESP32-C3 SuperMini and Chakshu / XIAO ESP32S3 Sense
+- **Field / physical-acceptance baseline:** Synap OS build **1351**.
+- **Current development baseline:** `main`.
+- **Release channel:** `ota-releases`.
+- **Production targets:** Synap Odyssey S3, Synap Odyssey C3 and Chakshu.
+- `main` contains **post-1351 Chakshu SD-recovery hardening**. Do not assume a source commit is already installed on a device; the OTA feed remains authoritative for installable firmware.
 
 Every production release is compiled in CI, published atomically, attested with GitHub OIDC provenance and checked through the public firmware feed for digests, provenance and browser CORS.
 
 ## Supported targets
 
-| Target | Product | Core capabilities |
-| --- | --- | --- |
-| `esp32s3-fh4r2-qspi-4m` | Synap S3 | audio, settings, touch, battery, standby |
-| `esp32c3-supermini-4m` | Synap C3 | audio, settings, touch, battery, standby |
-| `xiao-esp32s3-sense-8m` | Chakshu | audio, camera, SD, settings, video, SD audio, photo |
+| Target id | Product | Board | Core capabilities |
+| --- | --- | --- | --- |
+| `esp32s3-fh4r2-qspi-4m` | **Synap Odyssey S3** | ESP32-S3 SuperMini | audio, settings, touch, battery, standby |
+| `esp32c3-supermini-4m` | **Synap Odyssey C3** | ESP32-C3 SuperMini | audio, settings, touch, battery, standby |
+| `xiao-esp32s3-sense-8m` | **Chakshu** | XIAO ESP32-S3 Sense | audio, camera, SD, settings, video, SD audio, photo |
 
-The canonical device definition is `devices/catalog.json`. Target identity, hardware mapping, release limits and supported capabilities should be changed there first.
+The Odyssey naming is a **display/product-name change only**. Existing target ids, BLE advertising identities, OTA product markers, manifest paths and update compatibility identifiers must remain stable so devices already in the field are not orphaned.
+
+The canonical hardware/release definition is `devices/catalog.json`. Hardware mapping, capability flags, OTA identity and release limits should be changed there first.
 
 ## Firmware architecture
 
-Shared runtime behavior lives under `firmware/shared/`. Target adapters materialize the common source for the individual boards. Chakshu-specific camera, SD and local-voice behavior lives in the XIAO Sense path without changing the common S3/C3 audio contract.
+Shared runtime behavior lives under `firmware/shared/`. Target adapters materialize the common source for the individual boards.
 
-The checked-in S3 sketch is generated from the owned source components. Do not hand-maintain parallel copies of shared behavior.
+Chakshu-specific camera, SD, media-transfer and local-voice behavior lives under `firmware/xiao-sense/` without changing the common Odyssey S3/C3 audio contract.
+
+The checked-in/generated target sketches are derived from the owned source components. Do not create or revive parallel firmware implementations for the same production target.
 
 ## Audio and BLE baseline
 
@@ -38,28 +43,119 @@ The checked-in S3 sketch is generated from the owned source components. Do not h
 - Session/generation-safe replay.
 - Asynchronous device controls.
 - Target-aware BLE OTA with inactive-slot installation.
+- Device capabilities reported independently from transient readiness.
 
 A successful BLE notification enqueue is not proof that the browser persisted the corresponding bytes. CI verifies byte continuity and transport invariants; sustained real-device throughput remains a physical acceptance test.
 
-## Chakshu production baseline
+## Chakshu baseline
 
-The current Chakshu recovery baseline prioritizes BLE/OTA availability after a physical boot failure observed with the local speech-model startup path. Chakshu remains on the installed Arduino `default_8MB` dual-OTA partition layout. Local WakeNet/MultiNet initialization and its embedded model payload are temporarily disabled; BLE, audio, camera, SD, offline media and OTA remain available.
+Chakshu is the camera/SD member of the Synap family. Its current firmware path includes BLE audio, camera, SD media, OTA and a lightweight local TinyML wake/command runtime.
 
-- Synap-owned SD FIFO cleanup when reserve space is needed.
-- App-triggered clear of Synap capture files.
+### Hey Snap
+
+The current local runtime is the lightweight Synap TinyML implementation, not the older ESP-SR / WakeNet / MultiNet startup path.
+
+Current locally classified commands are:
+
+- **Hey Snap** — wake / open the short command window.
+- **Take a snap** — save a photo to SD.
+- **Record a video** — start the local SD video path.
+- **Stop** — stop/cancel the active local operation.
+
+The model uses a small embedded learned-weight payload and an adaptive AC-noise/VAD gate. It removes microphone DC offset from level detection so low-level board/microphone bias does not look like permanent speech.
+
+Voice protocol remains version **2**. Media protocol remains version **1**.
+
+### One command owner at a time
+
+The companion PWA now treats Chakshu as having one operational owner:
+
+- **Disconnected from the PWA:** firmware owns Hey Snap and offline media actions.
+- **Connected to the PWA:** the PWA disables the wake engine and owns media/BLE operations.
+
+This avoids voice/media work racing the same serialized BLE, microphone, camera and SD resources.
+
+The PWA re-enables Hey Snap before a disconnect that it initiates. **Unexpected-disconnect re-arm remains a firmware acceptance requirement:** an out-of-range or otherwise unclean BLE drop must leave the standalone wake engine available without requiring a second connect/disconnect cycle. Do not mark this behavior physically accepted until it is verified on hardware.
+
+### Offline media
+
+Chakshu supports Synap-owned offline SD capture and recovery:
+
+- Synap-owned SD FIFO cleanup when reserve space is required.
+- App-triggered clearing of Synap capture files only.
 - Verified move-to-app deletion semantics.
-- Offline audio stored entirely on SD until explicitly moved to the app.
+- Offline audio stored entirely on SD until explicitly moved into the companion app.
 - Offline video stored on SD.
-- Default video duration of 10 seconds.
-- Explicit requested video durations, within production limits.
-- High-quality/native camera capture profiles for the supported camera.
-- Local wake-word recognition is temporarily disabled in the BLE-first recovery build.
-- Voice protocol v2; wake events remain compatible with the companion app.
-- WakeNet/MultiNet will be reintroduced only behind a post-BLE fault-contained activation path.
-- Photo, video, audio and visual-description capabilities remain available through the companion app and offline media flows.
-- Disabled local voice consumes no boot-time model memory and cannot block BLE recovery.
+- Full-resolution still capture through the hardened saved-photo path.
+- Two app-controlled SD video profiles.
+- PWA-driven offline video durations of **15, 30 or 60 seconds**.
+- The local spoken **Record a video** path currently uses a **10-second default**.
+- Imported offline audio enters the normal transcription and memory pipeline after transfer to the app.
 
-After offline audio is moved to the companion app, cloud transcription and memory processing are owned by the PWA/backend repository.
+User/model files outside the narrow Synap capture naming convention are not part of FIFO cleanup or Clear SD.
+
+## Chakshu SD recovery
+
+The current `main` contains additional SD hardening after the build-1351 field baseline.
+
+### Mount behavior
+
+The SD SPI bus is explicitly reset before a mount attempt. The current mount path:
+
+1. ends the filesystem,
+2. resets the SPI bus,
+3. mounts at the current proven clock,
+4. falls back to **1 MHz** if the current clock cannot mount,
+5. verifies the `/synap` directory,
+6. verifies that filesystem capacity is readable,
+7. only then marks the card ready.
+
+The normal starting clock in the current recovery path is **4 MHz**. After a real I/O failure, recovery drops to **1 MHz** and keeps that conservative clock for the remainder of the boot instead of returning to a faster setting.
+
+No recovery path formats the card or silently replays a failed capture.
+
+### Failure diagnostics
+
+Failed SD media responses may include bounded diagnostics:
+
+- `sdReady`
+- `sdClockHz`
+- `sdMountStage`
+- `sdMountAttempts`
+- `freeHeap`
+
+These fields are intended to distinguish an absent card from a card that mounted previously but later became unusable.
+
+A mount alone is not considered proof of a healthy card; directory and capacity checks are part of readiness.
+
+### Media safety
+
+Current Chakshu media handling also:
+
+- avoids starting local photo/video work while live BLE audio is using the conflicting runtime path,
+- closes/releases the full-resolution camera path before SD writes where required,
+- quarantines SD readiness after exhausted I/O failures,
+- retries bounded file-selection/read/catalogue operations through the conservative recovery path,
+- preserves the current capture from FIFO deletion while it is active.
+
+The remaining field question is physical: whether the expansion-board/card path can sustain the required camera/video workload at the conservative clock without recurring I/O faults.
+
+## Companion PWA contract
+
+The companion PWA owns:
+
+- connection/session control,
+- disabling Hey Snap while it owns the live BLE link,
+- SD catalogue discovery after reconnect,
+- Library representation of SD-only captures,
+- explicit **Move to app**,
+- verification before deleting the SD original,
+- imported-audio transcription,
+- memory creation and downstream inference.
+
+For the detailed offline/Hey Snap application contract, see the companion repository document:
+
+`DivyanKavdia/synap-pwa/docs/CHAKSHU_OFFLINE_AND_HEY_SNAP.md`
 
 ## Build and validation
 
@@ -75,9 +171,9 @@ node --test tests/*.cjs
 Production CI additionally:
 
 1. installs the pinned ESP32/Arduino dependencies,
-2. applies the verified BLE compatibility patch,
-3. materializes S3, C3 and Chakshu production sources,
-4. embeds and verifies the pinned Chakshu local voice model,
+2. applies required compatibility patches,
+3. materializes Odyssey S3, Odyssey C3 and Chakshu production sources,
+4. verifies embedded Chakshu voice assets/runtime constraints,
 5. compiles all three targets with one build number,
 6. creates OTA and factory artifacts,
 7. attests production binaries,
@@ -90,26 +186,35 @@ Production CI additionally:
 - Routine compatible updates use the production OTA feed.
 - Never interchange target binaries.
 - Target, slot size, image structure and digest checks remain mandatory.
+- Existing OTA product markers and manifest paths are compatibility identifiers; do not rename them as part of product branding.
 - A source commit is not itself a release; the authoritative production feed determines the installable build.
 
 ## Physical acceptance boundary
 
-Build/test success validates software contracts but does not establish real-world hardware quality. The current production candidate should be physically accepted for:
+Software CI validates source generation, protocol contracts, storage/recovery logic and board compilation. It does **not** establish real-world hardware quality.
 
-- sustained microphone/BLE recording,
-- reconnect and recovery,
-- `Hi ESP` WakeNet acknowledgement and follow-up MultiNet command recognition,
+The current hardware acceptance list is:
+
+- sustained Odyssey S3/C3 microphone + BLE recording,
+- Chakshu BLE reconnect and recovery,
+- Hey Snap wake recognition after a clean standalone boot,
+- Hey Snap re-arm after an unexpected BLE disconnect,
+- Take a snap recognition and saved-photo completion,
+- Record a video recognition and durable SD completion,
 - photo quality,
-- timed video capture,
-- long SD recording,
+- timed SD video capture,
+- long/offline SD audio recording,
+- SD I/O recovery at conservative clocks,
 - FIFO space reclamation,
-- move-to-app followed by source deletion,
-- end-to-end transfer into the Synap memory pipeline.
+- Move to app followed by verified source deletion,
+- complete device → PWA → transcript → memory flow.
 
-## Working convention from this baseline
+Build **1351** remains the explicit field-reference baseline for comparison. Newer `main` changes must be identified separately during OTA/device testing so a source fix is not mistaken for an already-installed firmware behavior.
 
-`main` is the only current development baseline. New work should branch from current `main`; do not revive old audit branches or superseded implementation paths.
+## Working convention
 
-Detailed history belongs in Git commits, merged pull requests and published releases. Keep this README focused on the current production truth.
+`main` is the only current development baseline.
 
-<!-- release-trigger: voice-production -->
+New work should branch from current `main`; do not revive superseded audit branches, abandoned voice implementations or older parallel architecture paths.
+
+Keep this README focused on current product truth. Detailed implementation history belongs in Git commits, merged pull requests and published releases.
