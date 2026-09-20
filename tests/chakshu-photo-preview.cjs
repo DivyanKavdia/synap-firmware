@@ -96,7 +96,7 @@ test('voice photo reuses hardened saved-photo path and never races live audio st
  const saved=transfer.slice(transfer.indexOf('uint8_t captureSavedPreview\(\)'),transfer.indexOf('uint8_t catalogue\(\)'));
  assert(saved.indexOf('ChakshuCamera::endOriginal();') < saved.indexOf('ChakshuStorage::ensureSpace(bufferSize)'));
  assert.match(saved,/if\(!saved\)\{ChakshuStorage::ready=false/);
- assert.match(transfer,/if\(error==ChakshuMedia::IO_ERROR\|\|error==ChakshuMedia::NO_SD\)ChakshuStorage::ready=false/);
+ assert.match(transfer,/if\(error==ChakshuMedia::IO_ERROR\|\|error==ChakshuMedia::NO_SD\)\s*\{\s*ChakshuStorage::ready=false/);
  const commands=voice.slice(voice.indexOf('if(command==STOP)'),voice.indexOf('portENTER_CRITICAL(&stateMux)',voice.indexOf('if(command==STOP)')));
  assert.match(commands,/command==PHOTO[\s\S]*streamingEnabled\.load\(\)/);
  assert.match(commands,/command==VIDEO_START[\s\S]*streamingEnabled\.load\(\)/);

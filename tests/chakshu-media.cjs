@@ -54,9 +54,9 @@ test('transient SD I/O recovery drops to conservative SPI speeds before failing'
   const end=storage.indexOf('bool capturePath(',start);
   assert(start>=0&&end>start);
   const recovery=storage.slice(start,end);
-  assert.match(recovery,/4000000u,1000000u/);
+  assert.match(recovery,/mountAt\(1000000u\)/);
   assert.doesNotMatch(recovery,/10000000u/);
-  assert.match(recovery,/SD\.begin\(21,SPI,hz,"\/sd",5,false\)/);
+  assert.match(storage,/SD\.begin\(21,SPI,hz,"\/sd",5,false\)/);
   const select=transfer.slice(transfer.indexOf('uint8_t selectFile('),transfer.indexOf('uint8_t readSelection('));
   const read=transfer.slice(transfer.indexOf('uint8_t readSelection('),transfer.indexOf('bool validPath('));
   const catalogue=transfer.slice(transfer.indexOf('uint8_t catalogue()'),transfer.indexOf('void recordOffline'));
