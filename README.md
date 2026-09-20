@@ -100,19 +100,20 @@ The current `main` contains additional SD hardening after the build-1351 field b
 
 ### Mount behavior
 
-The SD SPI bus is explicitly reset before a mount attempt. The current mount path:
+Cold boot and card re-detection use the field-proven initialization sequence:
 
-1. ends the filesystem,
-2. resets the SPI bus,
-3. mounts at the current proven clock,
-4. falls back to **1 MHz** if the current clock cannot mount,
-5. verifies the `/synap` directory,
-6. verifies that filesystem capacity is readable,
-7. only then marks the card ready.
+1. end any filesystem session,
+2. initialize the Chakshu SPI pins once,
+3. try the SD card handshake at **10 MHz**, then **4 MHz**, then **1 MHz** on that SPI session,
+4. verify the `/synap` directory,
+5. verify that filesystem capacity is readable,
+6. only then mark the card ready.
 
-The normal starting clock in the current recovery path is **4 MHz**. After a real I/O failure, recovery drops to **1 MHz** and keeps that conservative clock for the remainder of the boot instead of returning to a faster setting.
+If a card never mounts, no clock is treated as proven. The bus is left clean and a later **Check SD card** or catalogue request repeats the full 10→4→1 MHz detection sequence.
 
-No recovery path formats the card or silently replays a failed capture.
+A different path is used after a card was mounted and then suffers a real I/O fault: firmware explicitly resets the SPI bus, retries at **1 MHz**, and keeps that conservative recovery clock for the remainder of the boot. Normal catalogue retries cannot raise it again.
+
+No detection or recovery path formats the card or silently replays a failed capture.
 
 ### Failure diagnostics
 
