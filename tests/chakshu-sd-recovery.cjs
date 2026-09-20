@@ -50,7 +50,9 @@ unsigned esp_random(){return 123;}
 ${lifecycle}
 int main(){
  using namespace ChakshuStorage;
- // Cold detection keeps one SPI session and falls back 10 -> 4 -> 1 MHz.
+ // Cold detection first resets any inherited SPI state, then keeps one owned
+ // Sense-pin session while falling back through compatibility clocks.
+ busStarted=true;
  assert(begin(false)&&clockHz==4000000&&capacity==8000000&&freeBytes==7000000);
  assert((clocks==std::vector<uint32_t>{10000000u,4000000u}));
  assert(!recoveryClockLocked);
@@ -65,12 +67,12 @@ int main(){
  // A card that never mounted is not falsely treated as a recovered card.
  ready=false;recoveryClockLocked=false;clockHz=10000000u;mountHealthy=false;clocks.clear();
  assert(!begin(true));
- assert((clocks==std::vector<uint32_t>{10000000u,4000000u,1000000u}));
+ assert((clocks==std::vector<uint32_t>{10000000u,4000000u,1000000u,400000u}));
  assert(!recoveryClockLocked&&!busStarted&&!fsMounted);
  // Diagnostics must show the ladder actually ran. Reporting the last
  // successful clock left a never-mounted card claiming 10 MHz for ever, which
  // reads as a ladder that never stepped down.
- assert(clockHz==1000000u);
+ assert(clockHz==400000u);
  assert(std::string(mountStage)=="bus");
  // A bus that answers with nothing behind it is a different fault from a bus
  // that never answered, and the field needs to tell them apart.
@@ -88,12 +90,14 @@ int main(){
  spaceHealthy=false;assert(!begin(true)&&!ready);spaceHealthy=true;
  rootExists=false;mkdirHealthy=false;assert(!begin(true));mkdirHealthy=true;assert(begin(true));
 
- // A real recovery failure remains conservative rather than raising the clock.
+ // A real recovery failure remains conservative rather than returning to the
+ // 10/4 MHz boot clocks, and gets a 400 kHz last-resort retry.
  recoveryClockLocked=false;assert(begin(true));mountHealthy=false;
  assert(!recoverIO()&&recoveryClockLocked&&!ready&&!busStarted&&!fsMounted);
+ assert((clocks.size()>=2&&clocks[clocks.size()-2]==1000000u&&clocks.back()==400000u));
  mountHealthy=true;limitHz=10000000u;clocks.clear();
  assert(begin(false)&&lastHz==1000000u);
  assert((clocks==std::vector<uint32_t>{1000000u}));
- puts("PASS boot redetection and sticky I/O recovery");
-}`),/PASS boot redetection and sticky I\/O recovery/);
+ puts("PASS SD SPI ownership, boot redetection and sticky I/O recovery");
+}`),/PASS SD SPI ownership, boot redetection and sticky I\/O recovery/);
 });
