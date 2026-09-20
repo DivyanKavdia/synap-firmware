@@ -19,8 +19,20 @@ void refresh() {
 }
 
 bool validateMount(uint32_t hz) {
-  ++mountAttempts;mountStage="mount";
-  bool usable=SD.begin(21,SPI,hz,"/sd",5,false) && SD.cardType()!=CARD_NONE;
+  ++mountAttempts;
+  // Record the clock being attempted, not only one that worked. Reporting the
+  // last successful clock leaves a card that has never mounted reporting the
+  // initial 10 MHz for ever, which reads in the field as "the ladder never
+  // stepped down" when in fact it ran all three and every one failed. That
+  // misreading cost a debugging session.
+  clockHz=hz;
+  mountStage="mount";
+  bool usable=SD.begin(21,SPI,hz,"/sd",5,false);
+  // Separate no handshake at all from a bus that answered with no card behind
+  // it. Both used to report "mount", so neither could be told apart without
+  // opening the device.
+  if(!usable)mountStage="bus";
+  else if(SD.cardType()==CARD_NONE){usable=false;mountStage="no-card";}
   if(usable){mountStage="directory";if(!SD.exists("/synap"))usable=SD.mkdir("/synap");}
   if(usable) {
     File directory=SD.open("/synap");
@@ -30,7 +42,7 @@ bool validateMount(uint32_t hz) {
   // A successful mount alone does not prove the filesystem is readable.
   if(usable){mountStage="capacity";usable=SD.totalBytes()>0;}
   ready=usable;
-  if(usable){clockHz=hz;mountStage="ready";}
+  if(usable)mountStage="ready";
   else SD.end();
   Serial.printf("[CHAKSHU] sd mount hz=%lu ready=%u heap=%lu\n",
     (unsigned long)hz,unsigned(ready),(unsigned long)ESP.getFreeHeap());

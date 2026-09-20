@@ -10,8 +10,9 @@ test('SD boot detection retries all clocks while I/O recovery alone becomes stic
 #include <cassert>
 #include <cstdio>
 #include <vector>
+#include <string>
 constexpr int CARD_NONE=0;
-bool spiHealthy=true,mountHealthy=true,rootHealthy=true,rootDirectory=true,spaceHealthy=true,rootExists=true,mkdirHealthy=true;
+bool spiHealthy=true,mountHealthy=true,rootHealthy=true,rootDirectory=true,spaceHealthy=true,rootExists=true,mkdirHealthy=true,cardPresent=true;
 bool busStarted=false,fsMounted=false;unsigned resets=0,handles=0;uint32_t lastHz=0,limitHz=4000000;
 std::vector<uint32_t> clocks;
 struct File {
@@ -36,7 +37,7 @@ struct Card {
   assert(busStarted&&cs==21&&files==5&&!format);clocks.push_back(hz);lastHz=hz;
   fsMounted=mountHealthy&&hz<=limitHz;return fsMounted;
  }
- int cardType(){return fsMounted?1:CARD_NONE;}
+ int cardType(){return fsMounted&&cardPresent?1:CARD_NONE;}
  bool exists(const char*){return rootExists;}
  bool mkdir(const char*){return mkdirHealthy;}
  File open(const char*){assert(fsMounted);return File(rootHealthy);}
@@ -66,6 +67,17 @@ int main(){
  assert(!begin(true));
  assert((clocks==std::vector<uint32_t>{10000000u,4000000u,1000000u}));
  assert(!recoveryClockLocked&&!busStarted&&!fsMounted);
+ // Diagnostics must show the ladder actually ran. Reporting the last
+ // successful clock left a never-mounted card claiming 10 MHz for ever, which
+ // reads as a ladder that never stepped down.
+ assert(clockHz==1000000u);
+ assert(std::string(mountStage)=="bus");
+ // A bus that answers with nothing behind it is a different fault from a bus
+ // that never answered, and the field needs to tell them apart.
+ mountHealthy=true;limitHz=10000000u;cardPresent=false;clocks.clear();
+ assert(!begin(true)&&!ready);
+ assert(std::string(mountStage)=="no-card");
+ cardPresent=true;
  mountHealthy=true;limitHz=10000000u;clocks.clear();
  assert(begin(false)&&clockHz==10000000u);
  assert((clocks==std::vector<uint32_t>{10000000u}));
