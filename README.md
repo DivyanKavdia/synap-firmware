@@ -6,8 +6,8 @@ This repository owns production firmware for the Synap wearable family.
 
 ## Release and source status
 
-- **Current production release:** Synap OS build **1365** (`synap-os1-build1365`).
-- **Production source:** `08c0bf603dc63ac089a6558b1fdb2acad5f4e9d4`.
+- **Current production release:** Synap OS build **1366** (`synap-os1-build1366`).
+- **Production source:** `cb5857df5290a22494c6901b12d61f35e15c12e2`.
 - **Current development baseline:** `main`.
 - **Release channel:** `ota-releases`.
 - **Production targets:** Synap Odyssey S3, Synap Odyssey C3 and Chakshu.
@@ -97,7 +97,7 @@ User/model files outside the narrow Synap capture naming convention are not part
 
 ## Chakshu SD recovery
 
-Production build **1365** contains the current SD boot/re-detection and post-mount recovery hardening.
+Production build **1366** contains the current SD boot/re-detection and post-mount recovery hardening, plus corrected mount diagnostics.
 
 ### Mount behavior
 
@@ -118,7 +118,7 @@ No detection or recovery path formats the card or silently replays a failed capt
 
 ### Failure diagnostics
 
-Failed SD media responses may include bounded diagnostics:
+Failed SD media responses may include bounded diagnostics. In build 1366, `sdClockHz` reports the **clock attempted by the current mount try**, not a previously successful/default value; `sdMountStage` distinguishes low-level `bus` failure from `no-card` when the bus responds but no card is detected:
 
 - `sdReady`
 - `sdClockHz`
@@ -213,7 +213,11 @@ The current hardware acceptance list is:
 - Sync to app followed by verified source deletion,
 - complete device → PWA → transcript → memory flow.
 
-Build **1365** is the current production hardware baseline. Physical testing should record the installed build explicitly and compare device logs against this README before attributing behavior to current source. A later `main` commit is not a device behavior until it is published through the OTA feed and installed.
+Build **1366** is the current production hardware baseline. Physical testing should record the installed build explicitly and compare device logs against this README before attributing behavior to current source. A later `main` commit is not a device behavior until it is published through the OTA feed and installed.
+
+## Live-source cleanup policy
+
+Production firmware is materialized only from the shared source graph plus the current Chakshu TinyML components listed by `tools/boards/xiao-sense/index.cjs`. Retired external ESP-SR/MultiNet flash-model files and tooling are intentionally absent from `main`; do not restore them unless the production architecture is explicitly changed and the materialization/CI path is updated together.
 
 ## Working convention
 
