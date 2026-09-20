@@ -50,7 +50,7 @@ test('Chakshu keeps connect callbacks passive and retains early-disconnect evide
 #include <cassert>
 #include <cstdio>
 constexpr uint16_t BLE_HS_CONN_HANDLE_NONE=65535;
-namespace ChakshuTransfer {std::atomic<uint16_t> subscribedConnection{65535};std::atomic<uint32_t> cancelWindow{0};}
+namespace ChakshuTransfer {std::atomic<uint16_t> subscribedConnection{65535};std::atomic<uint32_t> cancelWindow{0},localEpoch{0};}
 namespace ChakshuVoice {void linkConnected(){} void linkDisconnected(){}}
 constexpr int BLE_MIN_INTERVAL=12,BLE_MAX_INTERVAL=24,BLE_SLAVE_LATENCY=0,BLE_SUPERVISION_TIMEOUT=600;
 uint32_t clockMs=1000;uint32_t millis(){return clockMs;}
@@ -86,6 +86,7 @@ int main(){
     NimBLEConnInfo peer{uint16_t(i)},other{uint16_t(i+100)};
     cb.onConnect(&server,peer);
     assert(deviceConnected && connectionEventPending && chakshuConnectionHandle==i);
+    assert(ChakshuTransfer::localEpoch==i+1);
     assert(server.updates==0 && server.dataRequests==0); // no optional LL/L2CAP procedures at startup
     assert(!ChakshuLink::statusSeen && !chakshuAudioSubscribed);
     cb.onConnect(&server,other);assert(server.rejected==int(i+1));

@@ -11,6 +11,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     ChakshuLink::paramRequests=0;ChakshuLink::paramRequestCode=0xFFFF;
     ++connectionGeneration;
     if(!recoveryWaiting.load())streamingEnabled=false;
+    ++ChakshuTransfer::localEpoch; // Invalidate queued standalone work across this handoff.
     deviceConnected=true;connectionEventPending=true;
     ChakshuVoice::linkConnected();
     // The pinned host owns DLE; the control task defers any timeout correction.

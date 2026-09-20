@@ -15,7 +15,7 @@ function materializeChakshu(source,target) {
   replace('Adafruit_NeoPixel statusLed(1, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);','','No camera-pin LED');
   out=out.split('statusLed.clear();statusLed.show();').join('/* No external LED on Chakshu. */');
   out=replaceFunctionBlock(out,'void updateStatusLed(bool force) {','void setDeviceState(',
-    'void updateStatusLed(bool force) { (void)force; }\n\n','No external indicator');
+    readTemplate('xiao-sense','status-led.cpp')+'\n','Onboard SD recording indicator');
   const stopStart=out.indexOf('void stopStreaming(ErrorCode reason) {');
   const stopEnd=out.indexOf('bool configureTransportFromPeerMtu() {',stopStart);
   if(stopStart<0 || stopEnd<0)throw Error('Missing BLE stop boundary');
@@ -32,7 +32,7 @@ function materializeChakshu(source,target) {
   const bootStart=out.indexOf('  bootSleepWasLocked=readDurableSleepLock()');
   const bootEnd=out.indexOf('  disconnectedAt=millis();',bootStart);
   if (bootStart<0 || bootEnd<0) throw Error('Missing Chakshu hardware setup boundary');
-  out=out.slice(0,bootStart)+'  bootSleepWasLocked=false;\n  delay(400);\n'+out.slice(bootEnd);
+  out=out.slice(0,bootStart)+'  bootSleepWasLocked=false;\n  digitalWrite(21,HIGH);pinMode(21,OUTPUT);\n  delay(400);\n'+out.slice(bootEnd);
   replace('    microphoneI2S.setPins(I2S_BCLK_PIN, I2S_WS_PIN, -1, I2S_DATA_IN_PIN);',
     `    microphoneI2S.setPinsPdmRx(${target.hardware.clock},${target.hardware.data});`,'Onboard PDM pins');
   replace('microphoneReady=microphoneI2S.begin(I2S_MODE_STD, SAMPLE_RATE,\n      I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);',

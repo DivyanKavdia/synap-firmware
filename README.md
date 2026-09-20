@@ -78,6 +78,14 @@ This avoids voice/media work racing the same serialized BLE, microphone, camera 
 
 Firmware now enforces the ownership boundary itself: any BLE connection stands the local wake engine down, and every BLE disconnect re-arms it, including unexpected out-of-range/browser drops where the PWA cannot send a release opcode. The PWA's voice on/off writes are session handoff signals rather than a persisted user preference. Physical verification of this reconnect path remains required.
 
+### Offline recording light (development)
+
+The onboard user LED blinks for 250 ms every second while an SD audio/video session is active, including file finalization after reconnect. It returns off when the session completes or fails; connected app recording and idle listening do not show this blink. The indicator runs from the control tick without delaying capture or sharing camera/SD pins. This addition requires a new OTA release after build 1368.
+
+Queued local commands are invalidated on BLE connection and checked again before dispatch. An already running capture is allowed to close safely.
+
+The current personalized voice model has no trained start-audio phrase. Offline WAV recording/sync is supported by the media path, but spoken audio start still requires real-microphone training and device acceptance.
+
 ### Offline media
 
 Chakshu supports Synap-owned offline SD capture and recovery:

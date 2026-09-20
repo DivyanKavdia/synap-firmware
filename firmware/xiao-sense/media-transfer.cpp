@@ -247,7 +247,7 @@ void worker(void*) {
   Request request{};
   for(;;) {
     if(xQueueReceive(requests,&request,portMAX_DELAY)!=pdTRUE)continue;
-    if(request.local&&request.localEpoch!=localEpoch.load())continue;
+    if(request.local&&(deviceConnected.load()||request.localEpoch!=localEpoch.load()))continue;
     if(!request.local&&(request.connection!=connectionGeneration.load()||!deviceConnected.load()))continue;
     ChakshuResources::Lease admission;
     if(!admission||otaBusySnapshot.load()) {replyFor(request,1);continue;}

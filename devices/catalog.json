@@ -131,8 +131,8 @@
         "data": 41,
         "touch": null,
         "battery": null,
-        "led": null,
-        "ledDriver": "none",
+        "led": 21,
+        "ledDriver": "active-low",
         "idleMHz": 240,
         "activeMHz": 240,
         "batteryCutoff": false
