@@ -250,6 +250,9 @@ void worker(void*) {
     if(!admission||otaBusySnapshot.load()) {replyFor(request,1);continue;}
     if(selectedConnection!=request.connection){clearSelection();originalPath[0]=0;selectedConnection=request.connection;}
     if(request.operation==5||request.operation==10) {
+      // SD capture is a standalone-device operation. While BLE is connected the
+      // app owns capture and must save audio/video directly to the PWA.
+      if(!request.local){replyFor(request,ChakshuMedia::BAD_COMMAND);continue;}
       if(streamingEnabled.load()||remoteStandby){replyFor(request,1);continue;}
       ChakshuCamera::VideoProfile profile;
       const uint32_t seconds=request.operation==5?(request.offset>>8):request.offset;
