@@ -6,8 +6,8 @@ This repository owns production firmware for the Synap wearable family.
 
 ## Release and source status
 
-- **Current production release:** Synap OS build **1368** (`synap-os1-build1368`).
-- **Production source:** `1dea4dbb50122d5e8b48d5ab5f792ae8d1ba1f4b`.
+- **Current production release:** Synap OS build **1371** (`synap-os1-build1371`).
+- **Production source:** `a280e233af9230724615cbbe594f98b3bf8b34a7`.
 - **Current development baseline:** `main`.
 - **Release channel:** `ota-releases`.
 - **Production targets:** Synap Odyssey S3, Synap Odyssey C3 and Chakshu.
@@ -82,7 +82,7 @@ Firmware now enforces the ownership boundary itself: any BLE connection stands t
 
 GPIO21 is both the onboard user LED and the Sense expansion-board SD chip-select. Firmware must not drive it from a status-light task, even to keep the LED off: that can interrupt an SD transaction. A separately controllable recording blink requires an external LED on a verified unused GPIO. The proposed onboard blink was withdrawn before release.
 
-Queued standalone actions are invalidated on BLE connection and rejected while connected. Already running captures retain safe file finalization.
+Build **1371** hardens BLE handoff: queued standalone actions are invalidated on BLE connection and rejected while connected. Already running captures retain safe file finalization.
 
 The personalized voice model still lacks a trained start-audio phrase; offline WAV storage and sync do not establish spoken audio-start support.
 
@@ -221,7 +221,7 @@ The current hardware acceptance list is:
 - Sync to app followed by verified source deletion,
 - complete device → PWA → transcript → memory flow.
 
-Build **1368** is the current production hardware baseline. Physical testing should record the installed build explicitly and compare device logs against this README before attributing behavior to current source. A later `main` commit is not a device behavior until it is published through the OTA feed and installed.
+Build **1371** is the current production hardware baseline. Physical testing should record the installed build explicitly and compare device logs against this README before attributing behavior to current source. A later `main` commit is not a device behavior until it is published through the OTA feed and installed.
 
 ## Live-source cleanup policy
 
