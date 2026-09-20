@@ -6,11 +6,12 @@ This repository owns production firmware for the Synap wearable family.
 
 ## Release and source status
 
-- **Field / physical-acceptance baseline:** Synap OS build **1351**.
+- **Current production release:** Synap OS build **1365** (`synap-os1-build1365`).
+- **Production source:** `08c0bf603dc63ac089a6558b1fdb2acad5f4e9d4`.
 - **Current development baseline:** `main`.
 - **Release channel:** `ota-releases`.
 - **Production targets:** Synap Odyssey S3, Synap Odyssey C3 and Chakshu.
-- `main` contains **post-1351 Chakshu SD-recovery hardening**. Do not assume a source commit is already installed on a device; the OTA feed remains authoritative for installable firmware.
+- Build 1365 contains the Chakshu SD boot/re-detection and BLE-exclusive Hey Snap ownership fixes described below. The OTA feed remains authoritative for what is installable on a physical device.
 
 Every production release is compiled in CI, published atomically, attested with GitHub OIDC provenance and checked through the public firmware feed for digests, provenance and browser CORS.
 
@@ -96,7 +97,7 @@ User/model files outside the narrow Synap capture naming convention are not part
 
 ## Chakshu SD recovery
 
-The current `main` contains additional SD hardening after the build-1351 field baseline.
+Production build **1365** contains the current SD boot/re-detection and post-mount recovery hardening.
 
 ### Mount behavior
 
@@ -123,6 +124,7 @@ Failed SD media responses may include bounded diagnostics:
 - `sdClockHz`
 - `sdMountStage`
 - `sdMountAttempts`
+- `sdRecoveryLocked`
 - `freeHeap`
 
 These fields are intended to distinguish an absent card from a card that mounted previously but later became unusable.
@@ -208,10 +210,10 @@ The current hardware acceptance list is:
 - long/offline SD audio recording,
 - SD I/O recovery at conservative clocks,
 - FIFO space reclamation,
-- Move to app followed by verified source deletion,
+- Sync to app followed by verified source deletion,
 - complete device → PWA → transcript → memory flow.
 
-Build **1351** remains the explicit field-reference baseline for comparison. Newer `main` changes must be identified separately during OTA/device testing so a source fix is not mistaken for an already-installed firmware behavior.
+Build **1365** is the current production hardware baseline. Physical testing should record the installed build explicitly and compare device logs against this README before attributing behavior to current source. A later `main` commit is not a device behavior until it is published through the OTA feed and installed.
 
 ## Working convention
 
