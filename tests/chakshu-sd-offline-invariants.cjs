@@ -37,6 +37,28 @@ test('Chakshu SD remains the durable offline inbox without capture-time remounts
   assert.doesNotMatch(space,/oldestCapture\(|removeCapture\(/);
 });
 
+
+test('Hey Snap photo and video commands remain routed to durable SD operations',()=>{
+  const voice=fs.readFileSync('firmware/xiao-sense/voice.cpp','utf8');
+  const transfer=fs.readFileSync('firmware/xiao-sense/media-transfer.cpp','utf8');
+  const tick=voice.slice(voice.indexOf('void tick()'),voice.indexOf('class Callbacks'));
+  const worker=transfer.slice(transfer.indexOf('void worker(void*)'),transfer.indexOf('class CommandCallbacks'));
+
+  // PHOTO must enqueue the saved full-resolution photo operation, not a BLE
+  // preview capture. VIDEO_START must enqueue the standalone SD recorder with
+  // the current 10-second default.
+  assert.match(tick,/command==PHOTO[\s\S]*queueLocal\(11\)/);
+  assert.match(tick,/command==VIDEO_START[\s\S]*queueLocal\(5,uint32_t\(10u\)<<8\)/);
+  assert.match(voice,/operation==11\?PHOTO:operation==5\?VIDEO_START:0/);
+
+  // The worker must keep those requests local-only and finish them through the
+  // SD-backed implementations before publishing completion to voice status.
+  assert.match(worker,/request\.operation==5\|\|request\.operation==10/);
+  assert.match(worker,/if\(!request\.local\)\{replyFor\(request,ChakshuMedia::BAD_COMMAND\);continue;\}/);
+  assert.match(worker,/recordOffline\(request\.operation==5\)/);
+  assert.match(worker,/case 11:[\s\S]*captureSavedPreview\(\)[\s\S]*ChakshuMedia::save\(s\)/);
+});
+
 test('offline media is only acknowledged after its SD file is closed',()=>{
   const transfer=fs.readFileSync('firmware/xiao-sense/media-transfer.cpp','utf8');
   const recording=fs.readFileSync('firmware/xiao-sense/sd-recording.cpp','utf8');
