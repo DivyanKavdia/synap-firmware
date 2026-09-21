@@ -9,7 +9,6 @@
 // explicitly experimental field baseline and MUST be retrained with more separated,
 // independently recorded utterances before being treated as production-accurate.
 // Raw user voice recordings are not embedded in this repository; only learned weights are shipped.
-#pragma once
 #include <stdint.h>
 namespace ChakshuTinyModel {
 constexpr uint16_t MODEL_SAMPLE_RATE=16000;
