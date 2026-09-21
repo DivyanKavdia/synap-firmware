@@ -12,6 +12,7 @@ std::atomic<uint16_t> audioMeanAbs{0},audioPeak{0},candidateConfidence{0};
 std::atomic<uint8_t> candidateId{0};
 std::atomic<uint32_t> candidateAt{0},candidateCount{0};
 std::atomic<uint32_t> mediaCompletion{0};
+std::atomic<uint8_t> photoCompletionCommand{PHOTO};
 struct Block { uint16_t count;int16_t samples[800]; };
 struct PendingCommand { uint8_t command;uint32_t epoch,at; };
 struct Inference { uint8_t cls;float confidence,margin; };
@@ -155,6 +156,8 @@ uint8_t classCommand(uint8_t cls){
   if(cls==ChakshuTinyModel::PHOTO)return PHOTO;
   if(cls==ChakshuTinyModel::VIDEO)return VIDEO_START;
   if(cls==ChakshuTinyModel::STOP)return STOP;
+  if(cls==ChakshuTinyModel::AUDIO)return AUDIO_ON;
+  if(cls==ChakshuTinyModel::DESCRIBE)return DESCRIBE;
   return 0;
 }
 void consider(const Inference& result,uint32_t now,uint32_t epoch){
@@ -175,7 +178,7 @@ void consider(const Inference& result,uint32_t now,uint32_t epoch){
   if(accepted){
     // The wake phrase and action must never share the same 1.5 s inference
     // history. Keep Gate armed, but discard all wake audio so only fresh
-    // speech can become PHOTO/VIDEO/STOP.
+    // speech can become PHOTO/VIDEO/AUDIO/DESCRIBE/STOP.
     if(accepted==WAKE)resetClassifierWindow();
     PendingCommand pending{accepted,epoch,now};xQueueSend(commandQueue,&pending,0);
   }
@@ -294,7 +297,10 @@ bool queueLocal(uint8_t operation,uint32_t offset=0){
   return true;
 }
 void mediaCompleted(uint8_t operation,uint8_t error){
-  const uint8_t command=operation==11?PHOTO:operation==5?VIDEO_START:0;
+  uint8_t command=0;
+  if(operation==11)command=photoCompletionCommand.exchange(PHOTO);
+  else if(operation==5)command=VIDEO_START;
+  else if(operation==10)command=AUDIO_ON;
   if(command)mediaCompletion.store(0x10000u|(uint32_t(command)<<8)|error);
 }
 void tick(){
@@ -308,7 +314,7 @@ void tick(){
   PendingCommand pending;if(!commandQueue||xQueueReceive(commandQueue,&pending,0)!=pdTRUE)return;
   if(!active()||otaBusy()||pending.epoch!=discontinuities.load()||uint32_t(millis()-pending.at)>2200u)return;
   const uint8_t command=pending.command;
-  const uint16_t value=command==VIDEO_START?10:0;
+  const uint16_t value=command==VIDEO_START?10:command==AUDIO_ON?60:0;
   const bool online=deviceConnected.load()&&leaseConnection.load()==connectionGeneration.load()&&
     leaseAt.load()!=0&&uint32_t(millis()-leaseAt.load())<6000u;
   if(command==WAKE){
@@ -318,13 +324,28 @@ void tick(){
   }
   uint8_t result=0;using namespace ChakshuTransfer;
   if(command==STOP){++localEpoch;if(offline.load())stopRequested.store(true);if(streamingEnabled.load())stopStreaming();}
-  else if(command==PHOTO){
+  else if(command==PHOTO || command==DESCRIBE){
     if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;
-    else if(streamingEnabled.load()||offline.load()||!queueLocal(11))result=ChakshuMedia::BUSY;
+    else if(streamingEnabled.load()||offline.load())result=ChakshuMedia::BUSY;
+    else {
+      photoCompletionCommand.store(command);
+      if(!queueLocal(11)) {
+        photoCompletionCommand.store(PHOTO);
+        result=ChakshuMedia::BUSY;
+      }
+    }
   }
   else if(command==VIDEO_START){
     if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;
     else if(streamingEnabled.load()||!exitRemoteStandby()||!queueLocal(5,uint32_t(10u)<<8))result=ChakshuMedia::BUSY;
+  }
+  else if(command==AUDIO_ON){
+    // Voice-started audio is bounded to 60 seconds because the same microphone
+    // is occupied by the recorder while the WAV is being written. BLE reconnect
+    // or the recorder limit safely finalizes the file; future training/runtime
+    // work can add reliable in-recording voice stop.
+    if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;
+    else if(streamingEnabled.load()||offline.load()||!queueLocal(10,60u))result=ChakshuMedia::BUSY;
   }
   portENTER_CRITICAL(&stateMux);++serial;lastCommand=command;lastResult=result?1:(online?2:0);lastAt=millis();lastValue=result?result:value;portEXIT_CRITICAL(&stateMux);
   if(online&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
