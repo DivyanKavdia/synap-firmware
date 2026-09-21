@@ -171,19 +171,7 @@ uint8_t captureSavedPreview() {
   // stays on SD until the app durably verifies and acknowledges its move.
   makePreviewFromOriginal();return 0;
 }
-bool writeDescribeMarker() {
-  if(!originalPath[0])return false;
-  String marker(originalPath);
-  const int dot=marker.lastIndexOf('.');
-  if(dot<8)return false;
-  marker.remove(dot);marker+=".json";
-  File file=SD.open(marker.c_str(),FILE_WRITE);
-  if(!file)return false;
-  constexpr char payload[]="{\"schema\":1,\"voice\":\"describe\"}";
-  const bool ok=file.write(reinterpret_cast<const uint8_t*>(payload),sizeof(payload)-1)==sizeof(payload)-1;
-  file.flush();file.close();
-  return ok;
-}
+bool writeDescribeMarker();
 uint8_t catalogue() {
   clearSelection();
   // Catalogue is serialized by the media lease. Recover a mounted-but-unstable
@@ -214,6 +202,20 @@ uint8_t catalogue() {
   directory.close();json+="]";
   buffer=static_cast<uint8_t*>(ps_malloc(json.length()));if(!buffer)return ChakshuMedia::CAPTURE_ERROR;
   bufferSize=json.length();memcpy(buffer,json.c_str(),bufferSize);return 0;
+}
+
+bool writeDescribeMarker() {
+  if(!originalPath[0])return false;
+  String marker(originalPath);
+  const int dot=marker.lastIndexOf('.');
+  if(dot<8)return false;
+  marker.remove(dot);marker+=".json";
+  File file=SD.open(marker.c_str(),FILE_WRITE);
+  if(!file)return false;
+  constexpr char payload[]="{\"schema\":1,\"voice\":\"describe\"}";
+  const bool ok=file.write(reinterpret_cast<const uint8_t*>(payload),sizeof(payload)-1)==sizeof(payload)-1;
+  file.flush();file.close();
+  return ok;
 }
 
 void recordOffline(bool withVideo=true) {
@@ -350,9 +352,6 @@ void worker(void*) {
       case 8:total=bufferSize;break;
       default:error=2;
     }
-    // Local saved-photo completion is published only after the JPG and any
-    // describe marker are flushed and closed, matching audio/video semantics.
-    if(request.local&&request.operation==11)ChakshuVoice::mediaCompleted(11,error);
     if(error)size=0;
     if(error==ChakshuMedia::IO_ERROR||error==ChakshuMedia::NO_SD) {
       ChakshuStorage::ready=false;
