@@ -30,8 +30,8 @@ ${contract}
 ${model}
 namespace ChakshuVoice { using namespace ChakshuTinyModel; ${mapping} }
 int main(){
- const uint8_t expected[]={0,0,1,2,3,8};
- for(uint8_t i=0;i<6;++i)assert(ChakshuVoice::classCommand(i)==expected[i]);
+ const uint8_t expected[]={0,0,1,2,3,8,5,7};
+ for(uint8_t i=0;i<8;++i)assert(ChakshuVoice::classCommand(i)==expected[i]);
  assert(ChakshuVoice::classCommand(99)==0);
  ChakshuVoice::Gate gate;
  assert(gate.accept(2,0.99f,100)==0);

@@ -49,7 +49,9 @@ test('Hey Snap photo and video commands remain routed to durable SD operations',
   // the current 10-second default.
   assert.match(tick,/command==PHOTO[\s\S]*queueLocal\(11\)/);
   assert.match(tick,/command==VIDEO_START[\s\S]*queueLocal\(5,uint32_t\(10u\)<<8\)/);
-  assert.match(voice,/operation==11\?PHOTO:operation==5\?VIDEO_START:0/);
+  assert.match(voice,/if\(operation==11\)command=photoCompletionCommand\.exchange\(PHOTO\)/);
+  assert.match(voice,/else if\(operation==5\)command=VIDEO_START/);
+  assert.match(voice,/else if\(operation==10\)command=AUDIO_ON/);
 
   // The worker must keep those requests local-only and finish them through the
   // SD-backed implementations before publishing completion to voice status.
