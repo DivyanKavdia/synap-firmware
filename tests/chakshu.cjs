@@ -63,11 +63,11 @@ test('TinyML v2 keeps actions deliberately small and SD-first',()=>{
   assert.match(voice,/streakCount<2/);
   assert.match(voice,/command==WAKE\?0\.72f:0\.76f/);
   assert.match(voice,/result\.margin<0\.10f/);
-  assert.match(voice,/queueLocal\(11\)/);
+  assert.match(voice,/queueLocal\(11,command==DESCRIBE\?1u:0u\)/);
   assert.match(voice,/queueLocal\(5,uint32_t\(10u\)<<8\)/);
   assert.doesNotMatch(voice,/speechHoldUntil-now\)>0&&!mediaBusy\(\)/);
   assert.match(voice,/command==AUDIO_ON[\s\S]*queueLocal\(10,60u\)/);
-  assert.match(voice,/command==PHOTO \|\| command==DESCRIBE[\s\S]*queueLocal\(11\)/);
+  assert.match(voice,/command==PHOTO \|\| command==DESCRIBE[\s\S]*queueLocal\(11,command==DESCRIBE\?1u:0u\)/);
   assert.match(contract,/confidence<0\.70f/);
   assert.match(contract,/confidence<0\.74f/);
 });
