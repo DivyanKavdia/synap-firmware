@@ -1,0 +1,111 @@
+{
+  "seed": 7,
+  "labels": [
+    "noise",
+    "unknown",
+    "hey_snap",
+    "photo",
+    "video",
+    "stop",
+    "audio",
+    "describe"
+  ],
+  "epochs": 180,
+  "synthetic": {
+    "count": 442,
+    "accuracy": 0.9705882352941176,
+    "confusion_matrix": [
+      [
+        50,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        50,
+        0,
+        0,
+        2,
+        1,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        63,
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        2,
+        1,
+        60,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        1,
+        0,
+        0,
+        60,
+        1,
+        2,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        46,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        45,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        55
+      ]
+    ]
+  },
+  "real_session_holdout": {
+    "count": 0,
+    "accuracy": null,
+    "confusion_matrix": null
+  },
+  "real_train_utterances": 0,
+  "real_test_utterances": 0,
+  "production_ready": false,
+  "note": "Experimental candidate only. Synthetic accuracy is not real-device accuracy. Review class recall, negative speech, wake/action gates and independent real sessions before promotion.",
+  "promoted": false,
+  "reason": "Synthetic-only continuation check; existing personalized production model retained."
+}

@@ -1,3 +1,6 @@
 /prepared/
 /compiled-*/
 /bundle/
+
+/build/voice-candidate/
+__pycache__/

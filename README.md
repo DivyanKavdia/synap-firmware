@@ -67,6 +67,8 @@ Current locally classified commands are:
 
 The build-1400 classifier is intentionally an **experimental field baseline**. Its 8-class weights combine synthetic English augmentation with 22 user-supplied 16 kHz mono utterances: Record audio (8), Record video (6), and Explain what you see (8). Synthetic held-out accuracy was about 94% and fit on the available real utterances about 95.5%, but the limited independent real holdout was weak at roughly 30%. These figures are observations for continuity, not a production-accuracy claim. The next training pass should use more independently recorded, clearly separated real-device utterances plus negative/confusable examples and a true speaker/session holdout.
 
+The reproducible eight-class candidate workflow and real-session split requirements are documented in [Voice training](docs/VOICE_TRAINING.md).
+
 The model uses a small embedded learned-weight payload and an adaptive AC-noise/VAD gate. It removes microphone DC offset from level detection so low-level board/microphone bias does not look like permanent speech.
 
 Voice protocol remains version **2**. Media protocol remains version **1**.
