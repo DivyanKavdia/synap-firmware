@@ -26,6 +26,15 @@ test('Chakshu SD remains the durable offline inbox without capture-time remounts
   // silently format a card containing unsynced memories.
   assert.match(storage,/sdcard_mount\(drive,"\/sd-probe",1,false\)/);
   assert.doesNotMatch(storage,/format_if_empty\s*=\s*true|SD_MMC\.format|\.format\(/);
+
+  // Every capture still on SD is unsynced. Space checks may reject a new take,
+  // but must never delete an older one behind the user's back.
+  const spaceStart=storage.indexOf('bool ensureSpace('),
+    spaceEnd=storage.indexOf('uint16_t clearCaptures()',spaceStart),
+    space=storage.slice(spaceStart,spaceEnd);
+  assert.match(space,/if\(freeBytes<required\)/);
+  assert.match(space,/unsynced media preserved/);
+  assert.doesNotMatch(space,/oldestCapture\(|removeCapture\(/);
 });
 
 test('offline media is only acknowledged after its SD file is closed',()=>{

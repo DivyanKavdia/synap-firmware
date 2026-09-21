@@ -252,14 +252,15 @@ bool ensureSpace(uint64_t expectedBytes=0) {
   refresh();
   const uint64_t required=uint64_t(RESERVE_BYTES)+expectedBytes;
   if(required>capacity)return false;
-  uint16_t removed=0;
-  while(freeBytes<required) {
-    char oldest[96];
-    if(!oldestCapture(oldest,sizeof(oldest),false) || !removeCapture(oldest))return false;
-    if(++removed>1000)return false;
+  // Anything still on the card is unsynced. Never reclaim it automatically:
+  // the PWA deletes a capture only after the imported copy has been verified.
+  // If the user stays offline long enough to fill the card, fail the new
+  // capture with NO_SPACE rather than silently destroy an older memory.
+  if(freeBytes<required) {
+    Serial.printf("[CHAKSHU] sd full free=%llu required=%llu; unsynced media preserved\n",
+      (unsigned long long)freeBytes,(unsigned long long)required);
+    return false;
   }
-  if(removed)Serial.printf("[CHAKSHU] sd fifo removed=%u free=%llu required=%llu\n",
-    unsigned(removed),(unsigned long long)freeBytes,(unsigned long long)required);
   return true;
 }
 
