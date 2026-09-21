@@ -1,17 +1,17 @@
 # Synap Firmware
 
-**Current firmware baseline — 20 September 2026**
+**Current firmware baseline — 21 September 2026**
 
 This repository owns production firmware for the Synap wearable family.
 
 ## Release and source status
 
-- **Current production release:** Synap OS build **1371** (`synap-os1-build1371`).
-- **Production source:** `a280e233af9230724615cbbe594f98b3bf8b34a7`.
+- **Current production release:** Synap OS build **1400** (`synap-os1-build1400`).
+- **Production source:** `cfe7859c64469ef8672ecb6fcfe548b6262b1bc6`.
 - **Current development baseline:** `main`.
 - **Release channel:** `ota-releases`.
 - **Production targets:** Synap Odyssey S3, Synap Odyssey C3 and Chakshu.
-- Build 1365 contains the Chakshu SD boot/re-detection and BLE-exclusive Hey Snap ownership fixes described below. The OTA feed remains authoritative for what is installable on a physical device.
+- Build 1400 retains the hardened Chakshu SD boot/re-detection and BLE-exclusive Hey Snap ownership path, and adds the explicitly experimental 8-class personalized TinyML field model plus the offline Describe capture lifecycle. The OTA feed remains authoritative for what is installable on a physical device.
 
 Every production release is compiled in CI, published atomically, attested with GitHub OIDC provenance and checked through the public firmware feed for digests, provenance and browser CORS.
 
@@ -59,9 +59,13 @@ The current local runtime is the lightweight Synap TinyML implementation, not th
 Current locally classified commands are:
 
 - **Hey Snap** — wake / open the short command window.
-- **Take a snap** — save a photo to SD.
-- **Record a video** — start the local SD video path.
-- **Stop** — stop/cancel the active local operation.
+- **Take a snap / photo** — save a full-resolution photo to SD.
+- **Record a video** — record a 10-second default video + soundtrack bundle to SD.
+- **Record audio** — record a bounded 60-second WAV to SD.
+- **Explain what you see** — save a tagged full-resolution photo to SD for description after verified PWA sync.
+- **Stop** — stop/cancel the active local operation when the classifier owns the microphone.
+
+The build-1400 classifier is intentionally an **experimental field baseline**. Its 8-class weights combine synthetic English augmentation with 22 user-supplied 16 kHz mono utterances: Record audio (8), Record video (6), and Explain what you see (8). Synthetic held-out accuracy was about 94% and fit on the available real utterances about 95.5%, but the limited independent real holdout was weak at roughly 30%. These figures are observations for continuity, not a production-accuracy claim. The next training pass should use more independently recorded, clearly separated real-device utterances plus negative/confusable examples and a true speaker/session holdout.
 
 The model uses a small embedded learned-weight payload and an adaptive AC-noise/VAD gate. It removes microphone DC offset from level detection so low-level board/microphone bias does not look like permanent speech.
 
@@ -82,9 +86,9 @@ Firmware now enforces the ownership boundary itself: any BLE connection stands t
 
 GPIO21 is both the onboard user LED and the Sense expansion-board SD chip-select. Firmware must not drive it from a status-light task, even to keep the LED off: that can interrupt an SD transaction. A separately controllable recording blink requires an external LED on a verified unused GPIO. The proposed onboard blink was withdrawn before release.
 
-Build **1371** hardens BLE handoff: queued standalone actions are invalidated on BLE connection and rejected while connected. Already running captures retain safe file finalization.
+Build **1400** preserves the BLE ownership/SD safeguards and adds the experimental audio/describe voice routes. Queued standalone actions are invalidated on BLE connection and rejected while connected. Already running captures retain safe file finalization.
 
-The personalized voice model still lacks a trained start-audio phrase; offline WAV storage and sync do not establish spoken audio-start support.
+The experimental personalized model now includes Record audio and Explain what you see classes. Recognition quality remains under field observation and must be retrained with a larger independent real-device dataset before being treated as production-accurate.
 
 ### Offline media
 
@@ -99,13 +103,15 @@ Chakshu supports Synap-owned offline SD capture and recovery:
 - Two SD video profiles used by standalone firmware capture.
 - Connected BLE clients cannot start SD audio/video recording; connected capture belongs to the PWA.
 - The local spoken **Record a video** path currently uses a **10-second default**.
+- The local spoken **Record audio** path is bounded to **60 seconds** because the recorder owns the microphone while active.
+- **Explain what you see** saves a tagged JPG offline; visual inference occurs only after a later verified PWA sync.
 - Imported offline audio enters the normal transcription and memory pipeline after transfer to the app.
 
 User/model files outside the narrow Synap capture naming convention are not part of FIFO cleanup or Clear SD.
 
 ## Chakshu SD recovery
 
-Production build **1368** contains the current SD boot/re-detection and post-mount recovery hardening, plus corrected mount diagnostics.
+Production build **1400** retains the SD boot/re-detection and post-mount recovery hardening, corrected mount diagnostics, non-destructive recovery probes, and unsynced-capture protection.
 
 ### Mount behavior
 
@@ -221,7 +227,7 @@ The current hardware acceptance list is:
 - Sync to app followed by verified source deletion,
 - complete device → PWA → transcript → memory flow.
 
-Build **1371** is the current production hardware baseline. Physical testing should record the installed build explicitly and compare device logs against this README before attributing behavior to current source. A later `main` commit is not a device behavior until it is published through the OTA feed and installed.
+Build **1400** is the current production hardware baseline. Physical testing should record the installed build explicitly and compare device logs against this README before attributing behavior to current source. A later `main` commit is not a device behavior until it is published through the OTA feed and installed.
 
 ## Live-source cleanup policy
 
