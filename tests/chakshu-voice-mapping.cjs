@@ -21,10 +21,14 @@ int main(){
  ChakshuVoice::Gate gate;
  assert(gate.accept(2,0.99f,100)==0);
  assert(gate.accept(1,0.99f,200)==1);
- assert(gate.accept(2,0.99f,400)==2);
- assert(gate.accept(3,0.99f,600)==0);
+ // The wake utterance itself must not be able to spill into a media action.
+ assert(gate.accept(2,0.99f,400)==0);
+ assert(gate.accept(2,0.99f,1099)==0);
+ assert(gate.accept(2,0.99f,1100)==2);
+ assert(gate.accept(3,0.99f,1300)==0);
  assert(gate.accept(1,0.99f,2000)==1);
- assert(gate.accept(8,0.99f,2300)==8);
+ assert(gate.accept(8,0.99f,2899)==0);
+ assert(gate.accept(8,0.99f,2900)==8);
  puts("PASS class mapping and wake gate");
 }`), /PASS class mapping/);
 });

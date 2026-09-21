@@ -6,6 +6,7 @@ enum Command : uint8_t {
 inline void put16le(uint8_t* p,uint16_t value){p[0]=uint8_t(value);p[1]=uint8_t(value>>8);}
 class Gate {
   bool armed=false;uint32_t armedAt=0,lastAction=0;bool acted=false;
+  static constexpr uint32_t MIN_ACTION_DELAY_MS=900u;
 public:
   void reset(){armed=false;}
   uint8_t accept(uint8_t command,float confidence,uint32_t now) {
@@ -16,7 +17,10 @@ public:
     }
     if(confidence<0.74f)return 0;
     const bool recognized=command>=PHOTO&&command<=STOP;
-    const bool allowed=armed&&uint32_t(now-armedAt)<=5000u&&recognized;
+    const uint32_t age=uint32_t(now-armedAt);
+    // Do not let the overlapping inference windows from the wake utterance
+    // become a media action. A fresh command must follow the wake phrase.
+    const bool allowed=armed&&age>=MIN_ACTION_DELAY_MS&&age<=5000u&&recognized;
     if(!allowed)return 0;
     armed=false;
     if(acted&&uint32_t(now-lastAction)<1500u)return 0;
