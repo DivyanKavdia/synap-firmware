@@ -51,16 +51,22 @@ bool validateMount(uint32_t hz) {
 
 bool detectCard() {
   ready=false;mountStage="spi";
-  // Preserve the field-proven cold-boot path: initialize SPI once, then retry
-  // the card handshake at lower clocks without tearing the bus down between
-  // attempts. A card that never mounted has no proven recovery clock.
+  // Never inherit an SPI bus configured by another Arduino component. This
+  // target is built with the generic ESP32-S3 board definition, so a previously
+  // started global SPI instance may be on the generic board pins. SD.begin()
+  // calls SPI.begin() too, but Arduino deliberately makes that a no-op once the
+  // bus is started. Tear it down here, then own the Sense pins explicitly.
   SD.end();
+  SPI.end();
   if(!SPI.begin(7,8,9,21)){SPI.end();return false;}
-  for(const uint32_t hz:{10000000u,4000000u,1000000u}) {
+  // 400 kHz is intentionally retained as the last-resort operating clock. The
+  // SD library already uses a slow clock for card initialization, but marginal
+  // wiring/cards can still fail once filesystem traffic switches to 1 MHz.
+  for(const uint32_t hz:{10000000u,4000000u,1000000u,400000u}) {
     if(validateMount(hz))return true;
   }
   // Leave the bus clean so a later Check SD/catalogue request can repeat the
-  // full detection sequence instead of getting pinned to a failed 1 MHz try.
+  // full detection sequence instead of inheriting a failed attempt.
   SPI.end();
   return false;
 }
@@ -77,9 +83,19 @@ bool resetMountAt(uint32_t hz) {
   return false;
 }
 
+bool recoverMount() {
+  // Once a mounted card has shown an I/O fault, never raise it above 1 MHz for
+  // the rest of this boot. Some cards that are unstable at 1 MHz remain fully
+  // usable at 400 kHz, so preserve that final recovery rung as well.
+  for(const uint32_t hz:{1000000u,400000u}) {
+    if(resetMountAt(hz))return true;
+  }
+  return false;
+}
+
 bool begin(bool remount) {
   if(remount || !ready) {
-    if(recoveryClockLocked)resetMountAt(1000000u);
+    if(recoveryClockLocked)recoverMount();
     else detectCard();
     if(!bootId)bootId=esp_random();
   }
@@ -88,9 +104,10 @@ bool begin(bool remount) {
 }
 
 bool recoverIO() {
-  // A real mounted-card I/O failure locks recovery to 1 MHz for this boot.
+  // A real mounted-card I/O failure locks recovery to conservative clocks for
+  // this boot. It never returns to 10 or 4 MHz without a restart.
   recoveryClockLocked=true;
-  resetMountAt(1000000u);
+  recoverMount();
   refresh();
   return ready;
 }

@@ -50,6 +50,11 @@ void clearSelection() {
 uint8_t selectFile(const char* path,uint32_t& total) {
   if(!ChakshuStorage::ready&&!ChakshuStorage::begin(false))return ChakshuMedia::NO_SD;
   for(uint8_t attempt=0;attempt<2;++attempt) {
+    // A stale catalogue entry or an already-moved companion is a file-level
+    // condition, not evidence that the whole card disappeared. Keep SD ready
+    // so one missing file cannot make storage vanish from the PWA.
+    if(SD.cardType()==CARD_NONE){ChakshuStorage::ready=false;return ChakshuMedia::NO_SD;}
+    if(!SD.exists(path))return ChakshuMedia::FILE_UNAVAILABLE;
     File file=SD.open(path,FILE_READ);
     if(file&&!file.isDirectory()) {
       total=file.size();file.close();snprintf(selectedPath,sizeof(selectedPath),"%s",path);
@@ -65,14 +70,15 @@ uint8_t readSelection(uint32_t offset,uint32_t& total,uint8_t* bytes,size_t& siz
   if(selectedPath[0]) {
     if(!ChakshuStorage::ready&&!ChakshuStorage::begin(false))return ChakshuMedia::NO_SD;
     for(uint8_t attempt=0;attempt<2;++attempt) {
+      if(SD.cardType()==CARD_NONE){ChakshuStorage::ready=false;return ChakshuMedia::NO_SD;}
+      if(!SD.exists(selectedPath))return ChakshuMedia::FILE_UNAVAILABLE;
       File file=SD.open(selectedPath,FILE_READ);
       if(file&&!file.isDirectory()) {
         total=file.size();
-        if(offset<total) {
-          const size_t wanted=std::min(size_t(480),size_t(total-offset));
-          if(file.seek(offset)&&file.read(bytes,wanted)==int(wanted)) {
-            size=wanted;file.close();return 0;
-          }
+        if(offset>=total){file.close();return ChakshuMedia::FILE_UNAVAILABLE;}
+        const size_t wanted=std::min(size_t(480),size_t(total-offset));
+        if(file.seek(offset)&&file.read(bytes,wanted)==int(wanted)) {
+          size=wanted;file.close();return 0;
         }
       }
       file.close();
@@ -82,7 +88,7 @@ uint8_t readSelection(uint32_t offset,uint32_t& total,uint8_t* bytes,size_t& siz
     return ChakshuMedia::IO_ERROR;
   }
   total=bufferSize;
-  if(!buffer||offset>=total)return ChakshuMedia::IO_ERROR;
+  if(!buffer||offset>=total)return ChakshuMedia::FILE_UNAVAILABLE;
   size=std::min(size_t(480),size_t(total-offset));memcpy(bytes,buffer+offset,size);return 0;
 }
 bool validPath(const char* path) {

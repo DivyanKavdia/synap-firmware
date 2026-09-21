@@ -5,7 +5,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
-namespace ChakshuMedia {enum {NO_SD=3,IO_ERROR=7};}
+namespace ChakshuMedia {enum {NO_SD=3,IO_ERROR=7,FILE_UNAVAILABLE=11};}
+constexpr int CARD_NONE=0;
 unsigned mounted=1,handles=0;
 namespace ChakshuStorage {
 bool ready=true;bool protectedCapture=false;
@@ -15,7 +16,7 @@ bool begin(bool){return ready;}
 bool recoverIO(){if(!ready)return false;++mounted;return true;}
 }
 constexpr int FILE_READ=0;
-bool exists=true,shortRead=false,canSeek=true,directory=false;
+bool exists=true,cardPresent=true,shortRead=false,canSeek=true,directory=false;
 std::vector<uint8_t> disk(1000);
 struct File {
  bool opened=false;unsigned epoch=0;size_t at=0;
@@ -29,7 +30,11 @@ struct File {
  int read(uint8_t* bytes,size_t size){assert(opened&&epoch==mounted);if(shortRead)return 0;memcpy(bytes,disk.data()+at,size);return size;}
  void close(){if(opened){assert(epoch==mounted);--handles;opened=false;}}
 };
-struct {File open(const char*,int){return File(exists);}} SD;
+struct {
+ int cardType(){return cardPresent?1:CARD_NONE;}
+ bool exists(const char*){return ::exists;}
+ File open(const char*,int){return File(::exists);}
+} SD;
 char selectedPath[64]{};uint8_t* buffer=nullptr;size_t bufferSize=0;
 // INSERT FILE HELPERS
 int main(){
@@ -41,10 +46,11 @@ int main(){
  ++mounted;
  assert(readSelection(480,total,bytes,size)==0&&size==480&&bytes[0]==uint8_t(480)&&handles==0);
  assert(readSelection(960,total,bytes,size)==0&&size==40&&bytes[39]==uint8_t(999)&&handles==0);
- assert(readSelection(1000,total,bytes,size)==7&&handles==0);
+ assert(readSelection(1000,total,bytes,size)==11&&handles==0);
  canSeek=false;assert(readSelection(0,total,bytes,size)==7&&handles==0);canSeek=true;
  shortRead=true;assert(readSelection(0,total,bytes,size)==7&&handles==0);shortRead=false;
- exists=false;assert(readSelection(0,total,bytes,size)==7&&handles==0);exists=true;
+ exists=false;assert(readSelection(0,total,bytes,size)==11&&handles==0);exists=true;
+ cardPresent=false;assert(readSelection(0,total,bytes,size)==3&&handles==0&&!ChakshuStorage::ready);cardPresent=true;
  ChakshuStorage::ready=false;assert(readSelection(0,total,bytes,size)==3&&handles==0);
  clearSelection();buffer=static_cast<uint8_t*>(malloc(3));bufferSize=3;memcpy(buffer,"jpg",3);
  assert(readSelection(1,total,bytes,size)==0&&total==3&&size==2&&bytes[0]=='p');clearSelection();
