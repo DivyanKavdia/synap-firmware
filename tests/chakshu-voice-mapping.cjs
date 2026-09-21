@@ -1,6 +1,21 @@
 'use strict';
 const {test} = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs');
 const {nativeTest} = require('./support/native.cjs');
+test('wake recognition clears only classifier audio while keeping the action gate armed', () => {
+  const voice = fs.readFileSync('firmware/xiao-sense/voice.cpp', 'utf8');
+  const resetStart = voice.indexOf('void resetClassifierWindow()');
+  const resetEnd = voice.indexOf('void resetWindow()', resetStart);
+  const considerStart = voice.indexOf('void consider(');
+  const considerEnd = voice.indexOf('void feed(', considerStart);
+  assert(resetStart >= 0 && resetEnd > resetStart && considerStart >= 0 && considerEnd > considerStart);
+  const classifierReset = voice.slice(resetStart, resetEnd);
+  const consider = voice.slice(considerStart, considerEnd);
+  assert.match(classifierReset, /writeAt=0;samplesSeen=0;samplesSinceInference=0;speechHoldUntil=0;vadRun=0/);
+  assert.doesNotMatch(classifierReset, /gate\.reset\(\)/, 'post-wake audio reset must keep Gate armed');
+  assert.match(consider, /if\(accepted==WAKE\)resetClassifierWindow\(\)/);
+  assert.match(voice.slice(resetEnd, voice.indexOf('inline int16_t sampleAt', resetEnd)), /resetClassifierWindow\(\);gate\.reset\(\)/);
+});
+
 test('all trained classes map to protocol commands, and actions require a wake', () => {
   const voice = fs.readFileSync('firmware/xiao-sense/voice.cpp', 'utf8');
   const model = fs.readFileSync('firmware/xiao-sense/tiny-voice-model.h', 'utf8');
