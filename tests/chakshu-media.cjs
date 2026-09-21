@@ -71,9 +71,12 @@ test('transient SD I/O recovery drops to conservative SPI speeds before failing'
 test('SD owns SPI and mounts before camera on boot and hardware refresh',()=>{
   const storage=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/sd-storage.cpp'),'utf8');
   const media=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/media.cpp'),'utf8');
-  const detect=storage.slice(storage.indexOf('bool detectCard()'),storage.indexOf('bool resetMountAt('));
-  assert(detect.indexOf('SPI.end();')>=0&&detect.indexOf('SPI.end();')<detect.indexOf('SPI.begin(7,8,9,21)'),
-    'detection must discard inherited generic-board SPI pins');
+  assert.match(storage,/constexpr uint8_t SD_SCK=7,SD_MISO=8,SD_MOSI=9,SD_CS=21/);
+  const prepare=storage.slice(storage.indexOf('bool prepareBus()'),storage.indexOf('void refresh()'));
+  assert(prepare.indexOf('SPI.end();')>=0&&
+    prepare.indexOf('SPI.end();')<prepare.indexOf('SPI.begin(SD_SCK,SD_MISO,SD_MOSI,SD_CS)'),
+    'every SD attempt must discard inherited generic-board SPI pins');
+  assert.match(prepare,/digitalWrite\(SD_CS,HIGH\)/);
   const init=media.slice(media.indexOf('void initialize()'),media.indexOf('void ble(',media.indexOf('void initialize()')));
   assert(init.indexOf('ChakshuStorage::begin(false)')<init.indexOf('ChakshuCamera::begin()'),
     'SD must be mounted before camera allocation at boot');
