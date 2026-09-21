@@ -329,7 +329,9 @@ void tick(){
     else if(streamingEnabled.load()||offline.load())result=ChakshuMedia::BUSY;
     else {
       photoCompletionCommand.store(command);
-      if(!queueLocal(11)) {
+      // Offset 1 tags a saved JPG as an offline visual-description request.
+      // The SD worker writes a tiny companion marker after the JPG is closed.
+      if(!queueLocal(11,command==DESCRIBE?1u:0u)) {
         photoCompletionCommand.store(PHOTO);
         result=ChakshuMedia::BUSY;
       }
