@@ -9,6 +9,7 @@ test('SD boot detection retries all clocks while I/O recovery alone becomes stic
 #include <cstdint>
 #include <cassert>
 #include <cstdio>
+#include <cstring>
 #include <vector>
 #include <string>
 constexpr int CARD_NONE=0,CARD_MMC=1,CARD_SD=2,CARD_SDHC=3,CARD_UNKNOWN=4;
