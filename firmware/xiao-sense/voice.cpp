@@ -43,9 +43,12 @@ void linkDisconnected(){
   linkStandDown=false;leaseAt=0;++discontinuities;refreshRuntimeStatus();
 }
 
-void resetWindow(){
+void resetClassifierWindow(){
   writeAt=0;samplesSeen=0;samplesSinceInference=0;speechHoldUntil=0;vadRun=0;
-  streakClass=NOISE;streakCount=0;streakAt=0;gate.reset();
+  streakClass=NOISE;streakCount=0;streakAt=0;
+}
+void resetWindow(){
+  resetClassifierWindow();gate.reset();
 }
 inline int16_t sampleAt(size_t relative){
   return ring[(writeAt+relative)%WINDOW_SAMPLES];
@@ -169,7 +172,13 @@ void consider(const Inference& result,uint32_t now,uint32_t epoch){
   if(streakCount<2)return;
   streakCount=0;
   const uint8_t accepted=gate.accept(command,result.confidence,now);
-  if(accepted){PendingCommand pending{accepted,epoch,now};xQueueSend(commandQueue,&pending,0);}
+  if(accepted){
+    // The wake phrase and action must never share the same 1.5 s inference
+    // history. Keep Gate armed, but discard all wake audio so only fresh
+    // speech can become PHOTO/VIDEO/STOP.
+    if(accepted==WAKE)resetClassifierWindow();
+    PendingCommand pending{accepted,epoch,now};xQueueSend(commandQueue,&pending,0);
+  }
 }
 void feed(const int16_t* samples,size_t count){
   if(!active()||!pcmQueue||!samples)return;
