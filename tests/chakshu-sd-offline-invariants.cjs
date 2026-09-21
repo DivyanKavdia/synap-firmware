@@ -47,7 +47,7 @@ test('Hey Snap photo and video commands remain routed to durable SD operations',
   // PHOTO must enqueue the saved full-resolution photo operation, not a BLE
   // preview capture. VIDEO_START must enqueue the standalone SD recorder with
   // the current 10-second default.
-  assert.match(tick,/command==PHOTO[\s\S]*queueLocal\(11\)/);
+  assert.match(tick,/command==PHOTO \|\| command==DESCRIBE[\s\S]*queueLocal\(11,command==DESCRIBE\?1u:0u\)/);
   assert.match(tick,/command==VIDEO_START[\s\S]*queueLocal\(5,uint32_t\(10u\)<<8\)/);
   assert.match(voice,/if\(operation==11\)command=photoCompletionCommand\.exchange\(PHOTO\)/);
   assert.match(voice,/else if\(operation==5\)command=VIDEO_START/);
@@ -58,7 +58,19 @@ test('Hey Snap photo and video commands remain routed to durable SD operations',
   assert.match(worker,/request\.operation==5\|\|request\.operation==10/);
   assert.match(worker,/if\(!request\.local\)\{replyFor\(request,ChakshuMedia::BAD_COMMAND\);continue;\}/);
   assert.match(worker,/recordOffline\(request\.operation==5\)/);
-  assert.match(worker,/case 11:[\s\S]*captureSavedPreview\(\)[\s\S]*ChakshuMedia::save\(s\)/);
+  assert.match(worker,/case 11:[\s\S]*captureSavedPreview\(\)[\s\S]*writeDescribeMarker\(\)[\s\S]*ChakshuMedia::save\(s\)/);
+  const replyFor=transfer.slice(transfer.indexOf('void replyFor('),transfer.indexOf('void readResponse('));
+  assert.match(replyFor,/request\.operation==11\)ChakshuVoice::mediaCompleted\(request\.operation,error\)/);
+  assert.match(transfer,/const bool describe=path\.endsWith\("\.jpg"\)&&SD\.exists/);
+  assert.match(transfer,/\\"describe\\":true/);
+});
+
+test('describe markers are companions and are removed with the verified JPG',()=>{
+  const storage=fs.readFileSync('firmware/xiao-sense/sd-storage.cpp','utf8');
+  const transfer=fs.readFileSync('firmware/xiao-sense/media-transfer.cpp','utf8');
+  assert.match(transfer,/constexpr char payload\[\]=\"\{\\\"schema\\\":1,\\\"voice\\\":\\\"describe\\\"\}\"/);
+  const removal=storage.slice(storage.indexOf('bool removeCapture('),storage.indexOf('bool oldestCapture('));
+  assert.match(removal,/SD\.exists\(jpg\.c_str\(\)\)[\s\S]*removeIfPresent\(json\)[\s\S]*removeIfPresent\(jpg\)/);
 });
 
 test('offline media is only acknowledged after its SD file is closed',()=>{

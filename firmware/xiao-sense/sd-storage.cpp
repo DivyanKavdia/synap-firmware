@@ -207,8 +207,10 @@ bool removeCapture(const char* path) {
     ok=removeIfPresent(mjpeg)&&ok;
     ok=removeIfPresent(wav)&&ok;
     ok=removeIfPresent(json)&&ok;
-  } else if(SD.exists(jpg.c_str()) || strstr(path,".jpg")) ok=removeIfPresent(jpg)&&ok;
-  else ok=removeIfPresent(wav)&&ok; // standalone offline audio
+  } else if(SD.exists(jpg.c_str()) || strstr(path,".jpg")) {
+    ok=removeIfPresent(json)&&ok; // optional offline describe marker
+    ok=removeIfPresent(jpg)&&ok;
+  } else ok=removeIfPresent(wav)&&ok; // standalone offline audio
   refresh();
   return ok;
 }

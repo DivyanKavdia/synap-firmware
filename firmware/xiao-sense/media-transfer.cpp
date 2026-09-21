@@ -171,6 +171,7 @@ uint8_t captureSavedPreview() {
   // stays on SD until the app durably verifies and acknowledges its move.
   makePreviewFromOriginal();return 0;
 }
+bool writeDescribeMarker();
 uint8_t catalogue() {
   clearSelection();
   // Catalogue is serialized by the media lease. Recover a mounted-but-unstable
@@ -191,13 +192,30 @@ uint8_t catalogue() {
     String path=entry.path();
     if(!entry.isDirectory()&&validPath(path.c_str())&&(path.endsWith(".jpg")||path.endsWith(".mjpeg")||(path.endsWith(".wav")&&!SD.exists(path.substring(0,path.length()-4)+".mjpeg")))) {
       if(count++)json+=",";
-      json+="{\"path\":\""+path+"\",\"bytes\":"+String(entry.size())+"}";
+      const String stem=path.substring(0,path.lastIndexOf('.'));
+      const bool describe=path.endsWith(".jpg")&&SD.exists((stem+".json").c_str());
+      json+="{\"path\":\""+path+"\",\"bytes\":"+String(entry.size())+
+        (describe?",\"describe\":true":"")+"}";
     }
     entry.close();if(count>=100)break;
   }
   directory.close();json+="]";
   buffer=static_cast<uint8_t*>(ps_malloc(json.length()));if(!buffer)return ChakshuMedia::CAPTURE_ERROR;
   bufferSize=json.length();memcpy(buffer,json.c_str(),bufferSize);return 0;
+}
+
+bool writeDescribeMarker() {
+  if(!originalPath[0])return false;
+  String marker(originalPath);
+  const int dot=marker.lastIndexOf('.');
+  if(dot<8)return false;
+  marker.remove(dot);marker+=".json";
+  File file=SD.open(marker.c_str(),FILE_WRITE);
+  if(!file)return false;
+  constexpr char payload[]="{\"schema\":1,\"voice\":\"describe\"}";
+  const bool ok=file.write(reinterpret_cast<const uint8_t*>(payload),sizeof(payload)-1)==sizeof(payload)-1;
+  file.flush();file.close();
+  return ok;
 }
 
 void recordOffline(bool withVideo=true) {
@@ -297,7 +315,10 @@ void worker(void*) {
         if(streamingEnabled.load())error=ChakshuMedia::BUSY;
         else {
           error=captureSavedPreview();
-          if(!error)snprintf(s.path,sizeof(s.path),"%s",originalPath);
+          if(!error) {
+            snprintf(s.path,sizeof(s.path),"%s",originalPath);
+            if(request.local&&request.offset==1&&!writeDescribeMarker())error=ChakshuMedia::IO_ERROR;
+          }
         }
         s.operation=2;s.state=error?3:2;s.error=error;ChakshuMedia::refresh(s);ChakshuMedia::save(s);break;
       }
