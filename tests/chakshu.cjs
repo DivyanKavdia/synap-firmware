@@ -16,7 +16,8 @@ test('Chakshu uses onboard PDM and does not configure absent hardware',()=>{
   assert.match(source,/static int16_t raw\[SAMPLES_PER_FRAME\]/);
   assert.match(source,/const int32_t sample=raw\[i\];/);
   assert.doesNotMatch(source,/statusLed\.|digitalRead\(TOUCH_INPUT_PIN|pinMode\(TOUCH_INPUT_PIN|analogSetPinAttenuation|esp_deep_sleep_start\(/);
-  assert.match(source,/SPI.begin\(7,8,9,21\)/);
+  assert.match(source,/constexpr uint8_t SD_SCK=7,SD_MISO=8,SD_MOSI=9,SD_CS=21/);
+  assert.match(source,/SPI\.begin\(SD_SCK,SD_MISO,SD_MOSI,SD_CS\)/);
   assert.match(source,/config.pin_d7=48/);
   assert.match(source,/SYNAP-CHAKSHU-OTA-ID-V3/);
   assert.doesNotMatch(source,/SYNAP-ESP32S3-OTA-ID-V3/);
