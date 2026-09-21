@@ -59,8 +59,9 @@ test('Hey Snap photo and video commands remain routed to durable SD operations',
   assert.match(worker,/if\(!request\.local\)\{replyFor\(request,ChakshuMedia::BAD_COMMAND\);continue;\}/);
   assert.match(worker,/recordOffline\(request\.operation==5\)/);
   assert.match(worker,/case 11:[\s\S]*captureSavedPreview\(\)[\s\S]*writeDescribeMarker\(\)[\s\S]*ChakshuMedia::save\(s\)/);
-  assert.match(worker,/request\.local&&request\.operation==11\)ChakshuVoice::mediaCompleted\(11,error\)/);
-  assert.match(transfer,/const bool describe=path\.endsWith\("\\.jpg"\)&&SD\.exists/);
+  const replyFor=transfer.slice(transfer.indexOf('void replyFor('),transfer.indexOf('void readResponse('));
+  assert.match(replyFor,/request\.operation==11\)ChakshuVoice::mediaCompleted\(request\.operation,error\)/);
+  assert.match(transfer,/const bool describe=path\.endsWith\("\.jpg"\)&&SD\.exists/);
   assert.match(transfer,/\\"describe\\":true/);
 });
 
