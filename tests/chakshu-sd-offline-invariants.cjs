@@ -32,7 +32,9 @@ test('offline media is only acknowledged after its SD file is closed',()=>{
   const transfer=fs.readFileSync('firmware/xiao-sense/media-transfer.cpp','utf8');
   const recording=fs.readFileSync('firmware/xiao-sense/sd-recording.cpp','utf8');
   assert.match(voiceSafe(transfer),/Publish completion only after the SD worker has closed the capture files/);
-  assert.match(recording,/file\.flush\(\)[\s\S]*file\.close\(\)/);
+  assert.match(recording,/audio\.flush\(\);audio\.close\(\)/);
+  assert.match(recording,/index\.flush\(\);index\.close\(\)/);
+  assert.match(recording,/video\.flush\(\);video\.close\(\)/);
 });
 
 function voiceSafe(source){
