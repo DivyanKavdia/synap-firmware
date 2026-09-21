@@ -1,8 +1,10 @@
 // Media jobs serialize filesystem ownership. Never format a mounted card.
 #include <SD.h>
 #include <SPI.h>
+#include <sd_diskio.h>
 namespace ChakshuStorage {
 constexpr uint32_t RESERVE_BYTES=4u*1024u*1024u;
+constexpr uint8_t SD_SCK=7,SD_MISO=8,SD_MOSI=9,SD_CS=21;
 std::atomic<bool> ready{false};
 uint64_t capacity=0,freeBytes=0;
 uint32_t sequence=0,bootId=0;
@@ -11,6 +13,25 @@ uint32_t clockHz=10000000u;
 uint32_t mountAttempts=0;
 const char* mountStage="not-started";
 bool recoveryClockLocked=false;
+uint8_t probeCardType=CARD_NONE;
+bool probeSector0=false,probeBootSignature=false,probeFilesystem=false;
+
+void clearProbe() {
+  probeCardType=CARD_NONE;probeSector0=false;probeBootSignature=false;probeFilesystem=false;
+}
+
+bool prepareBus() {
+  ready=false;mountStage="spi";
+  SD.end();
+  SPI.end();
+  // The Sense slot shares GPIO21 with the board's user LED. For SD it must
+  // remain an inactive-high chip select; no status path may pulse this pin.
+  pinMode(SD_CS,OUTPUT);
+  digitalWrite(SD_CS,HIGH);
+  delay(2);
+  if(!SPI.begin(SD_SCK,SD_MISO,SD_MOSI,SD_CS)){SPI.end();return false;}
+  return true;
+}
 
 void refresh() {
   capacity=ready?SD.totalBytes():0;
@@ -27,11 +48,11 @@ bool validateMount(uint32_t hz) {
   // misreading cost a debugging session.
   clockHz=hz;
   mountStage="mount";
-  bool usable=SD.begin(21,SPI,hz,"/sd",5,false);
+  bool usable=SD.begin(SD_CS,SPI,hz,"/sd",5,false);
   // Separate no handshake at all from a bus that answered with no card behind
   // it. Both used to report "mount", so neither could be told apart without
   // opening the device.
-  if(!usable)mountStage="bus";
+  if(!usable)mountStage="mount-failed";
   else if(SD.cardType()==CARD_NONE){usable=false;mountStage="no-card";}
   if(usable){mountStage="directory";if(!SD.exists("/synap"))usable=SD.mkdir("/synap");}
   if(usable) {
@@ -49,37 +70,53 @@ bool validateMount(uint32_t hz) {
   return ready;
 }
 
-bool detectCard() {
-  ready=false;mountStage="spi";
-  // Never inherit an SPI bus configured by another Arduino component. This
-  // target is built with the generic ESP32-S3 board definition, so a previously
-  // started global SPI instance may be on the generic board pins. SD.begin()
-  // calls SPI.begin() too, but Arduino deliberately makes that a no-op once the
-  // bus is started. Tear it down here, then own the Sense pins explicitly.
-  SD.end();
-  SPI.end();
-  if(!SPI.begin(7,8,9,21)){SPI.end();return false;}
-  // 400 kHz is intentionally retained as the last-resort operating clock. The
-  // SD library already uses a slow clock for card initialization, but marginal
-  // wiring/cards can still fail once filesystem traffic switches to 1 MHz.
-  for(const uint32_t hz:{10000000u,4000000u,1000000u,400000u}) {
-    if(validateMount(hz))return true;
+void inspectFailedMount() {
+  // SD.begin() collapses card-initialisation and FAT-mount failures into one
+  // boolean. After all normal attempts fail, use Arduino-ESP32's pinned SD
+  // driver directly to preserve the card state long enough to tell those
+  // failures apart. This probe is read-only: format_if_empty=false and the only
+  // sector operation is a read of sector zero.
+  clearProbe();
+  if(!prepareBus())return;
+  mountStage="probe";
+  const uint8_t drive=sdcard_init(SD_CS,&SPI,400000);
+  if(drive==0xFF){mountStage="driver";SPI.end();return;}
+  probeFilesystem=sdcard_mount(drive,"/sd-probe",1,false);
+  probeCardType=uint8_t(sdcard_type(drive));
+  uint8_t sector[512]{};
+  if(probeCardType!=CARD_NONE && probeCardType!=CARD_UNKNOWN) {
+    probeSector0=sd_read_raw(drive,sector,0);
+    probeBootSignature=probeSector0 && sector[510]==0x55 && sector[511]==0xAA;
   }
-  // Leave the bus clean so a later Check SD/catalogue request can repeat the
-  // full detection sequence instead of inheriting a failed attempt.
+  sdcard_unmount(drive);
+  sdcard_uninit(drive);
   SPI.end();
-  return false;
+  if(probeFilesystem)mountStage="probe-mounted";
+  else if(probeSector0)mountStage="filesystem";
+  else if(probeCardType!=CARD_NONE)mountStage="card-read";
+  else mountStage="card";
 }
 
 bool resetMountAt(uint32_t hz) {
-  ready=false;mountStage="spi";
-  // Only a card that was mounted and then hit a real I/O fault gets a full bus
-  // reset and a sticky conservative clock.
-  SD.end();
-  SPI.end();
-  if(!SPI.begin(7,8,9,21)){SPI.end();return false;}
+  // Every attempt starts from a deselected card and a fresh Sense-pin SPI bus.
+  // This avoids carrying a wedged card/SPI transaction into the next clock.
+  if(!prepareBus())return false;
   if(validateMount(hz))return true;
+  digitalWrite(SD_CS,HIGH);
   SPI.end();
+  delay(2);
+  return false;
+}
+
+bool detectCard() {
+  clearProbe();
+  // 400 kHz is intentionally retained as the last-resort operating clock. The
+  // SD driver also uses a slow clock during card initialization, but marginal
+  // links can still fail once filesystem traffic begins.
+  for(const uint32_t hz:{10000000u,4000000u,1000000u,400000u}) {
+    if(resetMountAt(hz))return true;
+  }
+  inspectFailedMount();
   return false;
 }
 
@@ -114,9 +151,11 @@ bool recoverIO() {
 
 size_t diagnostics(uint8_t* bytes,size_t length) {
   const int size=snprintf(reinterpret_cast<char*>(bytes),length,
-    "{\"sdReady\":%s,\"sdClockHz\":%lu,\"sdMountStage\":\"%s\",\"sdMountAttempts\":%lu,\"sdRecoveryLocked\":%s,\"freeHeap\":%lu}",
+    "{\"sdReady\":%s,\"sdClockHz\":%lu,\"sdMountStage\":\"%s\",\"sdMountAttempts\":%lu,\"sdRecoveryLocked\":%s,\"sdCsPin\":%u,\"sdProbeCardType\":%u,\"sdProbeSector0\":%s,\"sdProbeBootSignature\":%s,\"sdProbeFilesystem\":%s,\"resetReason\":%u,\"uptimeMs\":%lu,\"freeHeap\":%lu}",
     ready?"true":"false",(unsigned long)clockHz,mountStage,
-    (unsigned long)mountAttempts,recoveryClockLocked?"true":"false",
+    (unsigned long)mountAttempts,recoveryClockLocked?"true":"false",unsigned(SD_CS),
+    unsigned(probeCardType),probeSector0?"true":"false",probeBootSignature?"true":"false",
+    probeFilesystem?"true":"false",unsigned(esp_reset_reason()),(unsigned long)millis(),
     (unsigned long)ESP.getFreeHeap());
   return size>0 && size_t(size)<length?size_t(size):0;
 }
