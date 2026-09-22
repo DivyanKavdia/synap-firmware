@@ -28,7 +28,7 @@
       "releasePrefix": "",
       "sourceName": "synap_esp32s3.ino",
       "moduleId": 1,
-      "name": "synap S3",
+      "name": "Synap Odyssey S3",
       "adapter": "esp32s3",
       "advertisingName": "synap",
       "features": [
@@ -70,7 +70,7 @@
       "releasePrefix": "targets/esp32c3-supermini-4m/",
       "sourceName": "synap_esp32c3.ino",
       "moduleId": 2,
-      "name": "synap C3",
+      "name": "Synap Odyssey C3",
       "adapter": "esp32c3",
       "advertisingName": "synap",
       "features": [

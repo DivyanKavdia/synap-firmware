@@ -7,10 +7,14 @@ function prepared(){return fs.readFileSync(path.join(root,'synap_esp32s3/synap_e
 
 test('target catalog keeps S3 SuperMini as primary',()=>{
   assert.equal(PRIMARY_TARGET,'esp32s3-fh4r2-qspi-4m');
+  assert.equal(TARGETS[PRIMARY_TARGET].name,'Synap Odyssey S3');
   assert.equal(TARGETS[PRIMARY_TARGET].board,'ESP32-S3 SuperMini');
   assert.equal(TARGETS[PRIMARY_TARGET].chip,9);
   assert.equal(TARGETS[PRIMARY_TARGET].flashBytes,4194304);
   assert.equal(TARGETS[PRIMARY_TARGET].psramBytes,2097152);
+  assert.equal(TARGETS['esp32c3-supermini-4m'].name,'Synap Odyssey C3');
+  assert.equal(TARGETS['esp32c3-supermini-4m'].hardware.led,8);
+  assert.equal(TARGETS['esp32c3-supermini-4m'].hardware.ledDriver,'neopixel');
 });
 
 test('secondary generated target preserves the production interaction contract',()=>{

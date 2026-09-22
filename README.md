@@ -1,6 +1,6 @@
 # Synap Firmware
 
-**Current firmware baseline — 21 September 2026**
+**Current firmware baseline — 22 September 2026**
 
 This repository owns production firmware for the Synap wearable family.
 
@@ -25,7 +25,7 @@ Every production release is compiled in CI, published atomically, attested with 
 
 The Odyssey naming is a **display/product-name change only**. Existing target ids, BLE advertising identities, OTA product markers, manifest paths and update compatibility identifiers must remain stable so devices already in the field are not orphaned.
 
-The canonical hardware/release definition is `devices/catalog.json`. Hardware mapping, capability flags, OTA identity and release limits should be changed there first.
+The canonical hardware/release definition is `devices/catalog.json`. Hardware mapping, product display name, capability flags, OTA identity and release limits should be changed there first. The catalog now carries the current display names **Synap Odyssey S3** and **Synap Odyssey C3** while retaining the original target IDs, advertising names and OTA markers.
 
 ## Firmware architecture
 
@@ -33,7 +33,7 @@ Shared runtime behavior lives under `firmware/shared/`. Target adapters material
 
 Chakshu-specific camera, SD, media-transfer and local-voice behavior lives under `firmware/xiao-sense/` without changing the common Odyssey S3/C3 audio contract.
 
-The checked-in/generated target sketches are derived from the owned source components. Do not create or revive parallel firmware implementations for the same production target.
+The checked-in/generated target sketches are derived from the owned source components. Do not create or revive parallel firmware implementations for the same production target. See [`docs/CODEBASE.md`](docs/CODEBASE.md) for the current source graph, generated-artifact boundary and cleanup rules.
 
 ## Audio and BLE baseline
 
