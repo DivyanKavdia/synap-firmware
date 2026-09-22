@@ -11,7 +11,7 @@ void encodeModuleCapabilities(uint8_t* p) {
   if (batteryAvailable) ready|=SYNAP_CAP_BATTERY;
 #if SYNAP_CHAKSHU
   ChakshuMedia::Snapshot status;ChakshuMedia::copy(status);
-  ready=SYNAP_CAP_SETTINGS|status.ready;
+  ready|=status.ready;
   if (status.ready&SYNAP_CAP_CAMERA) ready|=SYNAP_CAP_VIDEO|SYNAP_CAP_PHOTO;
   if ((status.ready&(SYNAP_CAP_AUDIO|SYNAP_CAP_SD))==(SYNAP_CAP_AUDIO|SYNAP_CAP_SD)) ready|=SYNAP_CAP_SDAUDIO;
   sensor=status.sensor;

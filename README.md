@@ -21,7 +21,7 @@ Every production release is compiled in CI, published atomically, attested with 
 | --- | --- | --- | --- |
 | `esp32s3-fh4r2-qspi-4m` | **Synap Odyssey S3** | ESP32-S3 SuperMini | audio, settings, touch, battery, standby |
 | `esp32c3-supermini-4m` | **Synap Odyssey C3** | ESP32-C3 SuperMini | audio, settings, touch, battery, standby |
-| `xiao-esp32s3-sense-8m` | **Chakshu** | XIAO ESP32-S3 Sense | audio, camera, SD, settings, video, SD audio, photo |
+| `xiao-esp32s3-sense-8m` | **Chakshu** | XIAO ESP32-S3 Sense | audio, camera, SD, settings, touch, battery, standby, video, SD audio, photo |
 
 The Odyssey naming is a **display/product-name change only**. Existing target ids, BLE advertising identities, OTA product markers, manifest paths and update compatibility identifiers must remain stable so devices already in the field are not orphaned.
 
@@ -84,9 +84,18 @@ This avoids voice/media work racing the same serialized BLE, microphone, camera 
 
 Firmware now enforces the ownership boundary itself: any BLE connection stands the local wake engine down, and every BLE disconnect re-arms it, including unexpected out-of-range/browser drops where the PWA cannot send a release opcode. The PWA's voice on/off writes are session handoff signals rather than a persisted user preference. Physical verification of this reconnect path remains required.
 
-### SD and recording indicator pin ownership
+### Touch, battery and status indicator
 
-GPIO21 is both the onboard user LED and the Sense expansion-board SD chip-select. Firmware must not drive it from a status-light task, even to keep the LED off: that can interrupt an SD transaction. A separately controllable recording blink requires an external LED on a verified unused GPIO. The proposed onboard blink was withdrawn before release.
+The current Chakshu hardware revision extends the shared Odyssey power/status controls:
+
+- **TTP223 touch:** GPIO0, active high. It uses the shared double-tap recording/power-saver gestures and 4-second deep-sleep / wake hold.
+- **Battery ADC:** GPIO1 through the same 1 MΩ / 470 kΩ divider calibration used by Odyssey S3 (4130 mV cell ↔ 1320 mV ADC, 6 dB attenuation). Battery telemetry and critical-battery protection are enabled.
+- **Status NeoPixel:** external WS2812/NeoPixel on GPIO4 using the shared dim disconnected/connected/recording/OTA/low-battery patterns.
+- **SD chip-select remains GPIO21.** The Sense expansion-board orange/onboard path on GPIO21 is not a status LED and must never be driven by the status task.
+
+GPIO0 is an ESP32-S3 boot-strapping pin. Firmware only owns it after reset, so physical acceptance must verify cold boot/reset with the TTP223 released and touched; the hardware level during reset must not force the board into the ROM download path.
+
+While disconnected, an active Hey Snap listener prevents the normal idle auto-sleep timeout so offline voice remains available. An explicit 4-second touch hold can still enter deep sleep. Camera/SD work blocks standby/deep sleep until the active media operation finishes.
 
 Build **1400** preserves the BLE ownership/SD safeguards and adds the experimental audio/describe voice routes. Queued standalone actions are invalidated on BLE connection and rejected while connected. Already running captures retain safe file finalization.
 

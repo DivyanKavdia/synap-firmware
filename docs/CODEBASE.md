@@ -32,7 +32,7 @@ Arduino compile → OTA/factory artifacts → ota-releases
 
 - **Synap Odyssey S3** — target `esp32s3-fh4r2-qspi-4m`, module 1.
 - **Synap Odyssey C3** — target `esp32c3-supermini-4m`, module 2; GPIO8 is a NeoPixel driven through the shared RGB status engine.
-- **Chakshu** — target `xiao-esp32s3-sense-8m`, module 3; camera, SD, media transfer, Wi-Fi download and local voice live under `firmware/xiao-sense/`.
+- **Chakshu** — target `xiao-esp32s3-sense-8m`, module 3; camera, SD, media transfer, Wi-Fi download and local voice live under `firmware/xiao-sense/`; shared touch/battery/standby/status behavior is enabled on GPIO0/GPIO1/GPIO4.
 
 Display names are not compatibility IDs. Do not rename target IDs, product markers, manifest paths or BLE advertising identities as part of branding work.
 
@@ -59,7 +59,7 @@ Chakshu-specific files own:
 - Wi-Fi downloads;
 - TinyML voice contract/runtime/model.
 
-GPIO21 is reserved by the Sense SD path and is not a semantic status LED.
+GPIO21 is reserved by the Sense SD path and is not a semantic status LED. The hardware status NeoPixel is GPIO4; TTP223 is GPIO0 and the S3-style 1 MΩ / 470 kΩ battery divider is read on GPIO1. GPIO0 remains a reset-time strapping risk that must be covered by physical boot acceptance.
 
 ## Build and test
 

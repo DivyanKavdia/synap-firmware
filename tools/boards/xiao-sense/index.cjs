@@ -1,5 +1,5 @@
 'use strict';
-const {replaceOnce,replaceFunctionBlock,readTemplate}=require('../../target-source.cjs');
+const {replaceOnce,readTemplate}=require('../../target-source.cjs');
 const {materializeBle}=require('./ble.cjs');
 function materializeChakshu(source,target) {
   let out=source;
@@ -11,11 +11,6 @@ function materializeChakshu(source,target) {
   replace('    otaSession.packet(message.data,message.length,millis(),generation,',
     '    ChakshuResources::Lease admission;\n    otaSession.packet(message.data,message.length,millis(),generation,','Reserve OTA transition');
   replace('      || mediaBusy()','      || !admission','OTA admission result');
-  replace('#include <Adafruit_NeoPixel.h>','','No external LED');
-  replace('Adafruit_NeoPixel statusLed(1, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);','','No camera-pin LED');
-  out=out.split('statusLed.clear();statusLed.show();').join('/* No external LED on Chakshu. */');
-  out=replaceFunctionBlock(out,'void updateStatusLed(bool force) {','void setDeviceState(',
-    'void updateStatusLed(bool force) { (void)force; }\n\n','No external indicator');
   const stopStart=out.indexOf('void stopStreaming(ErrorCode reason) {');
   const stopEnd=out.indexOf('bool configureTransportFromPeerMtu() {',stopStart);
   if(stopStart<0 || stopEnd<0)throw Error('Missing BLE stop boundary');
@@ -23,16 +18,6 @@ function materializeChakshu(source,target) {
   out=out.slice(0,stopStart)+stop+out.slice(stopEnd);
   replace('applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu());',
     'applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu() || mediaBusy() || ChakshuVoice::active());','Camera/voice CPU profile');
-  // Remove touch wake/sleep implementations, including durable wake gates from another board.
-  out=replaceFunctionBlock(out,'bool armTouchWakeSource() {','void publishPowerEvent(',
-    'bool armTouchWakeSource() { return false; }\nvoid armTouchWakeAndSleep() {}\nbool confirmTouchWakeGesture() { return true; }\n\n','Always-awake boot');
-  out=replaceFunctionBlock(out,'void enterDeepSleep(const char* reason) {','void updateStatusCharacteristic(',
-    'void enterDeepSleep(const char* reason) { (void)reason; }\nvoid powerTick() {}\nvoid pollTouchControl() {}\n\n','No touch or automatic sleep');
-  // Initialization must not touch GPIO8 (SD MISO), GPIO13 (camera clock), or GPIO48 (camera data).
-  const bootStart=out.indexOf('  bootSleepWasLocked=readDurableSleepLock()');
-  const bootEnd=out.indexOf('  disconnectedAt=millis();',bootStart);
-  if (bootStart<0 || bootEnd<0) throw Error('Missing Chakshu hardware setup boundary');
-  out=out.slice(0,bootStart)+'  bootSleepWasLocked=false;\n  delay(400);\n'+out.slice(bootEnd);
   replace('    microphoneI2S.setPins(I2S_BCLK_PIN, I2S_WS_PIN, -1, I2S_DATA_IN_PIN);',
     `    microphoneI2S.setPinsPdmRx(${target.hardware.clock},${target.hardware.data});`,'Onboard PDM pins');
   replace('microphoneReady=microphoneI2S.begin(I2S_MODE_STD, SAMPLE_RATE,\n      I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);',
@@ -50,9 +35,14 @@ function materializeChakshu(source,target) {
   // copy of completed PCM frames and cannot alter transport bytes.
   replace('  return true;\n}\nvoid acquisitionTask',
     '  ChakshuVoice::feed(frame.samples,SAMPLES_PER_FRAME);\n  return true;\n}\nvoid acquisitionTask','Copy streamed PCM to command recognizer');
-  if (out.includes('statusLed.') || out.includes('pinMode(TOUCH_INPUT_PIN') ||
-      out.includes('analogSetPinAttenuation(') || out.includes('esp_deep_sleep_start()'))
-    throw Error('Chakshu still accesses absent hardware');
+  if (!out.includes('#define SYNAP_TOUCH_PIN 0') ||
+      !out.includes('#define SYNAP_BATTERY_ADC_PIN 1') ||
+      !out.includes('constexpr uint8_t RGB_LED_PIN = 4;') ||
+      !out.includes('Adafruit_NeoPixel statusLed(1, RGB_LED_PIN') ||
+      !out.includes('pinMode(TOUCH_INPUT_PIN, INPUT)') ||
+      !out.includes('analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_6db)') ||
+      !out.includes('esp_deep_sleep_start()'))
+    throw Error('Chakshu touch, battery, NeoPixel or sleep materialization is incomplete');
   replace('  ChakshuMedia::initialize();',
     '  const uint32_t mediaStarted=millis();\n  ChakshuMedia::initialize();\n  ChakshuLink::mediaBootMs=millis()-mediaStarted;\n  // TinyML remains deferred: BLE/OTA/media initialize first; no external model is loaded.','Measure media boot cost without blocking BLE on local voice');
   replace('    ChakshuMedia::tick();','    ChakshuMedia::tick();\n    ChakshuVoice::tick();','Dispatch local voice commands');

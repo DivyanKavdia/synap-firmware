@@ -102,9 +102,6 @@ class DiagnosticsCallbacks : public BLECharacteristicCallbacks {
 };
 
 void processCommand(uint8_t command, uint8_t version) {
-#if SYNAP_CHAKSHU
-  if (command==CMD_STANDBY) { publishPowerEvent(POWER_STATE_AWAKE);updateStatusCharacteristic(true);return; }
-#endif
   if (sleepPending) return;
   if (!deviceConnected.load()) {
     if(command==CMD_STOP && streamingEnabled.load()) {

@@ -121,6 +121,9 @@
         "camera",
         "sd",
         "settings",
+        "touch",
+        "battery",
+        "standby",
         "video",
         "sdAudio",
         "photo"
@@ -129,13 +132,17 @@
         "microphone": "pdm",
         "clock": 42,
         "data": 41,
-        "touch": null,
-        "battery": null,
-        "led": null,
-        "ledDriver": "none",
+        "touch": 0,
+        "battery": 1,
+        "led": 4,
+        "ledDriver": "neopixel",
         "idleMHz": 240,
         "activeMHz": 240,
-        "batteryCutoff": false
+        "batteryCutoff": true,
+        "batteryAdcMv": 1320,
+        "batteryCellMv": 4130,
+        "batteryFullMv": 4130,
+        "batteryAttenuation": "ADC_6db"
       },
       "protocols": {
         "media": 1,

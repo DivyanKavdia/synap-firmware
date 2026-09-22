@@ -32,7 +32,7 @@ portMUX_TYPE stateMux=portMUX_INITIALIZER_UNLOCKED;
 uint32_t serial=0,lastAt=0;uint8_t lastCommand=0,lastResult=0;uint16_t lastValue=0;
 Gate gate;
 
-bool ownershipAllowsVoice(){return enabled.load()&&!linkStandDown.load()&&!deviceConnected.load();}
+bool ownershipAllowsVoice(){return enabled.load()&&!linkStandDown.load()&&!deviceConnected.load()&&!sleepPending;}
 bool active(){return status.load()==LISTENING&&ownershipAllowsVoice()&&ring&&workerHandle;}
 void refreshRuntimeStatus(){
   if(workerHandle)status=ownershipAllowsVoice()?LISTENING:VOICE_DISABLED;

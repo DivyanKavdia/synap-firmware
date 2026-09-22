@@ -5,7 +5,7 @@ bool armTouchWakeSource() {
   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
   rtc_gpio_init(static_cast<gpio_num_t>(TOUCH_INPUT_PIN));
   rtc_gpio_set_direction(static_cast<gpio_num_t>(TOUCH_INPUT_PIN), RTC_GPIO_MODE_INPUT_ONLY);
-  // TTP223 drives GPIO13 push-pull. Do not bias the line from the ESP while asleep.
+  // TTP223 drives the configured touch GPIO push-pull. Do not bias the line from the ESP while asleep.
   rtc_gpio_pullup_dis(static_cast<gpio_num_t>(TOUCH_INPUT_PIN));
   rtc_gpio_pulldown_dis(static_cast<gpio_num_t>(TOUCH_INPUT_PIN));
   wakeError=esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(TOUCH_INPUT_PIN),1);
@@ -126,6 +126,9 @@ bool exitRemoteStandby() {
 void enterRemoteStandby() {
   if (sleepPending) return;
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
+#if SYNAP_CHAKSHU
+  if (mediaBusy()) { updateStatusCharacteristic(true); return; }
+#endif
   if (streamingEnabled.load()) stopStreaming();
   remoteStandby=true;
 #if USE_REAL_I2S_MIC
@@ -141,6 +144,9 @@ void enterRemoteStandby() {
 
 void enterDeepSleep(const char* reason) {
   if (otaBusy() || streamingEnabled.load() || sleepPending) return;
+#if SYNAP_CHAKSHU
+  if (mediaBusy()) return;
+#endif
   if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) return;
 
   const uint32_t initialReleaseAt=millis();
@@ -225,6 +231,9 @@ void powerTick() {
     return;
   }
   if (!deviceConnected.load() && !streamingEnabled.load() && !otaBusy() &&
+#if SYNAP_CHAKSHU
+      !ChakshuVoice::active() &&
+#endif
       disconnectedAt && uint32_t(millis()-disconnectedAt)>=AUTO_SLEEP_DISCONNECTED_MS) {
     enterDeepSleep("disconnected-timeout");
   }

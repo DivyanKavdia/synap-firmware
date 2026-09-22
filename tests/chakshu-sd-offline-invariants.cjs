@@ -18,7 +18,7 @@ test('Chakshu SD remains the durable offline inbox without capture-time remounts
 
   // A connected PWA is the sole capture owner. Local/voice SD requests are
   // rejected as soon as BLE owns the device, preventing two writers.
-  assert.match(voice,/ownershipAllowsVoice\(\)\{return enabled\.load\(\)&&!linkStandDown\.load\(\)&&!deviceConnected\.load\(\);\}/);
+  assert.match(voice,/ownershipAllowsVoice\(\)\{return enabled\.load\(\)&&!linkStandDown\.load\(\)&&!deviceConnected\.load\(\)&&!sleepPending;\}/);
   assert.match(transfer,/if\(request\.local&&\(deviceConnected\.load\(\)\|\|request\.localEpoch!=localEpoch\.load\(\)\)\)continue;/);
   assert.match(transfer,/if\(!request\.local\)\{replyFor\(request,ChakshuMedia::BAD_COMMAND\);continue;\}/);
 

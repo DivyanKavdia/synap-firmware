@@ -7,7 +7,7 @@ const fs=require('node:fs'),path=require('node:path');
 test('canonical modules reproduce the distributable source byte for byte',()=>{
   assert.equal(assemble(),fs.readFileSync(path.join(__dirname,'../synap_esp32s3/synap_esp32s3.ino'),'utf8'));
 });
-test('Chakshu uses onboard PDM and does not configure absent hardware',()=>{
+test('Chakshu uses onboard PDM plus configured touch, battery and NeoPixel hardware',()=>{
   const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
   assert.match(source,/#define SYNAP_MODULE_ID 3/);
   assert.match(source,/#define DEVICE_NAME "synap-Chakshu"/);
@@ -15,13 +15,30 @@ test('Chakshu uses onboard PDM and does not configure absent hardware',()=>{
   assert.match(source,/I2S_MODE_PDM_RX, SAMPLE_RATE,\s+I2S_DATA_BIT_WIDTH_16BIT/);
   assert.match(source,/static int16_t raw\[SAMPLES_PER_FRAME\]/);
   assert.match(source,/const int32_t sample=raw\[i\];/);
-  assert.doesNotMatch(source,/statusLed\.|digitalRead\(TOUCH_INPUT_PIN|pinMode\(TOUCH_INPUT_PIN|analogSetPinAttenuation|esp_deep_sleep_start\(/);
+  assert.match(source,/#define SYNAP_TOUCH_PIN 0/);
+  assert.match(source,/#define SYNAP_BATTERY_ADC_PIN 1/);
+  assert.match(source,/#define SYNAP_BATTERY_MONITOR_ENABLE 1/);
+  assert.match(source,/#define SYNAP_BATTERY_ENFORCE 1/);
+  assert.match(source,/#define SYNAP_BATTERY_SCALE_NUMERATOR 4130/);
+  assert.match(source,/#define SYNAP_BATTERY_SCALE_DENOMINATOR 1320/);
+  assert.match(source,/constexpr uint8_t RGB_LED_PIN = 4;/);
+  assert.match(source,/pinMode\(TOUCH_INPUT_PIN, INPUT\)/);
+  assert.match(source,/pinMode\(BATTERY_ADC_PIN, INPUT\)/);
+  assert.match(source,/analogSetPinAttenuation\(BATTERY_ADC_PIN, ADC_6db\)/);
+  assert.match(source,/statusLed\.begin\(\)/);
+  assert.match(source,/esp_deep_sleep_start\(\)/);
+  assert.match(source,/#define SYNAP_SUPPORTED_CAPABILITIES 1023/);
   assert.match(source,/constexpr uint8_t SD_SCK=7,SD_MISO=8,SD_MOSI=9,SD_CS=21/);
   assert.match(source,/SPI\.begin\(SD_SCK,SD_MISO,SD_MOSI,SD_CS\)/);
   assert.match(source,/config.pin_d7=48/);
   assert.match(source,/SYNAP-CHAKSHU-OTA-ID-V3/);
   assert.doesNotMatch(source,/SYNAP-ESP32S3-OTA-ID-V3/);
   assert.match(source,/if \(!mediaBusy\(\) && !ChakshuVoice::active\(\)\) stopMicrophone\(\)/);
+  const commands=source.slice(source.indexOf('void processCommand(uint8_t command'),source.indexOf('void reconcileConnection()'));
+  assert.match(commands,/case CMD_STANDBY:[\s\S]*enterRemoteStandby\(\)/);
+  assert.doesNotMatch(commands,/command==CMD_STANDBY[\s\S]*POWER_STATE_AWAKE/);
+  assert.match(source,/if \(mediaBusy\(\)\) \{ updateStatusCharacteristic\(true\); return; \}/);
+  assert.match(source,/!ChakshuVoice::active\(\)[\s\S]*AUTO_SLEEP_DISCONNECTED_MS/);
 });
 test('Chakshu keeps separate release paths, OTA marker and the deployed default 8MB slots',()=>{
   const target=getTarget('xiao-esp32s3-sense-8m');
