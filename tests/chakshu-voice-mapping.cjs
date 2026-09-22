@@ -134,3 +134,15 @@ test('BLE owns Chakshu while connected and every disconnect re-arms standalone v
   assert.doesNotMatch(callback, /Preferences|persistEnabled|enabled=op==1/);
   assert.match(voice, /bytes\[3\]=ownershipAllowsVoice\(\)\?1:0/);
 });
+
+test('touch audio toggle starts and stops only standalone SD audio', () => {
+  const voice = fs.readFileSync('firmware/xiao-sense/voice.cpp', 'utf8');
+  const start=voice.indexOf('bool touchAudioToggle()');
+  const end=voice.indexOf('void mediaCompleted(',start);
+  assert(start>=0&&end>start);
+  const toggle=voice.slice(start,end);
+  assert.match(toggle,/deviceConnected\.load\(\)\|\|sleepPending\|\|otaBusy\(\)/);
+  assert.match(toggle,/if\(offline\.load\(\)\)[\s\S]*stopRequested\.store\(true\)/);
+  assert.match(toggle,/queueLocal\(10,0u\)/);
+  assert.match(toggle,/ChakshuStorage::ready/);
+});

@@ -35,5 +35,6 @@ void tick();
 void mediaCompleted(uint8_t operation,uint8_t error);
 void linkConnected();
 void linkDisconnected();
+bool touchAudioToggle();
 void ble(BLEService* service);
 }

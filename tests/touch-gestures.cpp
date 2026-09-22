@@ -19,6 +19,8 @@ using esp_sleep_wakeup_cause_t=int;
 uint32_t clockMs=1000,touchChangedAt=0,touchPressedAt=0;
 bool input=false,touchRawState=false,touchStableState=false;
 bool remoteStandby=false,sleepPending=false,busy=false;
+std::atomic<uint32_t> touchTransitions{0},touchActions{0};
+std::atomic<uint16_t> touchLastHoldMs{0};
 std::atomic<bool> deviceConnected{true},streamingEnabled{false};
 std::atomic<uint32_t> connectionGeneration{1};
 bool durableLock=false,bootSleepWasLocked=false,clearSucceeds=true;
@@ -54,6 +56,7 @@ enum class EventType { COMMAND };
 std::atomic<uint32_t> streamGeneration{1};
 void queueEvent(EventType,uint8_t cmd,uint8_t,uint32_t){commands.push_back(cmd);}
 void drain(){for(auto cmd:commands)processCommand(cmd,PROTOCOL_VERSION);commands.clear();}
+namespace ChakshuVoice { bool touchAudioToggle(){return false;} }
 // INSERT WAKE
 // INSERT POLL
 void advance(uint32_t duration,bool level,bool consumeCommands=true){

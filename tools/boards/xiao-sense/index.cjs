@@ -26,6 +26,9 @@ function materializeChakshu(source,target) {
   replace('    const int32_t sample=raw[i] >> 16;','    const int32_t sample=raw[i];','Preserve onboard PCM samples');
   replace('// SYNAP_BOARD_FEATURES',
     ['voice-contract.cpp','tiny-voice-model.h','camera.cpp','sd-storage.cpp','media.cpp','media-buffers.cpp','sd-recording.cpp','wifi-downloads.cpp','media-transfer.cpp','voice.cpp'].map(name=>readTemplate('xiao-sense',name)).join('\n'),'Camera, SD and local voice drivers');
+  replace('std::atomic<bool> batteryAvailable{false};',
+    'std::atomic<bool> batteryAvailable{false};\nstd::atomic<uint32_t> touchTransitions{0},touchActions{0};\nstd::atomic<uint16_t> touchLastHoldMs{0};',
+    'Retain Chakshu hardware input evidence');
   // SD owns the PDM reader while offline recording. Feed the recognizer the
   // exact PCM copy already captured for the WAV, never a competing microphone read.
   replace('if(slot->size){s.capturedBytes.fetch_add(slot->size);s.audio.publish();}',
@@ -35,11 +38,22 @@ function materializeChakshu(source,target) {
   // copy of completed PCM frames and cannot alter transport bytes.
   replace('  return true;\n}\nvoid acquisitionTask',
     '  ChakshuVoice::feed(frame.samples,SAMPLES_PER_FRAME);\n  return true;\n}\nvoid acquisitionTask','Copy streamed PCM to command recognizer');
+  replace("  pinMode(TOUCH_INPUT_PIN, INPUT);","  pinMode(TOUCH_INPUT_PIN, INPUT_PULLDOWN);","Stabilize TTP223 input after boot");
+  replace("  statusLed.begin();\n  statusLed.clear();\n  statusLed.show();","  pinMode(RGB_LED_PIN,OUTPUT);\n  digitalWrite(RGB_LED_PIN,LOW);\n  delay(2);\n  statusLed.begin();\n  statusLed.clear();\n  statusLed.show();\n  delay(1);\n  statusLed.clear();\n  statusLed.show();","Force external NeoPixel dark at startup");
+  replace("  statusLed.setPixelColor(0,statusLed.Color(r,g,b));\n  statusLed.show();","  statusLed.clear();\n  if(pattern)statusLed.setPixelColor(0,statusLed.Color(r,g,b));\n  statusLed.show();","Clear stale NeoPixel state before every pattern");
+  replace("  } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {","  } else if (mediaBusy()) {\n    if (now%900u<90u) g=LED_DIM+2;\n  } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {","Show Chakshu media activity on NeoPixel");
+  replace("  (void)analogRead(BATTERY_ADC_PIN);\n  delayMicroseconds(1200);\n  uint32_t mvTotal=0, rawTotal=0;\n  for (uint8_t i=0;i<16;++i) {","  for(uint8_t warmup=0;warmup<4;++warmup){(void)analogRead(BATTERY_ADC_PIN);delayMicroseconds(500);}\n  delayMicroseconds(3000);\n  constexpr uint8_t BATTERY_SAMPLE_COUNT=24;\n  uint32_t mvTotal=0, rawTotal=0;\n  for (uint8_t i=0;i<BATTERY_SAMPLE_COUNT;++i) {","Settle high-impedance Chakshu battery divider");
+  replace("  const uint32_t adcMv=mvTotal/16u;\n  const uint32_t adcRaw=rawTotal/16u;","  const uint32_t adcMv=mvTotal/BATTERY_SAMPLE_COUNT;\n  const uint32_t adcRaw=rawTotal/BATTERY_SAMPLE_COUNT;","Average settled Chakshu ADC samples");
+  replace("  if (raw!=touchRawState) { touchRawState=raw; touchChangedAt=now; }","  if (raw!=touchRawState) { touchRawState=raw; touchChangedAt=now; ++touchTransitions; Serial.printf(\"[TOUCH] gpio=%u raw=%u transitions=%lu\\\\n\",unsigned(TOUCH_INPUT_PIN),raw?1u:0u,(unsigned long)touchTransitions.load()); }","Track TTP223 transitions");
+  replace("    const uint32_t held=touchPressedAt ? uint32_t(now-touchPressedAt) : 0;\n    touchPressedAt=0;","    const uint32_t held=touchPressedAt ? uint32_t(now-touchPressedAt) : 0;\n    touchLastHoldMs=uint16_t(held>65535u?65535u:held);\n    touchPressedAt=0;","Track TTP223 hold time");
+  replace("      Serial.println(\"[TOUCH] long press -> DEEP SLEEP\");","      ++touchActions;\n      Serial.println(\"[TOUCH] long press -> DEEP SLEEP\");","Count long-press touch action");
+  replace("    touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;\n    if (streamingEnabled.load()) {","    touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;\n    ++touchActions;\n    if (streamingEnabled.load()) {","Count double-tap touch action");
+  replace("    } else if (deviceConnected.load()) {\n      Serial.println(remoteStandby ? \"[TOUCH] double tap standby -> START\" : \"[TOUCH] double tap -> START\");\n      queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,streamGeneration.load());\n    }","    } else if (deviceConnected.load()) {\n      Serial.println(remoteStandby ? \"[TOUCH] double tap standby -> START\" : \"[TOUCH] double tap -> START\");\n      queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,streamGeneration.load());\n    } else if (ChakshuVoice::touchAudioToggle()) {\n      Serial.println(\"[TOUCH] double tap -> OFFLINE SD AUDIO TOGGLE\");\n    }","Route disconnected touch to SD audio");
   if (!out.includes('#define SYNAP_TOUCH_PIN 0') ||
       !out.includes('#define SYNAP_BATTERY_ADC_PIN 1') ||
       !out.includes('constexpr uint8_t RGB_LED_PIN = 4;') ||
       !out.includes('Adafruit_NeoPixel statusLed(1, RGB_LED_PIN') ||
-      !out.includes('pinMode(TOUCH_INPUT_PIN, INPUT)') ||
+      !out.includes('pinMode(TOUCH_INPUT_PIN, INPUT_PULLDOWN)') ||
       !out.includes('analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_6db)') ||
       !out.includes('esp_deep_sleep_start()'))
     throw Error('Chakshu touch, battery, NeoPixel or sleep materialization is incomplete');

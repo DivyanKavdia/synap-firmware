@@ -296,6 +296,19 @@ bool queueLocal(uint8_t operation,uint32_t offset=0){
   if(offline.load())stopRequested.store(true);
   return true;
 }
+bool touchAudioToggle(){
+  using namespace ChakshuTransfer;
+  if(deviceConnected.load()||sleepPending||otaBusy())return false;
+  if(offline.load()){
+    stopRequested.store(true);
+    Serial.println("[TOUCH] offline audio stop requested");
+    return true;
+  }
+  if(!ChakshuStorage::ready||streamingEnabled.load()||remoteStandby)return false;
+  const bool queued=queueLocal(10,0u);
+  if(queued)Serial.println("[TOUCH] offline audio start queued");
+  return queued;
+}
 void mediaCompleted(uint8_t operation,uint8_t error){
   uint8_t command=0;
   if(operation==11)command=photoCompletionCommand.exchange(PHOTO);

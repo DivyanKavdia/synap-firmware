@@ -22,10 +22,13 @@ test('Chakshu uses onboard PDM plus configured touch, battery and NeoPixel hardw
   assert.match(source,/#define SYNAP_BATTERY_SCALE_NUMERATOR 4130/);
   assert.match(source,/#define SYNAP_BATTERY_SCALE_DENOMINATOR 1320/);
   assert.match(source,/constexpr uint8_t RGB_LED_PIN = 4;/);
-  assert.match(source,/pinMode\(TOUCH_INPUT_PIN, INPUT\)/);
+  assert.match(source,/pinMode\(TOUCH_INPUT_PIN, INPUT_PULLDOWN\)/);
   assert.match(source,/pinMode\(BATTERY_ADC_PIN, INPUT\)/);
   assert.match(source,/analogSetPinAttenuation\(BATTERY_ADC_PIN, ADC_6db\)/);
+  assert.match(source,/pinMode\(RGB_LED_PIN,OUTPUT\)/);
+  assert.match(source,/digitalWrite\(RGB_LED_PIN,LOW\)/);
   assert.match(source,/statusLed\.begin\(\)/);
+  assert.match(source,/statusLed\.clear\(\);\s*if\(pattern\)statusLed\.setPixelColor/);
   assert.match(source,/esp_deep_sleep_start\(\)/);
   assert.match(source,/#define SYNAP_SUPPORTED_CAPABILITIES 1023/);
   assert.match(source,/constexpr uint8_t SD_SCK=7,SD_MISO=8,SD_MOSI=9,SD_CS=21/);
@@ -39,6 +42,12 @@ test('Chakshu uses onboard PDM plus configured touch, battery and NeoPixel hardw
   assert.doesNotMatch(commands,/command==CMD_STANDBY[\s\S]*POWER_STATE_AWAKE/);
   assert.match(source,/if \(mediaBusy\(\)\) \{ updateStatusCharacteristic\(true\); return; \}/);
   assert.match(source,/!ChakshuVoice::active\(\)[\s\S]*AUTO_SLEEP_DISCONNECTED_MS/);
+  assert.match(source,/ChakshuVoice::touchAudioToggle\(\)/);
+  assert.match(source,/BATTERY_SAMPLE_COUNT=24/);
+  assert.match(source,/DIAGNOSTICS_VERSION = 5/);
+  assert.match(source,/uint8_t value\[112\]/);
+  assert.match(source,/value\[84\]=digitalRead\(TOUCH_INPUT_PIN\)/);
+  assert.match(source,/put32le\(value\+100,touchTransitions\.load\(\)\)/);
 });
 test('Chakshu keeps separate release paths, OTA marker and the deployed default 8MB slots',()=>{
   const target=getTarget('xiao-esp32s3-sense-8m');
