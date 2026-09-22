@@ -134,7 +134,7 @@ No detection or recovery path formats the card or silently replays a failed capt
 
 ### Failure diagnostics
 
-Failed SD media responses may include bounded diagnostics. In build 1368, `sdClockHz` reports the **clock attempted by the current mount try**, not a previously successful/default value; `sdMountStage` distinguishes low-level `bus` failure from `no-card` when the bus responds but no card is detected:
+Failed SD media responses may include bounded diagnostics. In the current recovery contract, `sdClockHz` reports the **clock attempted by the current mount try**, not a previously successful/default value; `sdMountStage` distinguishes low-level `bus` failure from `no-card` when the bus responds but no card is detected:
 
 - `sdReady`
 - `sdClockHz`
