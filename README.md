@@ -6,12 +6,12 @@ This repository owns production firmware for the Synap wearable family.
 
 ## Release and source status
 
-- **Current production release:** Synap OS build **1402** (`synap-os1-build1402`).
-- **Production source:** `e63af76e2c8a764109f4d572d26b4b71ce7787c7`.
+- **Current production release:** Synap OS build **1406** (`synap-os1-build1406`).
+- **Production source:** `975759cf869fc9aff6f9929eea4f6005b5e18aca`.
 - **Current development baseline:** `main`.
 - **Release channel:** `ota-releases`.
 - **Production targets:** Synap Odyssey S3, Synap Odyssey C3 and Chakshu.
-- Build 1402 retains the build-1400 personalized model and runtime unchanged. This release fixes the eight-class training pipeline and records a synthetic-only candidate that was not promoted. Build 1400 introduced the hardened Chakshu SD boot/re-detection and BLE-exclusive Hey Snap ownership path, and adds the explicitly experimental 8-class personalized TinyML field model plus the offline Describe capture lifecycle. The OTA feed remains authoritative for what is installable on a physical device.
+- Build 1406 retains the current experimental eight-class Chakshu voice model and the hardened SD/Hey Snap lifecycle, and extends Chakshu with the shared Odyssey touch, battery, standby and status-indicator controls on GPIO0/GPIO1/GPIO4. The OTA feed remains authoritative for what is installable on a physical device.
 
 Every production release is compiled in CI, published atomically, attested with GitHub OIDC provenance and checked through the public firmware feed for digests, provenance and browser CORS.
 
@@ -243,7 +243,7 @@ The current hardware acceptance list is:
 - Sync to app followed by verified source deletion,
 - complete device → PWA → transcript → memory flow.
 
-Build **1402** is the current production hardware baseline, retaining the build-1400 personalized model and runtime. Physical testing should record the installed build explicitly and compare device logs against this README before attributing behavior to current source. A later `main` commit is not a device behavior until it is published through the OTA feed and installed.
+Build **1406** is the current production hardware baseline. It retains the build-1400 personalized voice model while adding the Chakshu GPIO0 touch, GPIO1 battery ADC and GPIO4 NeoPixel hardware profile. Physical testing should record the installed build explicitly and compare device logs against this README before attributing behavior to current source. A later `main` commit is not a device behavior until it is published through the OTA feed and installed.
 
 ## Live-source cleanup policy
 
