@@ -117,10 +117,11 @@ int main(){
 
 test('only Chakshu extends diagnostics and uses a fixed 20 ms advertising interval',()=>{
   const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
-  assert.match(source,/DIAGNOSTICS_VERSION = 4/);
-  assert.match(source,/uint8_t value\[84\] = \{\}/);
+  assert.match(source,/DIAGNOSTICS_VERSION = 5/);
+  assert.match(source,/uint8_t value\[112\] = \{\}/);
   assert.match(source,/reconcileConnection\(\);\s+serviceChakshuLink\(\);/);
   assert.match(source,/ChakshuLink::append\(value,deviceConnected.load\(\)/);
+  assert.match(source,/value\[97\]=TOUCH_INPUT_PIN;value\[98\]=BATTERY_ADC_PIN;value\[99\]=RGB_LED_PIN/);
   assert.match(source,/command==CMD_GET_STATUS && version==PROTOCOL_VERSION\) ChakshuLink::statusSeen=true/);
   assert.match(source,/setMinInterval\(32\)/);assert.match(source,/setMaxInterval\(32\)/);
   for(const target of ['esp32s3-fh4r2-qspi-4m','esp32c3-supermini-4m']){
