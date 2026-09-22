@@ -94,6 +94,11 @@ A firmware runtime file is removable only when it is absent from:
 
 At this review every production runtime module is reachable from the materialization graph, so no firmware runtime file was removed.
 
-Manual training/release tools are intentionally not runtime-reachable. They remain because they are the supported way to reproduce models or publish releases.
+The non-runtime tools are also intentional:
+- `tools/train-tiny-voice.py` and `tools/test-train-tiny-voice.py` reproduce and validate experimental Chakshu voice candidates;
+- release/feed/patch tools are invoked by the production firmware workflow;
+- target-source/materialization helpers are required to derive C3 and Chakshu sources from the reviewed shared baseline.
+
+The companion PWA has its own reachability/cleanup policy in [its development guide](https://github.com/DivyanKavdia/synap-pwa/blob/main/docs/DEVELOPMENT.md). Device/PWA responsibilities must stay separated: firmware owns disconnected capture; the PWA owns connected capture, verified SD import/deletion and cloud-derived memory surfaces.
 
 Git history is the rollback store; do not keep retired production implementations beside their replacements.
