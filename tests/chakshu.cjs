@@ -15,13 +15,13 @@ test('Chakshu uses onboard PDM plus configured touch, battery and NeoPixel hardw
   assert.match(source,/I2S_MODE_PDM_RX, SAMPLE_RATE,\s+I2S_DATA_BIT_WIDTH_16BIT/);
   assert.match(source,/static int16_t raw\[SAMPLES_PER_FRAME\]/);
   assert.match(source,/const int32_t sample=raw\[i\];/);
-  assert.match(source,/#define SYNAP_TOUCH_PIN 0/);
-  assert.match(source,/#define SYNAP_BATTERY_ADC_PIN 1/);
+  assert.match(source,/#define SYNAP_TOUCH_PIN 1/);
+  assert.match(source,/#define SYNAP_BATTERY_ADC_PIN 2/);
   assert.match(source,/#define SYNAP_BATTERY_MONITOR_ENABLE 1/);
   assert.match(source,/#define SYNAP_BATTERY_ENFORCE 1/);
   assert.match(source,/#define SYNAP_BATTERY_SCALE_NUMERATOR 4130/);
   assert.match(source,/#define SYNAP_BATTERY_SCALE_DENOMINATOR 1320/);
-  assert.match(source,/constexpr uint8_t RGB_LED_PIN = 4;/);
+  assert.match(source,/constexpr uint8_t RGB_LED_PIN = 5;/);
   assert.match(source,/pinMode\(TOUCH_INPUT_PIN, INPUT_PULLDOWN\)/);
   assert.match(source,/pinMode\(BATTERY_ADC_PIN, INPUT\)/);
   assert.match(source,/analogSetPinAttenuation\(BATTERY_ADC_PIN, ADC_6db\)/);

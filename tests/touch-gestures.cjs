@@ -7,7 +7,7 @@ const source=fs.readFileSync(path.join(__dirname,'../synap_esp32s3/synap_esp32s3
 for (const {target,c3,pin} of [
   {target:'esp32s3-fh4r2-qspi-4m',c3:false,pin:13},
   {target:'esp32c3-supermini-4m',c3:true,pin:3},
-  {target:'xiao-esp32s3-sense-8m',c3:false,pin:0},
+  {target:'xiao-esp32s3-sense-8m',c3:false,pin:1},
 ]) {
   test(`${target} validates immediate double taps and four-second sleep/wake holds`,()=>{
     const code=materialize(source,target);

@@ -49,9 +49,9 @@ function materializeChakshu(source,target) {
   replace("      Serial.println(\"[TOUCH] long press -> DEEP SLEEP\");","      ++touchActions;\n      Serial.println(\"[TOUCH] long press -> DEEP SLEEP\");","Count long-press touch action");
   replace("    touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;\n    if (streamingEnabled.load()) {","    touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;\n    ++touchActions;\n    if (streamingEnabled.load()) {","Count double-tap touch action");
   replace("    } else if (deviceConnected.load()) {\n      Serial.println(remoteStandby ? \"[TOUCH] double tap standby -> START\" : \"[TOUCH] double tap -> START\");\n      queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,streamGeneration.load());\n    }","    } else if (deviceConnected.load()) {\n      Serial.println(remoteStandby ? \"[TOUCH] double tap standby -> START\" : \"[TOUCH] double tap -> START\");\n      queueEvent(EventType::COMMAND,CMD_START,PROTOCOL_VERSION,streamGeneration.load());\n    } else if (ChakshuVoice::touchAudioToggle()) {\n      Serial.println(\"[TOUCH] double tap -> OFFLINE SD AUDIO TOGGLE\");\n    }","Route disconnected touch to SD audio");
-  if (!out.includes('#define SYNAP_TOUCH_PIN 0') ||
-      !out.includes('#define SYNAP_BATTERY_ADC_PIN 1') ||
-      !out.includes('constexpr uint8_t RGB_LED_PIN = 4;') ||
+  if (!out.includes('#define SYNAP_TOUCH_PIN 1') ||
+      !out.includes('#define SYNAP_BATTERY_ADC_PIN 2') ||
+      !out.includes('constexpr uint8_t RGB_LED_PIN = 5;') ||
       !out.includes('Adafruit_NeoPixel statusLed(1, RGB_LED_PIN') ||
       !out.includes('pinMode(TOUCH_INPUT_PIN, INPUT_PULLDOWN)') ||
       !out.includes('analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_6db)') ||

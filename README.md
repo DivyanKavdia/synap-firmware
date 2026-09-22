@@ -11,7 +11,7 @@ This repository owns production firmware for the Synap wearable family.
 - **Current development baseline:** `main`.
 - **Release channel:** `ota-releases`.
 - **Production targets:** Synap Odyssey S3, Synap Odyssey C3 and Chakshu.
-- Build 1406 retains the current experimental eight-class Chakshu voice model and the hardened SD/Hey Snap lifecycle, and extends Chakshu with the shared Odyssey touch, battery, standby and status-indicator controls on GPIO0/GPIO1/GPIO4. The OTA feed remains authoritative for what is installable on a physical device.
+- Build 1406 retains the current experimental eight-class Chakshu voice model and the hardened SD/Hey Snap lifecycle, and extends Chakshu with the shared Odyssey touch, battery, standby and status-indicator controls on GPIO1/GPIO2/GPIO5. The OTA feed remains authoritative for what is installable on a physical device.
 
 Every production release is compiled in CI, published atomically, attested with GitHub OIDC provenance and checked through the public firmware feed for digests, provenance and browser CORS.
 
@@ -88,12 +88,11 @@ Firmware now enforces the ownership boundary itself: any BLE connection stands t
 
 The current Chakshu hardware revision extends the shared Odyssey power/status controls:
 
-- **TTP223 touch:** GPIO0, active high. It uses the shared double-tap recording/power-saver gestures and 4-second deep-sleep / wake hold.
-- **Battery ADC:** GPIO1 through the same 1 MΩ / 470 kΩ divider calibration used by Odyssey S3 (4130 mV cell ↔ 1320 mV ADC, 6 dB attenuation). Battery telemetry and critical-battery protection are enabled.
-- **Status NeoPixel:** external WS2812/NeoPixel on GPIO4 using the shared dim disconnected/connected/recording/OTA/low-battery patterns.
+- **TTP223 touch:** GPIO1 / D0, active high. It uses the shared double-tap recording/power-saver gestures and 4-second deep-sleep / wake hold.
+- **Battery ADC:** GPIO2 / D1 through the same 1 MΩ / 470 kΩ divider calibration used by Odyssey S3 (4130 mV cell ↔ 1320 mV ADC, 6 dB attenuation). Battery telemetry and critical-battery protection are enabled.
+- **Status NeoPixel:** external WS2812/NeoPixel on GPIO5 / D4 using the shared dim disconnected/connected/recording/OTA/low-battery patterns.
 - **SD chip-select remains GPIO21.** The Sense expansion-board orange/onboard path on GPIO21 is not a status LED and must never be driven by the status task.
 
-GPIO0 is an ESP32-S3 boot-strapping pin. Firmware only owns it after reset, so physical acceptance must verify cold boot/reset with the TTP223 released and touched; the hardware level during reset must not force the board into the ROM download path.
 
 While disconnected, an active Hey Snap listener prevents the normal idle auto-sleep timeout so offline voice remains available. An explicit 4-second touch hold can still enter deep sleep. Camera/SD work blocks standby/deep sleep until the active media operation finishes.
 
@@ -243,7 +242,7 @@ The current hardware acceptance list is:
 - Sync to app followed by verified source deletion,
 - complete device → PWA → transcript → memory flow.
 
-Build **1406** is the current production hardware baseline. It retains the build-1400 personalized voice model while adding the Chakshu GPIO0 touch, GPIO1 battery ADC and GPIO4 NeoPixel hardware profile. Physical testing should record the installed build explicitly and compare device logs against this README before attributing behavior to current source. A later `main` commit is not a device behavior until it is published through the OTA feed and installed.
+Build **1406** is the current production hardware baseline. It retains the build-1400 personalized voice model while adding the Chakshu GPIO1/D0 touch, GPIO2/D1 battery ADC and GPIO5/D4 NeoPixel hardware profile. Physical testing should record the installed build explicitly and compare device logs against this README before attributing behavior to current source. A later `main` commit is not a device behavior until it is published through the OTA feed and installed.
 
 ## Live-source cleanup policy
 
