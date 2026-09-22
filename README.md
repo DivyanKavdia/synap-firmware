@@ -173,9 +173,14 @@ The companion PWA owns:
 - imported-audio transcription,
 - memory creation and downstream inference.
 
-For the detailed offline/Hey Snap application contract, see the companion repository document:
+For the companion-system contracts, see:
 
-`DivyanKavdia/synap-pwa/docs/CHAKSHU_OFFLINE_AND_HEY_SNAP.md`
+- [PWA architecture](https://github.com/DivyanKavdia/synap-pwa/blob/main/docs/ARCHITECTURE.md)
+- [PWA operations and recovery](https://github.com/DivyanKavdia/synap-pwa/blob/main/docs/OPERATIONS.md)
+- [Automatic speech, speaker identity and transcript refresh](https://github.com/DivyanKavdia/synap-pwa/blob/main/docs/AUTOMATIC_SPEECH.md)
+- [Chakshu offline + Hey Snap](https://github.com/DivyanKavdia/synap-pwa/blob/main/docs/CHAKSHU_OFFLINE_AND_HEY_SNAP.md)
+
+The companion PWA owns verified SD import/deletion, cloud transcription/memory, People identity corrections and Ask Synap. Firmware must not duplicate those responsibilities.
 
 ## Build and validation
 
