@@ -124,7 +124,7 @@ int main(){
 test('BLE owns Chakshu while connected and every disconnect re-arms standalone voice', () => {
   const voice = fs.readFileSync('firmware/xiao-sense/voice.cpp', 'utf8');
   const server = fs.readFileSync('firmware/xiao-sense/ble-server.cpp', 'utf8');
-  assert.match(voice, /ownershipAllowsVoice\(\)\{return enabled\.load\(\)&&!linkStandDown\.load\(\)&&!deviceConnected\.load\(\);\}/);
+  assert.match(voice, /ownershipAllowsVoice\(\)\{return enabled\.load\(\)&&!linkStandDown\.load\(\)&&!deviceConnected\.load\(\)&&!sleepPending;\}/);
   assert.match(voice, /void linkConnected\(\)[\s\S]*linkStandDown=true[\s\S]*refreshRuntimeStatus\(\)/);
   assert.match(voice, /void linkDisconnected\(\)[\s\S]*linkStandDown=false[\s\S]*refreshRuntimeStatus\(\)/);
   assert.match(server, /deviceConnected=true;connectionEventPending=true;\s*ChakshuVoice::linkConnected\(\)/);

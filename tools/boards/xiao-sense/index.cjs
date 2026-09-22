@@ -46,6 +46,9 @@ function materializeChakshu(source,target) {
   replace('  ChakshuMedia::initialize();',
     '  const uint32_t mediaStarted=millis();\n  ChakshuMedia::initialize();\n  ChakshuLink::mediaBootMs=millis()-mediaStarted;\n  // TinyML remains deferred: BLE/OTA/media initialize first; no external model is loaded.','Measure media boot cost without blocking BLE on local voice');
   replace('    ChakshuMedia::tick();','    ChakshuMedia::tick();\n    ChakshuVoice::tick();','Dispatch local voice commands');
+  replace('  if (!deviceConnected.load() && !streamingEnabled.load() && !otaBusy() &&\n      disconnectedAt && uint32_t(millis()-disconnectedAt)>=AUTO_SLEEP_DISCONNECTED_MS) {',
+    '  if (!deviceConnected.load() && !streamingEnabled.load() && !otaBusy() &&\n      !ChakshuVoice::active() &&\n      disconnectedAt && uint32_t(millis()-disconnectedAt)>=AUTO_SLEEP_DISCONNECTED_MS) {',
+    'Keep standalone Hey Snap awake');
   out=materializeBle(out);
   replace('  ChakshuTransfer::ble(service);','  ChakshuTransfer::ble(service);\n  ChakshuVoice::ble(service);','Register local voice service');
   replace('  p[14]=ChakshuTransfer::requests?1:0;','  p[14]=ChakshuTransfer::requests?1:0;\n  p[15]=2;','Advertise voice protocol v2');

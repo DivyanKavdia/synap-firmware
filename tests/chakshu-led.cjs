@@ -4,7 +4,8 @@ const {assemble}=require('../tools/assemble-source.cjs');
 const {materialize}=require('../tools/materialize-target.cjs');
 test('Chakshu uses the external GPIO4 NeoPixel and never repurposes SD chip-select as status LED',()=>{
  const source=materialize(assemble(),'xiao-esp32s3-sense-8m');
- const led=source.slice(source.indexOf('void updateStatusLed(bool force) {'),source.indexOf('void setDeviceState('));
+ const start=source.indexOf('void updateStatusLed(bool force) {');
+ const led=source.slice(start,source.indexOf('void setDeviceState(',start));
  assert.match(source,/constexpr uint8_t RGB_LED_PIN = 4;/);
  assert.match(source,/Adafruit_NeoPixel statusLed\(1, RGB_LED_PIN, NEO_GRB \+ NEO_KHZ800\)/);
  assert.match(led,/statusLed\.setPixelColor/);

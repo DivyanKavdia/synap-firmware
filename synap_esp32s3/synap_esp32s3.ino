@@ -1029,9 +1029,6 @@ void powerTick() {
     return;
   }
   if (!deviceConnected.load() && !streamingEnabled.load() && !otaBusy() &&
-#if SYNAP_CHAKSHU
-      !ChakshuVoice::active() &&
-#endif
       disconnectedAt && uint32_t(millis()-disconnectedAt)>=AUTO_SLEEP_DISCONNECTED_MS) {
     enterDeepSleep("disconnected-timeout");
   }
