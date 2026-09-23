@@ -74,7 +74,7 @@ Production CI additionally installs the pinned ESP32 toolchain/libraries, applie
 
 ## Release truth
 
-The authoritative installable version is the `ota-releases` feed. At this review it reports **build 1411** for all three targets, source commit `c84912a3864584321bfda75ed9097d510ae8cbd0`.
+The authoritative installable version is the `ota-releases` feed. At this review it reports **build 1412** for all three targets, source commit `a2c3dd98730a3e38f21d0c191e7a6137ac00c6f0`.
 
 A later `main` commit is development source until a successful publish updates that feed.
 
