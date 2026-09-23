@@ -59,7 +59,7 @@ Chakshu-specific files own:
 - Wi-Fi downloads;
 - TinyML voice contract/runtime/model.
 
-GPIO21 is reserved by the Sense SD path and is not a semantic status LED. The hardware status NeoPixel is GPIO5 / D4; TTP223 is GPIO1 / D0; and the S3-style 1 MΩ / 470 kΩ battery divider is read on GPIO2 / D1.
+GPIO21 is reserved by the Sense SD path and is not a semantic status LED. The board's active-low orange USER_LED is electrically shared with GPIO21, so real microSD chip-select traffic can visibly flash it even though firmware never uses it for status. The hardware status NeoPixel is GPIO5 / D4 and is dark by default in idle states; TTP223 is GPIO1 / D0; and the S3-style 1 MΩ / 470 kΩ battery divider is read on GPIO2 / D1.
 
 ## Build and test
 

@@ -41,6 +41,17 @@ function materializeChakshu(source,target) {
   replace("  pinMode(TOUCH_INPUT_PIN, INPUT);","  pinMode(TOUCH_INPUT_PIN, INPUT_PULLDOWN);","Stabilize TTP223 input after boot");
   replace("  statusLed.begin();\n  statusLed.clear();\n  statusLed.show();","  pinMode(RGB_LED_PIN,OUTPUT);\n  digitalWrite(RGB_LED_PIN,LOW);\n  delay(2);\n  statusLed.begin();\n  statusLed.clear();\n  statusLed.show();\n  delay(1);\n  statusLed.clear();\n  statusLed.show();","Force external NeoPixel dark at startup");
   replace("  statusLed.setPixelColor(0,statusLed.Color(r,g,b));\n  statusLed.show();","  statusLed.clear();\n  if(pattern)statusLed.setPixelColor(0,statusLed.Color(r,g,b));\n  statusLed.show();","Clear stale NeoPixel state before every pattern");
+  replace("constexpr uint8_t LED_DIM = 4;","constexpr uint8_t LED_DIM = 2;","Use minimum practical Chakshu NeoPixel brightness");
+  replace("    const uint32_t phase=now%1400u;\n    if (phase<55u || (phase>=180u && phase<235u)) { r=LED_DIM; g=2; }",
+    "    const uint32_t phase=now%3000u;\n    if (phase<20u) { r=LED_DIM; g=1; }","Minimize Chakshu OTA LED duty cycle");
+  replace("  } else if (mediaBusy()) {\n    if (now%900u<90u) g=LED_DIM+2;\n  } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {",
+    "  } else if (mediaBusy()) {\n    if (now%5000u<20u) g=LED_DIM;\n  } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {","Minimize Chakshu media LED duty cycle");
+  replace("    const uint32_t phase=now%5000u;\n    if (phase<40u || (phase>=180u && phase<220u)) r=LED_DIM;",
+    "    if (now%15000u<20u) r=LED_DIM;","Minimize Chakshu low-battery LED duty cycle");
+  replace("  } else if (deviceState == DeviceState::DISCONNECTED) {\n    if (now%5000u<35u) r=LED_DIM;\n  } else if (deviceState == DeviceState::CONNECTED_IDLE) {\n    if (now%6000u<30u) b=LED_DIM;",
+    "  } else if (deviceState == DeviceState::DISCONNECTED) {\n    // Dark by default for maximum battery life.\n  } else if (deviceState == DeviceState::CONNECTED_IDLE) {\n    // Dark by default for maximum battery life.","Disable Chakshu idle heartbeats");
+  replace("  } else if (deviceState == DeviceState::STREAMING) {\n    if (now%1800u<45u) g=LED_DIM+1;\n  } else {\n    if (now%1200u<70u) { r=LED_DIM; b=LED_DIM; }",
+    "  } else if (deviceState == DeviceState::STREAMING) {\n    if (now%5000u<20u) g=LED_DIM;\n  } else {\n    if (now%10000u<25u) { r=LED_DIM; b=LED_DIM; }","Minimize Chakshu active and error LED duty cycle");
   replace("  } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {","  } else if (mediaBusy()) {\n    if (now%900u<90u) g=LED_DIM+2;\n  } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {","Show Chakshu media activity on NeoPixel");
   replace("  (void)analogRead(BATTERY_ADC_PIN);\n  delayMicroseconds(1200);\n  uint32_t mvTotal=0, rawTotal=0;\n  for (uint8_t i=0;i<16;++i) {","  for(uint8_t warmup=0;warmup<4;++warmup){(void)analogRead(BATTERY_ADC_PIN);delayMicroseconds(500);}\n  delayMicroseconds(3000);\n  constexpr uint8_t BATTERY_SAMPLE_COUNT=24;\n  uint32_t mvTotal=0, rawTotal=0;\n  for (uint8_t i=0;i<BATTERY_SAMPLE_COUNT;++i) {","Settle high-impedance Chakshu battery divider");
   replace("  const uint32_t adcMv=mvTotal/16u;\n  const uint32_t adcRaw=rawTotal/16u;","  const uint32_t adcMv=mvTotal/BATTERY_SAMPLE_COUNT;\n  const uint32_t adcRaw=rawTotal/BATTERY_SAMPLE_COUNT;","Average settled Chakshu ADC samples");
