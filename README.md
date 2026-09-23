@@ -6,8 +6,8 @@ This repository owns production firmware for the Synap wearable family.
 
 ## Release and source status
 
-- **Current production release:** Synap OS build **1411** (`synap-os1-build1411`).
-- **Production source:** `c84912a3864584321bfda75ed9097d510ae8cbd0`.
+- **Current production release:** Synap OS build **1412** (`synap-os1-build1412`).
+- **Production source:** `a2c3dd98730a3e38f21d0c191e7a6137ac00c6f0`.
 - **Current development baseline:** `main`.
 - **Release channel:** `ota-releases`.
 - **Production targets:** Synap Odyssey S3, Synap Odyssey C3 and Chakshu.
@@ -242,7 +242,7 @@ The current hardware acceptance list is:
 - Sync to app followed by verified source deletion,
 - complete device → PWA → transcript → memory flow.
 
-Build **1411** is the current production hardware baseline. It retains the build-1400 personalized voice model and uses the corrected Chakshu GPIO1/D0 touch, GPIO2/D1 battery ADC and GPIO5/D4 NeoPixel hardware profile. Physical testing should record the installed build explicitly and compare device logs against this README before attributing behavior to current source. A later `main` commit is not a device behavior until it is published through the OTA feed and installed.
+Build **1412** is the current production hardware baseline. It retains the build-1400 personalized voice model and uses the corrected Chakshu GPIO1/D0 touch, GPIO2/D1 battery ADC and GPIO5/D4 NeoPixel hardware profile. Physical testing should record the installed build explicitly and compare device logs against this README before attributing behavior to current source. A later `main` commit is not a device behavior until it is published through the OTA feed and installed.
 
 ## Live-source cleanup policy
 
