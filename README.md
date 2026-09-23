@@ -94,7 +94,7 @@ The current Chakshu hardware revision extends the shared Odyssey power/status co
 - **SD chip-select remains GPIO21.** On XIAO ESP32-S3 Sense this signal is electrically shared with the active-low orange USER_LED. Synap never uses that LED as a status indicator, but SD transactions necessarily pull CS low and can therefore flash the orange LED. Software can reduce unnecessary SD reads but cannot suppress that electrical flash while accessing the onboard SD slot.
 
 
-While disconnected, an active Hey Snap listener prevents the normal idle auto-sleep timeout so offline voice remains available. An explicit 4-second touch hold can still enter deep sleep. Camera/SD work blocks standby/deep sleep until the active media operation finishes.
+While disconnected, an active Hey Snap listener prevents the normal idle auto-sleep timeout so offline voice remains available. TinyML allocation itself is also deferred while BLE/PWA owns Chakshu; the model ring and worker tasks are created only after a stable disconnected interval, so the offline voice runtime cannot introduce a late heap/task transition during connected audio. An explicit 4-second touch hold can still enter deep sleep. Camera/SD work blocks standby/deep sleep until the active media operation finishes.
 
 Build **1400** preserves the BLE ownership/SD safeguards and adds the experimental audio/describe voice routes. Queued standalone actions are invalidated on BLE connection and rejected while connected. Already running captures retain safe file finalization.
 

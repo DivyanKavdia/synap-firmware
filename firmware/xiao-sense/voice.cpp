@@ -268,7 +268,18 @@ void initialize(){
     (unsigned long)(WINDOW_SAMPLES*sizeof(int16_t)),(unsigned long)ESP.getFreeHeap(),(unsigned long)ESP.getFreePsram());
 }
 void initTask(void*){
-  while(millis()<12000u||otaBusy()||mediaBusy())vTaskDelay(pdMS_TO_TICKS(250));
+  // Hey Snap is deliberately offline-only. Do not allocate its ring, queues or
+  // worker tasks while BLE/PWA owns the device: that late 12 s heap/task burst
+  // can collide with a recording started immediately after connection.
+  uint32_t disconnectedSince=0;
+  for(;;){
+    const bool blocked=millis()<12000u || otaBusy() || mediaBusy() ||
+      deviceConnected.load() || streamingEnabled.load();
+    if(blocked){disconnectedSince=0;vTaskDelay(pdMS_TO_TICKS(250));continue;}
+    if(!disconnectedSince){disconnectedSince=millis();vTaskDelay(pdMS_TO_TICKS(250));continue;}
+    if(uint32_t(millis()-disconnectedSince)<1000u){vTaskDelay(pdMS_TO_TICKS(250));continue;}
+    break;
+  }
   initialize();initHandle=nullptr;vTaskDelete(nullptr);
 }
 void scheduleInitialize(){
