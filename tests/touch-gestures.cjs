@@ -19,3 +19,12 @@ for (const {target,c3,pin} of [
     assert.doesNotMatch(code,/pendingDoubleAt|touch-triple|WAKE_TRIPLE/);
   });
 }
+
+
+test('Chakshu touch routes only audio and never camera media',()=>{
+  const code=materialize(source,'xiao-esp32s3-sense-8m');
+  const poll=code.slice(code.indexOf('void pollTouchControl() {'),code.indexOf('void updateStatusCharacteristic(bool notify) {'));
+  assert.match(poll,/deviceConnected\.load\(\)[\s\S]*queueEvent\(EventType::COMMAND,CMD_START/);
+  assert.match(poll,/ChakshuVoice::touchAudioToggle\(\)/);
+  assert.doesNotMatch(poll,/ChakshuVoice::PHOTO|ChakshuVoice::VIDEO|queueLocal\(|captureSavedPreview|captureFrame/);
+});
