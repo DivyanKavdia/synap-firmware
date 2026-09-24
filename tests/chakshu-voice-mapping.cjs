@@ -136,6 +136,16 @@ test('Hey Snap stays armed across BLE link transitions and legacy handoff writes
   assert.match(voice, /bytes\[3\]=ownershipAllowsVoice\(\)\?1:0/);
 });
 
+
+test('voice STOP cannot terminate a live PWA recording', () => {
+  const voice = fs.readFileSync('firmware/xiao-sense/voice.cpp', 'utf8');
+  const tick = voice.slice(voice.indexOf('void tick()'), voice.indexOf('class Callbacks'));
+  const stop = tick.slice(tick.indexOf('if(command==STOP)'), tick.indexOf('else if(command==PHOTO'));
+  assert.match(stop,/localEpoch/);
+  assert.match(stop,/stopRequested\.store\(true\)/);
+  assert.doesNotMatch(stop,/stopStreaming\(/);
+});
+
 test('touch audio toggle starts and stops only standalone SD audio', () => {
   const voice = fs.readFileSync('firmware/xiao-sense/voice.cpp', 'utf8');
   const start=voice.indexOf('bool touchAudioToggle()');
