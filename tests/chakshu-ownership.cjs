@@ -22,6 +22,7 @@ constexpr uint8_t PROTOCOL_VERSION=2;
 std::atomic<bool> deviceConnected{true},streamingEnabled{false},chakshuAudioSubscribed{true};
 std::atomic<unsigned> streamGeneration{0},capturedFrames{0},captureDrops{0},notifyRejected{0};
 bool updating=false,microphoneValid=true,transportValid=true;
+struct MicrophoneGuard { MicrophoneGuard(){} ~MicrophoneGuard(){} };
 unsigned starts=0,wakes=0;
 int audioFrameQueue=1,captureTaskHandle=1;
 bool otaBusy(){return updating;}
