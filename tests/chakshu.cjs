@@ -67,11 +67,13 @@ test('Chakshu TinyML starts only after BLE and uses no ESP-SR runtime',()=>{
   assert(ble>=0 && schedule>ble);
   assert.match(source,/TinyML remains optional and starts only after the proven BLE\/OTA\/media boot path is healthy/);
   const voice=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/voice.cpp'),'utf8');
-  assert.match(voice,/deviceConnected\.load\(\) \|\| streamingEnabled\.load\(\)/,
-    'offline TinyML initialization must not overlap a BLE-owned recording');
-  assert.match(voice,/disconnectedSince/);
-  assert.match(voice,/millis\(\)-disconnectedSince\)<1000u/,
-    'TinyML waits for a stable disconnected interval before allocating workers');
+  assert.doesNotMatch(voice,/deviceConnected\.load\(\) \|\| streamingEnabled\.load\(\)/,
+    'BLE connection alone must not suppress TinyML initialization');
+  assert.match(voice,/millis\(\)<12000u \|\| otaBusy\(\) \|\| mediaBusy\(\) \|\| streamingEnabled\.load\(\)/,
+    'TinyML still waits for the healthy boot window and never initializes during live capture');
+  assert.match(voice,/healthySince/);
+  assert.match(voice,/millis\(\)-healthySince\)<1000u/,
+    'TinyML waits for a stable healthy interval before allocating workers');
   assert.match(source,/WINDOW_SAMPLES=24000/);
   assert.match(source,/LEARNED_WEIGHT_BYTES=sizeof\(C1_WEIGHT\)\+sizeof\(C2_WEIGHT\)\+sizeof\(FC_WEIGHT\)/);
   assert.match(source,/xTaskCreatePinnedToCore\(workerTask,"tiny-voice",12288/);
