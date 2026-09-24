@@ -271,14 +271,15 @@ void worker(void*) {
   Request request{};
   for(;;) {
     if(xQueueReceive(requests,&request,portMAX_DELAY)!=pdTRUE)continue;
-    if(request.local&&(deviceConnected.load()||request.localEpoch!=localEpoch.load()))continue;
+    if(request.local&&request.localEpoch!=localEpoch.load())continue;
     if(!request.local&&(request.connection!=connectionGeneration.load()||!deviceConnected.load()))continue;
     ChakshuResources::Lease admission;
     if(!admission||otaBusySnapshot.load()) {replyFor(request,1);continue;}
     if(selectedConnection!=request.connection){clearSelection();originalPath[0]=0;selectedConnection=request.connection;}
     if(request.operation==5||request.operation==10) {
-      // SD capture is a standalone-device operation. While BLE is connected the
-      // app owns capture and must save audio/video directly to the PWA.
+      // SD audio/video is reserved for a local voice/touch request. BLE clients
+      // cannot select this destination: PWA-started capture remains live-to-phone.
+      // A connected Hey Snap request is local and is allowed when live streaming is idle.
       if(!request.local){replyFor(request,ChakshuMedia::BAD_COMMAND);continue;}
       if(streamingEnabled.load()||remoteStandby){replyFor(request,1);continue;}
       ChakshuCamera::VideoProfile profile;

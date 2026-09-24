@@ -121,18 +121,29 @@ int main(){
 }`), /PASS capture paths/);
 });
 
-test('BLE owns Chakshu while connected and every disconnect re-arms standalone voice', () => {
+test('Hey Snap stays armed across BLE link transitions and legacy handoff writes', () => {
   const voice = fs.readFileSync('firmware/xiao-sense/voice.cpp', 'utf8');
   const server = fs.readFileSync('firmware/xiao-sense/ble-server.cpp', 'utf8');
-  assert.match(voice, /ownershipAllowsVoice\(\)\{return enabled\.load\(\)&&!linkStandDown\.load\(\)&&!deviceConnected\.load\(\)&&!sleepPending;\}/);
-  assert.match(voice, /void linkConnected\(\)[\s\S]*linkStandDown=true[\s\S]*refreshRuntimeStatus\(\)/);
+  assert.match(voice, /ownershipAllowsVoice\(\)\{return enabled\.load\(\)&&!linkStandDown\.load\(\)&&!sleepPending;\}/);
+  assert.match(voice, /void linkConnected\(\)[\s\S]*linkStandDown=false[\s\S]*refreshRuntimeStatus\(\)/);
   assert.match(voice, /void linkDisconnected\(\)[\s\S]*linkStandDown=false[\s\S]*refreshRuntimeStatus\(\)/);
   assert.match(server, /deviceConnected=true;connectionEventPending=true;\s*ChakshuVoice::linkConnected\(\)/);
   assert.match(server, /deviceConnected=false[\s\S]*ChakshuVoice::linkDisconnected\(\)/);
+  assert.doesNotMatch(server, /localEpoch; \/\/ Invalidate queued standalone work across this handoff/);
   const callback = voice.slice(voice.indexOf('class Callbacks'), voice.indexOf('void ble('));
-  assert.match(callback, /linkStandDown=op==0/);
-  assert.doesNotMatch(callback, /Preferences|persistEnabled|enabled=op==1/);
+  assert.match(callback, /linkStandDown=false;\+\+discontinuities/);
+  assert.doesNotMatch(callback, /linkStandDown=op==0/);
   assert.match(voice, /bytes\[3\]=ownershipAllowsVoice\(\)\?1:0/);
+});
+
+
+test('voice STOP cannot terminate a live PWA recording', () => {
+  const voice = fs.readFileSync('firmware/xiao-sense/voice.cpp', 'utf8');
+  const tick = voice.slice(voice.indexOf('void tick()'), voice.indexOf('class Callbacks'));
+  const stop = tick.slice(tick.indexOf('if(command==STOP)'), tick.indexOf('else if(command==PHOTO'));
+  assert.match(stop,/localEpoch/);
+  assert.match(stop,/stopRequested\.store\(true\)/);
+  assert.doesNotMatch(stop,/stopStreaming\(/);
 });
 
 test('touch audio toggle starts and stops only standalone SD audio', () => {
@@ -141,6 +152,8 @@ test('touch audio toggle starts and stops only standalone SD audio', () => {
   const end=voice.indexOf('void mediaCompleted(',start);
   assert(start>=0&&end>start);
   const toggle=voice.slice(start,end);
+  // Connected touch never enters this SD fallback; shared touch routing emits
+  // live CMD_START/CMD_STOP so the PWA owns the phone recording.
   assert.match(toggle,/deviceConnected\.load\(\)\|\|sleepPending\|\|otaBusy\(\)/);
   assert.match(toggle,/if\(offline\.load\(\)\)[\s\S]*stopRequested\.store\(true\)/);
   assert.match(toggle,/queueLocal\(10,0u\)/);

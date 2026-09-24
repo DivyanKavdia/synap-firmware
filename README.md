@@ -73,16 +73,19 @@ The model uses a small embedded learned-weight payload and an adaptive AC-noise/
 
 Voice protocol remains version **2**. Media protocol remains version **1**.
 
-### One command owner at a time
+### Input routing: initiator chooses storage
 
-The companion PWA now treats Chakshu as having one operational owner:
+Chakshu now keeps **Hey Snap available both connected and disconnected**. BLE state no longer decides whether local voice exists; the initiator decides the storage path:
 
-- **Disconnected from the PWA:** firmware owns Hey Snap and offline media actions.
-- **Connected to the PWA:** the PWA disables the wake engine and owns media/BLE operations.
+- **Hey Snap:** audio, photo, video and describe captures always go to Chakshu SD.
+- **PWA controls:** audio, photo and video stream over BLE and are stored in the PWA/browser on the phone.
+- **TTP223 double tap while connected:** starts/stops the existing live BLE audio path, so the recording is stored on the phone.
+- **TTP223 double tap while disconnected:** starts/stops local SD audio capture.
+- **TTP223 never triggers photo or video.**
 
-This avoids voice/media work racing the same serialized BLE, microphone, camera and SD resources.
+The paths are parallel from a control perspective but not allowed to corrupt shared hardware. Existing media/OTA/resource admission gates serialize camera, microphone and SD ownership. A Hey Snap request issued while a conflicting PWA capture is already active returns busy rather than starting a second writer.
 
-Firmware now enforces the ownership boundary itself: any BLE connection stands the local wake engine down, and every BLE disconnect re-arms it, including unexpected out-of-range/browser drops where the PWA cannot send a release opcode. The PWA's voice on/off writes are session handoff signals rather than a persisted user preference. Physical verification of this reconnect path remains required.
+BLE connect/disconnect therefore no longer stands the wake engine down or invalidates queued local voice work. Legacy voice on/off handoff writes remain protocol-compatible but no longer transfer capture ownership. A spoken **Stop** applies only to a voice-owned SD operation; it cannot stop a PWA/TTP live recording.
 
 ### Touch, battery and status indicator
 
@@ -94,28 +97,28 @@ The current Chakshu hardware revision extends the shared Odyssey power/status co
 - **SD chip-select remains GPIO21.** On XIAO ESP32-S3 Sense this signal is electrically shared with the active-low orange USER_LED. Synap never uses that LED as a status indicator, but SD transactions necessarily pull CS low and can therefore flash the orange LED. Software can reduce unnecessary SD reads but cannot suppress that electrical flash while accessing the onboard SD slot.
 
 
-While disconnected, an active Hey Snap listener prevents the normal idle auto-sleep timeout so offline voice remains available. TinyML allocation itself is also deferred while BLE/PWA owns Chakshu; the model ring and worker tasks are created only after a stable disconnected interval, so the offline voice runtime cannot introduce a late heap/task transition during connected audio. An explicit 4-second touch hold can still enter deep sleep. Camera/SD work blocks standby/deep sleep until the active media operation finishes.
+An active Hey Snap listener prevents the normal idle auto-sleep timeout so voice remains available in either BLE state. TinyML allocation is deferred until the proven BLE/OTA/media boot path is healthy and the device has had a stable idle interval; it is still blocked by OTA, active media and live streaming. An explicit 4-second touch hold can enter deep sleep. Camera/SD work blocks standby/deep sleep until the active media operation finishes.
 
-Build **1400** preserves the BLE ownership/SD safeguards and adds the experimental audio/describe voice routes. Queued standalone actions are invalidated on BLE connection and rejected while connected. Already running captures retain safe file finalization.
+The build-1400 model remains the experimental audio/describe classifier baseline; the current routing layer changes ownership without retraining or replacing those weights.
 
 The experimental personalized model now includes Record audio and Explain what you see classes. Recognition quality remains under field observation and must be retrained with a larger independent real-device dataset before being treated as production-accurate.
 
-### Offline media
+### SD media
 
-Chakshu supports Synap-owned offline SD capture and recovery:
+Chakshu supports Synap-owned durable SD capture and recovery for Hey Snap whether BLE is connected or not:
 
 - Synap-owned SD FIFO cleanup when reserve space is required.
 - App-triggered clearing of Synap capture files only.
 - Verified move-to-app deletion semantics.
-- Offline audio stored entirely on SD until explicitly moved into the companion app.
-- Offline video stored on SD.
-- Full-resolution still capture through the hardened saved-photo path.
-- Two SD video profiles used by standalone firmware capture.
-- Connected BLE clients cannot start SD audio/video recording; connected capture belongs to the PWA.
-- The local spoken **Record a video** path currently uses a **10-second default**.
-- The local spoken **Record audio** path is bounded to **60 seconds** because the recorder owns the microphone while active.
-- **Explain what you see** saves a tagged JPG offline; visual inference occurs only after a later verified PWA sync.
-- Imported offline audio enters the normal transcription and memory pipeline after transfer to the app.
+- Hey Snap audio is stored entirely on SD until explicitly moved into the companion app.
+- Hey Snap video is stored on SD.
+- Full-resolution Hey Snap still capture uses the hardened saved-photo path.
+- Two SD video profiles are retained for local firmware capture.
+- Connected BLE clients cannot invoke the local SD audio/video operations directly; PWA-started capture remains phone-owned.
+- The spoken **Record a video** path currently uses a **10-second default**.
+- The spoken **Record audio** path is bounded to **60 seconds** because the local recorder owns the microphone while active.
+- **Explain what you see** saves a tagged JPG to SD; visual inference occurs only after a later verified PWA sync.
+- Imported SD audio enters the normal transcription and memory pipeline after transfer to the app.
 
 User/model files outside the narrow Synap capture naming convention are not part of FIFO cleanup or Clear SD.
 
@@ -172,11 +175,11 @@ The remaining field question is physical: whether the expansion-board/card path 
 The companion PWA owns:
 
 - connection/session control,
-- all new audio/photo/video capture while BLE is connected; connected captures save directly to the PWA,
-- disabling Hey Snap while it owns the live BLE link,
-- SD catalogue discovery after reconnect,
-- Library representation of unsynced SD-only audio, photo and video,
-- explicit **Sync to app** for one item or all pending offline captures,
+- audio/photo/video capture explicitly started from the PWA; those captures save directly to the PWA,
+- subscribing to Hey Snap result notifications while leaving the device wake engine armed,
+- SD catalogue discovery after connect/reconnect,
+- Library representation of unsynced SD-only audio, photo and video, including captures created by Hey Snap while connected,
+- explicit **Sync to app** for one item or all pending SD captures,
 - byte/digest verification before deleting the SD original,
 - imported-audio transcription,
 - memory creation and downstream inference.
@@ -231,7 +234,7 @@ The current hardware acceptance list is:
 - sustained Odyssey S3/C3 microphone + BLE recording,
 - Chakshu BLE reconnect and recovery,
 - Hey Snap wake recognition after a clean standalone boot,
-- Hey Snap automatic re-arm after an unexpected BLE disconnect,
+- Hey Snap remains armed through BLE connect, reconnect and unexpected disconnect,
 - Take a snap recognition and saved-photo completion,
 - Record a video recognition and durable SD completion,
 - photo quality,

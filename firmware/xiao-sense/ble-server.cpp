@@ -11,7 +11,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     ChakshuLink::paramRequests=0;ChakshuLink::paramRequestCode=0xFFFF;
     ++connectionGeneration;
     if(!recoveryWaiting.load())streamingEnabled=false;
-    ++ChakshuTransfer::localEpoch; // Invalidate queued standalone work across this handoff.
+    // A BLE handoff no longer invalidates local voice work: Hey Snap remains
+    // a device-local SD source while the connected PWA keeps its own live path.
     deviceConnected=true;connectionEventPending=true;
     ChakshuVoice::linkConnected();
     // The pinned host owns DLE; the control task defers any timeout correction.
@@ -34,8 +35,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
       recoveryWaiting=true;if(!recoveryWaitingAt.load())recoveryWaitingAt=millis();
     }else streamingEnabled=false;
     ++connectionGeneration;connectionEventPending=true;
-    // Re-arm standalone Hey Snap after every link loss, including unexpected
-    // out-of-range/browser drops where the PWA cannot send a release opcode.
+    // Link loss changes only event delivery; the wake engine stays armed.
     ChakshuVoice::linkDisconnected();
   }
   void onConnParamsUpdate(NimBLEConnInfo& peer) override {

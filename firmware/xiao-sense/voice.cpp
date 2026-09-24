@@ -32,13 +32,15 @@ portMUX_TYPE stateMux=portMUX_INITIALIZER_UNLOCKED;
 uint32_t serial=0,lastAt=0;uint8_t lastCommand=0,lastResult=0;uint16_t lastValue=0;
 Gate gate;
 
-bool ownershipAllowsVoice(){return enabled.load()&&!linkStandDown.load()&&!deviceConnected.load()&&!sleepPending;}
+bool ownershipAllowsVoice(){return enabled.load()&&!linkStandDown.load()&&!sleepPending;}
 bool active(){return status.load()==LISTENING&&ownershipAllowsVoice()&&ring&&workerHandle;}
 void refreshRuntimeStatus(){
   if(workerHandle)status=ownershipAllowsVoice()?LISTENING:VOICE_DISABLED;
 }
 void linkConnected(){
-  linkStandDown=true;leaseAt=0;++discontinuities;refreshRuntimeStatus();
+  // BLE no longer takes ownership of local voice. Hey Snap remains armed while
+  // connected; live PWA capture and local SD capture are serialized elsewhere.
+  linkStandDown=false;leaseAt=0;++discontinuities;refreshRuntimeStatus();
 }
 void linkDisconnected(){
   linkStandDown=false;leaseAt=0;++discontinuities;refreshRuntimeStatus();
@@ -268,16 +270,15 @@ void initialize(){
     (unsigned long)(WINDOW_SAMPLES*sizeof(int16_t)),(unsigned long)ESP.getFreeHeap(),(unsigned long)ESP.getFreePsram());
 }
 void initTask(void*){
-  // Hey Snap is deliberately offline-only. Do not allocate its ring, queues or
-  // worker tasks while BLE/PWA owns the device: that late 12 s heap/task burst
-  // can collide with a recording started immediately after connection.
-  uint32_t disconnectedSince=0;
+  // Hey Snap is always available after the proven BLE/SD/media boot path is
+  // healthy. Initialization still waits through active media/OTA/streaming so
+  // it never competes with an in-flight capture for heap or microphone setup.
+  uint32_t idleSince=0;
   for(;;){
-    const bool blocked=millis()<12000u || otaBusy() || mediaBusy() ||
-      deviceConnected.load() || streamingEnabled.load();
-    if(blocked){disconnectedSince=0;vTaskDelay(pdMS_TO_TICKS(250));continue;}
-    if(!disconnectedSince){disconnectedSince=millis();vTaskDelay(pdMS_TO_TICKS(250));continue;}
-    if(uint32_t(millis()-disconnectedSince)<1000u){vTaskDelay(pdMS_TO_TICKS(250));continue;}
+    const bool blocked=millis()<12000u || otaBusy() || mediaBusy() || streamingEnabled.load();
+    if(blocked){idleSince=0;vTaskDelay(pdMS_TO_TICKS(250));continue;}
+    if(!idleSince){idleSince=millis();vTaskDelay(pdMS_TO_TICKS(250));continue;}
+    if(uint32_t(millis()-idleSince)<1000u){vTaskDelay(pdMS_TO_TICKS(250));continue;}
     break;
   }
   initialize();initHandle=nullptr;vTaskDelete(nullptr);
@@ -339,15 +340,18 @@ void tick(){
   if(!active()||otaBusy()||pending.epoch!=discontinuities.load()||uint32_t(millis()-pending.at)>2200u)return;
   const uint8_t command=pending.command;
   const uint16_t value=command==VIDEO_START?10:command==AUDIO_ON?60:0;
-  const bool online=deviceConnected.load()&&leaseConnection.load()==connectionGeneration.load()&&
-    leaseAt.load()!=0&&uint32_t(millis()-leaseAt.load())<6000u;
+  const bool online=deviceConnected.load();
   if(command==WAKE){
     portENTER_CRITICAL(&stateMux);++serial;lastCommand=WAKE;lastResult=online?2:0;lastAt=millis();lastValue=0;portEXIT_CRITICAL(&stateMux);
     if(deviceConnected.load()&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
     Serial.printf("[VOICE] TinyML Hey Snap confidence=%u online=%u\n",unsigned(candidateConfidence.load()),unsigned(online));return;
   }
   uint8_t result=0;using namespace ChakshuTransfer;
-  if(command==STOP){++localEpoch;if(offline.load())stopRequested.store(true);if(streamingEnabled.load())stopStreaming();}
+  if(command==STOP){
+    // Voice STOP belongs only to the voice-owned SD session. It must never stop
+    // a PWA/TTP live stream that is being persisted on the phone.
+    ++localEpoch;if(offline.load())stopRequested.store(true);
+  }
   else if(command==PHOTO || command==DESCRIBE){
     if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;
     else if(streamingEnabled.load()||offline.load())result=ChakshuMedia::BUSY;
@@ -384,9 +388,10 @@ class Callbacks : public BLECharacteristicCallbacks {
     if(op==2){leaseConnection=connectionGeneration.load();leaseAt=millis();return;}
     if(op==3){leaseAt=0;return;}
     if(op>1)return;
-    // 0/1 are ownership handoff opcodes, never a persistent user preference.
-    // A live BLE link always wins even if an old client writes VOICE_ON.
-    linkStandDown=op==0;++discontinuities;leaseAt=0;refreshRuntimeStatus();
+    // Legacy clients may still send VOICE_OFF on connect. The v2 routing
+    // contract keeps Hey Snap armed online and offline, so both legacy 0/1
+    // handoff opcodes resolve to voice enabled rather than transferring ownership.
+    linkStandDown=false;++discontinuities;leaseAt=0;refreshRuntimeStatus();
   }
 };
 void ble(BLEService* service){

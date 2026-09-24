@@ -16,11 +16,15 @@ test('Chakshu SD remains the durable offline inbox without capture-time remounts
   assert.doesNotMatch(transfer,/SD\.end\(\)|SPI\.end\(\)/);
   assert.doesNotMatch(recording,/SD\.end\(\)|SPI\.end\(\)/);
 
-  // A connected PWA is the sole capture owner. Local/voice SD requests are
-  // rejected as soon as BLE owns the device, preventing two writers.
-  assert.match(voice,/ownershipAllowsVoice\(\)\{return enabled\.load\(\)&&!linkStandDown\.load\(\)&&!deviceConnected\.load\(\)&&!sleepPending;\}/);
-  assert.match(transfer,/if\(request\.local&&\(deviceConnected\.load\(\)\|\|request\.localEpoch!=localEpoch\.load\(\)\)\)continue;/);
+  // Hey Snap owns a durable local SD route whether or not BLE is linked.
+  // BLE clients still cannot choose the local SD audio/video operations; their
+  // captures use the live PWA path. Resource admission serializes real hardware.
+  assert.match(voice,/ownershipAllowsVoice\(\)\{return enabled\.load\(\)&&!linkStandDown\.load\(\)&&!sleepPending;\}/);
+  assert.doesNotMatch(voice,/ownershipAllowsVoice\(\)[^\n]*!deviceConnected\.load\(\)/);
+  assert.match(transfer,/if\(request\.local&&request\.localEpoch!=localEpoch\.load\(\)\)continue;/);
+  assert.doesNotMatch(transfer,/request\.local&&\(deviceConnected\.load\(\)/);
   assert.match(transfer,/if\(!request\.local\)\{replyFor\(request,ChakshuMedia::BAD_COMMAND\);continue;\}/);
+  assert.match(transfer,/if\(streamingEnabled\.load\(\)\|\|remoteStandby\)\{replyFor\(request,1\);continue;\}/);
 
   // Recovery/probing is non-destructive. Never make a future readiness change
   // silently format a card containing unsynced memories.
