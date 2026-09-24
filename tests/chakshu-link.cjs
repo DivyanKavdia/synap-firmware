@@ -86,7 +86,7 @@ int main(){
     NimBLEConnInfo peer{uint16_t(i)},other{uint16_t(i+100)};
     cb.onConnect(&server,peer);
     assert(deviceConnected && connectionEventPending && chakshuConnectionHandle==i);
-    assert(ChakshuTransfer::localEpoch==i+1);
+    assert(ChakshuTransfer::localEpoch==0); // BLE transitions no longer cancel local Hey Snap work
     assert(server.updates==0 && server.dataRequests==0); // no optional LL/L2CAP procedures at startup
     assert(!ChakshuLink::statusSeen && !chakshuAudioSubscribed);
     cb.onConnect(&server,other);assert(server.rejected==int(i+1));
