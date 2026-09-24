@@ -273,12 +273,12 @@ void initTask(void*){
   // Hey Snap is always available after the proven BLE/SD/media boot path is
   // healthy. Initialization still waits through active media/OTA/streaming so
   // it never competes with an in-flight capture for heap or microphone setup.
-  uint32_t disconnectedSince=0;
+  uint32_t idleSince=0;
   for(;;){
     const bool blocked=millis()<12000u || otaBusy() || mediaBusy() || streamingEnabled.load();
-    if(blocked){disconnectedSince=0;vTaskDelay(pdMS_TO_TICKS(250));continue;}
-    if(!disconnectedSince){disconnectedSince=millis();vTaskDelay(pdMS_TO_TICKS(250));continue;}
-    if(uint32_t(millis()-disconnectedSince)<1000u){vTaskDelay(pdMS_TO_TICKS(250));continue;}
+    if(blocked){idleSince=0;vTaskDelay(pdMS_TO_TICKS(250));continue;}
+    if(!idleSince){idleSince=millis();vTaskDelay(pdMS_TO_TICKS(250));continue;}
+    if(uint32_t(millis()-idleSince)<1000u){vTaskDelay(pdMS_TO_TICKS(250));continue;}
     break;
   }
   initialize();initHandle=nullptr;vTaskDelete(nullptr);
