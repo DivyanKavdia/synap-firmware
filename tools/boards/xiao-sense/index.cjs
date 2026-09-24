@@ -18,6 +18,8 @@ function materializeChakshu(source,target) {
   out=out.slice(0,stopStart)+stop+out.slice(stopEnd);
   replace('applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu());',
     'applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu() || mediaBusy() || ChakshuVoice::active());','Camera/voice CPU profile');
+  replace('  applyCpuPowerProfile(true);\n#if USE_REAL_I2S_MIC',
+    '  MicrophoneGuard pwaMicrophoneHandoff;\n  applyCpuPowerProfile(true);\n#if USE_REAL_I2S_MIC','PWA START pre-empts Hey Snap microphone read');
   replace('    microphoneI2S.setPins(I2S_BCLK_PIN, I2S_WS_PIN, -1, I2S_DATA_IN_PIN);',
     `    microphoneI2S.setPinsPdmRx(${target.hardware.clock},${target.hardware.data});`,'Onboard PDM pins');
   replace('microphoneReady=microphoneI2S.begin(I2S_MODE_STD, SAMPLE_RATE,\n      I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);',

@@ -6,8 +6,7 @@ using namespace ChakshuTinyModel;
 enum Status : uint8_t { STARTING=0,LISTENING=1,MODEL_MISSING=2,NO_MEMORY=3,MODEL_ERROR=4,VOICE_DISABLED=5 };
 std::atomic<uint8_t> status{MODEL_MISSING};
 std::atomic<bool> enabled{true};
-std::atomic<bool> linkStandDown{false};
-std::atomic<uint32_t> discontinuities{0},leaseAt{0},leaseConnection{0};
+std::atomic<uint32_t> discontinuities{0};
 std::atomic<uint16_t> audioMeanAbs{0},audioPeak{0},candidateConfidence{0};
 std::atomic<uint8_t> candidateId{0};
 std::atomic<uint32_t> candidateAt{0},candidateCount{0};
@@ -32,17 +31,13 @@ portMUX_TYPE stateMux=portMUX_INITIALIZER_UNLOCKED;
 uint32_t serial=0,lastAt=0;uint8_t lastCommand=0,lastResult=0;uint16_t lastValue=0;
 Gate gate;
 
-bool ownershipAllowsVoice(){return enabled.load()&&!linkStandDown.load()&&!deviceConnected.load()&&!sleepPending;}
+bool ownershipAllowsVoice(){return enabled.load()&&!sleepPending;}
 bool active(){return status.load()==LISTENING&&ownershipAllowsVoice()&&ring&&workerHandle;}
 void refreshRuntimeStatus(){
   if(workerHandle)status=ownershipAllowsVoice()?LISTENING:VOICE_DISABLED;
 }
-void linkConnected(){
-  linkStandDown=true;leaseAt=0;++discontinuities;refreshRuntimeStatus();
-}
-void linkDisconnected(){
-  linkStandDown=false;leaseAt=0;++discontinuities;refreshRuntimeStatus();
-}
+void linkConnected(){ ++discontinuities;refreshRuntimeStatus(); }
+void linkDisconnected(){ ++discontinuities;refreshRuntimeStatus(); }
 
 void resetClassifierWindow(){
   writeAt=0;samplesSeen=0;samplesSinceInference=0;speechHoldUntil=0;vadRun=0;
@@ -268,16 +263,15 @@ void initialize(){
     (unsigned long)(WINDOW_SAMPLES*sizeof(int16_t)),(unsigned long)ESP.getFreeHeap(),(unsigned long)ESP.getFreePsram());
 }
 void initTask(void*){
-  // Hey Snap is deliberately offline-only. Do not allocate its ring, queues or
-  // worker tasks while BLE/PWA owns the device: that late 12 s heap/task burst
-  // can collide with a recording started immediately after connection.
-  uint32_t disconnectedSince=0;
+  // Start after the proven BLE/SD boot window is healthy. Hey Snap remains
+  // available whether BLE is connected or not; live PWA capture pre-empts the
+  // idle listener through the shared microphone mutex.
+  uint32_t healthySince=0;
   for(;;){
-    const bool blocked=millis()<12000u || otaBusy() || mediaBusy() ||
-      deviceConnected.load() || streamingEnabled.load();
-    if(blocked){disconnectedSince=0;vTaskDelay(pdMS_TO_TICKS(250));continue;}
-    if(!disconnectedSince){disconnectedSince=millis();vTaskDelay(pdMS_TO_TICKS(250));continue;}
-    if(uint32_t(millis()-disconnectedSince)<1000u){vTaskDelay(pdMS_TO_TICKS(250));continue;}
+    const bool blocked=millis()<12000u || otaBusy() || mediaBusy() || streamingEnabled.load();
+    if(blocked){healthySince=0;vTaskDelay(pdMS_TO_TICKS(250));continue;}
+    if(!healthySince){healthySince=millis();vTaskDelay(pdMS_TO_TICKS(250));continue;}
+    if(uint32_t(millis()-healthySince)<1000u){vTaskDelay(pdMS_TO_TICKS(250));continue;}
     break;
   }
   initialize();initHandle=nullptr;vTaskDelete(nullptr);
@@ -339,15 +333,14 @@ void tick(){
   if(!active()||otaBusy()||pending.epoch!=discontinuities.load()||uint32_t(millis()-pending.at)>2200u)return;
   const uint8_t command=pending.command;
   const uint16_t value=command==VIDEO_START?10:command==AUDIO_ON?60:0;
-  const bool online=deviceConnected.load()&&leaseConnection.load()==connectionGeneration.load()&&
-    leaseAt.load()!=0&&uint32_t(millis()-leaseAt.load())<6000u;
+  const bool online=deviceConnected.load();
   if(command==WAKE){
     portENTER_CRITICAL(&stateMux);++serial;lastCommand=WAKE;lastResult=online?2:0;lastAt=millis();lastValue=0;portEXIT_CRITICAL(&stateMux);
     if(deviceConnected.load()&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
     Serial.printf("[VOICE] TinyML Hey Snap confidence=%u online=%u\n",unsigned(candidateConfidence.load()),unsigned(online));return;
   }
   uint8_t result=0;using namespace ChakshuTransfer;
-  if(command==STOP){++localEpoch;if(offline.load())stopRequested.store(true);if(streamingEnabled.load())stopStreaming();}
+  if(command==STOP){++localEpoch;if(offline.load())stopRequested.store(true);}
   else if(command==PHOTO || command==DESCRIBE){
     if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;
     else if(streamingEnabled.load()||offline.load())result=ChakshuMedia::BUSY;
@@ -381,12 +374,8 @@ class Callbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* c)override{
     const String value=c->getValue();if(value.length()!=3||uint8_t(value[0])!=0xCC||uint8_t(value[1])!=2)return;
     const uint8_t op=value[2];
-    if(op==2){leaseConnection=connectionGeneration.load();leaseAt=millis();return;}
-    if(op==3){leaseAt=0;return;}
     if(op>1)return;
-    // 0/1 are ownership handoff opcodes, never a persistent user preference.
-    // A live BLE link always wins even if an old client writes VOICE_ON.
-    linkStandDown=op==0;++discontinuities;leaseAt=0;refreshRuntimeStatus();
+    enabled=op==1;++discontinuities;refreshRuntimeStatus();
   }
 };
 void ble(BLEService* service){

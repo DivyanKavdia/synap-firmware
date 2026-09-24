@@ -121,17 +121,22 @@ int main(){
 }`), /PASS capture paths/);
 });
 
-test('BLE owns Chakshu while connected and every disconnect re-arms standalone voice', () => {
+test('Hey Snap remains armed across BLE while PWA transport keeps capture ownership', () => {
   const voice = fs.readFileSync('firmware/xiao-sense/voice.cpp', 'utf8');
   const server = fs.readFileSync('firmware/xiao-sense/ble-server.cpp', 'utf8');
-  assert.match(voice, /ownershipAllowsVoice\(\)\{return enabled\.load\(\)&&!linkStandDown\.load\(\)&&!deviceConnected\.load\(\)&&!sleepPending;\}/);
-  assert.match(voice, /void linkConnected\(\)[\s\S]*linkStandDown=true[\s\S]*refreshRuntimeStatus\(\)/);
-  assert.match(voice, /void linkDisconnected\(\)[\s\S]*linkStandDown=false[\s\S]*refreshRuntimeStatus\(\)/);
+  const adapter = fs.readFileSync('tools/boards/xiao-sense/index.cjs', 'utf8');
+  assert.match(voice, /ownershipAllowsVoice\(\)\{return enabled\.load\(\)&&!sleepPending;\}/);
+  assert.doesNotMatch(voice, /linkStandDown|!deviceConnected\.load\(\)/);
+  assert.match(voice, /void linkConnected\(\)\{ \+\+discontinuities;refreshRuntimeStatus\(\); \}/);
+  assert.match(voice, /void linkDisconnected\(\)\{ \+\+discontinuities;refreshRuntimeStatus\(\); \}/);
   assert.match(server, /deviceConnected=true;connectionEventPending=true;\s*ChakshuVoice::linkConnected\(\)/);
   assert.match(server, /deviceConnected=false[\s\S]*ChakshuVoice::linkDisconnected\(\)/);
   const callback = voice.slice(voice.indexOf('class Callbacks'), voice.indexOf('void ble('));
-  assert.match(callback, /linkStandDown=op==0/);
-  assert.doesNotMatch(callback, /Preferences|persistEnabled|enabled=op==1/);
+  assert.match(callback, /enabled=op==1;\+\+discontinuities;refreshRuntimeStatus\(\)/);
+  assert.match(voice, /const bool online=deviceConnected\.load\(\)/);
+  assert.match(voice, /if\(command==STOP\)\{\+\+localEpoch;if\(offline\.load\(\)\)stopRequested\.store\(true\);\}/);
+  assert.doesNotMatch(voice, /if\(streamingEnabled\.load\(\)\)stopStreaming\(\)/);
+  assert.match(adapter, /MicrophoneGuard pwaMicrophoneHandoff/);
   assert.match(voice, /bytes\[3\]=ownershipAllowsVoice\(\)\?1:0/);
 });
 
