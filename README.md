@@ -1,6 +1,6 @@
 # Synap Firmware
 
-**Current firmware baseline — 22 September 2026**
+**Current firmware baseline — 24 September 2026**
 
 This repository owns production firmware for the Synap wearable family.
 
@@ -73,16 +73,20 @@ The model uses a small embedded learned-weight payload and an adaptive AC-noise/
 
 Voice protocol remains version **2**. Media protocol remains version **1**.
 
-### One command owner at a time
+### Source-based command routing
 
-The companion PWA now treats Chakshu as having one operational owner:
+Chakshu no longer uses BLE connection state to enable or disable Hey Snap. The input source determines the destination:
 
-- **Disconnected from the PWA:** firmware owns Hey Snap and offline media actions.
-- **Connected to the PWA:** the PWA disables the wake engine and owns media/BLE operations.
+| Trigger | BLE connected | BLE disconnected |
+| --- | --- | --- |
+| **Hey Snap → audio/photo/video/describe** | Save to Chakshu SD | Save to Chakshu SD |
+| **PWA mic/photo/video controls** | Stream/capture directly to the PWA/phone | Not available |
+| **TTP223 double tap** | Start/stop PWA audio stream | Start/stop SD audio |
+| **TTP223 image/video** | Never | Never |
 
-This avoids voice/media work racing the same serialized BLE, microphone, camera and SD resources.
+Hey Snap stays armed across BLE connect/disconnect. A PWA START takes the shared microphone mutex before live capture begins, so the idle wake listener cannot race the first BLE audio read. During live PWA capture, voice media commands that need the same camera/microphone/SD path fail busy rather than redirecting or corrupting the active take. A voice **Stop** stops only a voice/TTP SD capture and never terminates a PWA-started recording.
 
-Firmware now enforces the ownership boundary itself: any BLE connection stands the local wake engine down, and every BLE disconnect re-arms it, including unexpected out-of-range/browser drops where the PWA cannot send a release opcode. The PWA's voice on/off writes are session handoff signals rather than a persisted user preference. Physical verification of this reconnect path remains required.
+Voice control opcodes 0/1 remain available as explicit diagnostic enable/disable controls; they are no longer BLE-session ownership handoff signals.
 
 ### Touch, battery and status indicator
 
@@ -94,9 +98,9 @@ The current Chakshu hardware revision extends the shared Odyssey power/status co
 - **SD chip-select remains GPIO21.** On XIAO ESP32-S3 Sense this signal is electrically shared with the active-low orange USER_LED. Synap never uses that LED as a status indicator, but SD transactions necessarily pull CS low and can therefore flash the orange LED. Software can reduce unnecessary SD reads but cannot suppress that electrical flash while accessing the onboard SD slot.
 
 
-While disconnected, an active Hey Snap listener prevents the normal idle auto-sleep timeout so offline voice remains available. TinyML allocation itself is also deferred while BLE/PWA owns Chakshu; the model ring and worker tasks are created only after a stable disconnected interval, so the offline voice runtime cannot introduce a late heap/task transition during connected audio. An explicit 4-second touch hold can still enter deep sleep. Camera/SD work blocks standby/deep sleep until the active media operation finishes.
+An active Hey Snap listener prevents the normal idle auto-sleep timeout so voice remains available whether BLE is connected or not. TinyML allocation is still deferred until the proven BLE/SD boot window is healthy, but it no longer waits for a disconnected interval. An explicit 4-second touch hold can still enter deep sleep. Camera/SD work blocks standby/deep sleep until the active media operation finishes.
 
-Build **1400** preserves the BLE ownership/SD safeguards and adds the experimental audio/describe voice routes. Queued standalone actions are invalidated on BLE connection and rejected while connected. Already running captures retain safe file finalization.
+Connected PWA capture and local SD capture remain mutually exclusive at the resource layer. Already running media is finalized safely; a conflicting new action returns busy rather than changing destination.
 
 The experimental personalized model now includes Record audio and Explain what you see classes. Recognition quality remains under field observation and must be retrained with a larger independent real-device dataset before being treated as production-accurate.
 
@@ -111,7 +115,7 @@ Chakshu supports Synap-owned offline SD capture and recovery:
 - Offline video stored on SD.
 - Full-resolution still capture through the hardened saved-photo path.
 - Two SD video profiles used by standalone firmware capture.
-- Connected BLE clients cannot start SD audio/video recording; connected capture belongs to the PWA.
+- BLE clients still cannot remotely start SD audio/video recording. SD media while connected is initiated only by the local Hey Snap runtime; PWA controls continue to capture directly to the phone.
 - The local spoken **Record a video** path currently uses a **10-second default**.
 - The local spoken **Record audio** path is bounded to **60 seconds** because the recorder owns the microphone while active.
 - **Explain what you see** saves a tagged JPG offline; visual inference occurs only after a later verified PWA sync.
@@ -173,7 +177,7 @@ The companion PWA owns:
 
 - connection/session control,
 - all new audio/photo/video capture while BLE is connected; connected captures save directly to the PWA,
-- disabling Hey Snap while it owns the live BLE link,
+- observing Hey Snap status/results over a single notification subscription without periodic polling,
 - SD catalogue discovery after reconnect,
 - Library representation of unsynced SD-only audio, photo and video,
 - explicit **Sync to app** for one item or all pending offline captures,
@@ -230,8 +234,9 @@ The current hardware acceptance list is:
 
 - sustained Odyssey S3/C3 microphone + BLE recording,
 - Chakshu BLE reconnect and recovery,
-- Hey Snap wake recognition after a clean standalone boot,
-- Hey Snap automatic re-arm after an unexpected BLE disconnect,
+- Hey Snap wake recognition both disconnected and while BLE is connected,
+- Hey Snap remains armed across unexpected BLE disconnect/reconnect,
+- PWA START pre-empts the idle voice microphone reader without first-frame loss,
 - Take a snap recognition and saved-photo completion,
 - Record a video recognition and durable SD completion,
 - photo quality,
