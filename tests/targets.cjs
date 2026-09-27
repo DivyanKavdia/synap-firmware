@@ -34,4 +34,11 @@ test('secondary generated target preserves the production interaction contract',
   assert.match(c3,/double tap -> STOP \+ POWER SAVER/);
   assert.match(c3,/900000u/);
   assert.match(c3,/SYNAP_BATTERY_MONITOR_ENABLE 1/);
+  assert.match(s3,/advertising->setScanResponse\(true\)/);
+  assert.match(c3,/advertising->setScanResponse\(false\)/);
+  assert.match(c3,/c3BleAddress\[0\] = uint8_t\(\(c3BleAddress\[0\] & 0x3Fu\) \| 0xC0u\)/);
+  assert.match(c3,/BLEDevice::setOwnAddrType\(BLE_OWN_ADDR_RANDOM\)/);
+  assert.match(c3,/advertising->setDeviceAddress\(c3BleAddress, BLE_ADDR_TYPE_RANDOM\)/);
+  assert.doesNotMatch(c3,/server->updateConnParams\(param->connect.remote_bda/);
+  assert.doesNotMatch(c3,/server->updateConnParams\(desc->conn_handle/);
 });
