@@ -5,7 +5,7 @@ namespace ChakshuVoice {
 using namespace ChakshuTinyModel;
 enum Status : uint8_t { STARTING=0,LISTENING=1,MODEL_MISSING=2,NO_MEMORY=3,MODEL_ERROR=4,VOICE_DISABLED=5 };
 std::atomic<uint8_t> status{MODEL_MISSING};
-std::atomic<bool> enabled{true};
+std::atomic<bool> enabled{true},pwaCaptureSuppressed{false};
 std::atomic<uint32_t> discontinuities{0};
 std::atomic<uint16_t> audioMeanAbs{0},audioPeak{0},candidateConfidence{0};
 std::atomic<uint8_t> candidateId{0};
@@ -35,12 +35,19 @@ bool ownershipAllowsVoice(){return enabled.load()&&!sleepPending;}
 bool active(){
   // PWA audio is also the soundtrack owner for PWA video. While that stream is
   // active, firmware Hey Snap must not listen, infer or execute local actions.
-  return status.load()==LISTENING&&ownershipAllowsVoice()&&!streamingEnabled.load()&&ring&&workerHandle;
+  return status.load()==LISTENING&&ownershipAllowsVoice()&&!pwaCaptureSuppressed.load()&&
+    !streamingEnabled.load()&&ring&&workerHandle;
 }
 void pwaCaptureStarted(){
-  // Invalidate a wake/action recognized immediately before START. Pending voice
-  // work carries this epoch, so it cannot cross into the PWA-owned recording.
-  ++discontinuities;
+  // Set the ownership latch before the PWA microphone handoff. The epoch then
+  // invalidates a wake/action recognized immediately before START.
+  if(!pwaCaptureSuppressed.exchange(true))++discontinuities;
+  candidateId=0;candidateConfidence=0;candidateAt=0;
+}
+void pwaCaptureStopped(){
+  // Resume only after BLE streaming has relinquished the microphone. Force the
+  // next offline/idle-listening block to start from a fresh wake-word window.
+  if(pwaCaptureSuppressed.exchange(false))++discontinuities;
   candidateId=0;candidateConfidence=0;candidateAt=0;
 }
 void refreshRuntimeStatus(){
