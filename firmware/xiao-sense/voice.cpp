@@ -32,7 +32,17 @@ uint32_t serial=0,lastAt=0;uint8_t lastCommand=0,lastResult=0;uint16_t lastValue
 Gate gate;
 
 bool ownershipAllowsVoice(){return enabled.load()&&!sleepPending;}
-bool active(){return status.load()==LISTENING&&ownershipAllowsVoice()&&ring&&workerHandle;}
+bool active(){
+  // PWA audio is also the soundtrack owner for PWA video. While that stream is
+  // active, firmware Hey Snap must not listen, infer or execute local actions.
+  return status.load()==LISTENING&&ownershipAllowsVoice()&&!streamingEnabled.load()&&ring&&workerHandle;
+}
+void pwaCaptureStarted(){
+  // Invalidate a wake/action recognized immediately before START. Pending voice
+  // work carries this epoch, so it cannot cross into the PWA-owned recording.
+  ++discontinuities;
+  candidateId=0;candidateConfidence=0;candidateAt=0;
+}
 void refreshRuntimeStatus(){
   if(workerHandle)status=ownershipAllowsVoice()?LISTENING:VOICE_DISABLED;
 }
