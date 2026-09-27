@@ -121,12 +121,14 @@ int main(){
 }`), /PASS capture paths/);
 });
 
-test('Hey Snap remains armed across BLE while PWA transport keeps capture ownership', () => {
+test('Hey Snap stays available while connected idle but is hard-suspended by PWA recording', () => {
   const voice = fs.readFileSync('firmware/xiao-sense/voice.cpp', 'utf8');
   const server = fs.readFileSync('firmware/xiao-sense/ble-server.cpp', 'utf8');
   const adapter = fs.readFileSync('tools/boards/xiao-sense/index.cjs', 'utf8');
   assert.match(voice, /ownershipAllowsVoice\(\)\{return enabled\.load\(\)&&!sleepPending;\}/);
   assert.doesNotMatch(voice, /linkStandDown|!deviceConnected\.load\(\)/);
+  assert.match(voice, /bool active\(\)\{[\s\S]*!streamingEnabled\.load\(\)[\s\S]*ring&&workerHandle;/);
+  assert.match(voice, /void pwaCaptureStarted\(\)\{[\s\S]*\+\+discontinuities;[\s\S]*candidateId=0;candidateConfidence=0;candidateAt=0;/);
   assert.match(voice, /void linkConnected\(\)\{ \+\+discontinuities;refreshRuntimeStatus\(\); \}/);
   assert.match(voice, /void linkDisconnected\(\)\{ \+\+discontinuities;refreshRuntimeStatus\(\); \}/);
   assert.match(server, /deviceConnected=true;connectionEventPending=true;\s*ChakshuVoice::linkConnected\(\)/);
@@ -136,7 +138,7 @@ test('Hey Snap remains armed across BLE while PWA transport keeps capture owners
   assert.match(voice, /const bool online=deviceConnected\.load\(\)/);
   assert.match(voice, /if\(command==STOP\)\{\+\+localEpoch;if\(offline\.load\(\)\)stopRequested\.store\(true\);\}/);
   assert.doesNotMatch(voice, /if\(streamingEnabled\.load\(\)\)stopStreaming\(\)/);
-  assert.match(adapter, /MicrophoneGuard pwaMicrophoneHandoff/);
+  assert.match(adapter, /ChakshuVoice::pwaCaptureStarted\(\);\\n  MicrophoneGuard pwaMicrophoneHandoff/);
   assert.match(voice, /bytes\[3\]=ownershipAllowsVoice\(\)\?1:0/);
 });
 
