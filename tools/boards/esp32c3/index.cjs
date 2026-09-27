@@ -69,10 +69,13 @@ function materializeC3(source,target){
   uint8_t c3BleAddress[6] = {};
   const bool c3BleAddressReady = esp_efuse_mac_get_default(c3BleAddress) == ESP_OK;
   if (c3BleAddressReady) {
-    c3BleAddress[0] = uint8_t((c3BleAddress[0] & 0x3Fu) | 0xC0u);
+    uint8_t displayOrder[6] = {};
+    memcpy(displayOrder, c3BleAddress, sizeof(displayOrder));
+    for (uint8_t i = 0; i < 6; ++i) c3BleAddress[i] = displayOrder[5 - i];
+    c3BleAddress[5] = uint8_t((c3BleAddress[5] & 0x3Fu) | 0xC0u);
 #if defined(CONFIG_NIMBLE_ENABLED)
-    BLEDevice::setOwnAddrType(BLE_OWN_ADDR_RANDOM);
-    BLEDevice::setOwnAddr(c3BleAddress);
+    const bool addrSet = BLEDevice::setOwnAddr(c3BleAddress);
+    if (addrSet) BLEDevice::setOwnAddrType(BLE_OWN_ADDR_RANDOM);
 #endif
   }
   BLEDevice::setMTU(REQUESTED_MTU);`;
@@ -87,11 +90,9 @@ function materializeC3(source,target){
   const advertisingAfter=`  BLEAdvertising* advertising=BLEDevice::getAdvertising();
 #if defined(CONFIG_BLUEDROID_ENABLED)
   if (c3BleAddressReady) advertising->setDeviceAddress(c3BleAddress, BLE_ADDR_TYPE_RANDOM);
-#elif defined(CONFIG_NIMBLE_ENABLED)
-  advertising->setName(DEVICE_NAME);
 #endif
   advertising->addServiceUUID(SERVICE_UUID);
-  advertising->setScanResponse(false);`;
+  advertising->setScanResponse(true);`;
   out=replaceOnce(out,advertisingBefore,advertisingAfter,'C3 primary BLE advertisement');
 
   if(out.includes(PRIMARY_TARGET))throw Error('C3 source still contains the S3 target identity');
