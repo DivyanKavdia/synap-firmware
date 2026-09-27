@@ -26,6 +26,10 @@ struct MicrophoneGuard { MicrophoneGuard(){} ~MicrophoneGuard(){} };
 unsigned starts=0,wakes=0;
 int audioFrameQueue=1,captureTaskHandle=1;
 bool otaBusy(){return updating;}
+namespace ChakshuVoice {
+unsigned pwaStarts=0;
+void pwaCaptureStarted(){++pwaStarts;}
+}
 void updateStatusCharacteristic(bool){}
 void stopStreaming(ErrorCode){streamingEnabled=false;}
 bool configureTransportFromPeerMtu(){return transportValid;}
@@ -48,6 +52,7 @@ int main(){
  transportValid=false;startStreaming(2);assert(!starts&&!ChakshuResources::media);
  transportValid=true;microphoneValid=false;startStreaming(2);assert(starts==1&&!streamingEnabled&&!ChakshuResources::media);
  microphoneValid=true;startStreaming(2);assert(starts==2&&wakes==1&&streamingEnabled&&!ChakshuResources::media);
+ assert(ChakshuVoice::pwaStarts==2);
  startStreaming(2);assert(starts==2&&wakes==1&&!ChakshuResources::media);
  {ChakshuResources::Lease media;assert(media&&streamingEnabled);}
  puts("PASS atomic START admission");
