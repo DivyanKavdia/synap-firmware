@@ -102,3 +102,16 @@ The non-runtime tools are also intentional:
 The companion PWA has its own reachability/cleanup policy in [its development guide](https://github.com/DivyanKavdia/synap-pwa/blob/main/docs/DEVELOPMENT.md). Device/PWA responsibilities must stay separated: firmware owns disconnected capture; the PWA owns connected capture, verified SD import/deletion and cloud-derived memory surfaces.
 
 Git history is the rollback store; do not keep retired production implementations beside their replacements.
+
+### Odyssey SD startup status (28 September 2026)
+
+The boot probe uses the existing non-overlapping catalog pin maps. It never writes,
+formats, retries or enables SD recording/sync, and releases SPI after the check.
+The existing 20-byte module descriptor now reports an optional Odyssey-only
+extension: byte 17 is version 1, byte 18 is 0 (not checked), 1 (detected and
+filesystem mounted), 2 (mount failed), or 3 (no card reported); byte 19 stays zero.
+The SD supported/ready capability bits stay clear. Chakshu's descriptor is unchanged.
+The result is a startup snapshot, not live card presence. Insert/change the card,
+restart the pendant, then reconnect. A mount failure alone does not prove absence;
+check power, wiring and filesystem. PWA shell166 shows this result in Device settings;
+older firmware requires an update before a result can be displayed.

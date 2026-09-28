@@ -582,6 +582,9 @@ void otaTick() {
 
 // SYNAP_BOARD_FEATURES
 // Versioned 20-byte descriptor fits the default ATT payload; names are display-only.
+#if !SYNAP_CHAKSHU
+uint8_t odysseySdDetectionState();
+#endif
 void encodeModuleCapabilities(uint8_t* p) {
   memset(p,0,20);p[0]=0xC7;p[1]=1;p[2]=SYNAP_MODULE_ID;p[3]=1;
   const uint16_t supported=SYNAP_SUPPORTED_CAPABILITIES;
@@ -601,6 +604,11 @@ void encodeModuleCapabilities(uint8_t* p) {
   // Additive media-v1 features: paced notifications, saved photo preview,
   // Wi-Fi downloads, independent SD workers, native SD video quality profiles.
   p[16]=ChakshuTransfer::requests?31:0;
+#endif
+#if !SYNAP_CHAKSHU
+  // Optional boot-probe extension; does not advertise usable SD storage.
+  p[17]=1;
+  p[18]=odysseySdDetectionState();
 #endif
   ready &= supported;
   p[4]=supported&255;p[5]=supported>>8;p[6]=ready&255;p[7]=ready>>8;
@@ -1897,7 +1905,7 @@ void transmitterTask(void* parameter) {
   }
 }
 
-// Detection only: no formatting, writes, recording, BLE services or retries.
+// Detection only: no formatting, writes, recording, new BLE services or retries.
 #if !SYNAP_CHAKSHU
 #include <SPI.h>
 #include <SD.h>
@@ -1923,7 +1931,12 @@ static_assert(ODYSSEY_SD_CS != ODYSSEY_SD_SCK && ODYSSEY_SD_CS != ODYSSEY_SD_MOS
   ODYSSEY_SD_SCK != ODYSSEY_SD_MISO && ODYSSEY_SD_MOSI != ODYSSEY_SD_MISO,
   "SD pins must be distinct");
 
+// Boot snapshot: 0=not checked, 1=detected, 2=mount failed, 3=no card reported.
+static uint8_t odysseySdBootState=0;
+uint8_t odysseySdDetectionState() { return odysseySdBootState; }
+
 void odysseyDetectSdCard() {
+  odysseySdBootState=0;
   SPIClass sdSpi(FSPI);
   // Explicit mapping avoids the board's default SPI pins (used by the mic).
   digitalWrite(ODYSSEY_SD_CS, HIGH);
@@ -1935,13 +1948,16 @@ void odysseyDetectSdCard() {
   if (mounted) {
     const uint8_t type=SD.cardType();
     if (type != CARD_NONE) {
+      odysseySdBootState=1;
       const char* label=type==CARD_MMC?"MMC":type==CARD_SD?"SDSC":type==CARD_SDHC?"SDHC/SDXC":"unknown";
       Serial.printf("[SD] detected: %s, %llu MiB; filesystem mounted\n", label,
         static_cast<unsigned long long>(SD.cardSize()/(1024ULL*1024ULL)));
     } else {
+      odysseySdBootState=3;
       Serial.println("[SD] no card reported");
     }
   } else {
+    odysseySdBootState=2;
     // A failed mount cannot distinguish absent card from wiring/filesystem trouble.
     Serial.println("[SD] detection/mount failed: check card, wiring and filesystem");
   }

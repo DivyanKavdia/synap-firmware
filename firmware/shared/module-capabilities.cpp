@@ -1,5 +1,8 @@
 // SYNAP_BOARD_FEATURES
 // Versioned 20-byte descriptor fits the default ATT payload; names are display-only.
+#if !SYNAP_CHAKSHU
+uint8_t odysseySdDetectionState();
+#endif
 void encodeModuleCapabilities(uint8_t* p) {
   memset(p,0,20);p[0]=0xC7;p[1]=1;p[2]=SYNAP_MODULE_ID;p[3]=1;
   const uint16_t supported=SYNAP_SUPPORTED_CAPABILITIES;
@@ -19,6 +22,11 @@ void encodeModuleCapabilities(uint8_t* p) {
   // Additive media-v1 features: paced notifications, saved photo preview,
   // Wi-Fi downloads, independent SD workers, native SD video quality profiles.
   p[16]=ChakshuTransfer::requests?31:0;
+#endif
+#if !SYNAP_CHAKSHU
+  // Optional boot-probe extension; does not advertise usable SD storage.
+  p[17]=1;
+  p[18]=odysseySdDetectionState();
 #endif
   ready &= supported;
   p[4]=supported&255;p[5]=supported>>8;p[6]=ready&255;p[7]=ready>>8;
