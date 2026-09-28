@@ -15,6 +15,8 @@ function renderProfile(target) {
     define('DEVICE_NAME', JSON.stringify(target.advertisingName)),
     define('SYNAP_SUPPORTED_CAPABILITIES', capabilityMask(target)),
     ...Object.entries(FLAGS).map(([name, bit]) => define(`SYNAP_CAP_${name.toUpperCase()}`, bit)),
+    ...(h.sdDetection ? Object.entries(h.sdDetection).map(([signal, pin]) =>
+      define(`SYNAP_SD_${signal.toUpperCase()}_PIN`, pin)) : []),
     optional('SYNAP_TOUCH_PIN', h.touch ?? -1),
     optional('SYNAP_BATTERY_ADC_PIN', h.battery ?? -1),
     optional('SYNAP_BATTERY_MONITOR_ENABLE', Number(h.battery !== null)),

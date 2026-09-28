@@ -53,7 +53,13 @@
         "batteryCellMv": 4130,
         "batteryFullMv": 4130,
         "batteryAttenuation": "ADC_6db",
-        "batteryCutoff": true
+        "batteryCutoff": true,
+        "sdDetection": {
+          "cs": 9,
+          "sck": 12,
+          "mosi": 10,
+          "miso": 11
+        }
       }
     },
     {
@@ -95,7 +101,13 @@
         "batteryCellMv": 2,
         "batteryFullMv": 4150,
         "batteryAttenuation": "ADC_11db",
-        "batteryCutoff": false
+        "batteryCutoff": false,
+        "sdDetection": {
+          "cs": 0,
+          "sck": 10,
+          "mosi": 21,
+          "miso": 20
+        }
       }
     },
     {

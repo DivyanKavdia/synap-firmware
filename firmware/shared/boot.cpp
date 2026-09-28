@@ -105,6 +105,10 @@ void setup() {
   ChakshuMedia::initialize();
   ChakshuTransfer::initialize();
 #endif
+  // Probe once before BLE/tasks start; failure never prevents normal startup.
+#if !SYNAP_CHAKSHU
+  odysseyDetectSdCard();
+#endif
   initializeBLE();
   initializeRecovery();
   if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
