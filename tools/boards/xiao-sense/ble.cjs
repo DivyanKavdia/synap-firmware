@@ -5,6 +5,15 @@ const {replaceOnce,replaceFunctionBlock,readTemplate}=require('../../target-sour
 function materializeBle(source) {
   let out=source;
   const replace=(before,after,label)=>out=replaceOnce(out,before,after,label);
+  // C3 SD transfer is compile-time dead on Chakshu. Remove it before the
+  // NimBLE adapter validates live Bluetooth APIs, otherwise Bluedroid-only
+  // calls inside the C3 block are falsely reported as Chakshu API leaks.
+  const c3Start=out.indexOf('#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU\nnamespace OdysseyTransfer {');
+  const c3EndMarker='} // namespace OdysseyTransfer\n#endif\n';
+  if(c3Start<0)throw Error('Missing Odyssey C3 transfer block');
+  const c3End=out.indexOf(c3EndMarker,c3Start);
+  if(c3End<0)throw Error('Missing Odyssey C3 transfer end');
+  out=out.slice(0,c3Start)+out.slice(c3End+c3EndMarker.length);
   replace('#include <BLEDevice.h>','#include <NimBLEDevice.h>','Chakshu Bluetooth library');
   replace('#include <BLEServer.h>','','NimBLEDevice includes server');
   // NimBLE's generic overload serializes mutable char arrays with sizeof(T),
