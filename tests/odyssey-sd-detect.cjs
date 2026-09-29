@@ -76,12 +76,12 @@ test('C3 rejects UART Serial and an overlapping peripheral pin at compile time',
  ['-DCONFIG_IDF_TARGET_ESP32C3=1','-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags('ESP32C3')]),/SD pin overlaps/);
 });
 
-test('device profile emits the agreed SD pins only for Odyssey',()=>{
+test('device profile emits Odyssey SD pins and only C3 advertises SD sync',()=>{
  for (const id of ['esp32c3-supermini-4m','esp32s3-fh4r2-qspi-4m']) {
   const target=getTarget(id),profile=renderProfile(target);
   for(const [signal,pin] of Object.entries(target.hardware.sdDetection))
    assert(profile.includes(`#define SYNAP_SD_${signal.toUpperCase()}_PIN ${pin}`));
-  assert(!target.features.includes('sd'), 'Detection alone must not advertise SD recording/sync');
+  assert.equal(target.features.includes('sd'), id==='esp32c3-supermini-4m');
  }
  assert(!renderProfile(getTarget('xiao-esp32s3-sense-8m')).includes('SYNAP_SD_'));
 });
