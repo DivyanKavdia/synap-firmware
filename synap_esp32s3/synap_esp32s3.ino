@@ -2001,6 +2001,7 @@ static_assert(ODYSSEY_SD_CS != ODYSSEY_SD_SCK && ODYSSEY_SD_CS != ODYSSEY_SD_MOS
   ODYSSEY_SD_SCK != ODYSSEY_SD_MISO && ODYSSEY_SD_MOSI != ODYSSEY_SD_MISO,
   "SD pins must be distinct");
 
+// Regression baseline: C3 build 1445 / commit af0d7537c12a6b9cd6c7598cf88a0f58654e2ee0.
 // Restore the mount sequence proven on C3 build 1445. Do not issue any raw SD
 // commands before SD.begin(); some cards/adapters are sensitive to a second
 // initialization path after a warm software/OTA reset.
