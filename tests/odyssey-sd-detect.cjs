@@ -15,7 +15,10 @@ const stub=`
 #include <string>
 #include <vector>
 #define HIGH 1
+#define LOW 0
 #define OUTPUT 1
+#define MSBFIRST 1
+#define SPI_MODE0 0
 #define FSPI 0
 #define CARD_NONE 0
 #define CARD_MMC 1
@@ -27,13 +30,12 @@ constexpr int TOUCH_INPUT_PIN=3,BATTERY_ADC_PIN=1,RGB_LED_PIN=8;
 #else
 constexpr int TOUCH_INPUT_PIN=13,BATTERY_ADC_PIN=8,RGB_LED_PIN=48;
 #endif
-int spiEnds=0,sdEnds=0,csLevel=0,beginCalls=0;
+int spiEnds=0,sdEnds=0,csLevel=0,beginCalls=0,lowTransfers=0;\nuint8_t rawReply=0x01;
 std::vector<uint32_t> clocks;
-void digitalWrite(int,int level){csLevel=level;}
+void digitalWrite(int,int level){csLevel=level;if(level==LOW)lowTransfers=0;}
 void pinMode(int,int){}
 void delay(uint32_t){}
-struct SPIClass {
- explicit SPIClass(int){}
+struct SPISettings { SPISettings(uint32_t,int,int){} };\nstruct SPIClass {\n explicit SPIClass(int){}
  void begin(int sck,int miso,int mosi,int cs){
 #if CONFIG_IDF_TARGET_ESP32C3
  assert(sck==10 && miso==20 && mosi==21 && cs==0);
@@ -41,8 +43,7 @@ struct SPIClass {
  assert(sck==12 && miso==11 && mosi==10 && cs==9);
 #endif
  }
- void end(){++spiEnds;}
-};
+ void beginTransaction(const SPISettings&){}\n void endTransaction(){}\n uint8_t transfer(uint8_t){if(csLevel==HIGH)return 0xff;return ++lowTransfers>6?rawReply:0xff;}\n void end(){++spiEnds;}\n};
 struct SerialStub {
  std::string log;
  template<typename... T> void printf(const char* f,T... v){char b[320];snprintf(b,sizeof(b),f,v...);log+=b;}
@@ -67,7 +68,7 @@ test('ESP32C3: preserves a healthy mount and recovers failed mounts at progressi
  int main(){
   assert(odysseySdDetectionState()==0);
   odysseyDetectSdCard();
-  assert(odysseySdDetectionState()==1 && beginCalls==1 && clocks.back()==400000u);
+  assert(odysseySdDetectionState()==1 && odysseySdProbeState()==1 && beginCalls==1 && clocks.back()==400000u);
   assert(Serial.log.find("filesystem mounted at 400000 Hz on attempt 1")!=std::string::npos);
 
   // A healthy mount is retained; no destructive remount is attempted.
@@ -82,16 +83,16 @@ test('ESP32C3: preserves a healthy mount and recovers failed mounts at progressi
   assert(clocks.size()==3 && clocks[0]==400000u && clocks[1]==400000u && clocks[2]==250000u);
 
   // Complete failure exhausts the bounded sequence and stays safely offline.
-  odysseySdBootState=2;SD.mounted=false;SD.failBegins=0;clocks.clear();
+  odysseySdBootState=2;SD.mounted=false;SD.failBegins=0;rawReply=0xff;clocks.clear();
   odysseyDetectSdCard();
-  assert(odysseySdDetectionState()==2);
+  assert(odysseySdDetectionState()==2 && odysseySdProbeState()==2);
   assert(clocks.size()==4 && clocks[0]==400000u && clocks[1]==400000u && clocks[2]==250000u && clocks[3]==125000u);
-  assert(Serial.log.find("failed after recovery sequence")!=std::string::npos);
+  assert(Serial.log.find("recovery exhausted")!=std::string::npos);
 
   // A card that responds without a usable type is distinct from a mount failure.
-  odysseySdBootState=2;SD.mounted=true;SD.type=CARD_NONE;clocks.clear();
+  odysseySdBootState=2;SD.mounted=true;SD.type=CARD_NONE;rawReply=0x01;clocks.clear();
   odysseyDetectSdCard();
-  assert(odysseySdDetectionState()==3 && clocks.size()==4);
+  assert(odysseySdDetectionState()==3 && odysseySdProbeState()==1 && clocks.size()==4);
   assert(Serial.log.find("no usable card type")!=std::string::npos);
   assert(csLevel==HIGH);
  }

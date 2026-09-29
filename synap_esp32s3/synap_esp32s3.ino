@@ -597,6 +597,7 @@ void otaTick() {
 // Versioned 20-byte descriptor fits the default ATT payload; names are display-only.
 #if !SYNAP_CHAKSHU
 uint8_t odysseySdDetectionState();
+uint8_t odysseySdProbeState();
 #endif
 void encodeModuleCapabilities(uint8_t* p) {
   memset(p,0,20);p[0]=0xC7;p[1]=1;p[2]=SYNAP_MODULE_ID;p[3]=1;
@@ -624,6 +625,9 @@ void encodeModuleCapabilities(uint8_t* p) {
   // is alive; SD readiness still follows the actual mounted-card state.
   p[17]=1;
   p[18]=odysseySdDetectionState();
+#if CONFIG_IDF_TARGET_ESP32C3
+  p[19]=odysseySdProbeState();
+#endif
 #if CONFIG_IDF_TARGET_ESP32C3
   if (OdysseyTransfer::available()) {
     p[14]=1;
@@ -1998,11 +2002,36 @@ static_assert(ODYSSEY_SD_CS != ODYSSEY_SD_SCK && ODYSSEY_SD_CS != ODYSSEY_SD_MOS
   "SD pins must be distinct");
 
 // Mount status: 0=not checked, 1=detected/mounted, 2=mount failed, 3=no usable card reported.
+// Electrical probe: 0=not checked, 1=card replied to SPI CMD0, 2=no SPI reply.
 static std::atomic<uint8_t> odysseySdBootState{0};
+static std::atomic<uint8_t> odysseySdElectricalState{0};
 #if CONFIG_IDF_TARGET_ESP32C3
 static SPIClass odysseySdSpi(FSPI);
 #endif
 uint8_t odysseySdDetectionState() { return odysseySdBootState; }
+uint8_t odysseySdProbeState() { return odysseySdElectricalState; }
+
+#if CONFIG_IDF_TARGET_ESP32C3
+static uint8_t odysseyRawSdProbe(SPIClass& spi,uint32_t hz) {
+  spi.beginTransaction(SPISettings(hz,MSBFIRST,SPI_MODE0));
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  for (uint8_t i=0;i<12;++i) spi.transfer(0xff); // >=96 idle clocks before CMD0.
+  digitalWrite(ODYSSEY_SD_CS,LOW);
+  static const uint8_t cmd0[6]={0x40,0,0,0,0,0x95};
+  for (uint8_t b:cmd0) spi.transfer(b);
+  uint8_t r1=0xff;
+  for (uint8_t i=0;i<16;++i) {
+    const uint8_t value=spi.transfer(0xff);
+    if ((value&0x80u)==0) { r1=value; break; }
+  }
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  spi.transfer(0xff);
+  spi.endTransaction();
+  const uint8_t state=r1==0xff?2:1;
+  Serial.printf("[SD] raw SPI probe %s, CMD0 R1=0x%02x\n",state==1?"responded":"no-response",r1);
+  return state;
+}
+#endif
 
 void odysseyDetectSdCard() {
 #if CONFIG_IDF_TARGET_ESP32C3
@@ -2013,7 +2042,9 @@ void odysseyDetectSdCard() {
   SPIClass& sdSpi=odysseySdSpi;
   static constexpr uint32_t clocks[] = {400000u, 400000u, 250000u, 125000u};
   bool sawCardWithoutType=false;
+  bool sawElectricalReply=false;
   odysseySdBootState=0;
+  odysseySdElectricalState=0;
 
   for (uint8_t attempt=0; attempt<sizeof(clocks)/sizeof(clocks[0]); ++attempt) {
     SD.end();
@@ -2028,11 +2059,16 @@ void odysseyDetectSdCard() {
       unsigned(attempt+1), static_cast<unsigned long>(clocks[attempt]),
       ODYSSEY_SD_CS, ODYSSEY_SD_SCK, ODYSSEY_SD_MOSI, ODYSSEY_SD_MISO);
 
+    const uint8_t electrical=odysseyRawSdProbe(sdSpi,clocks[attempt]);
+    if (electrical==1) sawElectricalReply=true;
+    odysseySdElectricalState=sawElectricalReply?1:2;
+
     const bool mounted=SD.begin(ODYSSEY_SD_CS, sdSpi, clocks[attempt], "/odyssey-sd", 1, false);
     if (mounted) {
       const uint8_t type=SD.cardType();
       if (type!=CARD_NONE) {
         odysseySdBootState=1;
+        odysseySdElectricalState=1;
         const char* label=type==CARD_MMC?"MMC":type==CARD_SD?"SDSC":type==CARD_SDHC?"SDHC/SDXC":"unknown";
         Serial.printf("[SD] detected: %s, %llu MiB; filesystem mounted at %lu Hz on attempt %u\n",
           label, static_cast<unsigned long long>(SD.cardSize()/(1024ULL*1024ULL)),
@@ -2048,11 +2084,11 @@ void odysseyDetectSdCard() {
   }
 
   odysseySdBootState=sawCardWithoutType?3:2;
-  Serial.println(sawCardWithoutType
-    ? "[SD] card responded but no usable card type was reported"
-    : "[SD] detection/mount failed after recovery sequence");
+  Serial.printf("[SD] recovery exhausted: mount=%u spi=%u\n",
+    unsigned(odysseySdBootState.load()),unsigned(odysseySdElectricalState.load()));
 #else
   odysseySdBootState=0;
+  odysseySdElectricalState=0;
   SPIClass sdSpi(FSPI);
 
   // S3 Odyssey remains a one-shot detection probe and releases the bus.

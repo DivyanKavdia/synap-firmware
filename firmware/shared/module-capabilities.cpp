@@ -2,6 +2,7 @@
 // Versioned 20-byte descriptor fits the default ATT payload; names are display-only.
 #if !SYNAP_CHAKSHU
 uint8_t odysseySdDetectionState();
+uint8_t odysseySdProbeState();
 #endif
 void encodeModuleCapabilities(uint8_t* p) {
   memset(p,0,20);p[0]=0xC7;p[1]=1;p[2]=SYNAP_MODULE_ID;p[3]=1;
@@ -29,6 +30,9 @@ void encodeModuleCapabilities(uint8_t* p) {
   // is alive; SD readiness still follows the actual mounted-card state.
   p[17]=1;
   p[18]=odysseySdDetectionState();
+#if CONFIG_IDF_TARGET_ESP32C3
+  p[19]=odysseySdProbeState();
+#endif
 #if CONFIG_IDF_TARGET_ESP32C3
   if (OdysseyTransfer::available()) {
     p[14]=1;
