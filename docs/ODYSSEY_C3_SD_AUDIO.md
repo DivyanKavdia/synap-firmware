@@ -1,8 +1,9 @@
 # Odyssey C3: local SD audio
 
-C3 retains a successfully mounted SD card at boot. It retries detection on every
-local recording start, so a boot-time mount failure or later card insertion does
-not require rebooting. No card is formatted and existing files are never replaced.
+C3 retains a successfully mounted SD card at boot. It re-probes on every offline
+recording start, so a boot-time mount failure or later card recovery does not
+require rebooting. A recorder task starts only after the filesystem is confirmed
+mounted. No card is formatted and existing files are never replaced.
 An SPI adapter without a usable card/filesystem cannot be reported as ready.
 
 | Control/state | Result |
@@ -26,9 +27,10 @@ enabled to keep UART0 off the SD pins. A dim green pulse indicates local activit
 
 Local capture blocks OTA, idle sleep and competing microphone use. It does not
 change the connected BLE audio/recovery protocol or the S3/Chakshu recording
-implementation. This change adds local WAV storage only: C3 SD catalogue/transfer
-to the PWA is not implemented, and SD media-transfer capabilities are not advertised.
-Read the WAV files from the card for now.
+implementation. C3 advertises SD-audio readiness only when both the microphone and
+mounted SD card are ready. On the next BLE connection, the media-v1 SD catalogue
+lists local WAV files in the PWA; a file is deleted from SD only after the app
+imports and verifies it successfully.
 
 Validation: native recorder tests cover PCM conversion with partial reads, WAV
 lengths/checkpoints, stop, reconnect, filename collisions, unavailable card, retry,
