@@ -627,7 +627,10 @@ void encodeModuleCapabilities(uint8_t* p) {
 #if CONFIG_IDF_TARGET_ESP32C3
   if (OdysseyTransfer::available()) {
     p[14]=1;
-    if (odysseySdDetectionState()==1) ready|=SYNAP_CAP_SD;
+    if (odysseySdDetectionState()==1) {
+      ready|=SYNAP_CAP_SD;
+      if (ready&SYNAP_CAP_AUDIO) ready|=SYNAP_CAP_SDAUDIO;
+    }
   }
 #endif
 #endif
@@ -2057,9 +2060,8 @@ static void odysseyRecordTask(void*) {
   File file;
   uint32_t bytes=0;
   char path[64]={};
-  // Retry on every offline start, including cards fitted after boot or a prior
-  // write fault. This never formats media or deletes an existing recording.
-  odysseyDetectSdCard();
+  // Start is admitted only after a successful SD probe. The worker owns the
+  // mounted filesystem for the duration of this disconnected local take.
   if (odysseySdDetectionState()!=1) failed=true;
   if (!failed && !SD.exists("/synap") && !SD.mkdir("/synap")) failed=true;
   if (!failed) {
@@ -2117,16 +2119,30 @@ static void odysseyRecordTask(void*) {
     static_cast<unsigned long>(bytes));
   // No microphone/file work is allowed after releasing ownership.
   odysseyRecording=false;
+  applyCpuPowerProfile(false);
   vTaskDelete(nullptr);
 }
 void odysseyToggleRecording() {
-  if (odysseyRecording.load()) { odysseyStopRequested=true; return; }
+  if (odysseyRecording.load()) {
+    odysseyStopRequested=true;
+    Serial.println("[TOUCH] double tap -> SD audio STOP");
+    return;
+  }
   if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) return;
+  // Offline capture is a real SD feature, not a best-effort fallback. Re-probe
+  // on every start so a card that recovered after boot is usable, but never
+  // create a recorder task unless the filesystem is actually mounted.
+  odysseyDetectSdCard();
+  if (odysseySdDetectionState()!=1) {
+    Serial.println("[TOUCH] double tap ignored: SD unavailable");
+    return;
+  }
   odysseyStopRequested=false;
   odysseyRecording=true;
   applyCpuPowerProfile(true);
   if (xTaskCreate(odysseyRecordTask,"sd-audio",8192,nullptr,2,nullptr)!=pdPASS) {
     odysseyRecording=false;
+    applyCpuPowerProfile(false);
     Serial.println("[SD] local audio task allocation failed");
     return;
   }
