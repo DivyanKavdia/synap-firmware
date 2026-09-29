@@ -90,8 +90,8 @@ test('C3 delayed activation waits three seconds and performs no pre-probe comman
 });
 
 test('C3 rejects UART Serial and an overlapping peripheral pin at compile time',()=>{
- assert.throws(()=>nativeTest(stub+source+'\\nint main(){}',['-DCONFIG_IDF_TARGET_ESP32C3=1',...sdFlags('ESP32C3')]),/enable USB CDC/);
- assert.throws(()=>nativeTest(stub.replace('TOUCH_INPUT_PIN=3','TOUCH_INPUT_PIN=10')+source+'\\nint main(){}',
+ assert.throws(()=>nativeTest(stub+source+'\nint main(){}',['-DCONFIG_IDF_TARGET_ESP32C3=1',...sdFlags('ESP32C3')]),/enable USB CDC/);
+ assert.throws(()=>nativeTest(stub.replace('TOUCH_INPUT_PIN=3','TOUCH_INPUT_PIN=10')+source+'\nint main(){}',
  ['-DCONFIG_IDF_TARGET_ESP32C3=1','-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags('ESP32C3')]),/SD pin overlaps/);
 });
 
