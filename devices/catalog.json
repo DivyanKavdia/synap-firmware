@@ -85,7 +85,8 @@
         "settings",
         "touch",
         "battery",
-        "standby"
+        "standby",
+        "sdAudio"
       ],
       "hardware": {
         "microphone": "i2s",
