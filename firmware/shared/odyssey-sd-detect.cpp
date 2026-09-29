@@ -32,13 +32,79 @@ static SPIClass odysseySdSpi(FSPI);
 uint8_t odysseySdDetectionState() { return odysseySdBootState; }
 
 void odysseyDetectSdCard() {
+#if CONFIG_IDF_TARGET_ESP32C3
+  // Do not disturb a healthy mounted card. Repeated SD.end()/SPI.end() cycles
+  // can turn a working sealed-device card into a false offline state.
+  if (odysseySdBootState.load()==1 && SD.cardType()!=CARD_NONE) return;
+#endif
+
   odysseySdBootState=0;
 #if CONFIG_IDF_TARGET_ESP32C3
-  SD.end();
-  odysseySdSpi.end();
   SPIClass& sdSpi=odysseySdSpi;
+  static constexpr uint32_t clocks[] = {400000u, 400000u, 250000u, 125000u};
+  bool sawCardWithoutType=false;
+  for (uint8_t attempt=0; attempt<sizeof(clocks)/sizeof(clocks[0]); ++attempt) {
+    SD.end();
+    sdSpi.end();
+    pinMode(ODYSSEY_SD_CS, OUTPUT);
+    digitalWrite(ODYSSEY_SD_CS, HIGH);
+    delay(20u + uint32_t(attempt)*20u);
+    sdSpi.begin(ODYSSEY_SD_SCK, ODYSSEY_SD_MISO, ODYSSEY_SD_MOSI, ODYSSEY_SD_CS);
+    delay(5);
+    Serial.printf("[SD] probe attempt=%u hz=%lu CS=%d SCK=%d MOSI=%d MISO=%d\n",
+      unsigned(attempt+1), static_cast<unsigned long>(clocks[attempt]),
+      ODYSSEY_SD_CS, ODYSSEY_SD_SCK, ODYSSEY_SD_MOSI, ODYSSEY_SD_MISO);
+
+    const bool mounted=SD.begin(ODYSSEY_SD_CS, sdSpi, clocks[attempt], "/odyssey-sd", 1, false);
+    if (mounted) {
+      const uint8_t type=SD.cardType();
+      if (type!=CARD_NONE) {
+        odysseySdBootState=1;
+        const char* label=type==CARD_MMC?"MMC":type==CARD_SD?"SDSC":type==CARD_SDHC?"SDHC/SDXC":"unknown";
+        Serial.printf("[SD] detected: %s, %llu MiB; filesystem mounted at %lu Hz on attempt %u\n",
+          label, static_cast<unsigned long long>(SD.cardSize()/(1024ULL*1024ULL)),
+          static_cast<unsigned long>(clocks[attempt]), unsigned(attempt+1));
+        return;
+      }
+      sawCardWithoutType=true;
+    }
+    SD.end();
+    sdSpi.end();
+    digitalWrite(ODYSSEY_SD_CS, HIGH);
+  }
+  odysseySdBootState=sawCardWithoutType?3:2;
+  Serial.println(sawCardWithoutType
+    ? "[SD] card responded but no usable card type was reported"
+    : "[SD] detection/mount failed after recovery sequence");
 #else
   SPIClass sdSpi(FSPI);
+  // Explicit mapping avoids the board's default SPI pins (used by the mic).
+  digitalWrite(ODYSSEY_SD_CS, HIGH);
+  pinMode(ODYSSEY_SD_CS, OUTPUT);
+  sdSpi.begin(ODYSSEY_SD_SCK, ODYSSEY_SD_MISO, ODYSSEY_SD_MOSI, ODYSSEY_SD_CS);
+  Serial.printf("[SD] probe CS=%d SCK=%d MOSI=%d MISO=%d\n",
+    ODYSSEY_SD_CS, ODYSSEY_SD_SCK, ODYSSEY_SD_MOSI, ODYSSEY_SD_MISO);
+  const bool mounted=SD.begin(ODYSSEY_SD_CS, sdSpi, 400000, "/odyssey-sd", 1, false);
+  if (mounted) {
+    const uint8_t type=SD.cardType();
+    if (type != CARD_NONE) {
+      odysseySdBootState=1;
+      const char* label=type==CARD_MMC?"MMC":type==CARD_SD?"SDSC":type==CARD_SDHC?"SDHC/SDXC":"unknown";
+      Serial.printf("[SD] detected: %s, %llu MiB; filesystem mounted\n", label,
+        static_cast<unsigned long long>(SD.cardSize()/(1024ULL*1024ULL)));
+    } else {
+      odysseySdBootState=3;
+      Serial.println("[SD] no card reported");
+    }
+  } else {
+    odysseySdBootState=2;
+    Serial.println("[SD] detection/mount failed: check card, wiring and filesystem");
+  }
+  SD.end();
+  sdSpi.end();
+  digitalWrite(ODYSSEY_SD_CS, HIGH);
+#endif
+}
 #endif
   // Explicit mapping avoids the board's default SPI pins (used by the mic).
   digitalWrite(ODYSSEY_SD_CS, HIGH);
