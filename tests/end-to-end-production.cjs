@@ -48,12 +48,11 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(c3,/double tap ignored: SD unavailable/);
   assert.match(c3,/odysseySdDetectionState\(\)!=1/);
   assert.match(c3,/ready\|=SYNAP_CAP_SDAUDIO/);
-  assert.match(c3,/ODYSSEY_SD_STARTUP_SETTLE_MS=3000u/);
-  assert.match(c3,/odysseyScheduleSdCardDetection\(\)/);
-  assert.match(c3,/activation scheduled after/);
-  assert.match(c3,/1445-compatible mount/);
-  assert.match(c3,/C3 SD activation is delayed until BLE and runtime tasks are ready\.\n  initializeBLE\(\);/);
-  assert.doesNotMatch(c3,/runtime tasks are ready\.\\\\n/);
+  assert.match(c3,/1445-compatible probe/);
+  const sdProbe=c3.indexOf('odysseyDetectSdCard();');
+  const bleInit=c3.indexOf('initializeBLE();');
+  assert.ok(sdProbe>0 && bleInit>sdProbe,'C3 must restore the proven 1445 SD probe before BLE startup');
+  assert.doesNotMatch(c3,/odysseyScheduleSdCardDetection\(\)/);
   assert.match(c3,/enterDeepSleep\("touch-hold"\)/);
   assert.match(c3,/enterDeepSleep\("touch-hold-after-stop"\)/);
   assert.doesNotMatch(c3,/triple tap -> DEEP SLEEP/);
@@ -70,11 +69,10 @@ test('release workflow compiles the shared complete production pipeline',()=>{
   assert.equal(compileLines.length,3);
   assert(compileLines.every(line=>line.includes('-DUSE_REAL_I2S_MIC=1')));
 });
-
-test('C3 brings BLE and runtime tasks up before delayed SD activation',()=>{
+test('C3 restores build-1445 SD startup ordering',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
+  const sd=c3.indexOf('odysseyDetectSdCard();');
   const ble=c3.indexOf('initializeBLE();');
   const tasks=c3.indexOf('xTaskCreate(controlTask, "control"');
-  const sd=c3.indexOf('if (!odysseyScheduleSdCardDetection()) odysseyDetectSdCard();');
-  assert(ble>0 && tasks>ble && sd>tasks,'C3 SD activation must not block BLE/runtime startup');
+  assert(sd>0 && ble>sd && tasks>ble,'C3 SD must initialize before BLE and runtime tasks as in build 1445');
 });
