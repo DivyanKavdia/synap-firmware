@@ -48,8 +48,9 @@ uint8_t odysseySdDetectionState() { return odysseySdBootState; }
 uint8_t odysseySdProbeState() { return odysseySdElectricalState; }
 
 #if CONFIG_IDF_TARGET_ESP32C3
-static uint8_t odysseySdCommand(SPIClass& spi,uint8_t cmd,uint32_t arg,uint8_t crc,
+static uint8_t odysseySdCommand(uint8_t cmd,uint32_t arg,uint8_t crc,
     uint8_t* tail=nullptr,size_t tailSize=0,bool release=true) {
+  SPIClass& spi=odysseySdSpi;
   digitalWrite(ODYSSEY_SD_CS,HIGH);spi.transfer(0xff);
   digitalWrite(ODYSSEY_SD_CS,LOW);
   spi.transfer(uint8_t(0x40u|cmd));
@@ -62,11 +63,12 @@ static uint8_t odysseySdCommand(SPIClass& spi,uint8_t cmd,uint32_t arg,uint8_t c
   return r1;
 }
 
-static bool odysseyRawReadSector(SPIClass& spi,uint32_t lba,bool blockAddressed,uint8_t* sector) {
+static bool odysseyRawReadSector(uint32_t lba,bool blockAddressed,uint8_t* sector) {
+  SPIClass& spi=odysseySdSpi;
   const uint64_t byteAddress=uint64_t(lba)*512ULL;
   if(!blockAddressed && byteAddress>0xffffffffULL) return false;
   const uint32_t arg=blockAddressed?lba:uint32_t(byteAddress);
-  const uint8_t r1=odysseySdCommand(spi,17,arg,0x01,nullptr,0,false);
+  const uint8_t r1=odysseySdCommand(17,arg,0x01,nullptr,0,false);
   if(r1!=0x00){digitalWrite(ODYSSEY_SD_CS,HIGH);spi.transfer(0xff);return false;}
   uint8_t token=0xff;
   for(uint16_t i=0;i<10000 && token==0xff;++i) token=spi.transfer(0xff);
@@ -87,20 +89,20 @@ static uint8_t odysseyRawSdInspect(uint32_t hz) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   for(uint8_t i=0;i<12;++i) spi.transfer(0xff);
 
-  const uint8_t r0=odysseySdCommand(spi,0,0,0x95);
+  const uint8_t r0=odysseySdCommand(0,0,0x95);
   if(r0==0xff){spi.endTransaction();Serial.println("[SD] raw inspect: no CMD0 response");return 2;}
 
   uint8_t r7[4]{};
-  const uint8_t r8=odysseySdCommand(spi,8,0x1aa,0x87,r7,sizeof(r7));
+  const uint8_t r8=odysseySdCommand(8,0x1aa,0x87,r7,sizeof(r7));
   const bool v2=r8==0x01 && r7[2]==0x01 && r7[3]==0xaa;
   if(!v2 && !(r8&0x04u)){spi.endTransaction();Serial.printf("[SD] raw inspect: CMD8 R1=0x%02x\n",r8);return 1;}
 
   bool initialized=false;
   const uint32_t started=millis();
   while(uint32_t(millis()-started)<1500u){
-    const uint8_t r55=odysseySdCommand(spi,55,0,0x01);
+    const uint8_t r55=odysseySdCommand(55,0,0x01);
     if(r55>0x01) break;
-    const uint8_t ra=odysseySdCommand(spi,41,v2?0x40000000u:0u,0x01);
+    const uint8_t ra=odysseySdCommand(41,v2?0x40000000u:0u,0x01);
     if(ra==0x00){initialized=true;break;}
     if(ra!=0x01) break;
     delay(5);
@@ -108,16 +110,16 @@ static uint8_t odysseyRawSdInspect(uint32_t hz) {
   if(!initialized){spi.endTransaction();Serial.println("[SD] raw inspect: ACMD41 did not reach ready");return 1;}
 
   uint8_t ocr[4]{};
-  if(odysseySdCommand(spi,58,0,0x01,ocr,sizeof(ocr))!=0x00){
+  if(odysseySdCommand(58,0,0x01,ocr,sizeof(ocr))!=0x00){
     spi.endTransaction();Serial.println("[SD] raw inspect: CMD58 failed");return 1;
   }
   const bool blockAddressed=(ocr[0]&0x40u)!=0;
-  if(!blockAddressed && odysseySdCommand(spi,16,512,0x01)!=0x00){
+  if(!blockAddressed && odysseySdCommand(16,512,0x01)!=0x00){
     spi.endTransaction();Serial.println("[SD] raw inspect: CMD16 failed");return 1;
   }
 
   uint8_t sector[512]{};
-  if(!odysseyRawReadSector(spi,0,blockAddressed,sector)){
+  if(!odysseyRawReadSector(0,blockAddressed,sector)){
     spi.endTransaction();Serial.println("[SD] raw inspect: card ready but sector 0 unreadable");return 3;
   }
   const bool signature=sector[510]==0x55 && sector[511]==0xaa;
@@ -134,7 +136,7 @@ static uint8_t odysseyRawSdInspect(uint32_t hz) {
       (uint32_t(sector[base+10])<<16) | (uint32_t(sector[base+11])<<24);
     if(!type || !lba) continue;
     uint8_t boot[512]{};
-    if(odysseyRawReadSector(spi,lba,blockAddressed,boot) &&
+    if(odysseyRawReadSector(lba,blockAddressed,boot) &&
        boot[510]==0x55 && boot[511]==0xaa && odysseyLooksLikeFat(boot)){
       spi.endTransaction();Serial.printf("[SD] raw inspect: FAT/exFAT partition readable at LBA %lu\n",
         static_cast<unsigned long>(lba));return 6;
@@ -151,7 +153,7 @@ static uint8_t odysseyRawSdProbe(uint32_t hz) {
   spi.beginTransaction(SPISettings(hz,MSBFIRST,SPI_MODE0));
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   for (uint8_t i=0;i<12;++i) spi.transfer(0xff);
-  const uint8_t r1=odysseySdCommand(spi,0,0,0x95);
+  const uint8_t r1=odysseySdCommand(0,0,0x95);
   spi.endTransaction();
   const uint8_t state=r1==0xff?2:1;
   Serial.printf("[SD] raw SPI probe %s, CMD0 R1=0x%02x\n",state==1?"responded":"no-response",r1);
