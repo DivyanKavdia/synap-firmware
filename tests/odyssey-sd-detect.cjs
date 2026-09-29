@@ -96,7 +96,7 @@ test('ESP32C3: preserves a healthy mount and recovers failed mounts at progressi
   odysseySdBootState=2;SD.mounted=true;SD.type=CARD_NONE;rawReply=0x01;clocks.clear();
   odysseyDetectSdCard();
   assert(odysseySdDetectionState()==3 && odysseySdProbeState()==1 && clocks.size()==4);
-  assert(Serial.log.find("recovery exhausted: mount=3 spi=1")!=std::string::npos);
+  assert(Serial.log.find("recovery exhausted: mount=3 raw=")!=std::string::npos);
   assert(csLevel==HIGH);
  }
  `,['-DCONFIG_IDF_TARGET_ESP32C3=1','-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags('ESP32C3')]);
@@ -128,4 +128,17 @@ test('device profile emits Odyssey SD pins and only C3 advertises SD sync',()=>{
   assert.equal(target.features.includes('sd'), id==='esp32c3-supermini-4m');
  }
  assert(!renderProfile(getTarget('xiao-esp32s3-sense-8m')).includes('SYNAP_SD_'));
+});
+
+
+test('recognizes FAT and exFAT boot-sector signatures without writing media',()=>{
+ nativeTest(stub+source+`
+ int main(){
+  uint8_t sector[512]{};
+  memcpy(sector+82,"FAT32   ",8);assert(odysseyLooksLikeFat(sector));
+  memset(sector,0,sizeof(sector));memcpy(sector+54,"FAT16   ",8);assert(odysseyLooksLikeFat(sector));
+  memset(sector,0,sizeof(sector));memcpy(sector+3,"EXFAT   ",8);assert(odysseyLooksLikeFat(sector));
+  memset(sector,0,sizeof(sector));assert(!odysseyLooksLikeFat(sector));
+ }
+ `,['-DCONFIG_IDF_TARGET_ESP32C3=1','-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags('ESP32C3')]);
 });
