@@ -93,7 +93,7 @@ test('ESP32C3: preserves a healthy mount and recovers failed mounts at progressi
   odysseySdBootState=2;SD.mounted=true;SD.type=CARD_NONE;rawReply=0x01;clocks.clear();
   odysseyDetectSdCard();
   assert(odysseySdDetectionState()==3 && odysseySdProbeState()==1 && clocks.size()==4);
-  assert(Serial.log.find("no usable card type")!=std::string::npos);
+  assert(Serial.log.find("recovery exhausted: mount=3 spi=1")!=std::string::npos);
   assert(csLevel==HIGH);
  }
  `,['-DCONFIG_IDF_TARGET_ESP32C3=1','-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags('ESP32C3')]);
