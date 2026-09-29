@@ -24,7 +24,7 @@ static_assert(ODYSSEY_SD_CS != ODYSSEY_SD_SCK && ODYSSEY_SD_CS != ODYSSEY_SD_MOS
   ODYSSEY_SD_SCK != ODYSSEY_SD_MISO && ODYSSEY_SD_MOSI != ODYSSEY_SD_MISO,
   "SD pins must be distinct");
 
-// Mount status (C3 also refreshes it on local start): 0=not checked, 1=detected, 2=mount failed, 3=no card reported.
+// Mount status: 0=not checked, 1=detected/mounted, 2=mount failed, 3=no usable card reported.
 static std::atomic<uint8_t> odysseySdBootState{0};
 #if CONFIG_IDF_TARGET_ESP32C3
 static SPIClass odysseySdSpi(FSPI);
@@ -33,16 +33,15 @@ uint8_t odysseySdDetectionState() { return odysseySdBootState; }
 
 void odysseyDetectSdCard() {
 #if CONFIG_IDF_TARGET_ESP32C3
-  // Do not disturb a healthy mounted card. Repeated SD.end()/SPI.end() cycles
-  // can turn a working sealed-device card into a false offline state.
+  // Preserve a healthy mounted card. Repeated teardown/remount cycles can turn
+  // a working card into a false-offline state on a sealed device.
   if (odysseySdBootState.load()==1 && SD.cardType()!=CARD_NONE) return;
-#endif
 
-  odysseySdBootState=0;
-#if CONFIG_IDF_TARGET_ESP32C3
   SPIClass& sdSpi=odysseySdSpi;
   static constexpr uint32_t clocks[] = {400000u, 400000u, 250000u, 125000u};
   bool sawCardWithoutType=false;
+  odysseySdBootState=0;
+
   for (uint8_t attempt=0; attempt<sizeof(clocks)/sizeof(clocks[0]); ++attempt) {
     SD.end();
     sdSpi.end();
@@ -51,6 +50,7 @@ void odysseyDetectSdCard() {
     delay(20u + uint32_t(attempt)*20u);
     sdSpi.begin(ODYSSEY_SD_SCK, ODYSSEY_SD_MISO, ODYSSEY_SD_MOSI, ODYSSEY_SD_CS);
     delay(5);
+
     Serial.printf("[SD] probe attempt=%u hz=%lu CS=%d SCK=%d MOSI=%d MISO=%d\n",
       unsigned(attempt+1), static_cast<unsigned long>(clocks[attempt]),
       ODYSSEY_SD_CS, ODYSSEY_SD_SCK, ODYSSEY_SD_MOSI, ODYSSEY_SD_MISO);
@@ -68,22 +68,27 @@ void odysseyDetectSdCard() {
       }
       sawCardWithoutType=true;
     }
+
     SD.end();
     sdSpi.end();
     digitalWrite(ODYSSEY_SD_CS, HIGH);
   }
+
   odysseySdBootState=sawCardWithoutType?3:2;
   Serial.println(sawCardWithoutType
     ? "[SD] card responded but no usable card type was reported"
     : "[SD] detection/mount failed after recovery sequence");
 #else
+  odysseySdBootState=0;
   SPIClass sdSpi(FSPI);
-  // Explicit mapping avoids the board's default SPI pins (used by the mic).
+
+  // S3 Odyssey remains a one-shot detection probe and releases the bus.
   digitalWrite(ODYSSEY_SD_CS, HIGH);
   pinMode(ODYSSEY_SD_CS, OUTPUT);
   sdSpi.begin(ODYSSEY_SD_SCK, ODYSSEY_SD_MISO, ODYSSEY_SD_MOSI, ODYSSEY_SD_CS);
   Serial.printf("[SD] probe CS=%d SCK=%d MOSI=%d MISO=%d\n",
     ODYSSEY_SD_CS, ODYSSEY_SD_SCK, ODYSSEY_SD_MOSI, ODYSSEY_SD_MISO);
+
   const bool mounted=SD.begin(ODYSSEY_SD_CS, sdSpi, 400000, "/odyssey-sd", 1, false);
   if (mounted) {
     const uint8_t type=SD.cardType();
@@ -104,36 +109,5 @@ void odysseyDetectSdCard() {
   sdSpi.end();
   digitalWrite(ODYSSEY_SD_CS, HIGH);
 #endif
-}
-#endif
-  // Explicit mapping avoids the board's default SPI pins (used by the mic).
-  digitalWrite(ODYSSEY_SD_CS, HIGH);
-  pinMode(ODYSSEY_SD_CS, OUTPUT);
-  sdSpi.begin(ODYSSEY_SD_SCK, ODYSSEY_SD_MISO, ODYSSEY_SD_MOSI, ODYSSEY_SD_CS);
-  Serial.printf("[SD] probe CS=%d SCK=%d MOSI=%d MISO=%d\n",
-    ODYSSEY_SD_CS, ODYSSEY_SD_SCK, ODYSSEY_SD_MOSI, ODYSSEY_SD_MISO);
-  const bool mounted=SD.begin(ODYSSEY_SD_CS, sdSpi, 400000, "/odyssey-sd", 1, false);
-  if (mounted) {
-    const uint8_t type=SD.cardType();
-    if (type != CARD_NONE) {
-      odysseySdBootState=1;
-      const char* label=type==CARD_MMC?"MMC":type==CARD_SD?"SDSC":type==CARD_SDHC?"SDHC/SDXC":"unknown";
-      Serial.printf("[SD] detected: %s, %llu MiB; filesystem mounted\n", label,
-        static_cast<unsigned long long>(SD.cardSize()/(1024ULL*1024ULL)));
-    } else {
-      odysseySdBootState=3;
-      Serial.println("[SD] no card reported");
-    }
-  } else {
-    odysseySdBootState=2;
-    // A failed mount cannot distinguish absent card from wiring/filesystem trouble.
-    Serial.println("[SD] detection/mount failed: check card, wiring and filesystem");
-  }
-#if CONFIG_IDF_TARGET_ESP32C3
-  if (odysseySdBootState==1) return;
-#endif
-  SD.end();
-  sdSpi.end();
-  digitalWrite(ODYSSEY_SD_CS, HIGH);
 }
 #endif
