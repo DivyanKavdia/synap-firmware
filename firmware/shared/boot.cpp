@@ -109,8 +109,9 @@ void setup() {
 #elif CONFIG_IDF_TARGET_ESP32C3
   OdysseyTransfer::initialize();
 #endif
-  // Probe once before BLE/tasks start; failure never prevents normal startup.
-#if !SYNAP_CHAKSHU
+  // S3 keeps its startup-only probe. C3 starts BLE/tasks first and lets the
+  // powered SD adapter settle before a serialized background mount attempt.
+#if !SYNAP_CHAKSHU && !CONFIG_IDF_TARGET_ESP32C3
   odysseyDetectSdCard();
 #endif
   initializeBLE();
@@ -120,6 +121,9 @@ void setup() {
       xTaskCreatePinnedToCore(transmitterTask, "transmit", 8192, nullptr, 2, nullptr, 1) != pdPASS) {
     fatalSetup("[FATAL] task allocation failed");
   }
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  if (!odysseyScheduleSdCardDetection()) odysseyDetectSdCard();
+#endif
 }
 void loop() {
 #if defined(CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE) && CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
