@@ -78,3 +78,13 @@ test('C3 brings BLE and runtime tasks up before delayed SD activation',()=>{
   const sd=c3.indexOf('if (!odysseyScheduleSdCardDetection()) odysseyDetectSdCard();');
   assert(ble>0 && tasks>ble && sd>tasks,'C3 SD activation must not block BLE/runtime startup');
 });
+
+
+test('BLE starts before delayed C3 SD activation',()=>{
+  const c3=assembleFor('esp32c3-supermini-4m');
+  const ble=c3.lastIndexOf('initializeBLE();');
+  const delayed=c3.lastIndexOf('odysseyScheduleSdCardDetection()');
+  assert.ok(ble>=0 && delayed>ble,'C3 must advertise BLE before scheduling SD activation');
+  assert.match(c3,/ODYSSEY_SD_STARTUP_SETTLE_MS=3000u/);
+  assert.match(c3,/activation scheduled after/);
+});

@@ -2603,12 +2603,18 @@ void setup() {
 #elif CONFIG_IDF_TARGET_ESP32C3
   OdysseyTransfer::initialize();
 #endif
-  // Probe once before BLE/tasks start; failure never prevents normal startup.
-#if !SYNAP_CHAKSHU
-  odysseyDetectSdCard();
-#endif
+  // Bring BLE up first. On C3 the SD adapter can remain powered across software
+  // resets, so activate it only after a post-boot settle window instead of
+  // holding the entire device startup inside SD.begin().
   initializeBLE();
   initializeRecovery();
+#if !SYNAP_CHAKSHU
+#if CONFIG_IDF_TARGET_ESP32C3
+  if (!odysseyScheduleSdCardDetection()) odysseyDetectSdCard();
+#else
+  odysseyDetectSdCard();
+#endif
+#endif
   if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
       xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, &captureTaskHandle, 0) != pdPASS ||
       xTaskCreatePinnedToCore(transmitterTask, "transmit", 8192, nullptr, 2, nullptr, 1) != pdPASS) {
