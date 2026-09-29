@@ -11,7 +11,7 @@ const stub=`
 #include <cassert>
 #include <atomic>
 #include <cstdint>
-#include <cstdio>
+#include <cstdio>\n#include <cstring>
 #include <string>
 #include <vector>
 #define HIGH 1
