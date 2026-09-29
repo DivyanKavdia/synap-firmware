@@ -53,7 +53,7 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   const sdProbe=c3.indexOf('odysseyDetectSdCard();',setupProbe);
   const bleInit=c3.indexOf('initializeBLE();',setupProbe);
   assert.ok(setupProbe>0 && sdProbe>setupProbe && bleInit>sdProbe,'C3 must restore the proven 1445 SD probe before BLE startup');
-  assert.doesNotMatch(c3,/odysseyScheduleSdCardDetection\(\)/);
+  assert.doesNotMatch(c3,/odysseyScheduleSdCardDetection/);
   assert.match(c3,/enterDeepSleep\("touch-hold"\)/);
   assert.match(c3,/enterDeepSleep\("touch-hold-after-stop"\)/);
   assert.doesNotMatch(c3,/triple tap -> DEEP SLEEP/);
