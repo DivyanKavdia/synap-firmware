@@ -30,11 +30,14 @@ constexpr int TOUCH_INPUT_PIN=3,BATTERY_ADC_PIN=1,RGB_LED_PIN=8;
 #else
 constexpr int TOUCH_INPUT_PIN=13,BATTERY_ADC_PIN=8,RGB_LED_PIN=48;
 #endif
-int spiEnds=0,sdEnds=0,csLevel=0,beginCalls=0,lowTransfers=0;\nuint8_t rawReply=0x01;
+int spiEnds=0,sdEnds=0,csLevel=0,beginCalls=0,lowTransfers=0;\nuint8_t rawReply=0x01;\nuint32_t nowMs=5000;\nusing BaseType_t=int;\n#define pdPASS 1
 std::vector<uint32_t> clocks;
 void digitalWrite(int,int level){csLevel=level;if(level==LOW)lowTransfers=0;}
 void pinMode(int,int){}
-void delay(uint32_t){}
+uint32_t millis(){return nowMs;}
+void delay(uint32_t ms){nowMs+=ms;}
+int xTaskCreate(void(*)(void*),const char*,uint32_t,void*,int,void**){return pdPASS;}
+void vTaskDelete(void*){}
 struct SPISettings { SPISettings(uint32_t,int,int){} };\nstruct SPIClass {\n explicit SPIClass(int){}
  void begin(int sck,int miso,int mosi,int cs){
 #if CONFIG_IDF_TARGET_ESP32C3
