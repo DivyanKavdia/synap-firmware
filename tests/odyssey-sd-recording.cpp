@@ -8,7 +8,7 @@
 #include <algorithm>
 constexpr uint32_t SAMPLE_RATE=16000;
 constexpr uint16_t SAMPLES_PER_FRAME=800;
-constexpr int FILE_WRITE=1,pdPASS=1;
+constexpr int FILE_WRITE=1,pdPASS=1,CARD_NONE=0,CARD_SDHC=3;
 std::atomic<bool> odysseyRecording{false},odysseyStopRequested{false},deviceConnected{false},streamingEnabled{false};
 bool sleepPending=false,critical=false,ota=false,micOk=true,cardOk=true,openOk=true,shortWrite=false,allocOk=true,reconnect=false;
 uint8_t odysseySdBootState=1;
@@ -34,7 +34,7 @@ struct File {
  void close(){++closed;valid=false;}
 };
 struct Storage {
- uint8_t cardType(){return cardOk?3:0;}
+ uint8_t cardType(){return cardOk?CARD_SDHC:CARD_NONE;}
  bool exists(const char* p){if(std::string(p)=="/synap")return true;if(collisions){--collisions;return true;}return false;}
  bool mkdir(const char*){return true;}
  File open(const char* p,int){opened=p;pos=0;data.clear();return File{openOk};}
