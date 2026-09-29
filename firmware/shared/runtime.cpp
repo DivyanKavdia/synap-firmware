@@ -208,6 +208,11 @@ std::atomic<bool> batteryAvailable{false};
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 std::atomic<bool> odysseyRecording{false}, odysseyStopRequested{false};
 void odysseyToggleRecording();
+namespace OdysseyTransfer {
+void initialize();
+void ble(BLEService* service);
+bool available();
+}
 #endif
 
 // Explicit prototypes prevent Arduino's auto-prototyper from duplicating defaults.

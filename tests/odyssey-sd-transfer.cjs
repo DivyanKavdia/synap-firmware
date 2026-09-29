@@ -1,0 +1,21 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const root=path.resolve(__dirname,'..');
+const source=fs.readFileSync(path.join(root,'firmware/shared/odyssey-sd-transfer.cpp'),'utf8');
+const runtime=fs.readFileSync(path.join(root,'firmware/shared/runtime.cpp'),'utf8');
+const caps=fs.readFileSync(path.join(root,'firmware/shared/module-capabilities.cpp'),'utf8');
+const catalog=require('../devices/catalog.json');
+const c3=catalog.devices.find(device=>device.id==='esp32c3-supermini-4m');
+
+assert(c3.features.includes('sd'),'C3 must advertise SD support');
+assert.equal(c3.protocols?.media,1,'C3 must advertise media-v1');
+assert.match(runtime,/namespace OdysseyTransfer/);
+assert.match(caps,/p\[14\]=1/);
+assert.match(caps,/ready\|=SYNAP_CAP_SD/);
+assert.match(source,/odysseyRecording\.load\(\) \|\| streamingEnabled\.load\(\) \|\| otaBusy\(\)/);
+assert.match(source,/case 7: error=catalogue\(total\)/);
+assert.match(source,/case 17: error=removeFile\(request\.path\)/);
+assert.match(source,/case 18:/);
+assert.match(source,/\/synap\//);
+assert.doesNotMatch(source,/SD\.format|format_if_empty/);
+console.log('PASS: Odyssey C3 exposes safe SD catalogue, verified-delete endpoint and non-formatting clear action.');

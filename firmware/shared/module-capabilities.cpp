@@ -24,9 +24,17 @@ void encodeModuleCapabilities(uint8_t* p) {
   p[16]=ChakshuTransfer::requests?31:0;
 #endif
 #if !SYNAP_CHAKSHU
-  // Optional boot-probe extension; does not advertise usable SD storage.
+  // Odyssey keeps the boot-probe snapshot for diagnostics. C3 additionally
+  // exposes the shared media-v1 catalogue/read/delete protocol when its worker
+  // is alive; SD readiness still follows the actual mounted-card state.
   p[17]=1;
   p[18]=odysseySdDetectionState();
+#if CONFIG_IDF_TARGET_ESP32C3
+  if (OdysseyTransfer::available()) {
+    p[14]=1;
+    if (odysseySdDetectionState()==1) ready|=SYNAP_CAP_SD;
+  }
+#endif
 #endif
   ready &= supported;
   p[4]=supported&255;p[5]=supported>>8;p[6]=ready&255;p[7]=ready>>8;

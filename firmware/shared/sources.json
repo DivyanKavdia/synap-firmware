@@ -13,5 +13,6 @@
   "audio-transport.cpp",
   "odyssey-sd-detect.cpp",
   "odyssey-sd-recording.cpp",
+  "odyssey-sd-transfer.cpp",
   "boot.cpp"
 ]

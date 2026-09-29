@@ -43,6 +43,8 @@ void initializeBLE() {
 #if SYNAP_CHAKSHU
   ChakshuMedia::ble(service);
   ChakshuTransfer::ble(service);
+#elif CONFIG_IDF_TARGET_ESP32C3
+  OdysseyTransfer::ble(service);
 #endif
   service->start();
   BLEAdvertising* advertising=BLEDevice::getAdvertising();
@@ -104,6 +106,8 @@ void setup() {
 #if SYNAP_CHAKSHU
   ChakshuMedia::initialize();
   ChakshuTransfer::initialize();
+#elif CONFIG_IDF_TARGET_ESP32C3
+  OdysseyTransfer::initialize();
 #endif
   // Probe once before BLE/tasks start; failure never prevents normal startup.
 #if !SYNAP_CHAKSHU

@@ -81,6 +81,7 @@
       "advertisingName": "synap",
       "features": [
         "audio",
+        "sd",
         "settings",
         "touch",
         "battery",
@@ -108,6 +109,9 @@
           "mosi": 21,
           "miso": 20
         }
+      },
+      "protocols": {
+        "media": 1
       }
     },
     {
