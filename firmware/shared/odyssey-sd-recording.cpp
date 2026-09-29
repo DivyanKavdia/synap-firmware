@@ -83,10 +83,10 @@ void odysseyToggleRecording() {
     return;
   }
   if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) return;
-  // Offline capture is a real SD feature, not a best-effort fallback. Re-probe
-  // on every start so a card that recovered after boot is usable, but never
-  // create a recorder task unless the filesystem is actually mounted.
-  odysseyDetectSdCard();
+  // Reuse a healthy mounted filesystem. Only invoke the 1445-compatible
+  // mount sequence when SD is currently unavailable; repeated SD.end()/begin()
+  // cycles are unnecessary before every local recording.
+  if (odysseySdDetectionState()!=1 || SD.cardType()==CARD_NONE) odysseyDetectSdCard();
   if (odysseySdDetectionState()!=1) {
     Serial.println("[TOUCH] double tap ignored: SD unavailable");
     return;
