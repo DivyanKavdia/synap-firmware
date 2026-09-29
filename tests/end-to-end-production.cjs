@@ -48,7 +48,7 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(c3,/double tap ignored: SD unavailable/);
   assert.match(c3,/odysseySdDetectionState\(\)!=1/);
   assert.match(c3,/ready\|=SYNAP_CAP_SDAUDIO/);
-  assert.match(c3,/1445-compatible probe/);
+  assert.match(c3,/\[SD\] probe CS=%d SCK=%d MOSI=%d MISO=%d/);
   const setupProbe=c3.indexOf('// Probe once before BLE/tasks start; failure never prevents normal startup.');
   const sdProbe=c3.indexOf('odysseyDetectSdCard();',setupProbe);
   const bleInit=c3.indexOf('initializeBLE();',setupProbe);
