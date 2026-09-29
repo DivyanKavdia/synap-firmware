@@ -21,6 +21,9 @@ bool input=false,touchRawState=false,touchStableState=false;
 bool remoteStandby=false,sleepPending=false,busy=false;
 std::atomic<uint32_t> touchTransitions{0},touchActions{0};
 std::atomic<uint16_t> touchLastHoldMs{0};
+std::atomic<bool> odysseyRecording{false},odysseyStopRequested{false};
+int localToggles=0;
+void odysseyToggleRecording(){++localToggles; if(odysseyRecording)odysseyStopRequested=true;else odysseyRecording=true;}
 std::atomic<bool> deviceConnected{true},streamingEnabled{false};
 std::atomic<uint32_t> connectionGeneration{1};
 bool durableLock=false,bootSleepWasLocked=false,clearSucceeds=true;
@@ -113,5 +116,19 @@ int main(){
   checkWake(5000,false,true,0); // Reset with a durable sleep lock cannot boot BLE.
   checkWake(5000,false,true,WRONG_TOUCH_WAKE_CAUSE);
   clockMs=0xffffff00u;checkWake(4100,true);
+#if CONFIG_IDF_TARGET_ESP32C3
+  sleepPending=false;deviceConnected=false;streamingEnabled=false;odysseyRecording=false;settle();
+  const int previousStarts=starts;
+  tap();tap();assert(odysseyRecording && starts==previousStarts && localToggles==1);
+  // A reconnect keeps local ownership; double tap stops that local take.
+  deviceConnected=true;settle();tap();tap();assert(odysseyStopRequested && starts==previousStarts);
+  odysseyStopRequested=false;
+  const int beforeLocalSleep=sleeps;
+  settle();advance(4100,true);advance(100,false);
+  assert(odysseyStopRequested && sleeps==beforeLocalSleep);
+  odysseyRecording=false;advance(5,false);assert(sleeps==beforeLocalSleep+1);
+  sleepPending=false;odysseyStopRequested=false;settle();
+  tap();tap();assert(starts==previousStarts+1);
+#endif
   std::puts("PASS shared touch: double tap, hold/release, delayed STOP, OTA, reconnect, wrap and wake lock");
 }

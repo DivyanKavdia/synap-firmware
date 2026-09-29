@@ -241,6 +241,11 @@ uint16_t batteryMillivolts = 0, batteryAdcMillivolts = 0, batteryAdcRaw = 0;
 uint8_t batteryPercent = 0, batteryValidSamples = 0, batteryCriticalSamples = 0;
 std::atomic<bool> batteryAvailable{false};
 
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+std::atomic<bool> odysseyRecording{false}, odysseyStopRequested{false};
+void odysseyToggleRecording();
+#endif
+
 // Explicit prototypes prevent Arduino's auto-prototyper from duplicating defaults.
 void setDeviceState(DeviceState state, ErrorCode error);
 void updateStatusLed(bool force = false);
@@ -558,6 +563,9 @@ void otaTick() {
     // start or continue a new flash transaction when brownout margin is inadequate.
     otaSession.packet(message.data,message.length,millis(),generation,
       streamingEnabled.load() || batteryCritical()
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      || odysseyRecording.load()
+#endif
 #if SYNAP_CHAKSHU
       || mediaBusy()
 #endif
@@ -632,6 +640,10 @@ void updateStatusLed(bool force) {
   if (otaBusy()) {
     const uint32_t phase=now%1400u;
     if (phase<55u || (phase>=180u && phase<235u)) { r=LED_DIM; g=2; }
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  } else if (odysseyRecording.load()) {
+    if (now%2000u<45u) g=LED_DIM+1;
+#endif
   } else if (remoteStandby) {
     // Standby stays dark; battery telemetry remains available over BLE.
   } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {
@@ -660,6 +672,9 @@ void setDeviceState(DeviceState state, ErrorCode error) {
 }
 
 void applyCpuPowerProfile(bool active) {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  active=active || odysseyRecording.load();
+#endif
   static uint32_t appliedMHz = 0;
   const uint32_t targetMHz = active ? ACTIVE_CPU_MHZ : IDLE_CPU_MHZ;
   if (appliedMHz == targetMHz) return;
@@ -934,6 +949,9 @@ bool exitRemoteStandby() {
 }
 
 void enterRemoteStandby() {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  if (odysseyRecording.load()) return;
+#endif
   if (sleepPending) return;
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
 #if SYNAP_CHAKSHU
@@ -953,6 +971,9 @@ void enterRemoteStandby() {
 }
 
 void enterDeepSleep(const char* reason) {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  if (odysseyRecording.load()) return;
+#endif
   if (otaBusy() || streamingEnabled.load() || sleepPending) return;
 #if SYNAP_CHAKSHU
   if (mediaBusy()) return;
@@ -1036,6 +1057,12 @@ void enterDeepSleep(const char* reason) {
 
 void powerTick() {
   sampleBattery(false);
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  if (odysseyRecording.load()) {
+    if (batteryCritical()) odysseyStopRequested=true;
+    return;
+  }
+#endif
   if (batteryCritical() && !streamingEnabled.load() && !otaBusy()) {
     enterDeepSleep("critical-battery");
     return;
@@ -1072,7 +1099,11 @@ void pollTouchControl() {
     deepSleepAfterStop=false;standbyAfterStop=false;
   }
 
-  if (deepSleepAfterStop && !streaming && !raw && !otaBusy()) {
+  if (deepSleepAfterStop && !streaming && !raw && !otaBusy()
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      && !odysseyRecording.load()
+#endif
+  ) {
     deepSleepAfterStop=false;
     enterDeepSleep("touch-hold-after-stop");
     return;
@@ -1125,6 +1156,13 @@ void pollTouchControl() {
       tapCount=0;lastTapAt=0;
       touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
       Serial.println("[TOUCH] long press -> DEEP SLEEP");
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      if (odysseyRecording.load()) {
+        odysseyStopRequested=true;
+        deepSleepAfterStop=true;
+        return;
+      }
+#endif
       if (streamingEnabled.load()) {
         deepSleepAfterStop=true;
         queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
@@ -1148,6 +1186,12 @@ void pollTouchControl() {
     // Second valid tap acts immediately; a third tap has no power action.
     tapCount=0;lastTapAt=0;
     touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+    if (odysseyRecording.load() || (!deviceConnected.load() && !streamingEnabled.load())) {
+      odysseyToggleRecording();
+      return;
+    }
+#endif
     if (streamingEnabled.load()) {
       standbyAfterStop=true;
       Serial.println("[TOUCH] double tap -> STOP + POWER SAVER");
@@ -1391,6 +1435,9 @@ class RecoveryCallbacks : public BLECharacteristicCallbacks {
 };
 
 void stopStreaming(ErrorCode reason) {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  if (odysseyRecording.load()) { updateStatusCharacteristic(true); return; }
+#endif
   streamingEnabled.store(false);
   ++streamGeneration; // Invalidates queued AND already-in-flight old task work.
   if (audioFrameQueue) xQueueReset(audioFrameQueue);
@@ -1428,6 +1475,9 @@ bool configureTransportFromPeerMtu() {
   return audioPayloadBytes + AUDIO_HEADER_BYTES <= attValueCapacity;
 }
 void startStreaming(uint8_t version) {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  if (odysseyRecording.load()) { updateStatusCharacteristic(true); return; }
+#endif
 #if SYNAP_CHAKSHU
   if (mediaBusy()) { updateStatusCharacteristic(true);return; }
 #endif
@@ -1905,7 +1955,7 @@ void transmitterTask(void* parameter) {
   }
 }
 
-// Detection only: no formatting, writes, recording, new BLE services or retries.
+// Odyssey SD mount. C3 retains the bus for local recording; S3 remains detection-only.
 #if !SYNAP_CHAKSHU
 #include <SPI.h>
 #include <SD.h>
@@ -1931,13 +1981,22 @@ static_assert(ODYSSEY_SD_CS != ODYSSEY_SD_SCK && ODYSSEY_SD_CS != ODYSSEY_SD_MOS
   ODYSSEY_SD_SCK != ODYSSEY_SD_MISO && ODYSSEY_SD_MOSI != ODYSSEY_SD_MISO,
   "SD pins must be distinct");
 
-// Boot snapshot: 0=not checked, 1=detected, 2=mount failed, 3=no card reported.
-static uint8_t odysseySdBootState=0;
+// Mount status (C3 also refreshes it on local start): 0=not checked, 1=detected, 2=mount failed, 3=no card reported.
+static std::atomic<uint8_t> odysseySdBootState{0};
+#if CONFIG_IDF_TARGET_ESP32C3
+static SPIClass odysseySdSpi(FSPI);
+#endif
 uint8_t odysseySdDetectionState() { return odysseySdBootState; }
 
 void odysseyDetectSdCard() {
   odysseySdBootState=0;
+#if CONFIG_IDF_TARGET_ESP32C3
+  SD.end();
+  odysseySdSpi.end();
+  SPIClass& sdSpi=odysseySdSpi;
+#else
   SPIClass sdSpi(FSPI);
+#endif
   // Explicit mapping avoids the board's default SPI pins (used by the mic).
   digitalWrite(ODYSSEY_SD_CS, HIGH);
   pinMode(ODYSSEY_SD_CS, OUTPUT);
@@ -1961,9 +2020,104 @@ void odysseyDetectSdCard() {
     // A failed mount cannot distinguish absent card from wiring/filesystem trouble.
     Serial.println("[SD] detection/mount failed: check card, wiring and filesystem");
   }
+#if CONFIG_IDF_TARGET_ESP32C3
+  if (odysseySdBootState==1) return;
+#endif
   SD.end();
   sdSpi.end();
   digitalWrite(ODYSSEY_SD_CS, HIGH);
+}
+#endif
+// C3 local audio owns its file and microphone until finalization. BLE connection
+// changes never redirect a take; no local PCM enters the app recovery/notify queue.
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+static void odysseyWavHeader(uint8_t* h, uint32_t bytes) {
+  memset(h,0,44);
+  memcpy(h,"RIFF",4); put32le(h+4,bytes+36);
+  memcpy(h+8,"WAVEfmt ",8); put32le(h+16,16);
+  h[20]=1; h[22]=1; put32le(h+24,SAMPLE_RATE);
+  put32le(h+28,SAMPLE_RATE*2); h[32]=2; h[34]=16;
+  memcpy(h+36,"data",4); put32le(h+40,bytes);
+}
+static void odysseyRecordTask(void*) {
+  bool failed=false;
+  File file;
+  uint32_t bytes=0;
+  char path[64]={};
+  // Retry on every offline start, including cards fitted after boot or a prior
+  // write fault. This never formats media or deletes an existing recording.
+  odysseyDetectSdCard();
+  if (odysseySdDetectionState()!=1) failed=true;
+  if (!failed && !SD.exists("/synap") && !SD.mkdir("/synap")) failed=true;
+  if (!failed) {
+    for (uint8_t attempt=0;attempt<16;++attempt) {
+      snprintf(path,sizeof(path),"/synap/odyssey_audio_%08lx_%08lx.wav",
+        static_cast<unsigned long>(esp_random()),static_cast<unsigned long>(esp_random()));
+      if (!SD.exists(path)) { file=SD.open(path,FILE_WRITE); break; }
+    }
+    if (!file) failed=true;
+  }
+  uint8_t header[44];
+  odysseyWavHeader(header,0);
+  if (!failed && file.write(header,sizeof(header))!=sizeof(header)) failed=true;
+#if USE_REAL_I2S_MIC
+  if (!failed && !odysseyStopRequested.load()) {
+    MicrophoneGuard guard;
+    if (!startMicrophone()) failed=true;
+    int32_t raw[SAMPLES_PER_FRAME];
+    int16_t pcm[SAMPLES_PER_FRAME];
+    uint32_t checkpointAt=millis();
+    while (!failed && !odysseyStopRequested.load()) {
+      size_t received=0;
+      uint8_t emptyReads=0;
+      while (received<sizeof(raw) && !odysseyStopRequested.load()) {
+        size_t count=microphoneI2S.readBytes(reinterpret_cast<char*>(raw)+received,sizeof(raw)-received);
+        if (!count) { if (++emptyReads>=3) { failed=true; break; } }
+        else { received+=count; emptyReads=0; }
+      }
+      if (failed || odysseyStopRequested.load()) break;
+      for (uint16_t i=0;i<SAMPLES_PER_FRAME;++i) pcm[i]=static_cast<int16_t>(raw[i]>>16);
+      // Bound RIFF's 32-bit length; a full card ends this take safely.
+      if (bytes>0xffffff00u-sizeof(pcm)) break;
+      const size_t written=file.write(reinterpret_cast<const uint8_t*>(pcm),sizeof(pcm));
+      bytes+=written & ~size_t(1);
+      if (written!=sizeof(pcm)) { failed=true; break; }
+      // Keep the on-disk header recoverable up to the last checkpoint on power loss.
+      if (uint32_t(millis()-checkpointAt)>=2000u) {
+        odysseyWavHeader(header,bytes);
+        if (!file.seek(0) || file.write(header,44)!=44 || !file.seek(44+bytes)) { failed=true; break; }
+        file.flush(); checkpointAt=millis();
+      }
+    }
+    stopMicrophone();
+  }
+#else
+  failed=true; // Never silently save synthetic audio as a real offline take.
+#endif
+  if (file) {
+    odysseyWavHeader(header,bytes);
+    if (!file.seek(0) || file.write(header,44)!=44) failed=true;
+    file.flush(); file.close();
+  }
+  if (failed) { odysseySdBootState=2; SD.end(); }
+  Serial.printf("[SD] local audio %s: %s, %lu PCM bytes\n",failed?"failed":"saved",path,
+    static_cast<unsigned long>(bytes));
+  // No microphone/file work is allowed after releasing ownership.
+  odysseyRecording=false;
+  vTaskDelete(nullptr);
+}
+void odysseyToggleRecording() {
+  if (odysseyRecording.load()) { odysseyStopRequested=true; return; }
+  if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) return;
+  odysseyStopRequested=false;
+  odysseyRecording=true;
+  applyCpuPowerProfile(true);
+  if (xTaskCreate(odysseyRecordTask,"sd-audio",8192,nullptr,2,nullptr)!=pdPASS) {
+    odysseyRecording=false;
+    Serial.println("[SD] local audio task allocation failed");
+    return;
+  }
+  Serial.println("[TOUCH] double tap -> SD audio START");
 }
 #endif
 void initializeBLE() {

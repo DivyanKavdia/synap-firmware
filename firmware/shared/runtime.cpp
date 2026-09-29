@@ -205,6 +205,11 @@ uint16_t batteryMillivolts = 0, batteryAdcMillivolts = 0, batteryAdcRaw = 0;
 uint8_t batteryPercent = 0, batteryValidSamples = 0, batteryCriticalSamples = 0;
 std::atomic<bool> batteryAvailable{false};
 
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+std::atomic<bool> odysseyRecording{false}, odysseyStopRequested{false};
+void odysseyToggleRecording();
+#endif
+
 // Explicit prototypes prevent Arduino's auto-prototyper from duplicating defaults.
 void setDeviceState(DeviceState state, ErrorCode error);
 void updateStatusLed(bool force = false);

@@ -274,6 +274,9 @@ void otaTick() {
     // start or continue a new flash transaction when brownout margin is inadequate.
     otaSession.packet(message.data,message.length,millis(),generation,
       streamingEnabled.load() || batteryCritical()
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      || odysseyRecording.load()
+#endif
 #if SYNAP_CHAKSHU
       || mediaBusy()
 #endif

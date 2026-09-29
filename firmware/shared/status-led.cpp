@@ -4,6 +4,10 @@ void updateStatusLed(bool force) {
   if (otaBusy()) {
     const uint32_t phase=now%1400u;
     if (phase<55u || (phase>=180u && phase<235u)) { r=LED_DIM; g=2; }
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  } else if (odysseyRecording.load()) {
+    if (now%2000u<45u) g=LED_DIM+1;
+#endif
   } else if (remoteStandby) {
     // Standby stays dark; battery telemetry remains available over BLE.
   } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {

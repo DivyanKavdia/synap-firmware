@@ -44,7 +44,9 @@ struct Microphone {
     produced+=n;return n;
   }
 } microphoneI2S;
-uint8_t jpeg[96000]={0xff,0xd8};
+// The byte-limit case must reach 32 MiB before the independently paced audio
+// reaches 60 seconds, even on hosts with coarse sleep scheduling.
+uint8_t jpeg[384000]={0xff,0xd8};
 struct camera_fb_t {int format=PIXFORMAT_JPEG;size_t len=1200;uint8_t* buf=jpeg;struct {int64_t tv_sec=0,tv_usec=0;} timestamp;} frame;
 camera_fb_t* esp_camera_fb_get(){
   std::this_thread::sleep_for(std::chrono::milliseconds(cameraDelay)); // normally much slower than each PCM read
@@ -68,6 +70,9 @@ struct File {
     if(cardFailed)return 0;
     const bool pcm=path.find(".wav")!=std::string::npos && n>44;
     if(pcm){std::this_thread::sleep_for(std::chrono::milliseconds(cardDelay));if(shortWrite)n/=2;}
+    // Model sequential SD writes without host vector reallocations copying an
+    // ever-growing video file and spuriously starving the independent PCM task.
+    if(content->bytes.capacity()==0)content->bytes.reserve(path.find(".mjpeg")!=std::string::npos?32u*1024u*1024u:2u*1024u*1024u);
     if(content->bytes.size()<position+n)content->bytes.resize(position+n);
     memcpy(content->bytes.data()+position,bytes,n);position+=n;
     if(pcm && position>=stopAt+44)stop=true;

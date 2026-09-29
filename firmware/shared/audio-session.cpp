@@ -230,6 +230,9 @@ class RecoveryCallbacks : public BLECharacteristicCallbacks {
 };
 
 void stopStreaming(ErrorCode reason) {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  if (odysseyRecording.load()) { updateStatusCharacteristic(true); return; }
+#endif
   streamingEnabled.store(false);
   ++streamGeneration; // Invalidates queued AND already-in-flight old task work.
   if (audioFrameQueue) xQueueReset(audioFrameQueue);
@@ -267,6 +270,9 @@ bool configureTransportFromPeerMtu() {
   return audioPayloadBytes + AUDIO_HEADER_BYTES <= attValueCapacity;
 }
 void startStreaming(uint8_t version) {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  if (odysseyRecording.load()) { updateStatusCharacteristic(true); return; }
+#endif
 #if SYNAP_CHAKSHU
   if (mediaBusy()) { updateStatusCharacteristic(true);return; }
 #endif

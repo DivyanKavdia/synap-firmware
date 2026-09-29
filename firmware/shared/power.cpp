@@ -124,6 +124,9 @@ bool exitRemoteStandby() {
 }
 
 void enterRemoteStandby() {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  if (odysseyRecording.load()) return;
+#endif
   if (sleepPending) return;
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
 #if SYNAP_CHAKSHU
@@ -143,6 +146,9 @@ void enterRemoteStandby() {
 }
 
 void enterDeepSleep(const char* reason) {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  if (odysseyRecording.load()) return;
+#endif
   if (otaBusy() || streamingEnabled.load() || sleepPending) return;
 #if SYNAP_CHAKSHU
   if (mediaBusy()) return;
@@ -226,6 +232,12 @@ void enterDeepSleep(const char* reason) {
 
 void powerTick() {
   sampleBattery(false);
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  if (odysseyRecording.load()) {
+    if (batteryCritical()) odysseyStopRequested=true;
+    return;
+  }
+#endif
   if (batteryCritical() && !streamingEnabled.load() && !otaBusy()) {
     enterDeepSleep("critical-battery");
     return;
@@ -262,7 +274,11 @@ void pollTouchControl() {
     deepSleepAfterStop=false;standbyAfterStop=false;
   }
 
-  if (deepSleepAfterStop && !streaming && !raw && !otaBusy()) {
+  if (deepSleepAfterStop && !streaming && !raw && !otaBusy()
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      && !odysseyRecording.load()
+#endif
+  ) {
     deepSleepAfterStop=false;
     enterDeepSleep("touch-hold-after-stop");
     return;
@@ -315,6 +331,13 @@ void pollTouchControl() {
       tapCount=0;lastTapAt=0;
       touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
       Serial.println("[TOUCH] long press -> DEEP SLEEP");
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      if (odysseyRecording.load()) {
+        odysseyStopRequested=true;
+        deepSleepAfterStop=true;
+        return;
+      }
+#endif
       if (streamingEnabled.load()) {
         deepSleepAfterStop=true;
         queueEvent(EventType::COMMAND,CMD_STOP,PROTOCOL_VERSION,streamGeneration.load());
@@ -338,6 +361,12 @@ void pollTouchControl() {
     // Second valid tap acts immediately; a third tap has no power action.
     tapCount=0;lastTapAt=0;
     touchRearmAt=now+TOUCH_STATE_LOCKOUT_MS;
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+    if (odysseyRecording.load() || (!deviceConnected.load() && !streamingEnabled.load())) {
+      odysseyToggleRecording();
+      return;
+    }
+#endif
     if (streamingEnabled.load()) {
       standbyAfterStop=true;
       Serial.println("[TOUCH] double tap -> STOP + POWER SAVER");

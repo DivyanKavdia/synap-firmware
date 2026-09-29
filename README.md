@@ -35,6 +35,15 @@ Chakshu-specific camera, SD, media-transfer and local-voice behavior lives under
 
 The checked-in/generated target sketches are derived from the owned source components. Do not create or revive parallel firmware implementations for the same production target. See [`docs/CODEBASE.md`](docs/CODEBASE.md) for the current source graph, generated-artifact boundary and cleanup rules.
 
+## Odyssey C3 SD audio
+
+Odyssey C3 now keeps a detected SD card mounted. Double tap starts/stops local
+16 kHz WAV recording when BLE is disconnected, or uses the existing app recording
+path when connected. A local take continues on SD if BLE reconnects; double tap
+finalizes it before app recording can begin. Detection retries on local start.
+See [C3 SD audio](docs/ODYSSEY_C3_SD_AUDIO.md) for wiring, behavior and validation.
+C3 SD-to-PWA file transfer is not included in this change.
+
 ## Audio and BLE baseline
 
 - 16 kHz mono capture.

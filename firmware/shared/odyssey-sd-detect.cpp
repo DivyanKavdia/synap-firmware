@@ -1,4 +1,4 @@
-// Detection only: no formatting, writes, recording, new BLE services or retries.
+// Odyssey SD mount. C3 retains the bus for local recording; S3 remains detection-only.
 #if !SYNAP_CHAKSHU
 #include <SPI.h>
 #include <SD.h>
@@ -24,13 +24,22 @@ static_assert(ODYSSEY_SD_CS != ODYSSEY_SD_SCK && ODYSSEY_SD_CS != ODYSSEY_SD_MOS
   ODYSSEY_SD_SCK != ODYSSEY_SD_MISO && ODYSSEY_SD_MOSI != ODYSSEY_SD_MISO,
   "SD pins must be distinct");
 
-// Boot snapshot: 0=not checked, 1=detected, 2=mount failed, 3=no card reported.
-static uint8_t odysseySdBootState=0;
+// Mount status (C3 also refreshes it on local start): 0=not checked, 1=detected, 2=mount failed, 3=no card reported.
+static std::atomic<uint8_t> odysseySdBootState{0};
+#if CONFIG_IDF_TARGET_ESP32C3
+static SPIClass odysseySdSpi(FSPI);
+#endif
 uint8_t odysseySdDetectionState() { return odysseySdBootState; }
 
 void odysseyDetectSdCard() {
   odysseySdBootState=0;
+#if CONFIG_IDF_TARGET_ESP32C3
+  SD.end();
+  odysseySdSpi.end();
+  SPIClass& sdSpi=odysseySdSpi;
+#else
   SPIClass sdSpi(FSPI);
+#endif
   // Explicit mapping avoids the board's default SPI pins (used by the mic).
   digitalWrite(ODYSSEY_SD_CS, HIGH);
   pinMode(ODYSSEY_SD_CS, OUTPUT);
@@ -54,6 +63,9 @@ void odysseyDetectSdCard() {
     // A failed mount cannot distinguish absent card from wiring/filesystem trouble.
     Serial.println("[SD] detection/mount failed: check card, wiring and filesystem");
   }
+#if CONFIG_IDF_TARGET_ESP32C3
+  if (odysseySdBootState==1) return;
+#endif
   SD.end();
   sdSpi.end();
   digitalWrite(ODYSSEY_SD_CS, HIGH);

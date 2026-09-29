@@ -9,6 +9,7 @@ const {nativeTest}=require('./support/native.cjs');
 const source=fs.readFileSync(path.join(__dirname,'../firmware/shared/odyssey-sd-detect.cpp'),'utf8').replace(/^#include.*$/gm,'');
 const stub=`
 #include <cassert>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -54,14 +55,18 @@ struct SDStub {
  void end(){++sdEnds;}
 } SD;
 `;
-for(const chip of ['ESP32C3','ESP32S3'])test(`${chip}: SD probe handles success, absent card and mount failure, always releases bus`,()=>{
+for(const chip of ['ESP32C3','ESP32S3'])test(`${chip}: SD probe handles success, absent card and mount failure, retains C3 ready mount and cleans up failures`,()=>{
  nativeTest(stub+source+`
  int main(){
  assert(odysseySdDetectionState()==0);
  odysseyDetectSdCard();assert(odysseySdDetectionState()==1);assert(Serial.log.find("detected: SDHC/SDXC, 8192 MiB")!=std::string::npos);
  Serial.log.clear();SD.type=CARD_NONE;odysseyDetectSdCard();assert(odysseySdDetectionState()==3);assert(Serial.log.find("no card reported")!=std::string::npos);
  Serial.log.clear();SD.mounted=false;odysseyDetectSdCard();assert(odysseySdDetectionState()==2);assert(Serial.log.find("detection/mount failed")!=std::string::npos);
+ #if CONFIG_IDF_TARGET_ESP32C3
+ assert(spiEnds==5 && sdEnds==5 && csLevel==HIGH);
+#else
  assert(spiEnds==3 && sdEnds==3 && csLevel==HIGH);
+#endif
  }
  `,[`-DCONFIG_IDF_TARGET_${chip}=1`,'-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags(chip)]);
 });
