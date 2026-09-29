@@ -13,7 +13,7 @@ std::atomic<bool> odysseyRecording{false},odysseyStopRequested{false},deviceConn
 bool sleepPending=false,critical=false,ota=false,micOk=true,cardOk=true,openOk=true,shortWrite=false,allocOk=true,reconnect=false;
 uint8_t odysseySdBootState=1;
 uint32_t clockMs=0;
-int reads=0,micStarts=0,micStops=0,closed=0,sdEnds=0,collisions=0;
+int reads=0,micStarts=0,micStops=0,closed=0,sdEnds=0,collisions=0,powerActive=0,powerIdle=0;
 size_t pos=0;
 std::vector<uint8_t> data;
 std::string opened;
@@ -45,7 +45,7 @@ uint32_t esp_random(){static uint32_t n=0;return ++n;}
 uint32_t millis(){return clockMs;}
 bool otaBusy(){return ota;}
 bool batteryCritical(){return critical;}
-void applyCpuPowerProfile(bool){}
+void applyCpuPowerProfile(bool active){if(active)++powerActive;else ++powerIdle;}
 struct MicrophoneGuard { ~MicrophoneGuard(){} };
 bool startMicrophone(){++micStarts;return micOk;}
 void stopMicrophone(){++micStops;}
@@ -66,23 +66,23 @@ void vTaskDelete(void*){}
 void reset(){
  odysseyRecording=false;odysseyStopRequested=false;deviceConnected=false;streamingEnabled=false;
  sleepPending=critical=ota=shortWrite=reconnect=false;micOk=cardOk=openOk=allocOk=true;
- clockMs=0;reads=micStarts=micStops=closed=sdEnds=collisions=0;pendingTask=nullptr;data.clear();opened.clear();
+ clockMs=0;reads=micStarts=micStops=closed=sdEnds=collisions=powerActive=powerIdle=0;pendingTask=nullptr;data.clear();opened.clear();
 }
 void run(){assert(pendingTask);auto fn=pendingTask;pendingTask=nullptr;fn(nullptr);assert(!odysseyRecording);}
 int main(){
  reset();collisions=2;odysseyToggleRecording();assert(odysseyRecording);run();
- assert(micStarts==1 && micStops==1 && closed==1);
+ assert(micStarts==1 && micStops==1 && closed==1);assert(powerActive>=1 && powerIdle>=1);
  assert(data.size()==44+3200 && get32(40)==3200 && get32(4)==3236);
  assert(get32(24)==16000 && get32(28)==32000);
  assert(data[44]==0xff && data[45]==0x7f && data[46]==0 && data[47]==0x80);
  assert(opened.find("/synap/odyssey_audio_")==0);
  reset();reconnect=true;odysseyToggleRecording();run();assert(deviceConnected && get32(40)==3200);
  reset();odysseyToggleRecording();odysseyToggleRecording();assert(odysseyStopRequested);run();assert(!micStarts && get32(40)==0);
- reset();cardOk=false;odysseyToggleRecording();run();assert(data.empty() && !micStarts && sdEnds==1);
- cardOk=true;odysseyToggleRecording();run();assert(get32(40)==3200); // retry succeeds
+ reset();cardOk=false;odysseyToggleRecording();assert(!odysseyRecording && !pendingTask && data.empty() && !micStarts);
+ cardOk=true;odysseyToggleRecording();assert(odysseyRecording && pendingTask);run();assert(get32(40)==3200); // retry succeeds
  reset();shortWrite=true;odysseyToggleRecording();run();assert(get32(40)==8 && odysseySdBootState==2 && closed==1);
  reset();openOk=false;odysseyToggleRecording();run();assert(!micStarts);
  reset();micOk=false;odysseyToggleRecording();run();assert(closed==1 && get32(40)==0);
- reset();allocOk=false;odysseyToggleRecording();assert(!odysseyRecording && !pendingTask);
+ reset();allocOk=false;odysseyToggleRecording();assert(!odysseyRecording && !pendingTask && powerActive==1 && powerIdle==1);
  for(int guard=0;guard<5;++guard){reset();switch(guard){case 0:deviceConnected=true;break;case 1:streamingEnabled=true;break;case 2:ota=true;break;case 3:sleepPending=true;break;case 4:critical=true;break;}odysseyToggleRecording();assert(!odysseyRecording && !pendingTask);}
 }
