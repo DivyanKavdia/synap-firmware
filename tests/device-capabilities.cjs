@@ -18,12 +18,14 @@ for(const target of Object.values(TARGETS)) {
 #include <cstdio>
 ${profileBlock(source)}
 #define USE_REAL_I2S_MIC 1
+#define CONFIG_IDF_TARGET_ESP32C3 ${target.family==='esp32c3'?1:0}
 constexpr uint16_t SAMPLE_RATE=16000;
 std::atomic<bool> microphoneValidated{false};
 bool batteryAvailable=false;
 struct Esp { unsigned getFlashChipSize(){return ${target.flashBytes};} unsigned getPsramSize(){return ${target.psramBytes};} } ESP;
 namespace ChakshuMedia {struct Snapshot {uint16_t ready=0,sensor=0;};Snapshot current;void copy(Snapshot& s){s=current;}}
 namespace ChakshuTransfer {bool requests=true;}
+namespace OdysseyTransfer {bool available(){return true;}}
 uint8_t sdState=0;
 uint8_t odysseySdDetectionState(){return sdState;}
 ${encode}
@@ -52,8 +54,15 @@ int main(){
   assert(p[14]==1 && p[15]==2 && p[16]==31);
   assert(p[17]==0 && p[18]==0 && p[19]==0);
 #else
-  assert(!(word(p+4)&(SYNAP_CAP_CAMERA|SYNAP_CAP_SD|SYNAP_CAP_PHOTO|SYNAP_CAP_VIDEO)));
+  assert(!(word(p+4)&(SYNAP_CAP_CAMERA|SYNAP_CAP_PHOTO|SYNAP_CAP_VIDEO)));
+#if CONFIG_IDF_TARGET_ESP32C3
+  assert(word(p+4)&SYNAP_CAP_SD);
+  assert(bool(word(p+6)&SYNAP_CAP_SD)==bool(sdState==1));
+  assert(p[14]==1 && p[15]==0 && p[16]==0);
+#else
+  assert(!(word(p+4)&SYNAP_CAP_SD));
   assert(p[14]==0 && p[15]==0 && p[16]==0);
+#endif
   assert(p[17]==1 && p[18]==sdState && p[19]==0);
 #endif
  }
