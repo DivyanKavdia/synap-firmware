@@ -49,9 +49,10 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(c3,/odysseySdDetectionState\(\)!=1/);
   assert.match(c3,/ready\|=SYNAP_CAP_SDAUDIO/);
   assert.match(c3,/1445-compatible probe/);
-  const sdProbe=c3.indexOf('odysseyDetectSdCard();');
-  const bleInit=c3.indexOf('initializeBLE();');
-  assert.ok(sdProbe>0 && bleInit>sdProbe,'C3 must restore the proven 1445 SD probe before BLE startup');
+  const setupProbe=c3.indexOf('// Probe once before BLE/tasks start; failure never prevents normal startup.');
+  const sdProbe=c3.indexOf('odysseyDetectSdCard();',setupProbe);
+  const bleInit=c3.indexOf('initializeBLE();',setupProbe);
+  assert.ok(setupProbe>0 && sdProbe>setupProbe && bleInit>sdProbe,'C3 must restore the proven 1445 SD probe before BLE startup');
   assert.doesNotMatch(c3,/odysseyScheduleSdCardDetection\(\)/);
   assert.match(c3,/enterDeepSleep\("touch-hold"\)/);
   assert.match(c3,/enterDeepSleep\("touch-hold-after-stop"\)/);
@@ -71,8 +72,9 @@ test('release workflow compiles the shared complete production pipeline',()=>{
 });
 test('C3 restores build-1445 SD startup ordering',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
-  const sd=c3.indexOf('odysseyDetectSdCard();');
-  const ble=c3.indexOf('initializeBLE();');
-  const tasks=c3.indexOf('xTaskCreate(controlTask, "control"');
-  assert(sd>0 && ble>sd && tasks>ble,'C3 SD must initialize before BLE and runtime tasks as in build 1445');
+  const setupProbe=c3.indexOf('// Probe once before BLE/tasks start; failure never prevents normal startup.');
+  const sd=c3.indexOf('odysseyDetectSdCard();',setupProbe);
+  const ble=c3.indexOf('initializeBLE();',setupProbe);
+  const tasks=c3.indexOf('xTaskCreate(controlTask, "control"',ble);
+  assert(setupProbe>0 && sd>setupProbe && ble>sd && tasks>ble,'C3 SD must initialize before BLE and runtime tasks as in build 1445');
 });
