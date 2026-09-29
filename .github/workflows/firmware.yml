@@ -115,8 +115,15 @@ jobs:
             echo "release=true" >> "$GITHUB_OUTPUT"
             echo "Current source $GITHUB_SHA is eligible for production publish."
           else
-            echo "release=false" >> "$GITHUB_OUTPUT"
-            echo "Source $GITHUB_SHA was superseded by $current; skipping attestation, publish and feed verification."
+            changed="$(gh api "repos/DivyanKavdia/synap-firmware/compare/$GITHUB_SHA...$current" --jq '.files[].filename')"
+            release_affecting="$(printf '%s\n' "$changed" | grep -Ev '^(README\.md|OTA_RELEASES\.md|docs/)' || true)"
+            if [ -n "$changed" ] && [ -z "$release_affecting" ]; then
+              echo "release=true" >> "$GITHUB_OUTPUT"
+              echo "Main advanced only through firmware-ignored documentation; verified source $GITHUB_SHA remains eligible."
+            else
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              echo "Source $GITHUB_SHA was superseded by release-affecting changes in $current; skipping production publish."
+            fi
           fi
       - name: Attest ESP32-S3 production firmware with GitHub OIDC
         if: steps.current.outputs.release == 'true'

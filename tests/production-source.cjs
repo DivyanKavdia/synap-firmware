@@ -37,4 +37,7 @@ test('release publishes only the current candidate and retains both exact target
   assert.match(workflow,/steps\.publish_result\.outputs\.published == 'true'/);
   assert.match(publisher,/setPublished\(false\).*Superseded source commit/s);
   assert.match(publisher,/setPublished\(true\);\s*console\.log\(`Published/);
+  assert.match(workflow,/compare\/\$GITHUB_SHA\.\.\.\$current/,'release guard compares a superseding main commit');
+  assert.match(workflow,/README\\\.md\|OTA_RELEASES\\\.md\|docs\//,'docs-only changes must not invalidate a verified firmware candidate');
+  assert.match(workflow,/release-affecting changes/,'code changes must still invalidate an older firmware candidate');
 });
