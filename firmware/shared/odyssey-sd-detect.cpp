@@ -35,7 +35,8 @@ uint8_t odysseySdDetectionState() { return odysseySdBootState; }
 uint8_t odysseySdProbeState() { return odysseySdElectricalState; }
 
 #if CONFIG_IDF_TARGET_ESP32C3
-static uint8_t odysseyRawSdProbe(SPIClass& spi,uint32_t hz) {
+static uint8_t odysseyRawSdProbe(uint32_t hz) {
+  SPIClass& spi=odysseySdSpi;
   spi.beginTransaction(SPISettings(hz,MSBFIRST,SPI_MODE0));
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   for (uint8_t i=0;i<12;++i) spi.transfer(0xff); // >=96 idle clocks before CMD0.
@@ -82,7 +83,7 @@ void odysseyDetectSdCard() {
       unsigned(attempt+1), static_cast<unsigned long>(clocks[attempt]),
       ODYSSEY_SD_CS, ODYSSEY_SD_SCK, ODYSSEY_SD_MOSI, ODYSSEY_SD_MISO);
 
-    const uint8_t electrical=odysseyRawSdProbe(sdSpi,clocks[attempt]);
+    const uint8_t electrical=odysseyRawSdProbe(clocks[attempt]);
     if (electrical==1) sawElectricalReply=true;
     odysseySdElectricalState=sawElectricalReply?1:2;
 
