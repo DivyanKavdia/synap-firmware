@@ -13,6 +13,7 @@ const stub=`
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <vector>
 #define HIGH 1
 #define OUTPUT 1
 #define FSPI 0
@@ -26,9 +27,11 @@ constexpr int TOUCH_INPUT_PIN=3,BATTERY_ADC_PIN=1,RGB_LED_PIN=8;
 #else
 constexpr int TOUCH_INPUT_PIN=13,BATTERY_ADC_PIN=8,RGB_LED_PIN=48;
 #endif
-int spiEnds=0, sdEnds=0, csLevel=0;
+int spiEnds=0,sdEnds=0,csLevel=0,beginCalls=0;
+std::vector<uint32_t> clocks;
 void digitalWrite(int,int level){csLevel=level;}
 void pinMode(int,int){}
+void delay(uint32_t){}
 struct SPIClass {
  explicit SPIClass(int){}
  void begin(int sck,int miso,int mosi,int cs){
@@ -42,37 +45,74 @@ struct SPIClass {
 };
 struct SerialStub {
  std::string log;
- template<typename... T> void printf(const char* f,T... v){char b[256];snprintf(b,sizeof(b),f,v...);log+=b;}
+ template<typename... T> void printf(const char* f,T... v){char b[320];snprintf(b,sizeof(b),f,v...);log+=b;}
  void println(const char* s){log+=s;}
 } Serial;
 struct SDStub {
- bool mounted=true;uint8_t type=CARD_SDHC;
- bool begin(int,SPIClass&,int hz,const char* path,int files,bool format){
-  assert(hz==400000 && std::string(path)=="/odyssey-sd" && files==1 && !format);return mounted;
+ bool mounted=true;uint8_t type=CARD_SDHC;int failBegins=0;
+ bool begin(int,SPIClass&,uint32_t hz,const char* path,int files,bool format){
+  ++beginCalls;clocks.push_back(hz);
+  assert(std::string(path)=="/odyssey-sd" && files==1 && !format);
+  if(failBegins>0){--failBegins;return false;}
+  return mounted;
  }
  uint8_t cardType(){return type;}
  uint64_t cardSize(){return 8ULL*1024*1024*1024;}
  void end(){++sdEnds;}
 } SD;
 `;
-for(const chip of ['ESP32C3','ESP32S3'])test(`${chip}: SD probe handles success, absent card and mount failure, retains C3 ready mount and cleans up failures`,()=>{
+
+test('ESP32C3: preserves a healthy mount and recovers failed mounts at progressively lower safe SPI clocks',()=>{
  nativeTest(stub+source+`
  int main(){
- assert(odysseySdDetectionState()==0);
- odysseyDetectSdCard();assert(odysseySdDetectionState()==1);assert(Serial.log.find("detected: SDHC/SDXC, 8192 MiB")!=std::string::npos);
- Serial.log.clear();SD.type=CARD_NONE;odysseyDetectSdCard();assert(odysseySdDetectionState()==3);assert(Serial.log.find("no card reported")!=std::string::npos);
- Serial.log.clear();SD.mounted=false;odysseyDetectSdCard();assert(odysseySdDetectionState()==2);assert(Serial.log.find("detection/mount failed")!=std::string::npos);
- #if CONFIG_IDF_TARGET_ESP32C3
- assert(spiEnds==5 && sdEnds==5 && csLevel==HIGH);
-#else
- assert(spiEnds==3 && sdEnds==3 && csLevel==HIGH);
-#endif
+  assert(odysseySdDetectionState()==0);
+  odysseyDetectSdCard();
+  assert(odysseySdDetectionState()==1 && beginCalls==1 && clocks.back()==400000u);
+  assert(Serial.log.find("filesystem mounted at 400000 Hz on attempt 1")!=std::string::npos);
+
+  // A healthy mount is retained; no destructive remount is attempted.
+  const int beginBefore=beginCalls,sdEndBefore=sdEnds,spiEndBefore=spiEnds;
+  odysseyDetectSdCard();
+  assert(beginCalls==beginBefore && sdEnds==sdEndBefore && spiEnds==spiEndBefore);
+
+  // A previously failed/offline state retries 400k, 400k, then 250k.
+  odysseySdBootState=2;SD.failBegins=2;SD.mounted=true;SD.type=CARD_SDHC;clocks.clear();
+  odysseyDetectSdCard();
+  assert(odysseySdDetectionState()==1);
+  assert(clocks.size()==3 && clocks[0]==400000u && clocks[1]==400000u && clocks[2]==250000u);
+
+  // Complete failure exhausts the bounded sequence and stays safely offline.
+  odysseySdBootState=2;SD.mounted=false;SD.failBegins=0;clocks.clear();
+  odysseyDetectSdCard();
+  assert(odysseySdDetectionState()==2);
+  assert(clocks.size()==4 && clocks[0]==400000u && clocks[1]==400000u && clocks[2]==250000u && clocks[3]==125000u);
+  assert(Serial.log.find("failed after recovery sequence")!=std::string::npos);
+
+  // A card that responds without a usable type is distinct from a mount failure.
+  odysseySdBootState=2;SD.mounted=true;SD.type=CARD_NONE;clocks.clear();
+  odysseyDetectSdCard();
+  assert(odysseySdDetectionState()==3 && clocks.size()==4);
+  assert(Serial.log.find("no usable card type")!=std::string::npos);
+  assert(csLevel==HIGH);
  }
- `,[`-DCONFIG_IDF_TARGET_${chip}=1`,'-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags(chip)]);
+ `,['-DCONFIG_IDF_TARGET_ESP32C3=1','-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags('ESP32C3')]);
 });
+
+test('ESP32S3: Odyssey probe remains one-shot and releases the bus',()=>{
+ nativeTest(stub+source+`
+ int main(){
+  odysseyDetectSdCard();assert(odysseySdDetectionState()==1);assert(beginCalls==1 && clocks[0]==400000u);
+  assert(spiEnds==1 && sdEnds==1 && csLevel==HIGH);
+  SD.type=CARD_NONE;odysseyDetectSdCard();assert(odysseySdDetectionState()==3);
+  SD.type=CARD_SDHC;SD.mounted=false;odysseyDetectSdCard();assert(odysseySdDetectionState()==2);
+  assert(beginCalls==3 && spiEnds==3 && sdEnds==3);
+ }
+ `,['-DCONFIG_IDF_TARGET_ESP32S3=1','-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags('ESP32S3')]);
+});
+
 test('C3 rejects UART Serial and an overlapping peripheral pin at compile time',()=>{
- assert.throws(()=>nativeTest(stub+source+'\nint main(){}',['-DCONFIG_IDF_TARGET_ESP32C3=1',...sdFlags('ESP32C3')]),/enable USB CDC/);
- assert.throws(()=>nativeTest(stub.replace('TOUCH_INPUT_PIN=3','TOUCH_INPUT_PIN=10')+source+'\nint main(){}',
+ assert.throws(()=>nativeTest(stub+source+'\\nint main(){}',['-DCONFIG_IDF_TARGET_ESP32C3=1',...sdFlags('ESP32C3')]),/enable USB CDC/);
+ assert.throws(()=>nativeTest(stub.replace('TOUCH_INPUT_PIN=3','TOUCH_INPUT_PIN=10')+source+'\\nint main(){}',
  ['-DCONFIG_IDF_TARGET_ESP32C3=1','-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags('ESP32C3')]),/SD pin overlaps/);
 });
 
