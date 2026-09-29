@@ -2144,6 +2144,10 @@ struct Request {
   char path[64]{};
 };
 static QueueHandle_t requests=nullptr;
+// FAT/VFS directory enumeration has a materially deeper call stack than normal BLE work on C3.
+// Keep this worker at parity with the proven Chakshu transfer task so an SD catalogue cannot
+// overflow the task stack and reset the single-core C3 during the first post-connect probe.
+static constexpr uint32_t TRANSFER_STACK_BYTES=8192;
 static portMUX_TYPE responseMux=portMUX_INITIALIZER_UNLOCKED;
 static uint8_t response[496]{};
 static size_t responseSize=16;
@@ -2335,7 +2339,7 @@ bool available() { return requests!=nullptr; }
 
 void initialize() {
   requests=xQueueCreate(2,sizeof(Request));
-  if (!requests || xTaskCreate(worker,"odyssey-sd",4096,nullptr,1,nullptr)!=pdPASS) {
+  if (!requests || xTaskCreate(worker,"odyssey-sd",TRANSFER_STACK_BYTES,nullptr,1,nullptr)!=pdPASS) {
     if (requests) vQueueDelete(requests);
     requests=nullptr;
     Serial.println("[SD] BLE transfer worker unavailable");
