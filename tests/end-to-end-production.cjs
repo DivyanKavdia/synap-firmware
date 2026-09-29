@@ -50,7 +50,8 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(c3,/ready\|=SYNAP_CAP_SDAUDIO/);
   assert.match(c3,/ODYSSEY_SD_STARTUP_SETTLE_MS=3000u/);
   assert.match(c3,/odysseyScheduleSdCardDetection\(\)/);
-  assert.match(c3,/activation scheduled after/);\n  assert.match(c3,/1445-compatible mount/);
+  assert.match(c3,/activation scheduled after/);
+  assert.match(c3,/1445-compatible mount/);
   assert.match(c3,/C3 SD activation is delayed until BLE and runtime tasks are ready\.\n  initializeBLE\(\);/);
   assert.doesNotMatch(c3,/runtime tasks are ready\.\\\\n/);
   assert.match(c3,/enterDeepSleep\("touch-hold"\)/);
