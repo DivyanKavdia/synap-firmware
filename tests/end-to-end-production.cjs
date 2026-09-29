@@ -48,6 +48,10 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(c3,/double tap ignored: SD unavailable/);
   assert.match(c3,/odysseySdDetectionState\(\)!=1/);
   assert.match(c3,/ready\|=SYNAP_CAP_SDAUDIO/);
+  assert.match(c3,/ODYSSEY_SD_STARTUP_SETTLE_MS=3000u/);
+  assert.match(c3,/odysseyScheduleSdCardDetection\(\)/);
+  assert.match(c3,/activation scheduled after/);
+  assert.match(c3,/odysseySdProbeBusy\.compare_exchange_strong/);
   assert.match(c3,/enterDeepSleep\("touch-hold"\)/);
   assert.match(c3,/enterDeepSleep\("touch-hold-after-stop"\)/);
   assert.doesNotMatch(c3,/triple tap -> DEEP SLEEP/);
@@ -63,4 +67,12 @@ test('release workflow compiles the shared complete production pipeline',()=>{
   const compileLines=workflow.split('\n').filter(line=>line.includes('arduino-cli compile'));
   assert.equal(compileLines.length,3);
   assert(compileLines.every(line=>line.includes('-DUSE_REAL_I2S_MIC=1')));
+});
+
+test('C3 brings BLE and runtime tasks up before delayed SD activation',()=>{
+  const c3=materialize(productionS3(),'esp32c3-supermini-4m');
+  const ble=c3.indexOf('initializeBLE();');
+  const tasks=c3.indexOf('xTaskCreate(controlTask, "control"');
+  const sd=c3.indexOf('odysseyScheduleSdCardDetection()');
+  assert(ble>0 && tasks>ble && sd>tasks,'C3 SD activation must not block BLE/runtime startup');
 });

@@ -30,6 +30,17 @@ static std::atomic<uint8_t> odysseySdBootState{0};
 static std::atomic<uint8_t> odysseySdElectricalState{0};
 #if CONFIG_IDF_TARGET_ESP32C3
 static SPIClass odysseySdSpi(FSPI);
+static std::atomic<bool> odysseySdProbeBusy{false};
+static constexpr uint32_t ODYSSEY_SD_STARTUP_SETTLE_MS=3000u;
+
+static void odysseyWaitForSdStartupSettle() {
+  const uint32_t now=millis();
+  if (now<ODYSSEY_SD_STARTUP_SETTLE_MS) {
+    const uint32_t waitMs=ODYSSEY_SD_STARTUP_SETTLE_MS-now;
+    Serial.printf("[SD] startup settle wait %lu ms\n",static_cast<unsigned long>(waitMs));
+    delay(waitMs);
+  }
+}
 #endif
 uint8_t odysseySdDetectionState() { return odysseySdBootState; }
 uint8_t odysseySdProbeState() { return odysseySdElectricalState; }
@@ -62,6 +73,17 @@ void odysseyDetectSdCard() {
   // Preserve a healthy mounted card. Repeated teardown/remount cycles can turn
   // a working card into a false-offline state on a sealed device.
   if (odysseySdBootState.load()==1 && SD.cardType()!=CARD_NONE) return;
+
+  // The SD adapter remains powered across software resets. Give it a short
+  // post-boot settle window, and serialize mount attempts from the background
+  // boot probe and any early PWA media request.
+  odysseyWaitForSdStartupSettle();
+  bool expected=false;
+  if (!odysseySdProbeBusy.compare_exchange_strong(expected,true)) {
+    const uint32_t started=millis();
+    while (odysseySdProbeBusy.load() && uint32_t(millis()-started)<5000u) delay(10);
+    return;
+  }
 
   SPIClass& sdSpi=odysseySdSpi;
   static constexpr uint32_t clocks[] = {400000u, 400000u, 250000u, 125000u};
@@ -97,6 +119,7 @@ void odysseyDetectSdCard() {
         Serial.printf("[SD] detected: %s, %llu MiB; filesystem mounted at %lu Hz on attempt %u\n",
           label, static_cast<unsigned long long>(SD.cardSize()/(1024ULL*1024ULL)),
           static_cast<unsigned long>(clocks[attempt]), unsigned(attempt+1));
+        odysseySdProbeBusy=false;
         return;
       }
       sawCardWithoutType=true;
@@ -110,6 +133,7 @@ void odysseyDetectSdCard() {
   odysseySdBootState=sawCardWithoutType?3:2;
   Serial.printf("[SD] recovery exhausted: mount=%u spi=%u\n",
     unsigned(odysseySdBootState.load()),unsigned(odysseySdElectricalState.load()));
+  odysseySdProbeBusy=false;
 #else
   odysseySdBootState=0;
   odysseySdElectricalState=0;
@@ -143,4 +167,21 @@ void odysseyDetectSdCard() {
   digitalWrite(ODYSSEY_SD_CS, HIGH);
 #endif
 }
+#if CONFIG_IDF_TARGET_ESP32C3
+static void odysseyDelayedSdProbeTask(void*) {
+  odysseyWaitForSdStartupSettle();
+  odysseyDetectSdCard();
+  vTaskDelete(nullptr);
+}
+bool odysseyScheduleSdCardDetection() {
+  const BaseType_t created=xTaskCreate(odysseyDelayedSdProbeTask,"sd-boot",3072,nullptr,1,nullptr);
+  if (created!=pdPASS) {
+    Serial.println("[SD] delayed activation task unavailable; probing inline");
+    return false;
+  }
+  Serial.printf("[SD] activation scheduled after %lu ms\n",
+    static_cast<unsigned long>(ODYSSEY_SD_STARTUP_SETTLE_MS));
+  return true;
+}
+#endif
 #endif
