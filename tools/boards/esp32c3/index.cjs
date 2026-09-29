@@ -21,7 +21,7 @@ function materializeC3(source,target){
 #endif
 `;
   out=replaceOnce(out,sdBootProbe,
-    '  // C3 SD activation is delayed until BLE and runtime tasks are ready.\\n',
+    '  // C3 SD activation is delayed until BLE and runtime tasks are ready.\n',
     'Defer C3 SD activation until runtime is ready');
   const taskTail=`    fatalSetup("[FATAL] task allocation failed");
   }

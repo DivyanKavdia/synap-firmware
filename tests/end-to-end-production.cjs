@@ -52,6 +52,8 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(c3,/odysseyScheduleSdCardDetection\(\)/);
   assert.match(c3,/activation scheduled after/);
   assert.match(c3,/odysseySdProbeBusy\.compare_exchange_strong/);
+  assert.match(c3,/C3 SD activation is delayed until BLE and runtime tasks are ready\.\n  initializeBLE\(\);/);
+  assert.doesNotMatch(c3,/runtime tasks are ready\.\\\\n/);
   assert.match(c3,/enterDeepSleep\("touch-hold"\)/);
   assert.match(c3,/enterDeepSleep\("touch-hold-after-stop"\)/);
   assert.doesNotMatch(c3,/triple tap -> DEEP SLEEP/);
