@@ -1,0 +1,11 @@
+function,gpio,hardware
+microSD CS,0,microSD
+microSD SCK,10,microSD
+microSD MOSI,21,microSD
+microSD MISO,20,microSD
+INMP441 SCK/BCLK,4,microphone
+INMP441 WS,5,microphone
+INMP441 SD,6,microphone
+TTP223 OUT,3,touch
+Battery ADC,1,470k/470k divider on SW_BAT
+NeoPixel DIN,8,330R series
