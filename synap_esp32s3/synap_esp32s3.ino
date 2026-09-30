@@ -245,6 +245,7 @@ std::atomic<bool> batteryAvailable{false};
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 std::atomic<bool> odysseyRecording{false}, odysseyStopRequested{false};
 void odysseyToggleRecording();
+bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs);
 namespace OdysseyTransfer {
 void initialize();
 void ble(BLEService* service);
@@ -1457,7 +1458,10 @@ class RecoveryCallbacks : public BLECharacteristicCallbacks {
 
 void stopStreaming(ErrorCode reason) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  if (odysseyRecording.load()) { updateStatusCharacteristic(true); return; }
+  if (!odysseyPrepareForConnectedStreaming(1500u)) {
+    stopStreaming(ErrorCode::AUDIO_SOURCE_FAILED);
+    return;
+  }
 #endif
   streamingEnabled.store(false);
   ++streamGeneration; // Invalidates queued AND already-in-flight old task work.
@@ -1553,6 +1557,11 @@ void processStreamError() {
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* server) override {
     (void)server;
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+    // Reconnection ends disconnected-capture ownership. Ask a local SD take to
+    // finalize early so the first PWA START does not silently remain idle.
+    if (odysseyRecording.load()) odysseyStopRequested=true;
+#endif
     ++connectionGeneration;
     if(!recoveryWaiting.load())streamingEnabled.store(false);
     deviceConnected.store(true);
@@ -2388,6 +2397,21 @@ static void odysseyRecordTask(void*) {
   odysseyRecording=false;
   applyCpuPowerProfile(false);
   vTaskDelete(nullptr);
+}
+bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs) {
+  if (!odysseyRecording.load()) return true;
+  // Connected PWA capture owns future I2S access, but the disconnected SD take
+  // must close its WAV header/file before the microphone can change owners.
+  odysseyStopRequested=true;
+  Serial.println("[SD] BLE capture requested; finalizing local audio before live stream");
+  const uint32_t started=millis();
+  while (odysseyRecording.load() && uint32_t(millis()-started)<timeoutMs) delay(10);
+  if (odysseyRecording.load()) {
+    Serial.println("[SD] local audio did not finalize before BLE capture deadline");
+    return false;
+  }
+  Serial.println("[SD] local audio finalized; microphone released to BLE capture");
+  return true;
 }
 void odysseyToggleRecording() {
   if (odysseyRecording.load()) {
