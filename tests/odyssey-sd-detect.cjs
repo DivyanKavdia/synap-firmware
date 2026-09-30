@@ -18,7 +18,13 @@ test('C3 SD owner uses ESP-IDF SDSPI/FAT on the fixed Odyssey pins',()=>{
   assert.match(source,/bus\.sclk_io_num=ODYSSEY_SD_SCK/);
   assert.match(source,/bus\.mosi_io_num=ODYSSEY_SD_MOSI/);
   assert.match(source,/bus\.miso_io_num=ODYSSEY_SD_MISO/);
-  assert.match(source,/ODYSSEY_SD_MAX_FREQ_KHZ=10000u/);
+  assert.match(source,/ODYSSEY_SD_INIT_FREQ_KHZ=SDMMC_FREQ_PROBING/);
+  assert.match(source,/ODYSSEY_SD_RUN_FREQ_KHZ=4000u/);
+  assert.match(source,/host\.max_freq_khz=ODYSSEY_SD_INIT_FREQ_KHZ/);
+  assert.match(source,/sdmmc_get_status\(card\)/);
+  assert.match(source,/set_card_clk\(card->host\.slot,ODYSSEY_SD_RUN_FREQ_KHZ\)/);
+  assert.match(source,/set_card_clk\(card->host\.slot,ODYSSEY_SD_INIT_FREQ_KHZ\)/);
+  assert.doesNotMatch(source,/ODYSSEY_SD_MAX_FREQ_KHZ=10000u/);
   assert.match(source,/format_if_mount_failed=false/);
   assert.match(source,/allocation_unit_size=16\*1024/);
 });
@@ -30,7 +36,9 @@ test('C3 SD lifecycle has one owner, bounded retries and complete cleanup',()=>{
   assert.match(source,/spi_bus_free\(SPI2_HOST\)/);
   assert.match(source,/ODYSSEY_SD_BOOT_ATTEMPTS=2/);
   assert.match(source,/ODYSSEY_SD_RECOVERY_ATTEMPTS=3/);
-  assert.match(source,/ODYSSEY_SD_RETRY_BACKOFF_MS=150u/);
+  assert.match(source,/ODYSSEY_SD_RETRY_BACKOFF_MS=250u/);
+  assert.match(source,/gpio_reset_pin\(static_cast<gpio_num_t>\(ODYSSEY_SD_SCK\)\)/);
+  assert.match(source,/gpio_set_pull_mode\(static_cast<gpio_num_t>\(ODYSSEY_SD_MISO\),GPIO_PULLUP_ONLY\)/);
   assert.match(source,/odysseySdMountLocked\("boot",ODYSSEY_SD_BOOT_ATTEMPTS\)/);
   assert.match(source,/odysseySdMountLocked\("recovery",ODYSSEY_SD_RECOVERY_ATTEMPTS\)/);
   assert.doesNotMatch(source,/odysseySdRawCommand|odysseySdProtocolProbe|odysseySdReadSectorZero/);
