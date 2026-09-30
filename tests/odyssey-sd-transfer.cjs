@@ -17,6 +17,7 @@ assert.match(source,/case 7: error=catalogue\(total\)/);
 assert.match(source,/case 4: error=readSelected\(request\.path,request\.offset,total,bytes,size\)/);
 assert.match(source,/!strcmp\(requestedPath,"@catalogue"\)/);
 assert.match(source,/safeWavPath\(requestedPath\)/);
+assert.match(source,/transfer begin path=%s/);
 assert.match(source,/New clients make every chunk self-describing/);
 assert.match(source,/TRANSFER_STACK_BYTES=8192/,'C3 SD transfer needs an 8 KiB worker stack for FAT directory enumeration');
 assert.match(source,/xTaskCreate\(worker,"odyssey-sd",TRANSFER_STACK_BYTES/);

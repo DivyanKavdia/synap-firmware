@@ -82,6 +82,7 @@ static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& 
       return OK;
     }
     if (!safeWavPath(requestedPath)) return BAD_COMMAND;
+    if (offset==0) Serial.printf("[SD] transfer begin path=%s\\n",requestedPath);
     OdysseySdGuard guard;
     if (!guard || !storageReady()) return NO_SD;
     char full[96];
