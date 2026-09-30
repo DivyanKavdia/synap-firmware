@@ -209,6 +209,7 @@ std::atomic<bool> batteryAvailable{false};
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 std::atomic<bool> odysseyRecording{false}, odysseyStopRequested{false};
 void odysseyToggleRecording();
+bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs);
 namespace OdysseyTransfer {
 void initialize();
 void ble(BLEService* service);
