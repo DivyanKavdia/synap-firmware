@@ -52,9 +52,10 @@ struct SerialStub {
  void println(const char* s){log+=s;}
 } Serial;
 struct SDStub {
- bool mounted=true;uint8_t type=CARD_SDHC;
+ bool mounted=true;uint8_t type=CARD_SDHC;int failBegins=0;
  bool begin(int,SPIClass&,int hz,const char* path,int files,bool format){
-  ++beginCalls;assert(hz==400000 && std::string(path)=="/odyssey-sd" && files==1 && !format);return mounted;
+  ++beginCalls;assert(hz==400000 && std::string(path)=="/odyssey-sd" && files==1 && !format);
+  if(failBegins>0){--failBegins;return false;} return mounted;
  }
  uint8_t cardType(){return type;}
  uint64_t cardSize(){return 8ULL*1024*1024*1024;}
@@ -85,14 +86,29 @@ for(const chip of ['ESP32C3','ESP32S3'])test(`${chip}: restored 1445 SD mount pa
  `,[`-DCONFIG_IDF_TARGET_${chip}=1`,'-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags(chip)]);
 });
 
-test('C3 delayed activation waits three seconds before the first mount attempt',()=>{
+test('C3 boot waits three seconds, retries mount, and completes before BLE may start',()=>{
  nativeTest(stub+source+`
  int main(){
-   assert(odysseyScheduleSdCardDetection());
-   assert(beginCalls==0 && delayedMs==0);
-   odysseyDelayedSdProbeTask(nullptr);
-   assert(delayedMs==3000u && beginCalls==1);
+   SD.failBegins=2;
+   assert(odysseyInitializeSdCardBeforeBle());
+   assert(beginCalls==3);
+   assert(delayedMs==3700u);
    assert(odysseySdDetectionState()==1 && odysseySdProbeState()==6);
+   assert(Serial.log.find("boot mount attempt 1/3")!=std::string::npos);
+   assert(Serial.log.find("boot initialization complete state=1 before BLE")!=std::string::npos);
+ }
+ `,['-DCONFIG_IDF_TARGET_ESP32C3=1','-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags('ESP32C3')]);
+});
+
+test('C3 explicit recovery retries an unavailable card without a boot delay',()=>{
+ nativeTest(stub+source+`
+ int main(){
+   SD.mounted=false;odysseyDetectSdCard();
+   assert(odysseySdDetectionState()==2);
+   SD.mounted=true;SD.failBegins=1;delayedMs=0;beginCalls=0;
+   assert(odysseyRecoverSdCard());
+   assert(beginCalls==2 && delayedMs==700u);
+   assert(odysseySdDetectionState()==1);
  }
  `,['-DCONFIG_IDF_TARGET_ESP32C3=1','-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags('ESP32C3')]);
 });
