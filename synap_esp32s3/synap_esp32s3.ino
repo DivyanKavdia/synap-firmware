@@ -1990,10 +1990,26 @@ void transmitterTask(void* parameter) {
   }
 }
 
-// Odyssey SD mount. C3 retains the bus for local recording; S3 remains detection-only.
+// Odyssey SD storage.
+// C3 owns SD through ESP-IDF SDSPI + FAT/VFS; S3 keeps its legacy one-shot detection.
+// Hardware pins remain device-profile controlled and are never remapped here.
 #if !SYNAP_CHAKSHU
+#if CONFIG_IDF_TARGET_ESP32C3
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include "driver/spi_master.h"
+#include "driver/sdspi_host.h"
+#include "esp_vfs_fat.h"
+#include "sdmmc_cmd.h"
+#else
 #include <SPI.h>
 #include <SD.h>
+#endif
+
 #if CONFIG_IDF_TARGET_ESP32C3
 #if !defined(ARDUINO_USB_CDC_ON_BOOT) || !ARDUINO_USB_CDC_ON_BOOT
 #error Odyssey C3 SD uses GPIO20/21: enable USB CDC On Boot to keep Serial off UART0 pins
@@ -2001,6 +2017,7 @@ void transmitterTask(void* parameter) {
 #elif !CONFIG_IDF_TARGET_ESP32S3
 #error Unsupported Odyssey SD target
 #endif
+
 constexpr int ODYSSEY_SD_CS=SYNAP_SD_CS_PIN, ODYSSEY_SD_SCK=SYNAP_SD_SCK_PIN;
 constexpr int ODYSSEY_SD_MOSI=SYNAP_SD_MOSI_PIN, ODYSSEY_SD_MISO=SYNAP_SD_MISO_PIN;
 constexpr bool odysseySdPinAvailable(int pin) {
@@ -2016,239 +2033,273 @@ static_assert(ODYSSEY_SD_CS != ODYSSEY_SD_SCK && ODYSSEY_SD_CS != ODYSSEY_SD_MOS
   ODYSSEY_SD_SCK != ODYSSEY_SD_MISO && ODYSSEY_SD_MOSI != ODYSSEY_SD_MISO,
   "SD pins must be distinct");
 
+// Capability-compatible storage state:
+// detection 0=not checked, 1=mounted/ready, 2=initialization or mount failed, 3=no card.
+// probe 0=not checked, 1=SPI bus setup failed, 2=card protocol init failed,
+//       3=FAT mount failed, 4=VFS validation failed, 6=ready.
 static std::atomic<uint8_t> odysseySdBootState{0};
 static std::atomic<uint8_t> odysseySdProbeStage{0};
-#if CONFIG_IDF_TARGET_ESP32C3
-static SPIClass odysseySdSpi(FSPI);
-static constexpr uint32_t ODYSSEY_SD_RETRY_SETTLE_MS=350u;
-static constexpr uint8_t ODYSSEY_SD_MOUNT_ATTEMPTS=3;
+uint8_t odysseySdDetectionState() { return odysseySdBootState.load(); }
+uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 
-// Read-only SD SPI diagnostic stages exposed through the existing capability byte:
-// 1=no CMD0 response, 2=SPI idle entered, 3=interface recognized,
-// 4=card initialized, 5=sector 0 readable, 6=normal filesystem mount succeeded.
-static uint8_t odysseySdRawCommand(uint8_t cmd,uint32_t arg,uint8_t crc,
-                                   uint8_t* tail=nullptr,size_t tailSize=0) {
-  digitalWrite(ODYSSEY_SD_CS,LOW);
-  odysseySdSpi.transfer(0xFF);
-  odysseySdSpi.transfer(uint8_t(0x40u|cmd));
-  odysseySdSpi.transfer(uint8_t(arg>>24));odysseySdSpi.transfer(uint8_t(arg>>16));
-  odysseySdSpi.transfer(uint8_t(arg>>8));odysseySdSpi.transfer(uint8_t(arg));
-  odysseySdSpi.transfer(crc);
-  uint8_t response=0xFF;
-  for (uint8_t i=0;i<16;++i) {
-    response=odysseySdSpi.transfer(0xFF);
-    if ((response&0x80u)==0) break;
-  }
-  for (size_t i=0;i<tailSize;++i) tail[i]=odysseySdSpi.transfer(0xFF);
-  digitalWrite(ODYSSEY_SD_CS,HIGH);
-  odysseySdSpi.transfer(0xFF);
-  return response;
+#if CONFIG_IDF_TARGET_ESP32C3
+static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
+static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
+static constexpr uint32_t ODYSSEY_SD_MAX_FREQ_KHZ=10000u;
+static constexpr uint8_t ODYSSEY_SD_BOOT_ATTEMPTS=2;
+static constexpr uint8_t ODYSSEY_SD_RECOVERY_ATTEMPTS=3;
+static constexpr uint32_t ODYSSEY_SD_RETRY_BACKOFF_MS=150u;
+static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=4;
+
+static sdmmc_card_t* odysseySdCard=nullptr;
+static bool odysseySdBusInitialized=false;
+static StaticSemaphore_t odysseySdMutexStorage;
+static SemaphoreHandle_t odysseySdMutex=nullptr;
+
+static void odysseySdEnsureMutex() {
+  if (!odysseySdMutex) odysseySdMutex=xSemaphoreCreateMutexStatic(&odysseySdMutexStorage);
 }
-static bool odysseySdReadSectorZero(bool blockAddressing) {
-  digitalWrite(ODYSSEY_SD_CS,LOW);
-  odysseySdSpi.transfer(0xFF);
-  const uint32_t address=blockAddressing ? 0u : 0u;
-  odysseySdSpi.transfer(0x51); // CMD17 READ_SINGLE_BLOCK
-  odysseySdSpi.transfer(uint8_t(address>>24));odysseySdSpi.transfer(uint8_t(address>>16));
-  odysseySdSpi.transfer(uint8_t(address>>8));odysseySdSpi.transfer(uint8_t(address));
-  odysseySdSpi.transfer(0x01);
-  uint8_t response=0xFF;
-  for (uint8_t i=0;i<16;++i) {
-    response=odysseySdSpi.transfer(0xFF);
-    if ((response&0x80u)==0) break;
-  }
-  bool readable=false;
-  if (response==0x00) {
-    uint8_t token=0xFF;
-    for (uint16_t i=0;i<4096 && token==0xFF;++i) token=odysseySdSpi.transfer(0xFF);
-    if (token==0xFE) {
-      for (uint16_t i=0;i<514;++i) odysseySdSpi.transfer(0xFF); // 512-byte sector + CRC
-      readable=true;
-    }
-  }
-  digitalWrite(ODYSSEY_SD_CS,HIGH);
-  odysseySdSpi.transfer(0xFF);
-  return readable;
+bool odysseySdTake(TickType_t timeout=portMAX_DELAY) {
+  odysseySdEnsureMutex();
+  return odysseySdMutex && xSemaphoreTake(odysseySdMutex,timeout)==pdTRUE;
 }
-static uint8_t odysseySdProtocolProbe() {
-  SD.end();
-  odysseySdSpi.end();
-  digitalWrite(ODYSSEY_SD_CS,HIGH);
+void odysseySdGive() {
+  if (odysseySdMutex) xSemaphoreGive(odysseySdMutex);
+}
+class OdysseySdGuard {
+  bool held_;
+public:
+  explicit OdysseySdGuard(TickType_t timeout=portMAX_DELAY):held_(odysseySdTake(timeout)){}
+  ~OdysseySdGuard(){ if(held_) odysseySdGive(); }
+  explicit operator bool() const { return held_; }
+};
+bool odysseySdReady() {
+  return odysseySdBootState.load()==1 && odysseySdProbeStage.load()==6 && odysseySdCard!=nullptr;
+}
+const char* odysseySdMountPoint() { return ODYSSEY_SD_MOUNT_POINT; }
+bool odysseySdPath(const char* logical,char* full,size_t capacity) {
+  if (!logical || logical[0]!='/' || !full || capacity<2) return false;
+  if (strstr(logical,"..")) return false;
+  const int n=snprintf(full,capacity,"%s%s",ODYSSEY_SD_MOUNT_POINT,logical);
+  return n>0 && size_t(n)<capacity;
+}
+
+static void odysseySdReleaseLocked() {
+  if (odysseySdCard) {
+    const int result=int(esp_vfs_fat_sdcard_unmount(ODYSSEY_SD_MOUNT_POINT,odysseySdCard));
+    if (result!=ESP_OK) Serial.printf("[SD] unmount result=%s (%d)\n",esp_err_to_name(result),result);
+    odysseySdCard=nullptr;
+  }
+  if (odysseySdBusInitialized) {
+    const int result=int(spi_bus_free(SPI2_HOST));
+    if (result!=ESP_OK) Serial.printf("[SD] bus free result=%s (%d)\n",esp_err_to_name(result),result);
+    odysseySdBusInitialized=false;
+  }
   pinMode(ODYSSEY_SD_CS,OUTPUT);
-  odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
-  odysseySdSpi.beginTransaction(SPISettings(400000,MSBFIRST,SPI_MODE0));
-  for (uint8_t i=0;i<20;++i) odysseySdSpi.transfer(0xFF); // >= 74 clocks with CS high
-
-  uint8_t r0=0xFF;
-  for (uint8_t attempt=0;attempt<2 && r0!=0x01;++attempt)
-    r0=odysseySdRawCommand(0,0,0x95);
-  if (r0!=0x01) {
-    odysseySdSpi.endTransaction();odysseySdSpi.end();digitalWrite(ODYSSEY_SD_CS,HIGH);
-    Serial.printf("[SD] protocol probe stage=1 CMD0=0x%02X\n",unsigned(r0));
-    return 1;
-  }
-
-  uint8_t stage=2,r7[4]={0xFF,0xFF,0xFF,0xFF};
-  const uint8_t r8=odysseySdRawCommand(8,0x000001AAu,0x87,r7,sizeof(r7));
-  const bool v2=(r8==0x01 && r7[2]==0x01 && r7[3]==0xAA);
-  const bool legacy=(r8&0x04u)!=0;
-  if (v2 || legacy) stage=3;
-  else {
-    odysseySdSpi.endTransaction();odysseySdSpi.end();digitalWrite(ODYSSEY_SD_CS,HIGH);
-    Serial.printf("[SD] protocol probe stage=%u CMD8=0x%02X echo=%02X%02X%02X%02X\n",
-      unsigned(stage),unsigned(r8),unsigned(r7[0]),unsigned(r7[1]),unsigned(r7[2]),unsigned(r7[3]));
-    return stage;
-  }
-
-  bool initialized=false;
-  const uint32_t acmdArg=v2?0x40000000u:0u;
-  for (uint16_t attempt=0;attempt<120 && !initialized;++attempt) {
-    const uint8_t r55=odysseySdRawCommand(55,0,0x01);
-    if (r55==0x00 || r55==0x01) {
-      const uint8_t r41=odysseySdRawCommand(41,acmdArg,0x01);
-      if (r41==0x00) { initialized=true;break; }
-    }
-    delay(10);
-  }
-  if (!initialized && legacy) {
-    for (uint16_t attempt=0;attempt<120 && !initialized;++attempt) {
-      if (odysseySdRawCommand(1,0,0x01)==0x00) { initialized=true;break; }
-      delay(10);
-    }
-  }
-  if (!initialized) {
-    odysseySdSpi.endTransaction();odysseySdSpi.end();digitalWrite(ODYSSEY_SD_CS,HIGH);
-    Serial.println("[SD] protocol probe stage=3 card stayed idle");
-    return 3;
-  }
-  stage=4;
-
-  uint8_t ocr[4]={0,0,0,0};
-  const uint8_t r58=odysseySdRawCommand(58,0,0x01,ocr,sizeof(ocr));
-  const bool blockAddressing=(r58==0x00 && (ocr[0]&0x40u)!=0);
-  if (!blockAddressing) odysseySdRawCommand(16,512,0x01);
-  if (odysseySdReadSectorZero(blockAddressing)) stage=5;
-
-  odysseySdSpi.endTransaction();
-  odysseySdSpi.end();
   digitalWrite(ODYSSEY_SD_CS,HIGH);
-  Serial.printf("[SD] protocol probe stage=%u CMD8=0x%02X OCR=%02X%02X%02X%02X block=%u\n",
-    unsigned(stage),unsigned(r8),unsigned(ocr[0]),unsigned(ocr[1]),unsigned(ocr[2]),unsigned(ocr[3]),
-    blockAddressing?1u:0u);
-  return stage;
 }
-#endif
-uint8_t odysseySdDetectionState() { return odysseySdBootState; }
-uint8_t odysseySdProbeState() { return odysseySdBootState.load()==1 ? 6 : odysseySdProbeStage.load(); }
 
-static void odysseyDetectSdCardAttempt(bool diagnoseFailure) {
-  (void)diagnoseFailure;
-#if CONFIG_IDF_TARGET_ESP32C3
-  if (odysseySdBootState.load()==1 && SD.cardType()!=CARD_NONE) {
-    Serial.println("[SD] healthy mount retained");
-    return;
-  }
-#endif
+static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
+  odysseySdReleaseLocked();
   odysseySdBootState=0;
   odysseySdProbeStage=0;
-#if CONFIG_IDF_TARGET_ESP32C3
-  SD.end();
-  odysseySdSpi.end();
-  SPIClass& sdSpi=odysseySdSpi;
-#else
-  SPIClass sdSpi(FSPI);
-#endif
-  digitalWrite(ODYSSEY_SD_CS, HIGH);
-  pinMode(ODYSSEY_SD_CS, OUTPUT);
-  sdSpi.begin(ODYSSEY_SD_SCK, ODYSSEY_SD_MISO, ODYSSEY_SD_MOSI, ODYSSEY_SD_CS);
-  Serial.printf("[SD] probe CS=%d SCK=%d MOSI=%d MISO=%d\n",
-    ODYSSEY_SD_CS, ODYSSEY_SD_SCK, ODYSSEY_SD_MOSI, ODYSSEY_SD_MISO);
-  const bool mounted=SD.begin(ODYSSEY_SD_CS, sdSpi, 400000, "/odyssey-sd", 1, false);
-  if (mounted) {
-    const uint8_t type=SD.cardType();
-    if (type != CARD_NONE) {
-      odysseySdBootState=1;
-      odysseySdProbeStage=6;
-      const char* label=type==CARD_MMC?"MMC":type==CARD_SD?"SDSC":type==CARD_SDHC?"SDHC/SDXC":"unknown";
-      Serial.printf("[SD] detected: %s, %llu MiB; filesystem mounted\n", label,
-        static_cast<unsigned long long>(SD.cardSize()/(1024ULL*1024ULL)));
-    } else {
-      odysseySdBootState=3;
-      Serial.println("[SD] no card reported");
-    }
-  } else {
-    odysseySdBootState=2;
-#if CONFIG_IDF_TARGET_ESP32C3
-    if (diagnoseFailure) odysseySdProbeStage=odysseySdProtocolProbe();
-#endif
-    Serial.printf("[SD] detection/mount failed probeStage=%u\n",unsigned(odysseySdProbeStage.load()));
-  }
-#if CONFIG_IDF_TARGET_ESP32C3
-  if (odysseySdBootState==1) return;
-#endif
-  SD.end();
-  sdSpi.end();
-  digitalWrite(ODYSSEY_SD_CS, HIGH);
-}
-void odysseyDetectSdCard() { odysseyDetectSdCardAttempt(true); }
 
-#if CONFIG_IDF_TARGET_ESP32C3
-static bool odysseyMountWithRetries(const char* reason,uint32_t initialSettleMs) {
-  if (odysseySdBootState.load()==1 && SD.cardType()!=CARD_NONE) return true;
-  if (initialSettleMs) delay(initialSettleMs);
-  for (uint8_t attempt=1;attempt<=ODYSSEY_SD_MOUNT_ATTEMPTS;++attempt) {
-    Serial.printf("[SD] %s mount attempt %u/%u\n",reason,unsigned(attempt),unsigned(ODYSSEY_SD_MOUNT_ATTEMPTS));
-    odysseyDetectSdCardAttempt(false);
-    if (odysseySdBootState.load()==1) return true;
-    if (attempt<ODYSSEY_SD_MOUNT_ATTEMPTS) delay(ODYSSEY_SD_RETRY_SETTLE_MS);
+  // Keep CS inactive before the SPI peripheral is connected to the GPIO matrix.
+  pinMode(ODYSSEY_SD_CS,OUTPUT);
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  delay(5);
+
+  sdmmc_host_t host=SDSPI_HOST_DEFAULT();
+  host.max_freq_khz=ODYSSEY_SD_MAX_FREQ_KHZ;
+  host.unaligned_multi_block_rw_max_chunk_size=8;
+
+  spi_bus_config_t bus{};
+  bus.mosi_io_num=ODYSSEY_SD_MOSI;
+  bus.miso_io_num=ODYSSEY_SD_MISO;
+  bus.sclk_io_num=ODYSSEY_SD_SCK;
+  bus.quadwp_io_num=-1;
+  bus.quadhd_io_num=-1;
+  bus.max_transfer_sz=4096;
+
+  int result=int(spi_bus_initialize(host.slot,&bus,SDSPI_DEFAULT_DMA));
+  if (result!=ESP_OK) {
+    odysseySdBootState=2;odysseySdProbeStage=1;
+    Serial.printf("[SD] %s attempt %u bus init failed: %s (%d)\n",
+      reason,unsigned(attempt),esp_err_to_name(result),result);
+    return result;
   }
-  odysseySdProbeStage=odysseySdProtocolProbe();
-  Serial.printf("[SD] %s protocol diagnosis stage=%u\n",reason,unsigned(odysseySdProbeStage.load()));
+  odysseySdBusInitialized=true;
+
+  sdspi_device_config_t slot=SDSPI_DEVICE_CONFIG_DEFAULT();
+  slot.host_id=static_cast<spi_host_device_t>(host.slot);
+  slot.gpio_cs=static_cast<gpio_num_t>(ODYSSEY_SD_CS);
+  slot.gpio_cd=SDSPI_SLOT_NO_CD;
+  slot.gpio_wp=SDSPI_SLOT_NO_WP;
+  slot.wait_for_miso=0; // ESP-IDF default: wait up to 40 ms for MISO release.
+
+  esp_vfs_fat_mount_config_t mount=VFS_FAT_MOUNT_DEFAULT_CONFIG();
+  mount.format_if_mount_failed=false;
+  mount.max_files=ODYSSEY_SD_MAX_OPEN_FILES;
+  mount.allocation_unit_size=16*1024;
+  mount.disk_status_check_enable=false;
+
+  sdmmc_card_t* card=nullptr;
+  result=int(esp_vfs_fat_sdspi_mount(ODYSSEY_SD_MOUNT_POINT,&host,&slot,&mount,&card));
+  if (result!=ESP_OK || !card) {
+    odysseySdBootState=2;
+    odysseySdProbeStage=(result==ESP_FAIL)?3:2;
+    Serial.printf("[SD] %s attempt %u card/FAT init failed: %s (%d), stage=%u\n",
+      reason,unsigned(attempt),esp_err_to_name(result),result,unsigned(odysseySdProbeStage.load()));
+    // The IDF mount helper removes a partially attached SD device on failure;
+    // this owner still owns the SPI bus and must release it before retrying.
+    if (odysseySdBusInitialized) {
+      const int freeResult=int(spi_bus_free(host.slot));
+      if (freeResult!=ESP_OK)
+        Serial.printf("[SD] failed-attempt bus free: %s (%d)\n",esp_err_to_name(freeResult),freeResult);
+      odysseySdBusInitialized=false;
+    }
+    digitalWrite(ODYSSEY_SD_CS,HIGH);
+    return result==ESP_OK?ESP_FAIL:result;
+  }
+  odysseySdCard=card;
+
+  struct stat root{};
+  if (stat(ODYSSEY_SD_MOUNT_POINT,&root)!=0 || !S_ISDIR(root.st_mode)) {
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    Serial.printf("[SD] %s attempt %u VFS validation failed errno=%d\n",reason,unsigned(attempt),errno);
+    odysseySdReleaseLocked();
+    return ESP_FAIL;
+  }
+
+  struct stat recordings{};
+  if (stat(ODYSSEY_SD_RECORDING_DIR,&recordings)!=0) {
+    if (errno!=ENOENT || mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) {
+      odysseySdBootState=2;odysseySdProbeStage=4;
+      Serial.printf("[SD] %s attempt %u recording directory unavailable errno=%d\n",
+        reason,unsigned(attempt),errno);
+      odysseySdReleaseLocked();
+      return ESP_FAIL;
+    }
+  } else if (!S_ISDIR(recordings.st_mode)) {
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    Serial.printf("[SD] %s attempt %u /synap is not a directory\n",reason,unsigned(attempt));
+    odysseySdReleaseLocked();
+    return ESP_FAIL;
+  }
+
+  odysseySdBootState=1;
+  odysseySdProbeStage=6;
+  const unsigned long long bytes=uint64_t(card->csd.capacity)*uint64_t(card->csd.sector_size);
+  Serial.printf("[SD] ready via ESP-IDF SDSPI: %llu MiB, %u kHz max, pins CS=%d SCK=%d MOSI=%d MISO=%d\n",
+    bytes/(1024ULL*1024ULL),unsigned(ODYSSEY_SD_MAX_FREQ_KHZ),
+    ODYSSEY_SD_CS,ODYSSEY_SD_SCK,ODYSSEY_SD_MOSI,ODYSSEY_SD_MISO);
+  return ESP_OK;
+}
+
+static bool odysseySdMountLocked(const char* reason,uint8_t attempts) {
+  if (odysseySdReady()) return true;
+  for (uint8_t attempt=1;attempt<=attempts;++attempt) {
+    if (odysseySdMountOnceLocked(reason,attempt)==ESP_OK) return true;
+    if (attempt<attempts) delay(ODYSSEY_SD_RETRY_BACKOFF_MS*attempt);
+  }
+  Serial.printf("[SD] %s failed after %u attempt(s), state=%u stage=%u\n",
+    reason,unsigned(attempts),unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()));
   return false;
 }
+
+void odysseyDetectSdCard() {
+  OdysseySdGuard guard;
+  if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return; }
+  odysseySdMountLocked("probe",1);
+}
 bool odysseyInitializeSdCardBeforeBle() {
-  // Preserve the proven 1445 boot mount exactly: one immediate mount attempt.
-  odysseyDetectSdCard();
-  const bool ready=odysseySdBootState.load()==1;
-  Serial.printf("[SD] boot initialization complete state=%u before BLE\n",unsigned(odysseySdBootState.load()));
+  OdysseySdGuard guard;
+  if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return false; }
+  const bool ready=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
+  Serial.printf("[SD] boot initialization complete state=%u stage=%u before BLE\n",
+    unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()));
   return ready;
 }
 bool odysseyRecoverSdCard() {
-  return odysseyMountWithRetries("recovery",ODYSSEY_SD_RETRY_SETTLE_MS);
+  OdysseySdGuard guard;
+  if (!guard) return false;
+  // Recovery is a deliberate full lifecycle reset: VFS/card -> SPI device -> SPI bus.
+  odysseySdReleaseLocked();
+  odysseySdBootState=0;odysseySdProbeStage=0;
+  return odysseySdMountLocked("recovery",ODYSSEY_SD_RECOVERY_ATTEMPTS);
+}
+
+#else
+// Odyssey S3 remains detection-only and retains the existing Arduino SD probe.
+static SPIClass odysseySdSpi(FSPI);
+void odysseyDetectSdCard() {
+  odysseySdBootState=0;odysseySdProbeStage=0;
+  SD.end();odysseySdSpi.end();
+  digitalWrite(ODYSSEY_SD_CS,HIGH);pinMode(ODYSSEY_SD_CS,OUTPUT);
+  odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
+  const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,400000,"/odyssey-sd",1,false);
+  if (mounted && SD.cardType()!=CARD_NONE) {
+    odysseySdBootState=1;odysseySdProbeStage=6;
+    Serial.println("[SD] Odyssey S3 detection succeeded");
+  } else if (mounted) {
+    odysseySdBootState=3;
+    Serial.println("[SD] Odyssey S3 no card reported");
+  } else {
+    odysseySdBootState=2;
+    Serial.println("[SD] Odyssey S3 detection/mount failed");
+  }
+  SD.end();odysseySdSpi.end();digitalWrite(ODYSSEY_SD_CS,HIGH);
 }
 #endif
 #endif
-// C3 local audio owns its file and microphone until finalization. BLE connection
-// changes never redirect a take; no local PCM enters the app recovery/notify queue.
+// C3 local audio owns the mounted VFS and microphone until finalization.
+// BLE connection changes never redirect a take; no local PCM enters the app queue.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-static void odysseyWavHeader(uint8_t* h, uint32_t bytes) {
+static void odysseyWavHeader(uint8_t* h,uint32_t bytes) {
   memset(h,0,44);
-  memcpy(h,"RIFF",4); put32le(h+4,bytes+36);
-  memcpy(h+8,"WAVEfmt ",8); put32le(h+16,16);
-  h[20]=1; h[22]=1; put32le(h+24,SAMPLE_RATE);
-  put32le(h+28,SAMPLE_RATE*2); h[32]=2; h[34]=16;
-  memcpy(h+36,"data",4); put32le(h+40,bytes);
+  memcpy(h,"RIFF",4);put32le(h+4,bytes+36);
+  memcpy(h+8,"WAVEfmt ",8);put32le(h+16,16);
+  h[20]=1;h[22]=1;put32le(h+24,SAMPLE_RATE);
+  put32le(h+28,SAMPLE_RATE*2);h[32]=2;h[34]=16;
+  memcpy(h+36,"data",4);put32le(h+40,bytes);
+}
+static bool odysseyCheckpointWav(FILE* file,uint8_t* header,uint32_t bytes) {
+  odysseyWavHeader(header,bytes);
+  if (fseek(file,0,SEEK_SET)!=0) return false;
+  if (fwrite(header,1,44,file)!=44) return false;
+  if (fseek(file,long(44u+bytes),SEEK_SET)!=0) return false;
+  return fflush(file)==0;
 }
 static void odysseyRecordTask(void*) {
   bool failed=false;
-  File file;
   uint32_t bytes=0;
-  char path[64]={};
-  // Start is admitted only after a successful SD probe. The worker owns the
-  // mounted filesystem for the duration of this disconnected local take.
-  if (odysseySdDetectionState()!=1) failed=true;
-  if (!failed && !SD.exists("/synap") && !SD.mkdir("/synap")) failed=true;
+  char logicalPath[64]{};
+  char fullPath[96]{};
+  uint8_t header[44];
+  FILE* file=nullptr;
+
+  // Hold the single storage mutex for the whole take. A recovery/remount can
+  // never tear down the VFS beneath an open recording.
+  OdysseySdGuard storage;
+  if (!storage || !odysseySdReady()) failed=true;
+
   if (!failed) {
+    struct stat existing{};
     for (uint8_t attempt=0;attempt<16;++attempt) {
-      snprintf(path,sizeof(path),"/synap/odyssey_audio_%08lx_%08lx.wav",
+      snprintf(logicalPath,sizeof(logicalPath),"/synap/odyssey_audio_%08lx_%08lx.wav",
         static_cast<unsigned long>(esp_random()),static_cast<unsigned long>(esp_random()));
-      if (!SD.exists(path)) { file=SD.open(path,FILE_WRITE); break; }
+      if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) { failed=true; break; }
+      if (stat(fullPath,&existing)!=0 && errno==ENOENT) {
+        file=fopen(fullPath,"wb+");
+        if (file) break;
+      }
     }
     if (!file) failed=true;
   }
-  uint8_t header[44];
+
   odysseyWavHeader(header,0);
-  if (!failed && file.write(header,sizeof(header))!=sizeof(header)) failed=true;
+  if (!failed && fwrite(header,1,sizeof(header),file)!=sizeof(header)) failed=true;
+
 #if USE_REAL_I2S_MIC
   if (!failed && !odysseyStopRequested.load()) {
     MicrophoneGuard guard;
@@ -2260,38 +2311,42 @@ static void odysseyRecordTask(void*) {
       size_t received=0;
       uint8_t emptyReads=0;
       while (received<sizeof(raw) && !odysseyStopRequested.load()) {
-        size_t count=microphoneI2S.readBytes(reinterpret_cast<char*>(raw)+received,sizeof(raw)-received);
-        if (!count) { if (++emptyReads>=3) { failed=true; break; } }
-        else { received+=count; emptyReads=0; }
+        const size_t count=microphoneI2S.readBytes(reinterpret_cast<char*>(raw)+received,sizeof(raw)-received);
+        if (!count) {
+          if (++emptyReads>=3) { failed=true; break; }
+        } else {
+          received+=count;emptyReads=0;
+        }
       }
       if (failed || odysseyStopRequested.load()) break;
       for (uint16_t i=0;i<SAMPLES_PER_FRAME;++i) pcm[i]=static_cast<int16_t>(raw[i]>>16);
-      // Bound RIFF's 32-bit length; a full card ends this take safely.
-      if (bytes>0xffffff00u-sizeof(pcm)) break;
-      const size_t written=file.write(reinterpret_cast<const uint8_t*>(pcm),sizeof(pcm));
-      bytes+=written & ~size_t(1);
+      if (bytes>0xffffff00u-sizeof(pcm)) break; // RIFF length is 32-bit.
+      const size_t written=fwrite(pcm,1,sizeof(pcm),file);
+      bytes+=uint32_t(written & ~size_t(1));
       if (written!=sizeof(pcm)) { failed=true; break; }
-      // Keep the on-disk header recoverable up to the last checkpoint on power loss.
+
+      // Keep a recoverable WAV header on media even if power is lost mid-take.
       if (uint32_t(millis()-checkpointAt)>=2000u) {
-        odysseyWavHeader(header,bytes);
-        if (!file.seek(0) || file.write(header,44)!=44 || !file.seek(44+bytes)) { failed=true; break; }
-        file.flush(); checkpointAt=millis();
+        if (!odysseyCheckpointWav(file,header,bytes)) { failed=true; break; }
+        checkpointAt=millis();
       }
     }
     stopMicrophone();
   }
 #else
-  failed=true; // Never silently save synthetic audio as a real offline take.
+  failed=true;
 #endif
+
   if (file) {
-    odysseyWavHeader(header,bytes);
-    if (!file.seek(0) || file.write(header,44)!=44) failed=true;
-    file.flush(); file.close();
+    if (!odysseyCheckpointWav(file,header,bytes)) failed=true;
+    if (fclose(file)!=0) failed=true;
+    file=nullptr;
   }
-  if (failed) { odysseySdBootState=2; SD.end(); }
-  Serial.printf("[SD] local audio %s: %s, %lu PCM bytes\n",failed?"failed":"saved",path,
-    static_cast<unsigned long>(bytes));
-  // No microphone/file work is allowed after releasing ownership.
+
+  Serial.printf("[SD] local audio %s: %s, %lu PCM bytes%s\n",
+    failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),
+    failed?" (mount retained for explicit recovery)":"");
+
   odysseyRecording=false;
   applyCpuPowerProfile(false);
   vTaskDelete(nullptr);
@@ -2303,8 +2358,7 @@ void odysseyToggleRecording() {
     return;
   }
   if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) return;
-  // Offline recording consumes the boot-owned mount; it never remounts implicitly.
-  if (odysseySdDetectionState()!=1 || SD.cardType()==CARD_NONE) {
+  if (!odysseySdReady()) {
     Serial.println("[TOUCH] double tap ignored: SD unavailable");
     return;
   }
@@ -2321,8 +2375,8 @@ void odysseyToggleRecording() {
 }
 #endif
 // Odyssey C3 SD media-v1: catalogue/read/delete for locally recorded WAV files.
-// Files are never deleted by transfer itself. The PWA first imports and verifies
-// the complete WAV, then explicitly sends operation 17 for that path.
+// C3 storage is mounted once through ESP-IDF SDSPI/FAT and accessed through VFS.
+// Files are deleted only after the PWA has imported and verified them.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 namespace OdysseyTransfer {
 struct Request {
@@ -2331,9 +2385,6 @@ struct Request {
   char path[64]{};
 };
 static QueueHandle_t requests=nullptr;
-// FAT/VFS directory enumeration has a materially deeper call stack than normal BLE work on C3.
-// Keep this worker at parity with the proven Chakshu transfer task so an SD catalogue cannot
-// overflow the task stack and reset the single-core C3 during the first post-connect probe.
 static constexpr uint32_t TRANSFER_STACK_BYTES=8192;
 static portMUX_TYPE responseMux=portMUX_INITIALIZER_UNLOCKED;
 static uint8_t response[496]{};
@@ -2343,7 +2394,7 @@ static char selectedPath[64]{};
 static String catalogueBuffer;
 
 enum : uint8_t {
-  OK=0, BUSY=1, BAD_COMMAND=2, NO_SD=3, IO_ERROR=7, FILE_UNAVAILABLE=11
+  OK=0,BUSY=1,BAD_COMMAND=2,NO_SD=3,IO_ERROR=7,FILE_UNAVAILABLE=11
 };
 
 static bool safeWavPath(const char* path) {
@@ -2356,10 +2407,12 @@ static bool safeWavPath(const char* path) {
   }
   return true;
 }
-
 static bool storageReady() {
-  // Normal PWA reload/reconnect is observational only: never remount here.
-  return odysseySdDetectionState()==1 && SD.cardType()!=CARD_NONE;
+  // Normal PWA reads are observational only. Only operation 14 may remount.
+  return odysseySdReady();
+}
+static bool fullPath(const char* logical,char* full,size_t capacity) {
+  return safeWavPath(logical) && odysseySdPath(logical,full,capacity);
 }
 
 static void reply(const Request& request,uint8_t error,uint32_t total=0,uint32_t offset=0,
@@ -2381,85 +2434,118 @@ static void reply(const Request& request,uint8_t error,uint32_t total=0,uint32_t
 static uint8_t selectFile(const char* path,uint32_t& total) {
   selectedPath[0]=0;
   if (!safeWavPath(path)) return BAD_COMMAND;
-  if (!storageReady()) return NO_SD;
-  if (!SD.exists(path)) return FILE_UNAVAILABLE;
-  File file=SD.open(path,FILE_READ);
-  if (!file || file.isDirectory()) { if(file)file.close(); return FILE_UNAVAILABLE; }
-  total=file.size();
-  file.close();
-  if (!total) return FILE_UNAVAILABLE;
+  OdysseySdGuard guard;
+  if (!guard || !storageReady()) return NO_SD;
+  char full[96];
+  if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
+  struct stat st{};
+  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0) return FILE_UNAVAILABLE;
+  if (uint64_t(st.st_size)>UINT32_MAX) return FILE_UNAVAILABLE;
+  total=uint32_t(st.st_size);
   snprintf(selectedPath,sizeof(selectedPath),"%s",path);
   return OK;
 }
 
 static uint8_t readSelected(uint32_t offset,uint32_t& total,uint8_t* bytes,size_t& size) {
-  if (selectedPath[0]) {
-    if (!storageReady()) return NO_SD;
-    if (!SD.exists(selectedPath)) return FILE_UNAVAILABLE;
-    File file=SD.open(selectedPath,FILE_READ);
-    if (!file || file.isDirectory()) { if(file)file.close(); return FILE_UNAVAILABLE; }
-    total=file.size();
-    if (offset>=total) { file.close(); return FILE_UNAVAILABLE; }
+  if (!selectedPath[0]) {
+    total=catalogueBuffer.length();
+    if (!total || offset>=total) return FILE_UNAVAILABLE;
     size=std::min(size_t(480),size_t(total-offset));
-    if (!file.seek(offset) || file.read(bytes,size)!=int(size)) { file.close(); return IO_ERROR; }
-    file.close();
+    memcpy(bytes,catalogueBuffer.c_str()+offset,size);
     return OK;
   }
-  total=catalogueBuffer.length();
-  if (!total || offset>=total) return FILE_UNAVAILABLE;
+
+  OdysseySdGuard guard;
+  if (!guard || !storageReady()) return NO_SD;
+  char full[96];
+  if (!fullPath(selectedPath,full,sizeof(full))) return BAD_COMMAND;
+  struct stat st{};
+  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
+    return FILE_UNAVAILABLE;
+  total=uint32_t(st.st_size);
+  if (offset>=total) return FILE_UNAVAILABLE;
   size=std::min(size_t(480),size_t(total-offset));
-  memcpy(bytes,catalogueBuffer.c_str()+offset,size);
-  return OK;
+
+  FILE* file=fopen(full,"rb");
+  if (!file) return FILE_UNAVAILABLE;
+  const bool ok=fseek(file,long(offset),SEEK_SET)==0 && fread(bytes,1,size,file)==size;
+  fclose(file);
+  return ok?OK:IO_ERROR;
 }
 
 static uint8_t catalogue(uint32_t& total) {
   selectedPath[0]=0;
   catalogueBuffer="";
-  if (!storageReady()) return NO_SD;
-  File directory=SD.open("/synap");
+  OdysseySdGuard guard;
+  if (!guard || !storageReady()) return NO_SD;
+
+  char directoryPath[96];
+  if (!odysseySdPath("/synap",directoryPath,sizeof(directoryPath))) return IO_ERROR;
+  DIR* directory=opendir(directoryPath);
   if (!directory) return IO_ERROR;
+
   catalogueBuffer.reserve(2048);
   catalogueBuffer="[";
   unsigned count=0;
-  for (File entry=directory.openNextFile();entry;entry=directory.openNextFile()) {
-    const String path=entry.path();
-    const bool include=!entry.isDirectory() && safeWavPath(path.c_str());
-    const size_t bytes=entry.size();
-    entry.close();
-    if (!include) continue;
+  while (dirent* entry=readdir(directory)) {
+    if (!entry->d_name || !strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
+    char logical[64];
+    const int n=snprintf(logical,sizeof(logical),"/synap/%s",entry->d_name);
+    if (n<=0 || size_t(n)>=sizeof(logical) || !safeWavPath(logical)) continue;
+    char full[96];
+    if (!odysseySdPath(logical,full,sizeof(full))) continue;
+    struct stat st{};
+    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<0) continue;
     if (count++) catalogueBuffer+=",";
-    catalogueBuffer+="{\"path\":\""+path+"\",\"bytes\":"+String(bytes)+"}";
+    catalogueBuffer+="{\"path\":\""+String(logical)+"\",\"bytes\":"+String(uint32_t(st.st_size))+"}";
     if (count>=100) break;
   }
-  directory.close();
+  closedir(directory);
   catalogueBuffer+="]";
   total=catalogueBuffer.length();
-  return total?OK:IO_ERROR;
+  return OK;
 }
 
 static uint8_t removeFile(const char* path) {
   selectedPath[0]=0;
   if (!safeWavPath(path)) return BAD_COMMAND;
-  if (!storageReady()) return NO_SD;
-  if (!SD.exists(path)) return FILE_UNAVAILABLE;
-  return SD.remove(path)?OK:IO_ERROR;
+  OdysseySdGuard guard;
+  if (!guard || !storageReady()) return NO_SD;
+  char full[96];
+  if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
+  struct stat st{};
+  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode)) return FILE_UNAVAILABLE;
+  return unlink(full)==0?OK:IO_ERROR;
 }
 
 static uint16_t clearRecordings() {
-  if (!storageReady()) return 0;
-  File directory=SD.open("/synap");
+  OdysseySdGuard guard;
+  if (!guard || !storageReady()) return 0;
+  char directoryPath[96];
+  if (!odysseySdPath("/synap",directoryPath,sizeof(directoryPath))) return 0;
+  DIR* directory=opendir(directoryPath);
   if (!directory) return 0;
-  String paths[100];
+
+  String logicalPaths[100];
   uint16_t count=0;
-  for (File entry=directory.openNextFile();entry && count<100;entry=directory.openNextFile()) {
-    const String path=entry.path();
-    const bool include=!entry.isDirectory() && safeWavPath(path.c_str());
-    entry.close();
-    if (include) paths[count++]=path;
+  while (dirent* entry=readdir(directory)) {
+    if (count>=100) break;
+    if (!entry->d_name || !strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
+    char logical[64];
+    const int n=snprintf(logical,sizeof(logical),"/synap/%s",entry->d_name);
+    if (n<=0 || size_t(n)>=sizeof(logical) || !safeWavPath(logical)) continue;
+    char full[96];
+    if (!odysseySdPath(logical,full,sizeof(full))) continue;
+    struct stat st{};
+    if (stat(full,&st)==0 && S_ISREG(st.st_mode)) logicalPaths[count++]=logical;
   }
-  directory.close();
+  closedir(directory);
+
   uint16_t removed=0;
-  for (uint16_t i=0;i<count;++i) if (SD.remove(paths[i].c_str())) ++removed;
+  for (uint16_t i=0;i<count;++i) {
+    char full[96];
+    if (odysseySdPath(logicalPaths[i].c_str(),full,sizeof(full)) && unlink(full)==0) ++removed;
+  }
   return removed;
 }
 
@@ -2477,17 +2563,17 @@ static void worker(void*) {
       case 3: error=selectFile(request.path,total); break;
       case 4: error=readSelected(request.offset,total,bytes,size); break;
       case 7: error=catalogue(total); break;
-      case 8: total=catalogueBuffer.length(); if(!total)error=FILE_UNAVAILABLE; break;
+      case 8: total=catalogueBuffer.length();if(!total)error=FILE_UNAVAILABLE;break;
       case 14:
         selectedPath[0]=0;catalogueBuffer="";
-        // Explicit Settings recovery is the only connected-path remount.
-        error=odysseyRecoverSdCard()?OK:NO_SD;break;
+        error=odysseyRecoverSdCard()?OK:NO_SD;
+        break;
       case 17: error=removeFile(request.path); break;
       case 18:
         selectedPath[0]=0;catalogueBuffer="";
         if(!storageReady())error=NO_SD;else total=clearRecordings();
         break;
-      default: error=BAD_COMMAND; break;
+      default:error=BAD_COMMAND;break;
     }
     reply(request,error,total,request.offset,bytes,size);
   }
@@ -2523,7 +2609,7 @@ class DataCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
-bool available() { return requests!=nullptr; }
+bool available(){return requests!=nullptr;}
 
 void initialize() {
   requests=xQueueCreate(2,sizeof(Request));
@@ -2655,16 +2741,12 @@ void setup() {
   ChakshuMedia::initialize();
   ChakshuTransfer::initialize();
 #elif CONFIG_IDF_TARGET_ESP32C3
-  OdysseyTransfer::initialize();
-#endif
-  // C3 completes SD initialization before BLE can advertise. S3 keeps its
-  // existing one-shot probe behavior.
-#if !SYNAP_CHAKSHU
-#if CONFIG_IDF_TARGET_ESP32C3
+  // Storage owns SPI2/FAT before any SD worker or BLE characteristic can use it.
   odysseyInitializeSdCardBeforeBle();
+  OdysseyTransfer::initialize();
 #else
+  // Odyssey S3 remains a detection-only target.
   odysseyDetectSdCard();
-#endif
 #endif
   initializeBLE();
   initializeRecovery();
