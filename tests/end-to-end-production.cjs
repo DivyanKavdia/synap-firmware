@@ -79,7 +79,10 @@ test('C3 completes SD initialization before BLE and never remounts on normal PWA
   const sd=c3.indexOf('odysseyInitializeSdCardBeforeBle();');
   const ble=c3.indexOf('initializeBLE();',sd);
   assert(sd>0 && ble>sd,'C3 SD boot initialization must complete before BLE advertising');
-  assert.match(c3,/void odysseyDetectSdCard\(\)[\s\S]*?SD\.begin\(ODYSSEY_SD_CS, sdSpi, 400000, "\/odyssey-sd", 1, false\)/);
+  assert.match(c3,/static void odysseyDetectSdCardAttempt\(bool diagnoseFailure\)[\s\S]*?SD\.begin\(ODYSSEY_SD_CS, sdSpi, 400000, "\/odyssey-sd", 1, false\)/);
+  assert.match(c3,/protocol probe stage=1 CMD0/);
+  assert.match(c3,/protocol probe stage=3 card stayed idle/);
+  assert.match(c3,/stage=5[\s\S]*?sector 0 readable|odysseySdReadSectorZero/);
   assert.match(c3,/bool odysseyInitializeSdCardBeforeBle\(\) \{[\s\S]*?odysseyDetectSdCard\(\);[\s\S]*?return ready;/);
   assert.doesNotMatch(c3,/odysseyMountWithRetries\("boot"/);
   const storage=c3.match(/static bool storageReady\(\) \{[\s\S]*?\n\}/)?.[0]||'';

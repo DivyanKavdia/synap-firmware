@@ -14,8 +14,11 @@ const stub=`
 #include <cstdio>
 #include <string>
 #define HIGH 1
+#define LOW 0
 #define OUTPUT 1
 #define FSPI 0
+#define MSBFIRST 1
+#define SPI_MODE0 0
 #define CARD_NONE 0
 #define CARD_MMC 1
 #define CARD_SD 2
@@ -35,6 +38,7 @@ void pinMode(int,int){}
 void delay(uint32_t ms){delayedMs+=ms;}
 int xTaskCreate(void(*)(void*),const char*,uint32_t,void*,int,void**){return pdPASS;}
 void vTaskDelete(void*){}
+struct SPISettings { SPISettings(uint32_t,int,int){} };
 struct SPIClass {
  explicit SPIClass(int){}
  void begin(int sck,int miso,int mosi,int cs){
@@ -44,6 +48,9 @@ struct SPIClass {
  assert(sck==12 && miso==11 && mosi==10 && cs==9);
 #endif
  }
+ void beginTransaction(const SPISettings&){}
+ void endTransaction(){}
+ uint8_t transfer(uint8_t){return 0xFF;}
  void end(){++spiEnds;}
 };
 struct SerialStub {
@@ -80,8 +87,14 @@ for(const chip of ['ESP32C3','ESP32S3'])test(`${chip}: restored 1445 SD mount pa
    Serial.log.clear();SD.type=CARD_NONE;odysseyDetectSdCard();
    assert(odysseySdDetectionState()==3 && odysseySdProbeState()==0);
    Serial.log.clear();SD.type=CARD_SDHC;SD.mounted=false;odysseyDetectSdCard();
+#if CONFIG_IDF_TARGET_ESP32C3
+   assert(odysseySdDetectionState()==2 && odysseySdProbeState()==1);
+   assert(Serial.log.find("protocol probe stage=1")!=std::string::npos);
+   assert(Serial.log.find("detection\/mount failed probeStage=1")!=std::string::npos);
+#else
    assert(odysseySdDetectionState()==2 && odysseySdProbeState()==0);
-   assert(Serial.log.find("detection\/mount failed")!=std::string::npos);
+   assert(Serial.log.find("detection\/mount failed probeStage=0")!=std::string::npos);
+#endif
  }
  `,[`-DCONFIG_IDF_TARGET_${chip}=1`,'-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags(chip)]);
 });
@@ -102,11 +115,11 @@ test('C3 explicit recovery retries an unavailable card without a boot delay',()=
  nativeTest(stub+source+`
  int main(){
    SD.mounted=false;odysseyDetectSdCard();
-   assert(odysseySdDetectionState()==2);
+   assert(odysseySdDetectionState()==2 && odysseySdProbeState()==1);
    SD.mounted=true;SD.failBegins=1;delayedMs=0;beginCalls=0;
    assert(odysseyRecoverSdCard());
    assert(beginCalls==2 && delayedMs==700u);
-   assert(odysseySdDetectionState()==1);
+   assert(odysseySdDetectionState()==1 && odysseySdProbeState()==6);
  }
  `,['-DCONFIG_IDF_TARGET_ESP32C3=1','-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags('ESP32C3')]);
 });
