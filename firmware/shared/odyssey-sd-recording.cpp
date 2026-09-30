@@ -97,6 +97,21 @@ static void odysseyRecordTask(void*) {
   applyCpuPowerProfile(false);
   vTaskDelete(nullptr);
 }
+bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs) {
+  if (!odysseyRecording.load()) return true;
+  // Connected PWA capture owns future I2S access, but the disconnected SD take
+  // must close its WAV header/file before the microphone can change owners.
+  odysseyStopRequested=true;
+  Serial.println("[SD] BLE capture requested; finalizing local audio before live stream");
+  const uint32_t started=millis();
+  while (odysseyRecording.load() && uint32_t(millis()-started)<timeoutMs) delay(10);
+  if (odysseyRecording.load()) {
+    Serial.println("[SD] local audio did not finalize before BLE capture deadline");
+    return false;
+  }
+  Serial.println("[SD] local audio finalized; microphone released to BLE capture");
+  return true;
+}
 void odysseyToggleRecording() {
   if (odysseyRecording.load()) {
     odysseyStopRequested=true;
