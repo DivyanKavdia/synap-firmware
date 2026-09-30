@@ -13,7 +13,7 @@ test('C3 SD owner uses ESP-IDF SDSPI/FAT on the fixed Odyssey pins',()=>{
   assert.deepEqual(target.hardware.sdDetection,{cs:0,sck:10,mosi:21,miso:20});
   assert.match(source,/esp_vfs_fat_sdspi_mount/);
   assert.match(source,/sdmmc_host_t host=SDSPI_HOST_DEFAULT\(\)/);
-  assert.match(source,/spi_bus_initialize\(host\.slot,&bus,SDSPI_DEFAULT_DMA\)/);
+  assert.match(source,/spi_bus_initialize\\(static_cast<spi_host_device_t>\\(host\\.slot\\),&bus,SDSPI_DEFAULT_DMA\\)/);
   assert.match(source,/slot\.gpio_cs=static_cast<gpio_num_t>\(ODYSSEY_SD_CS\)/);
   assert.match(source,/bus\.sclk_io_num=ODYSSEY_SD_SCK/);
   assert.match(source,/bus\.mosi_io_num=ODYSSEY_SD_MOSI/);
