@@ -87,9 +87,14 @@ for(const chip of ['ESP32C3','ESP32S3'])test(`${chip}: restored 1445 SD mount pa
    Serial.log.clear();SD.type=CARD_NONE;odysseyDetectSdCard();
    assert(odysseySdDetectionState()==3 && odysseySdProbeState()==0);
    Serial.log.clear();SD.type=CARD_SDHC;SD.mounted=false;odysseyDetectSdCard();
+#if CONFIG_IDF_TARGET_ESP32C3
    assert(odysseySdDetectionState()==2 && odysseySdProbeState()==1);
    assert(Serial.log.find("protocol probe stage=1")!=std::string::npos);
    assert(Serial.log.find("detection\/mount failed probeStage=1")!=std::string::npos);
+#else
+   assert(odysseySdDetectionState()==2 && odysseySdProbeState()==0);
+   assert(Serial.log.find("detection\/mount failed probeStage=0")!=std::string::npos);
+#endif
  }
  `,[`-DCONFIG_IDF_TARGET_${chip}=1`,'-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags(chip)]);
 });
