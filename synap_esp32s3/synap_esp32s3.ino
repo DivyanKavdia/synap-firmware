@@ -2011,48 +2011,48 @@ static constexpr uint8_t ODYSSEY_SD_MOUNT_ATTEMPTS=3;
 // Read-only SD SPI diagnostic stages exposed through the existing capability byte:
 // 1=no CMD0 response, 2=SPI idle entered, 3=interface recognized,
 // 4=card initialized, 5=sector 0 readable, 6=normal filesystem mount succeeded.
-static uint8_t odysseySdRawCommand(SPIClass& spi,uint8_t cmd,uint32_t arg,uint8_t crc,
+static uint8_t odysseySdRawCommand(uint8_t cmd,uint32_t arg,uint8_t crc,
                                    uint8_t* tail=nullptr,size_t tailSize=0) {
   digitalWrite(ODYSSEY_SD_CS,LOW);
-  spi.transfer(0xFF);
-  spi.transfer(uint8_t(0x40u|cmd));
-  spi.transfer(uint8_t(arg>>24));spi.transfer(uint8_t(arg>>16));
-  spi.transfer(uint8_t(arg>>8));spi.transfer(uint8_t(arg));
-  spi.transfer(crc);
+  odysseySdSpi.transfer(0xFF);
+  odysseySdSpi.transfer(uint8_t(0x40u|cmd));
+  odysseySdSpi.transfer(uint8_t(arg>>24));odysseySdSpi.transfer(uint8_t(arg>>16));
+  odysseySdSpi.transfer(uint8_t(arg>>8));odysseySdSpi.transfer(uint8_t(arg));
+  odysseySdSpi.transfer(crc);
   uint8_t response=0xFF;
   for (uint8_t i=0;i<16;++i) {
-    response=spi.transfer(0xFF);
+    response=odysseySdSpi.transfer(0xFF);
     if ((response&0x80u)==0) break;
   }
-  for (size_t i=0;i<tailSize;++i) tail[i]=spi.transfer(0xFF);
+  for (size_t i=0;i<tailSize;++i) tail[i]=odysseySdSpi.transfer(0xFF);
   digitalWrite(ODYSSEY_SD_CS,HIGH);
-  spi.transfer(0xFF);
+  odysseySdSpi.transfer(0xFF);
   return response;
 }
-static bool odysseySdReadSectorZero(SPIClass& spi,bool blockAddressing) {
+static bool odysseySdReadSectorZero(bool blockAddressing) {
   digitalWrite(ODYSSEY_SD_CS,LOW);
-  spi.transfer(0xFF);
+  odysseySdSpi.transfer(0xFF);
   const uint32_t address=blockAddressing ? 0u : 0u;
-  spi.transfer(0x51); // CMD17 READ_SINGLE_BLOCK
-  spi.transfer(uint8_t(address>>24));spi.transfer(uint8_t(address>>16));
-  spi.transfer(uint8_t(address>>8));spi.transfer(uint8_t(address));
-  spi.transfer(0x01);
+  odysseySdSpi.transfer(0x51); // CMD17 READ_SINGLE_BLOCK
+  odysseySdSpi.transfer(uint8_t(address>>24));odysseySdSpi.transfer(uint8_t(address>>16));
+  odysseySdSpi.transfer(uint8_t(address>>8));odysseySdSpi.transfer(uint8_t(address));
+  odysseySdSpi.transfer(0x01);
   uint8_t response=0xFF;
   for (uint8_t i=0;i<16;++i) {
-    response=spi.transfer(0xFF);
+    response=odysseySdSpi.transfer(0xFF);
     if ((response&0x80u)==0) break;
   }
   bool readable=false;
   if (response==0x00) {
     uint8_t token=0xFF;
-    for (uint16_t i=0;i<4096 && token==0xFF;++i) token=spi.transfer(0xFF);
+    for (uint16_t i=0;i<4096 && token==0xFF;++i) token=odysseySdSpi.transfer(0xFF);
     if (token==0xFE) {
-      for (uint16_t i=0;i<514;++i) spi.transfer(0xFF); // 512-byte sector + CRC
+      for (uint16_t i=0;i<514;++i) odysseySdSpi.transfer(0xFF); // 512-byte sector + CRC
       readable=true;
     }
   }
   digitalWrite(ODYSSEY_SD_CS,HIGH);
-  spi.transfer(0xFF);
+  odysseySdSpi.transfer(0xFF);
   return readable;
 }
 static uint8_t odysseySdProtocolProbe() {
@@ -2066,7 +2066,7 @@ static uint8_t odysseySdProtocolProbe() {
 
   uint8_t r0=0xFF;
   for (uint8_t attempt=0;attempt<2 && r0!=0x01;++attempt)
-    r0=odysseySdRawCommand(odysseySdSpi,0,0,0x95);
+    r0=odysseySdRawCommand(0,0,0x95);
   if (r0!=0x01) {
     odysseySdSpi.endTransaction();odysseySdSpi.end();digitalWrite(ODYSSEY_SD_CS,HIGH);
     Serial.printf("[SD] protocol probe stage=1 CMD0=0x%02X\n",unsigned(r0));
@@ -2074,7 +2074,7 @@ static uint8_t odysseySdProtocolProbe() {
   }
 
   uint8_t stage=2,r7[4]={0xFF,0xFF,0xFF,0xFF};
-  const uint8_t r8=odysseySdRawCommand(odysseySdSpi,8,0x000001AAu,0x87,r7,sizeof(r7));
+  const uint8_t r8=odysseySdRawCommand(8,0x000001AAu,0x87,r7,sizeof(r7));
   const bool v2=(r8==0x01 && r7[2]==0x01 && r7[3]==0xAA);
   const bool legacy=(r8&0x04u)!=0;
   if (v2 || legacy) stage=3;
@@ -2088,16 +2088,16 @@ static uint8_t odysseySdProtocolProbe() {
   bool initialized=false;
   const uint32_t acmdArg=v2?0x40000000u:0u;
   for (uint16_t attempt=0;attempt<120 && !initialized;++attempt) {
-    const uint8_t r55=odysseySdRawCommand(odysseySdSpi,55,0,0x01);
+    const uint8_t r55=odysseySdRawCommand(55,0,0x01);
     if (r55==0x00 || r55==0x01) {
-      const uint8_t r41=odysseySdRawCommand(odysseySdSpi,41,acmdArg,0x01);
+      const uint8_t r41=odysseySdRawCommand(41,acmdArg,0x01);
       if (r41==0x00) { initialized=true;break; }
     }
     delay(10);
   }
   if (!initialized && legacy) {
     for (uint16_t attempt=0;attempt<120 && !initialized;++attempt) {
-      if (odysseySdRawCommand(odysseySdSpi,1,0,0x01)==0x00) { initialized=true;break; }
+      if (odysseySdRawCommand(1,0,0x01)==0x00) { initialized=true;break; }
       delay(10);
     }
   }
@@ -2109,10 +2109,10 @@ static uint8_t odysseySdProtocolProbe() {
   stage=4;
 
   uint8_t ocr[4]={0,0,0,0};
-  const uint8_t r58=odysseySdRawCommand(odysseySdSpi,58,0,0x01,ocr,sizeof(ocr));
+  const uint8_t r58=odysseySdRawCommand(58,0,0x01,ocr,sizeof(ocr));
   const bool blockAddressing=(r58==0x00 && (ocr[0]&0x40u)!=0);
-  if (!blockAddressing) odysseySdRawCommand(odysseySdSpi,16,512,0x01);
-  if (odysseySdReadSectorZero(odysseySdSpi,blockAddressing)) stage=5;
+  if (!blockAddressing) odysseySdRawCommand(16,512,0x01);
+  if (odysseySdReadSectorZero(blockAddressing)) stage=5;
 
   odysseySdSpi.endTransaction();
   odysseySdSpi.end();
