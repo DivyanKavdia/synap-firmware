@@ -2100,9 +2100,11 @@ static void odysseySdReleaseLocked() {
 }
 
 static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
-  odysseySdReleaseLocked();
+  // Publish INITIALIZING before teardown so capability reads never observe a
+  // stale ready state while VFS/card/bus ownership is being recycled.
   odysseySdBootState=0;
   odysseySdProbeStage=0;
+  odysseySdReleaseLocked();
 
   // Keep CS inactive before the SPI peripheral is connected to the GPIO matrix.
   pinMode(ODYSSEY_SD_CS,OUTPUT);
@@ -2221,9 +2223,10 @@ bool odysseyInitializeSdCardBeforeBle() {
 bool odysseyRecoverSdCard() {
   OdysseySdGuard guard;
   if (!guard) return false;
-  // Recovery is a deliberate full lifecycle reset: VFS/card -> SPI device -> SPI bus.
-  odysseySdReleaseLocked();
+  // Recovery is a deliberate full lifecycle reset: publish INITIALIZING, then
+  // VFS/card -> SPI device -> SPI bus -> fresh mount attempts.
   odysseySdBootState=0;odysseySdProbeStage=0;
+  odysseySdReleaseLocked();
   return odysseySdMountLocked("recovery",ODYSSEY_SD_RECOVERY_ATTEMPTS);
 }
 
