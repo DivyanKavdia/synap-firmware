@@ -97,6 +97,8 @@ test('C3 native SD owner is the only initialization and remount path',()=>{
   assert.match(c3,/OdysseySdGuard/);
   assert.match(c3,/fopen\(fullPath,"wb\+"\)/);
   assert.match(c3,/opendir\(directoryPath\)/);
+  assert.match(c3,/readSelected\(request\.path,request\.offset,total,bytes,size\)/);
+  assert.match(c3,/"@catalogue"/);
   assert.doesNotMatch(c3,/odysseySdRawCommand|odysseySdProtocolProbe|odysseySdReadSectorZero/);
   const storage=c3.match(/static bool storageReady\(\) \{[\s\S]*?\n\}/)?.[0]||'';
   assert.doesNotMatch(storage,/odysseyDetectSdCard|odysseyRecoverSdCard/);
