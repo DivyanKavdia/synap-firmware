@@ -1,6 +1,6 @@
 // Odyssey C3 SD media-v1: catalogue/read/delete for locally recorded WAV files.
-// Files are never deleted by transfer itself. The PWA first imports and verifies
-// the complete WAV, then explicitly sends operation 17 for that path.
+// C3 storage is mounted once through ESP-IDF SDSPI/FAT and accessed through VFS.
+// Files are deleted only after the PWA has imported and verified them.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 namespace OdysseyTransfer {
 struct Request {
@@ -9,9 +9,6 @@ struct Request {
   char path[64]{};
 };
 static QueueHandle_t requests=nullptr;
-// FAT/VFS directory enumeration has a materially deeper call stack than normal BLE work on C3.
-// Keep this worker at parity with the proven Chakshu transfer task so an SD catalogue cannot
-// overflow the task stack and reset the single-core C3 during the first post-connect probe.
 static constexpr uint32_t TRANSFER_STACK_BYTES=8192;
 static portMUX_TYPE responseMux=portMUX_INITIALIZER_UNLOCKED;
 static uint8_t response[496]{};
@@ -21,7 +18,7 @@ static char selectedPath[64]{};
 static String catalogueBuffer;
 
 enum : uint8_t {
-  OK=0, BUSY=1, BAD_COMMAND=2, NO_SD=3, IO_ERROR=7, FILE_UNAVAILABLE=11
+  OK=0,BUSY=1,BAD_COMMAND=2,NO_SD=3,IO_ERROR=7,FILE_UNAVAILABLE=11
 };
 
 static bool safeWavPath(const char* path) {
@@ -34,10 +31,12 @@ static bool safeWavPath(const char* path) {
   }
   return true;
 }
-
 static bool storageReady() {
-  // Normal PWA reload/reconnect is observational only: never remount here.
-  return odysseySdDetectionState()==1 && SD.cardType()!=CARD_NONE;
+  // Normal PWA reads are observational only. Only operation 14 may remount.
+  return odysseySdReady();
+}
+static bool fullPath(const char* logical,char* full,size_t capacity) {
+  return safeWavPath(logical) && odysseySdPath(logical,full,capacity);
 }
 
 static void reply(const Request& request,uint8_t error,uint32_t total=0,uint32_t offset=0,
@@ -59,85 +58,118 @@ static void reply(const Request& request,uint8_t error,uint32_t total=0,uint32_t
 static uint8_t selectFile(const char* path,uint32_t& total) {
   selectedPath[0]=0;
   if (!safeWavPath(path)) return BAD_COMMAND;
-  if (!storageReady()) return NO_SD;
-  if (!SD.exists(path)) return FILE_UNAVAILABLE;
-  File file=SD.open(path,FILE_READ);
-  if (!file || file.isDirectory()) { if(file)file.close(); return FILE_UNAVAILABLE; }
-  total=file.size();
-  file.close();
-  if (!total) return FILE_UNAVAILABLE;
+  OdysseySdGuard guard;
+  if (!guard || !storageReady()) return NO_SD;
+  char full[96];
+  if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
+  struct stat st{};
+  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0) return FILE_UNAVAILABLE;
+  if (uint64_t(st.st_size)>UINT32_MAX) return FILE_UNAVAILABLE;
+  total=uint32_t(st.st_size);
   snprintf(selectedPath,sizeof(selectedPath),"%s",path);
   return OK;
 }
 
 static uint8_t readSelected(uint32_t offset,uint32_t& total,uint8_t* bytes,size_t& size) {
-  if (selectedPath[0]) {
-    if (!storageReady()) return NO_SD;
-    if (!SD.exists(selectedPath)) return FILE_UNAVAILABLE;
-    File file=SD.open(selectedPath,FILE_READ);
-    if (!file || file.isDirectory()) { if(file)file.close(); return FILE_UNAVAILABLE; }
-    total=file.size();
-    if (offset>=total) { file.close(); return FILE_UNAVAILABLE; }
+  if (!selectedPath[0]) {
+    total=catalogueBuffer.length();
+    if (!total || offset>=total) return FILE_UNAVAILABLE;
     size=std::min(size_t(480),size_t(total-offset));
-    if (!file.seek(offset) || file.read(bytes,size)!=int(size)) { file.close(); return IO_ERROR; }
-    file.close();
+    memcpy(bytes,catalogueBuffer.c_str()+offset,size);
     return OK;
   }
-  total=catalogueBuffer.length();
-  if (!total || offset>=total) return FILE_UNAVAILABLE;
+
+  OdysseySdGuard guard;
+  if (!guard || !storageReady()) return NO_SD;
+  char full[96];
+  if (!fullPath(selectedPath,full,sizeof(full))) return BAD_COMMAND;
+  struct stat st{};
+  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
+    return FILE_UNAVAILABLE;
+  total=uint32_t(st.st_size);
+  if (offset>=total) return FILE_UNAVAILABLE;
   size=std::min(size_t(480),size_t(total-offset));
-  memcpy(bytes,catalogueBuffer.c_str()+offset,size);
-  return OK;
+
+  FILE* file=fopen(full,"rb");
+  if (!file) return FILE_UNAVAILABLE;
+  const bool ok=fseek(file,long(offset),SEEK_SET)==0 && fread(bytes,1,size,file)==size;
+  fclose(file);
+  return ok?OK:IO_ERROR;
 }
 
 static uint8_t catalogue(uint32_t& total) {
   selectedPath[0]=0;
   catalogueBuffer="";
-  if (!storageReady()) return NO_SD;
-  File directory=SD.open("/synap");
+  OdysseySdGuard guard;
+  if (!guard || !storageReady()) return NO_SD;
+
+  char directoryPath[96];
+  if (!odysseySdPath("/synap",directoryPath,sizeof(directoryPath))) return IO_ERROR;
+  DIR* directory=opendir(directoryPath);
   if (!directory) return IO_ERROR;
+
   catalogueBuffer.reserve(2048);
   catalogueBuffer="[";
   unsigned count=0;
-  for (File entry=directory.openNextFile();entry;entry=directory.openNextFile()) {
-    const String path=entry.path();
-    const bool include=!entry.isDirectory() && safeWavPath(path.c_str());
-    const size_t bytes=entry.size();
-    entry.close();
-    if (!include) continue;
+  while (dirent* entry=readdir(directory)) {
+    if (!entry->d_name || !strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
+    char logical[64];
+    const int n=snprintf(logical,sizeof(logical),"/synap/%s",entry->d_name);
+    if (n<=0 || size_t(n)>=sizeof(logical) || !safeWavPath(logical)) continue;
+    char full[96];
+    if (!odysseySdPath(logical,full,sizeof(full))) continue;
+    struct stat st{};
+    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<0) continue;
     if (count++) catalogueBuffer+=",";
-    catalogueBuffer+="{\"path\":\""+path+"\",\"bytes\":"+String(bytes)+"}";
+    catalogueBuffer+="{\"path\":\""+String(logical)+"\",\"bytes\":"+String(uint32_t(st.st_size))+"}";
     if (count>=100) break;
   }
-  directory.close();
+  closedir(directory);
   catalogueBuffer+="]";
   total=catalogueBuffer.length();
-  return total?OK:IO_ERROR;
+  return OK;
 }
 
 static uint8_t removeFile(const char* path) {
   selectedPath[0]=0;
   if (!safeWavPath(path)) return BAD_COMMAND;
-  if (!storageReady()) return NO_SD;
-  if (!SD.exists(path)) return FILE_UNAVAILABLE;
-  return SD.remove(path)?OK:IO_ERROR;
+  OdysseySdGuard guard;
+  if (!guard || !storageReady()) return NO_SD;
+  char full[96];
+  if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
+  struct stat st{};
+  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode)) return FILE_UNAVAILABLE;
+  return unlink(full)==0?OK:IO_ERROR;
 }
 
 static uint16_t clearRecordings() {
-  if (!storageReady()) return 0;
-  File directory=SD.open("/synap");
+  OdysseySdGuard guard;
+  if (!guard || !storageReady()) return 0;
+  char directoryPath[96];
+  if (!odysseySdPath("/synap",directoryPath,sizeof(directoryPath))) return 0;
+  DIR* directory=opendir(directoryPath);
   if (!directory) return 0;
-  String paths[100];
+
+  String logicalPaths[100];
   uint16_t count=0;
-  for (File entry=directory.openNextFile();entry && count<100;entry=directory.openNextFile()) {
-    const String path=entry.path();
-    const bool include=!entry.isDirectory() && safeWavPath(path.c_str());
-    entry.close();
-    if (include) paths[count++]=path;
+  while (dirent* entry=readdir(directory)) {
+    if (count>=100) break;
+    if (!entry->d_name || !strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
+    char logical[64];
+    const int n=snprintf(logical,sizeof(logical),"/synap/%s",entry->d_name);
+    if (n<=0 || size_t(n)>=sizeof(logical) || !safeWavPath(logical)) continue;
+    char full[96];
+    if (!odysseySdPath(logical,full,sizeof(full))) continue;
+    struct stat st{};
+    if (stat(full,&st)==0 && S_ISREG(st.st_mode)) logicalPaths[count++]=logical;
   }
-  directory.close();
+  closedir(directory);
+
   uint16_t removed=0;
-  for (uint16_t i=0;i<count;++i) if (SD.remove(paths[i].c_str())) ++removed;
+  for (uint16_t i=0;i<count;++i) {
+    char full[96];
+    if (odysseySdPath(logicalPaths[i].c_str(),full,sizeof(full)) && unlink(full)==0) ++removed;
+  }
   return removed;
 }
 
@@ -155,17 +187,17 @@ static void worker(void*) {
       case 3: error=selectFile(request.path,total); break;
       case 4: error=readSelected(request.offset,total,bytes,size); break;
       case 7: error=catalogue(total); break;
-      case 8: total=catalogueBuffer.length(); if(!total)error=FILE_UNAVAILABLE; break;
+      case 8: total=catalogueBuffer.length();if(!total)error=FILE_UNAVAILABLE;break;
       case 14:
         selectedPath[0]=0;catalogueBuffer="";
-        // Explicit Settings recovery is the only connected-path remount.
-        error=odysseyRecoverSdCard()?OK:NO_SD;break;
+        error=odysseyRecoverSdCard()?OK:NO_SD;
+        break;
       case 17: error=removeFile(request.path); break;
       case 18:
         selectedPath[0]=0;catalogueBuffer="";
         if(!storageReady())error=NO_SD;else total=clearRecordings();
         break;
-      default: error=BAD_COMMAND; break;
+      default:error=BAD_COMMAND;break;
     }
     reply(request,error,total,request.offset,bytes,size);
   }
@@ -201,7 +233,7 @@ class DataCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
-bool available() { return requests!=nullptr; }
+bool available(){return requests!=nullptr;}
 
 void initialize() {
   requests=xQueueCreate(2,sizeof(Request));
