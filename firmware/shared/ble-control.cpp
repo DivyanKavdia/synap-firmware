@@ -25,6 +25,11 @@ void processStreamError() {
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* server) override {
     (void)server;
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+    // A local SD take owns I2S while disconnected. Once the PWA reconnects,
+    // ask it to close cleanly so the first connected START can take the mic.
+    if (odysseyRecording.load()) odysseyStopRequested=true;
+#endif
     ++connectionGeneration;
     if(!recoveryWaiting.load())streamingEnabled.store(false);
     deviceConnected.store(true);
