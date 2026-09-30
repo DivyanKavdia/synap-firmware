@@ -24,19 +24,18 @@ static_assert(ODYSSEY_SD_CS != ODYSSEY_SD_SCK && ODYSSEY_SD_CS != ODYSSEY_SD_MOS
   ODYSSEY_SD_SCK != ODYSSEY_SD_MISO && ODYSSEY_SD_MOSI != ODYSSEY_SD_MISO,
   "SD pins must be distinct");
 
-// Mount status (C3 also refreshes it on local start): 0=not checked, 1=detected, 2=mount failed, 3=no card reported.
 static std::atomic<uint8_t> odysseySdBootState{0};
 #if CONFIG_IDF_TARGET_ESP32C3
 static SPIClass odysseySdSpi(FSPI);
 static constexpr uint32_t ODYSSEY_SD_STARTUP_SETTLE_MS=3000u;
+static constexpr uint32_t ODYSSEY_SD_RETRY_SETTLE_MS=350u;
+static constexpr uint8_t ODYSSEY_SD_MOUNT_ATTEMPTS=3;
 #endif
 uint8_t odysseySdDetectionState() { return odysseySdBootState; }
 uint8_t odysseySdProbeState() { return odysseySdBootState.load()==1 ? 6 : 0; }
 
 void odysseyDetectSdCard() {
 #if CONFIG_IDF_TARGET_ESP32C3
-  // A healthy mounted card is already usable. Never tear it down just to
-  // answer a later catalogue/status re-check.
   if (odysseySdBootState.load()==1 && SD.cardType()!=CARD_NONE) {
     Serial.println("[SD] healthy mount retained");
     return;
@@ -50,7 +49,6 @@ void odysseyDetectSdCard() {
 #else
   SPIClass sdSpi(FSPI);
 #endif
-  // Explicit mapping avoids the board's default SPI pins (used by the mic).
   digitalWrite(ODYSSEY_SD_CS, HIGH);
   pinMode(ODYSSEY_SD_CS, OUTPUT);
   sdSpi.begin(ODYSSEY_SD_SCK, ODYSSEY_SD_MISO, ODYSSEY_SD_MOSI, ODYSSEY_SD_CS);
@@ -70,7 +68,6 @@ void odysseyDetectSdCard() {
     }
   } else {
     odysseySdBootState=2;
-    // Exact build-1445 mount behavior retained; probe state remains unknown on failure.
     Serial.println("[SD] detection/mount failed: check card, wiring and filesystem");
   }
 #if CONFIG_IDF_TARGET_ESP32C3
@@ -82,20 +79,24 @@ void odysseyDetectSdCard() {
 }
 
 #if CONFIG_IDF_TARGET_ESP32C3
-static void odysseyDelayedSdProbeTask(void*) {
-  delay(ODYSSEY_SD_STARTUP_SETTLE_MS);
-  odysseyDetectSdCard();
-  vTaskDelete(nullptr);
-}
-bool odysseyScheduleSdCardDetection() {
-  const BaseType_t created=xTaskCreate(odysseyDelayedSdProbeTask,"sd-boot",3072,nullptr,1,nullptr);
-  if (created!=pdPASS) {
-    Serial.println("[SD] delayed activation task unavailable; probing inline");
-    return false;
+static bool odysseyMountWithRetries(const char* reason,uint32_t initialSettleMs) {
+  if (odysseySdBootState.load()==1 && SD.cardType()!=CARD_NONE) return true;
+  if (initialSettleMs) delay(initialSettleMs);
+  for (uint8_t attempt=1;attempt<=ODYSSEY_SD_MOUNT_ATTEMPTS;++attempt) {
+    Serial.printf("[SD] %s mount attempt %u/%u\n",reason,unsigned(attempt),unsigned(ODYSSEY_SD_MOUNT_ATTEMPTS));
+    odysseyDetectSdCard();
+    if (odysseySdBootState.load()==1) return true;
+    if (attempt<ODYSSEY_SD_MOUNT_ATTEMPTS) delay(ODYSSEY_SD_RETRY_SETTLE_MS);
   }
-  Serial.printf("[SD] activation scheduled after %lu ms\n",
-    static_cast<unsigned long>(ODYSSEY_SD_STARTUP_SETTLE_MS));
-  return true;
+  return false;
+}
+bool odysseyInitializeSdCardBeforeBle() {
+  const bool ready=odysseyMountWithRetries("boot",ODYSSEY_SD_STARTUP_SETTLE_MS);
+  Serial.printf("[SD] boot initialization complete state=%u before BLE\n",unsigned(odysseySdBootState.load()));
+  return ready;
+}
+bool odysseyRecoverSdCard() {
+  return odysseyMountWithRetries("recovery",ODYSSEY_SD_RETRY_SETTLE_MS);
 }
 #endif
 #endif
