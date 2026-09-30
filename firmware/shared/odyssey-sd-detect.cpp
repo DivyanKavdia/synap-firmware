@@ -150,6 +150,7 @@ uint8_t odysseySdDetectionState() { return odysseySdBootState; }
 uint8_t odysseySdProbeState() { return odysseySdBootState.load()==1 ? 6 : odysseySdProbeStage.load(); }
 
 static void odysseyDetectSdCardAttempt(bool diagnoseFailure) {
+  (void)diagnoseFailure;
 #if CONFIG_IDF_TARGET_ESP32C3
   if (odysseySdBootState.load()==1 && SD.cardType()!=CARD_NONE) {
     Serial.println("[SD] healthy mount retained");
