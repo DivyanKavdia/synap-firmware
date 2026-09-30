@@ -231,7 +231,10 @@ class RecoveryCallbacks : public BLECharacteristicCallbacks {
 
 void stopStreaming(ErrorCode reason) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  if (odysseyRecording.load()) { updateStatusCharacteristic(true); return; }
+  if (!odysseyPrepareForConnectedStreaming(1500u)) {
+    stopStreaming(ErrorCode::AUDIO_SOURCE_FAILED);
+    return;
+  }
 #endif
   streamingEnabled.store(false);
   ++streamGeneration; // Invalidates queued AND already-in-flight old task work.
