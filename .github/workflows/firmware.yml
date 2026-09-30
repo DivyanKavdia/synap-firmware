@@ -38,10 +38,12 @@ jobs:
           arduino-cli lib install "NimBLE-Arduino@2.3.6"
       - name: Fix pinned Arduino BLE request ownership and live reads
         run: node tools/patch-arduino-ble.cjs "$HOME/.arduino15/packages/esp32/hardware/esp32/3.3.5/libraries/BLE/src"
+      - name: Backport pinned Arduino SD SPI initialization fix
+        run: node tools/patch-arduino-sd.cjs "$HOME/.arduino15/packages/esp32/hardware/esp32/3.3.5/libraries/SD/src"
       - name: Test production source, audio, OTA and hardware contracts
         run: |
           node tools/assemble-source.cjs --check
-          SYNAP_ARDUINO_BLE_SRC="$HOME/.arduino15/packages/esp32/hardware/esp32/3.3.5/libraries/BLE/src" SYNAP_NIMBLE_SRC="$HOME/Arduino/libraries/NimBLE-Arduino/src" node --test tests/*.cjs
+          SYNAP_ARDUINO_BLE_SRC="$HOME/.arduino15/packages/esp32/hardware/esp32/3.3.5/libraries/BLE/src" SYNAP_ARDUINO_SD_SRC="$HOME/.arduino15/packages/esp32/hardware/esp32/3.3.5/libraries/SD/src" SYNAP_NIMBLE_SRC="$HOME/Arduino/libraries/NimBLE-Arduino/src" node --test tests/*.cjs
       - name: Prepare auditable S3, C3 and Chakshu production sources
         run: |
           mkdir -p prepared/synap_esp32s3 prepared/synap_esp32c3 prepared/synap_chakshu
