@@ -15,23 +15,6 @@ function materializeC3(source,target){
       xTaskCreate(transmitterTask, "transmit", 8192, nullptr, 2, nullptr) != pdPASS) {`;
   out=replaceOnce(out,taskBefore,taskAfter,'single-core task creation');
 
-  const sdBootProbe=`  // Probe once before BLE/tasks start; failure never prevents normal startup.
-#if !SYNAP_CHAKSHU
-  odysseyDetectSdCard();
-#endif
-`;
-  out=replaceOnce(out,sdBootProbe,
-    '  // C3 SD activation is delayed until BLE and runtime tasks are ready.\n',
-    'Defer C3 SD activation until runtime is ready');
-  const taskTail=`    fatalSetup("[FATAL] task allocation failed");
-  }
-}`;
-  const delayedTail=`    fatalSetup("[FATAL] task allocation failed");
-  }
-  if (!odysseyScheduleSdCardDetection()) odysseyDetectSdCard();
-}`;
-  out=replaceOnce(out,taskTail,delayedTail,'Schedule delayed C3 SD activation');
-
   if(out.includes(PRIMARY_TARGET))throw Error('C3 source still contains the S3 target identity');
   if(out.includes('SYNAP-ESP32S3-OTA-ID-V3'))throw Error('C3 source still contains the S3 product marker');
   if(out.includes('esp_sleep_enable_ext1_wakeup'))throw Error('C3 source still contains unsupported EXT1 wake');
