@@ -1,34 +1,51 @@
-// C3 local audio owns its file and microphone until finalization. BLE connection
-// changes never redirect a take; no local PCM enters the app recovery/notify queue.
+// C3 local audio owns the mounted VFS and microphone until finalization.
+// BLE connection changes never redirect a take; no local PCM enters the app queue.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-static void odysseyWavHeader(uint8_t* h, uint32_t bytes) {
+static void odysseyWavHeader(uint8_t* h,uint32_t bytes) {
   memset(h,0,44);
-  memcpy(h,"RIFF",4); put32le(h+4,bytes+36);
-  memcpy(h+8,"WAVEfmt ",8); put32le(h+16,16);
-  h[20]=1; h[22]=1; put32le(h+24,SAMPLE_RATE);
-  put32le(h+28,SAMPLE_RATE*2); h[32]=2; h[34]=16;
-  memcpy(h+36,"data",4); put32le(h+40,bytes);
+  memcpy(h,"RIFF",4);put32le(h+4,bytes+36);
+  memcpy(h+8,"WAVEfmt ",8);put32le(h+16,16);
+  h[20]=1;h[22]=1;put32le(h+24,SAMPLE_RATE);
+  put32le(h+28,SAMPLE_RATE*2);h[32]=2;h[34]=16;
+  memcpy(h+36,"data",4);put32le(h+40,bytes);
+}
+static bool odysseyCheckpointWav(FILE* file,uint8_t* header,uint32_t bytes) {
+  odysseyWavHeader(header,bytes);
+  if (fseek(file,0,SEEK_SET)!=0) return false;
+  if (fwrite(header,1,44,file)!=44) return false;
+  if (fseek(file,long(44u+bytes),SEEK_SET)!=0) return false;
+  return fflush(file)==0;
 }
 static void odysseyRecordTask(void*) {
   bool failed=false;
-  File file;
   uint32_t bytes=0;
-  char path[64]={};
-  // Start is admitted only after a successful SD probe. The worker owns the
-  // mounted filesystem for the duration of this disconnected local take.
-  if (odysseySdDetectionState()!=1) failed=true;
-  if (!failed && !SD.exists("/synap") && !SD.mkdir("/synap")) failed=true;
+  char logicalPath[64]{};
+  char fullPath[96]{};
+  uint8_t header[44];
+  FILE* file=nullptr;
+
+  // Hold the single storage mutex for the whole take. A recovery/remount can
+  // never tear down the VFS beneath an open recording.
+  OdysseySdGuard storage;
+  if (!storage || !odysseySdReady()) failed=true;
+
   if (!failed) {
+    struct stat existing{};
     for (uint8_t attempt=0;attempt<16;++attempt) {
-      snprintf(path,sizeof(path),"/synap/odyssey_audio_%08lx_%08lx.wav",
+      snprintf(logicalPath,sizeof(logicalPath),"/synap/odyssey_audio_%08lx_%08lx.wav",
         static_cast<unsigned long>(esp_random()),static_cast<unsigned long>(esp_random()));
-      if (!SD.exists(path)) { file=SD.open(path,FILE_WRITE); break; }
+      if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) { failed=true; break; }
+      if (stat(fullPath,&existing)!=0 && errno==ENOENT) {
+        file=fopen(fullPath,"wb+");
+        if (file) break;
+      }
     }
     if (!file) failed=true;
   }
-  uint8_t header[44];
+
   odysseyWavHeader(header,0);
-  if (!failed && file.write(header,sizeof(header))!=sizeof(header)) failed=true;
+  if (!failed && fwrite(header,1,sizeof(header),file)!=sizeof(header)) failed=true;
+
 #if USE_REAL_I2S_MIC
   if (!failed && !odysseyStopRequested.load()) {
     MicrophoneGuard guard;
@@ -40,38 +57,42 @@ static void odysseyRecordTask(void*) {
       size_t received=0;
       uint8_t emptyReads=0;
       while (received<sizeof(raw) && !odysseyStopRequested.load()) {
-        size_t count=microphoneI2S.readBytes(reinterpret_cast<char*>(raw)+received,sizeof(raw)-received);
-        if (!count) { if (++emptyReads>=3) { failed=true; break; } }
-        else { received+=count; emptyReads=0; }
+        const size_t count=microphoneI2S.readBytes(reinterpret_cast<char*>(raw)+received,sizeof(raw)-received);
+        if (!count) {
+          if (++emptyReads>=3) { failed=true; break; }
+        } else {
+          received+=count;emptyReads=0;
+        }
       }
       if (failed || odysseyStopRequested.load()) break;
       for (uint16_t i=0;i<SAMPLES_PER_FRAME;++i) pcm[i]=static_cast<int16_t>(raw[i]>>16);
-      // Bound RIFF's 32-bit length; a full card ends this take safely.
-      if (bytes>0xffffff00u-sizeof(pcm)) break;
-      const size_t written=file.write(reinterpret_cast<const uint8_t*>(pcm),sizeof(pcm));
-      bytes+=written & ~size_t(1);
+      if (bytes>0xffffff00u-sizeof(pcm)) break; // RIFF length is 32-bit.
+      const size_t written=fwrite(pcm,1,sizeof(pcm),file);
+      bytes+=uint32_t(written & ~size_t(1));
       if (written!=sizeof(pcm)) { failed=true; break; }
-      // Keep the on-disk header recoverable up to the last checkpoint on power loss.
+
+      // Keep a recoverable WAV header on media even if power is lost mid-take.
       if (uint32_t(millis()-checkpointAt)>=2000u) {
-        odysseyWavHeader(header,bytes);
-        if (!file.seek(0) || file.write(header,44)!=44 || !file.seek(44+bytes)) { failed=true; break; }
-        file.flush(); checkpointAt=millis();
+        if (!odysseyCheckpointWav(file,header,bytes)) { failed=true; break; }
+        checkpointAt=millis();
       }
     }
     stopMicrophone();
   }
 #else
-  failed=true; // Never silently save synthetic audio as a real offline take.
+  failed=true;
 #endif
+
   if (file) {
-    odysseyWavHeader(header,bytes);
-    if (!file.seek(0) || file.write(header,44)!=44) failed=true;
-    file.flush(); file.close();
+    if (!odysseyCheckpointWav(file,header,bytes)) failed=true;
+    if (fclose(file)!=0) failed=true;
+    file=nullptr;
   }
-  if (failed) { odysseySdBootState=2; SD.end(); }
-  Serial.printf("[SD] local audio %s: %s, %lu PCM bytes\n",failed?"failed":"saved",path,
-    static_cast<unsigned long>(bytes));
-  // No microphone/file work is allowed after releasing ownership.
+
+  Serial.printf("[SD] local audio %s: %s, %lu PCM bytes%s\n",
+    failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),
+    failed?" (mount retained for explicit recovery)":"");
+
   odysseyRecording=false;
   applyCpuPowerProfile(false);
   vTaskDelete(nullptr);
@@ -83,8 +104,7 @@ void odysseyToggleRecording() {
     return;
   }
   if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) return;
-  // Offline recording consumes the boot-owned mount; it never remounts implicitly.
-  if (odysseySdDetectionState()!=1 || SD.cardType()==CARD_NONE) {
+  if (!odysseySdReady()) {
     Serial.println("[TOUCH] double tap ignored: SD unavailable");
     return;
   }
