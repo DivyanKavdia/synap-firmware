@@ -70,7 +70,36 @@ static uint8_t selectFile(const char* path,uint32_t& total) {
   return OK;
 }
 
-static uint8_t readSelected(uint32_t offset,uint32_t& total,uint8_t* bytes,size_t& size) {
+static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& total,uint8_t* bytes,size_t& size) {
+  // New clients make every chunk self-describing. This prevents catalogue
+  // refreshes or another client from replacing the selected file mid-transfer.
+  if (requestedPath && requestedPath[0]) {
+    if (!strcmp(requestedPath,"@catalogue")) {
+      total=catalogueBuffer.length();
+      if (!total || offset>=total) return FILE_UNAVAILABLE;
+      size=std::min(size_t(480),size_t(total-offset));
+      memcpy(bytes,catalogueBuffer.c_str()+offset,size);
+      return OK;
+    }
+    if (!safeWavPath(requestedPath)) return BAD_COMMAND;
+    OdysseySdGuard guard;
+    if (!guard || !storageReady()) return NO_SD;
+    char full[96];
+    if (!fullPath(requestedPath,full,sizeof(full))) return BAD_COMMAND;
+    struct stat st{};
+    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
+      return FILE_UNAVAILABLE;
+    total=uint32_t(st.st_size);
+    if (offset>=total) return FILE_UNAVAILABLE;
+    size=std::min(size_t(480),size_t(total-offset));
+    FILE* file=fopen(full,"rb");
+    if (!file) return FILE_UNAVAILABLE;
+    const bool ok=fseek(file,long(offset),SEEK_SET)==0 && fread(bytes,1,size,file)==size;
+    fclose(file);
+    return ok?OK:IO_ERROR;
+  }
+
+  // Legacy clients still use the selected-file/catalogue state.
   if (!selectedPath[0]) {
     total=catalogueBuffer.length();
     if (!total || offset>=total) return FILE_UNAVAILABLE;
@@ -185,7 +214,7 @@ static void worker(void*) {
     uint8_t error=OK;uint32_t total=0;size_t size=0;
     switch (request.operation) {
       case 3: error=selectFile(request.path,total); break;
-      case 4: error=readSelected(request.offset,total,bytes,size); break;
+      case 4: error=readSelected(request.path,request.offset,total,bytes,size); break;
       case 7: error=catalogue(total); break;
       case 8: total=catalogueBuffer.length();if(!total)error=FILE_UNAVAILABLE;break;
       case 14:
