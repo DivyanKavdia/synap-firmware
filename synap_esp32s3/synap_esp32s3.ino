@@ -2005,11 +2005,20 @@ static_assert(ODYSSEY_SD_CS != ODYSSEY_SD_SCK && ODYSSEY_SD_CS != ODYSSEY_SD_MOS
 static std::atomic<uint8_t> odysseySdBootState{0};
 #if CONFIG_IDF_TARGET_ESP32C3
 static SPIClass odysseySdSpi(FSPI);
+static constexpr uint32_t ODYSSEY_SD_STARTUP_SETTLE_MS=3000u;
 #endif
 uint8_t odysseySdDetectionState() { return odysseySdBootState; }
 uint8_t odysseySdProbeState() { return odysseySdBootState.load()==1 ? 6 : 0; }
 
 void odysseyDetectSdCard() {
+#if CONFIG_IDF_TARGET_ESP32C3
+  // A healthy mounted card is already usable. Never tear it down just to
+  // answer a later catalogue/status re-check.
+  if (odysseySdBootState.load()==1 && SD.cardType()!=CARD_NONE) {
+    Serial.println("[SD] healthy mount retained");
+    return;
+  }
+#endif
   odysseySdBootState=0;
 #if CONFIG_IDF_TARGET_ESP32C3
   SD.end();
@@ -2048,6 +2057,24 @@ void odysseyDetectSdCard() {
   sdSpi.end();
   digitalWrite(ODYSSEY_SD_CS, HIGH);
 }
+
+#if CONFIG_IDF_TARGET_ESP32C3
+static void odysseyDelayedSdProbeTask(void*) {
+  delay(ODYSSEY_SD_STARTUP_SETTLE_MS);
+  odysseyDetectSdCard();
+  vTaskDelete(nullptr);
+}
+bool odysseyScheduleSdCardDetection() {
+  const BaseType_t created=xTaskCreate(odysseyDelayedSdProbeTask,"sd-boot",3072,nullptr,1,nullptr);
+  if (created!=pdPASS) {
+    Serial.println("[SD] delayed activation task unavailable; probing inline");
+    return false;
+  }
+  Serial.printf("[SD] activation scheduled after %lu ms\n",
+    static_cast<unsigned long>(ODYSSEY_SD_STARTUP_SETTLE_MS));
+  return true;
+}
+#endif
 #endif
 // C3 local audio owns its file and microphone until finalization. BLE connection
 // changes never redirect a take; no local PCM enters the app recovery/notify queue.

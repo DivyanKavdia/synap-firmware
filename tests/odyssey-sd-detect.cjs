@@ -29,9 +29,10 @@ constexpr int TOUCH_INPUT_PIN=3,BATTERY_ADC_PIN=1,RGB_LED_PIN=8;
 constexpr int TOUCH_INPUT_PIN=13,BATTERY_ADC_PIN=8,RGB_LED_PIN=48;
 #endif
 int spiEnds=0,sdEnds=0,csLevel=0,beginCalls=0;
+uint32_t delayedMs=0;
 void digitalWrite(int,int level){csLevel=level;}
 void pinMode(int,int){}
-void delay(uint32_t){}
+void delay(uint32_t ms){delayedMs+=ms;}
 int xTaskCreate(void(*)(void*),const char*,uint32_t,void*,int,void**){return pdPASS;}
 void vTaskDelete(void*){}
 struct SPIClass {
@@ -68,6 +69,13 @@ for(const chip of ['ESP32C3','ESP32S3'])test(`${chip}: restored 1445 SD mount pa
    odysseyDetectSdCard();
    assert(odysseySdDetectionState()==1 && odysseySdProbeState()==6 && beginCalls==1);
    assert(Serial.log.find("probe")!=std::string::npos);
+#if CONFIG_IDF_TARGET_ESP32C3
+   const int beginAfterMount=beginCalls, endsAfterMount=sdEnds, spiAfterMount=spiEnds;
+   Serial.log.clear();odysseyDetectSdCard();
+   assert(odysseySdDetectionState()==1 && beginCalls==beginAfterMount);
+   assert(sdEnds==endsAfterMount && spiEnds==spiAfterMount);
+   assert(Serial.log.find("healthy mount retained")!=std::string::npos);
+#endif
    Serial.log.clear();SD.type=CARD_NONE;odysseyDetectSdCard();
    assert(odysseySdDetectionState()==3 && odysseySdProbeState()==0);
    Serial.log.clear();SD.type=CARD_SDHC;SD.mounted=false;odysseyDetectSdCard();
@@ -75,6 +83,18 @@ for(const chip of ['ESP32C3','ESP32S3'])test(`${chip}: restored 1445 SD mount pa
    assert(Serial.log.find("detection\/mount failed")!=std::string::npos);
  }
  `,[`-DCONFIG_IDF_TARGET_${chip}=1`,'-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags(chip)]);
+});
+
+test('C3 delayed activation waits three seconds before the first mount attempt',()=>{
+ nativeTest(stub+source+`
+ int main(){
+   assert(odysseyScheduleSdCardDetection());
+   assert(beginCalls==0 && delayedMs==0);
+   odysseyDelayedSdProbeTask(nullptr);
+   assert(delayedMs==3000u && beginCalls==1);
+   assert(odysseySdDetectionState()==1 && odysseySdProbeState()==6);
+ }
+ `,['-DCONFIG_IDF_TARGET_ESP32C3=1','-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags('ESP32C3')]);
 });
 
 test('C3 rejects UART Serial and an overlapping peripheral pin at compile time',()=>{

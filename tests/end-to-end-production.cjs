@@ -49,11 +49,13 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(c3,/odysseySdDetectionState\(\)!=1/);
   assert.match(c3,/ready\|=SYNAP_CAP_SDAUDIO/);
   assert.match(c3,/\[SD\] probe CS=%d SCK=%d MOSI=%d MISO=%d/);
-  const setupProbe=c3.indexOf('// Probe once before BLE/tasks start; failure never prevents normal startup.');
-  const sdProbe=c3.indexOf('odysseyDetectSdCard();',setupProbe);
-  const bleInit=c3.indexOf('initializeBLE();',setupProbe);
-  assert.ok(setupProbe>0 && sdProbe>setupProbe && bleInit>sdProbe,'C3 must restore the proven 1445 SD probe before BLE startup');
-  assert.doesNotMatch(c3,/odysseyScheduleSdCardDetection/);
+  assert.match(c3,/ODYSSEY_SD_STARTUP_SETTLE_MS=3000u/);
+  assert.match(c3,/healthy mount retained/);
+  const bleInit=c3.indexOf('initializeBLE();');
+  const tasks=c3.indexOf('xTaskCreate(controlTask, "control"',bleInit);
+  const sdSchedule=c3.indexOf('odysseyScheduleSdCardDetection()',tasks);
+  assert.ok(bleInit>0 && tasks>bleInit && sdSchedule>tasks,'C3 must schedule SD activation only after BLE/runtime startup');
+  assert.doesNotMatch(c3,/Probe once before BLE\/tasks start/);
   assert.match(c3,/enterDeepSleep\("touch-hold"\)/);
   assert.match(c3,/enterDeepSleep\("touch-hold-after-stop"\)/);
   assert.doesNotMatch(c3,/triple tap -> DEEP SLEEP/);
@@ -70,11 +72,11 @@ test('release workflow compiles the shared complete production pipeline',()=>{
   assert.equal(compileLines.length,3);
   assert(compileLines.every(line=>line.includes('-DUSE_REAL_I2S_MIC=1')));
 });
-test('C3 restores build-1445 SD startup ordering',()=>{
+test('C3 restores proven delayed SD startup ordering',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
-  const setupProbe=c3.indexOf('// Probe once before BLE/tasks start; failure never prevents normal startup.');
-  const sd=c3.indexOf('odysseyDetectSdCard();',setupProbe);
-  const ble=c3.indexOf('initializeBLE();',setupProbe);
+  const ble=c3.indexOf('initializeBLE();');
   const tasks=c3.indexOf('xTaskCreate(controlTask, "control"',ble);
-  assert(setupProbe>0 && sd>setupProbe && ble>sd && tasks>ble,'C3 SD must initialize before BLE and runtime tasks as in build 1445');
+  const schedule=c3.indexOf('odysseyScheduleSdCardDetection()',tasks);
+  assert(ble>0 && tasks>ble && schedule>tasks,'C3 SD must wait until BLE/runtime startup before its 3-second activation settle');
+  assert.match(c3,/delay\(ODYSSEY_SD_STARTUP_SETTLE_MS\)/);
 });
