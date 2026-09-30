@@ -1,0 +1,18 @@
+SYNAP ODYSSEY C3 CARRIER
+Canonical revision: Rev K FINAL
+Finalized: 2026-09-30
+Firmware pin-contract commit: 21872010fc7c8c414284a0ca5090dabf1022a0e6
+Repository parent at archival commit start: 0aa57cc3c3eca2de767561cb762b351bcc132620
+
+Rev K changes from Rev J:
+- top silkscreen pin labels added
+- no copper changes
+- no drill changes
+- no footprint changes
+- no component-placement changes
+- no power-path changes
+
+Manufacturing package filename:
+Synap_Odyssey_C3_Carrier_RevK_FINAL_Gerbers.zip
+
+IMPORTANT: binary archive presence must be verified independently before using GitHub as fabrication source.
