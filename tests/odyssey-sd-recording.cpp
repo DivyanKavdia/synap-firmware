@@ -60,7 +60,7 @@ void reset(){
  odysseyRecording=false;odysseyStopRequested=false;deviceConnected=false;streamingEnabled=false;
  sleepPending=critical=ota=reconnect=false;micOk=cardOk=allocOk=pathOk=true;odysseySdBootState=1;
  clockMs=randomCounter=0;reads=micStarts=micStops=powerActive=powerIdle=0;pendingTask=nullptr;lastPath.clear();
- system("rm -rf /tmp/synap-odyssey-test");
+ {const int rc=system("rm -rf /tmp/synap-odyssey-test");assert(rc==0);}
  assert(mkdir("/tmp/synap-odyssey-test",0755)==0);
  assert(mkdir("/tmp/synap-odyssey-test/synap",0755)==0);
 }
@@ -68,7 +68,7 @@ std::vector<uint8_t> load(){
  assert(!lastPath.empty());
  FILE* f=fopen(lastPath.c_str(),"rb");assert(f);
  assert(fseek(f,0,SEEK_END)==0);long n=ftell(f);assert(n>=0);assert(fseek(f,0,SEEK_SET)==0);
- std::vector<uint8_t> data(size_t(n));assert(fread(data.data(),1,data.size(),f)==data.size());fclose(f);return data;
+ std::vector<uint8_t> data(static_cast<size_t>(n),uint8_t{0});assert(fread(data.data(),1,data.size(),f)==data.size());fclose(f);return data;
 }
 uint32_t get32(const std::vector<uint8_t>& data,size_t p){
  return uint32_t(data[p])|(uint32_t(data[p+1])<<8)|(uint32_t(data[p+2])<<16)|(uint32_t(data[p+3])<<24);
@@ -110,5 +110,5 @@ int main(){
   switch(guard){case 0:deviceConnected=true;break;case 1:streamingEnabled=true;break;case 2:ota=true;break;case 3:sleepPending=true;break;case 4:critical=true;break;}
   odysseyToggleRecording();assert(!odysseyRecording&&!pendingTask);
  }
- system("rm -rf /tmp/synap-odyssey-test");
+ {const int rc=system("rm -rf /tmp/synap-odyssey-test");assert(rc==0);}
 }
