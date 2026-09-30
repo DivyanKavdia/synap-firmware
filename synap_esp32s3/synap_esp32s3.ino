@@ -2516,9 +2516,14 @@ void setup() {
 #elif CONFIG_IDF_TARGET_ESP32C3
   OdysseyTransfer::initialize();
 #endif
-  // Probe once before BLE/tasks start; failure never prevents normal startup.
+  // C3 completes SD initialization before BLE can advertise. S3 keeps its
+  // existing one-shot probe behavior.
 #if !SYNAP_CHAKSHU
+#if CONFIG_IDF_TARGET_ESP32C3
+  odysseyInitializeSdCardBeforeBle();
+#else
   odysseyDetectSdCard();
+#endif
 #endif
   initializeBLE();
   initializeRecovery();
