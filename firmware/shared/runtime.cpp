@@ -71,6 +71,7 @@ constexpr uint8_t CMD_START = 0x01;
 constexpr uint8_t CMD_GET_STATUS = 0x02;
 constexpr uint8_t CMD_STANDBY = 0x03;
 constexpr uint8_t CMD_WAKE = 0x04;
+constexpr uint8_t CMD_RESTART = 0x05;
 constexpr uint8_t POWER_EVENT_MAGIC = 0xE2;
 constexpr uint8_t POWER_EVENT_VERSION = 1;
 constexpr uint8_t POWER_STATE_AWAKE = 1;

@@ -18,7 +18,7 @@ size_t heap_caps_get_free_size(int){return freeHeap;}
 struct AudioFrame{uint32_t generation;uint16_t sequence;int16_t samples[800];};
 enum class DeviceState{DISCONNECTED,CONNECTED_IDLE,STREAMING,ERROR};
 enum class ErrorCode{NONE,TRANSPORT_CHANGED,PROTOCOL_MISMATCH,BAD_COMMAND,AUDIO_NOT_SUBSCRIBED,MTU_TOO_SMALL,AUDIO_SOURCE_FAILED};
-constexpr uint8_t PROTOCOL_VERSION=2,CMD_STOP=0,CMD_START=1,CMD_GET_STATUS=2,CMD_STANDBY=3,CMD_WAKE=4,POWER_STATE_AWAKE=1;
+constexpr uint8_t PROTOCOL_VERSION=2,CMD_STOP=0,CMD_START=1,CMD_GET_STATUS=2,CMD_STANDBY=3,CMD_WAKE=4,CMD_RESTART=5,POWER_STATE_AWAKE=1;
 std::atomic<bool> streamingEnabled{false},deviceConnected{true};
 std::atomic<uint32_t> streamGeneration{1},connectionGeneration{1},captureDrops{0};
 std::atomic<uint32_t> notifyRejected{0},audioReplayGeneration{0};
@@ -38,6 +38,9 @@ std::atomic<uint8_t> chunksPerFrame{1};
 bool sleepPending=false,busy=false,transport=true;
 uint32_t now=100;
 uint32_t millis(){return now;}
+void delay(unsigned){}
+struct { void restart(){} } ESP;
+struct { void println(const char*){} } Serial;
 bool otaBusy(){return busy;}
 unsigned transportConfigurations=0;
 bool configureTransportFromPeerMtu(){++transportConfigurations;return transport;}
