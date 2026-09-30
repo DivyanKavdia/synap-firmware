@@ -49,7 +49,6 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(c3,/odysseySdDetectionState\(\)!=1/);
   assert.match(c3,/ready\|=SYNAP_CAP_SDAUDIO/);
   assert.match(c3,/\[SD\] probe CS=%d SCK=%d MOSI=%d MISO=%d/);
-  assert.match(c3,/ODYSSEY_SD_STARTUP_SETTLE_MS=3000u/);
   assert.match(c3,/ODYSSEY_SD_MOUNT_ATTEMPTS=3/);
   assert.match(c3,/healthy mount retained/);
   assert.match(c3,/Normal PWA reload\/reconnect is observational only: never remount here/);
@@ -80,9 +79,9 @@ test('C3 completes SD initialization before BLE and never remounts on normal PWA
   const sd=c3.indexOf('odysseyInitializeSdCardBeforeBle();');
   const ble=c3.indexOf('initializeBLE();',sd);
   assert(sd>0 && ble>sd,'C3 SD boot initialization must complete before BLE advertising');
-  assert.match(c3,/odysseyMountWithRetries\("boot",ODYSSEY_SD_STARTUP_SETTLE_MS\)/);
-  assert.match(c3,/if \(initialSettleMs\) delay\(initialSettleMs\)/);
-  assert.match(c3,/for \(uint8_t attempt=1;attempt<=ODYSSEY_SD_MOUNT_ATTEMPTS;\+\+attempt\)/);
+  assert.match(c3,/void odysseyDetectSdCard\(\)[\s\S]*?SD\.begin\(ODYSSEY_SD_CS, sdSpi, 400000, "\/odyssey-sd", 1, false\)/);
+  assert.match(c3,/bool odysseyInitializeSdCardBeforeBle\(\) \{[\s\S]*?odysseyDetectSdCard\(\);[\s\S]*?return ready;/);
+  assert.doesNotMatch(c3,/odysseyMountWithRetries\("boot"/);
   const storage=c3.match(/static bool storageReady\(\) \{[\s\S]*?\n\}/)?.[0]||'';
   assert.doesNotMatch(storage,/odysseyDetectSdCard|odysseyRecoverSdCard/);
   const toggle=c3.match(/void odysseyToggleRecording\(\) \{[\s\S]*?\n\}/)?.[0]||'';
