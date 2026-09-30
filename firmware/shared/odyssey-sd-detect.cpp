@@ -119,7 +119,6 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
 
   sdmmc_host_t host=SDSPI_HOST_DEFAULT();
   host.max_freq_khz=ODYSSEY_SD_MAX_FREQ_KHZ;
-  host.unaligned_multi_block_rw_max_chunk_size=8;
 
   spi_bus_config_t bus{};
   bus.mosi_io_num=ODYSSEY_SD_MOSI;
@@ -129,7 +128,7 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   bus.quadhd_io_num=-1;
   bus.max_transfer_sz=4096;
 
-  int result=int(spi_bus_initialize(host.slot,&bus,SDSPI_DEFAULT_DMA));
+  int result=int(spi_bus_initialize(static_cast<spi_host_device_t>(host.slot),&bus,SDSPI_DEFAULT_DMA));
   if (result!=ESP_OK) {
     odysseySdBootState=2;odysseySdProbeStage=1;
     Serial.printf("[SD] %s attempt %u bus init failed: %s (%d)\n",
@@ -143,7 +142,6 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   slot.gpio_cs=static_cast<gpio_num_t>(ODYSSEY_SD_CS);
   slot.gpio_cd=SDSPI_SLOT_NO_CD;
   slot.gpio_wp=SDSPI_SLOT_NO_WP;
-  slot.wait_for_miso=0; // ESP-IDF default: wait up to 40 ms for MISO release.
 
   esp_vfs_fat_mount_config_t mount=VFS_FAT_MOUNT_DEFAULT_CONFIG();
   mount.format_if_mount_failed=false;
@@ -161,7 +159,7 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
     // The IDF mount helper removes a partially attached SD device on failure;
     // this owner still owns the SPI bus and must release it before retrying.
     if (odysseySdBusInitialized) {
-      const int freeResult=int(spi_bus_free(host.slot));
+      const int freeResult=int(spi_bus_free(static_cast<spi_host_device_t>(host.slot)));
       if (freeResult!=ESP_OK)
         Serial.printf("[SD] failed-attempt bus free: %s (%d)\n",esp_err_to_name(freeResult),freeResult);
       odysseySdBusInitialized=false;
