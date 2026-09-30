@@ -107,16 +107,12 @@ void setup() {
   ChakshuMedia::initialize();
   ChakshuTransfer::initialize();
 #elif CONFIG_IDF_TARGET_ESP32C3
-  OdysseyTransfer::initialize();
-#endif
-  // C3 completes SD initialization before BLE can advertise. S3 keeps its
-  // existing one-shot probe behavior.
-#if !SYNAP_CHAKSHU
-#if CONFIG_IDF_TARGET_ESP32C3
+  // Storage owns SPI2/FAT before any SD worker or BLE characteristic can use it.
   odysseyInitializeSdCardBeforeBle();
+  OdysseyTransfer::initialize();
 #else
+  // Odyssey S3 remains a detection-only target.
   odysseyDetectSdCard();
-#endif
 #endif
   initializeBLE();
   initializeRecovery();
