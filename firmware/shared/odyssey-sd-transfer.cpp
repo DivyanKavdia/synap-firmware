@@ -36,7 +36,7 @@ static bool safeWavPath(const char* path) {
 }
 
 static bool storageReady() {
-  if (odysseySdDetectionState()!=1) odysseyDetectSdCard();
+  // Normal PWA reload/reconnect is observational only: never remount here.
   return odysseySdDetectionState()==1 && SD.cardType()!=CARD_NONE;
 }
 
@@ -158,7 +158,8 @@ static void worker(void*) {
       case 8: total=catalogueBuffer.length(); if(!total)error=FILE_UNAVAILABLE; break;
       case 14:
         selectedPath[0]=0;catalogueBuffer="";
-        odysseyDetectSdCard();error=odysseySdDetectionState()==1?OK:NO_SD;break;
+        // Explicit Settings recovery is the only connected-path remount.
+        error=odysseyRecoverSdCard()?OK:NO_SD;break;
       case 17: error=removeFile(request.path); break;
       case 18:
         selectedPath[0]=0;catalogueBuffer="";
