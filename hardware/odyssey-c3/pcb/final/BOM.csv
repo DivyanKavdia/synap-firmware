@@ -1,0 +1,13 @@
+Ref,Part,Audited orientation / note
+U1,ESP32-C3 SuperMini,"components up; USB top; left row GPIO5/6/7/8/9/10/20/21, right 5V/GND/3V3/4/3/2/1/0"
+MIC1,Round INMP441 module Ø14,"LABELLED ACOUSTIC-HOLE SIDE UP; top SCK/WS/LR, bottom SD/VDD/GND"
+TOUCH1,TTP223 14.7x11,touch side up; top-edge pins GND/IO/VCC left-right
+SD1,3.3V microSD SPI 17.9x17.9,card exits right
+D1,WS2812B 5050,emitting face up
+SW1,right-angle SPDT,center BAT+ common; switched outer->SW_BAT
+CHG1,USB-C 1S charger 10x10,mechanical landing; wire-tie battery pads
+D2,SS14 SMA,A=SW_BAT K=VIN_C3
+R1/R2,470k 0603,battery divider
+R3,330R 0603,NeoPixel series
+C1/C3/C5,100nF,decoupling
+C2,10uF,SD bulk

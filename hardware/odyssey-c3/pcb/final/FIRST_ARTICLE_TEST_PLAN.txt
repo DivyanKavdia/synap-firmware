@@ -1,0 +1,12 @@
+REV K FIRST-ARTICLE TEST
+1. Print MIC1_1to1_FIT_CHECK.svg at 100% with scaling disabled and physically check the actual module/header before ordering volume.
+2. Verify MIC1 labelled/acoustic-hole side faces top/outward.
+3. Top-view mic pins: SCK/WS/LR over SD/VDD/GND.
+4. Verify L/R-to-GND continuity before power.
+5. Verify TTP223 touch face top and pin order GND/IO/VCC left-right.
+6. Verify NeoPixel face top and C3 component side top.
+7. Check rails and no BAT+/GND short.
+8. Verify SD=3.3 V and repeated cold-boot mount.
+9. Record microphone audio with case opening centered at X=8.00,Y=20.50.
+10. Test touch through final case wall.
+11. Test BLE range with final battery/case.

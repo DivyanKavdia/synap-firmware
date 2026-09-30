@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24mm" height="24mm" viewBox="0 0 24 24">
+<rect x="0" y="0" width="24" height="24" fill="white"/>
+<circle cx="12.0" cy="12.0" r="7" fill="none" stroke="black" stroke-width="0.15"/>
+<circle cx="9.46" cy="8.19" r="0.70" fill="none" stroke="black" stroke-width="0.12"/>
+<text x="9.46" y="7.19" font-size="0.75" text-anchor="middle">SCK</text>
+<circle cx="12.0" cy="8.19" r="0.70" fill="none" stroke="black" stroke-width="0.12"/>
+<text x="12.0" y="7.19" font-size="0.75" text-anchor="middle">WS</text>
+<circle cx="14.54" cy="8.19" r="0.70" fill="none" stroke="black" stroke-width="0.12"/>
+<text x="14.54" y="7.19" font-size="0.75" text-anchor="middle">L/R</text>
+<circle cx="9.46" cy="15.81" r="0.70" fill="none" stroke="black" stroke-width="0.12"/>
+<text x="9.46" y="17.36" font-size="0.75" text-anchor="middle">SD</text>
+<circle cx="12.0" cy="15.81" r="0.70" fill="none" stroke="black" stroke-width="0.12"/>
+<text x="12.0" y="17.36" font-size="0.75" text-anchor="middle">VDD</text>
+<circle cx="14.54" cy="15.81" r="0.70" fill="none" stroke="black" stroke-width="0.12"/>
+<text x="14.54" y="17.36" font-size="0.75" text-anchor="middle">GND</text>
+<text x="12" y="1.2" font-size="0.8" text-anchor="middle">MIC1 1:1 — PRINT 100%</text>
+<text x="12" y="23" font-size="0.6" text-anchor="middle">14 mm OD · 2.54 mm pitch · 7.62 mm nominal rows · 1.40 mm holes</text>
+</svg>

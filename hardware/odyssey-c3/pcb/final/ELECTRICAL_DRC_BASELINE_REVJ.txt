@@ -1,0 +1,34 @@
+SYNAP ODYSSEY C3 CARRIER REV J ELECTRICAL BASELINE
+
+Board: 42.0 x 60.0 mm
+Copper DRC minimum: 0.250 mm
+Copper clearance errors: 0
+Connectivity errors: 0
+
+RF routed slot: 15.0..26.0 x 36.9..43.9 mm
+Required copper setback used: 0.50 mm
+Bottom plane distance to slot: 0.50 mm
+RF setback errors: 0
+
+Drill spacing rule checked: 0.254 mm edge-to-edge
+Drill spacing violations: 0
+Closest remaining drill edge gap: 0.700 mm
+Closest pair: SD1.3V3 <-> VIA:3V3:0
+Deleted via: GND (35.21, 43.49)
+
+MIC1:
+nominal pitch = 2.54 mm
+nominal row spacing = 7.62 mm
+drill = 1.40 mm
+pad = 2.10 mm
+
+Excellon:
+;FILE_FORMAT=3:3
+FMAT,2
+METRIC,TZ
+
+NPTH: intentionally absent; microphone acoustic port faces top/case.
+Bottom GND coverage: 80.1%
+RESULT: PASS
+
+Rev K changes silkscreen only; this electrical baseline remains authoritative.

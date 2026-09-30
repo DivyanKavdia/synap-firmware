@@ -1,0 +1,4 @@
+REV K changes from Rev J
+- Added top silkscreen pin labels only.
+- No copper, drill, netlist, footprint, placement or power-path changes.
+- No NPTH microphone opening; mic acoustic port remains TOP/outward.

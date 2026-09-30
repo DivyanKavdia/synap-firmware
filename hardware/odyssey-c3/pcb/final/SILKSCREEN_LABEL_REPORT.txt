@@ -1,0 +1,33 @@
+SYNAP ODYSSEY C3 CARRIER REV K
+
+Purpose: add top-silkscreen pin labels without changing the validated Rev J electrical design.
+
+Labels added:
+C3:
+  left row  G5 G6 G7 G8 G9 G10 G20 G21
+  right row 5V GND 3V3 G4 G3 G2 G1 G0
+INMP441:
+  SCK WS LR
+  SD VDD GND
+TTP223:
+  GND IO VCC
+microSD:
+  3V3 CS MOSI SCK MISO GND
+Battery:
+  B+ B-
+Charger:
+  CHG+ CHG-
+Switch:
+  SW BAT NC
+NeoPixel:
+  3V3 DIN DOUT GND
+
+Silkscreen manufacturing feature: 0.15 mm
+Minimum silk-to-soldermask opening clearance checked: 0.15 mm
+Actual minimum clearance found: 0.22 mm
+Violations: 0
+Copper changes: NONE
+Drill changes: NONE
+Footprint changes: NONE
+Component placement changes: NONE
+RESULT: PASS

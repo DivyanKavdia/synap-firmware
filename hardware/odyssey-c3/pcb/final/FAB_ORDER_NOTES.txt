@@ -1,0 +1,12 @@
+REV K FAB NOTES
+Board: 42 x 60 mm, 2-layer, 1 oz copper.
+Recommended thickness: 1.0 mm; 1.6 mm acceptable.
+Minimum verified copper clearance: 0.25 mm.
+Bottom-plane clearance: 0.28 mm.
+RF routed-edge copper setback: 0.50 mm.
+No microphone NPTH. Internal RF slot remains in GKO.
+MIC1 labelled/acoustic-hole side UP.
+TTP223 touch side UP.
+NeoPixel face UP.
+C3 component side UP.
+Do not add copper/metal/battery over C3 RF keepout or TTP sensing area.

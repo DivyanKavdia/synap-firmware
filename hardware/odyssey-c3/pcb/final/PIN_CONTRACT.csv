@@ -1,0 +1,14 @@
+Function,C3,Module pin,Physical top-view Rev K
+Mic BCLK,GPIO4,SCK,top-left; acoustic-hole-side-up
+Mic WS,GPIO5,WS,top-center; acoustic-hole-side-up
+Mic data,GPIO6,SD,bottom-left; acoustic-hole-side-up
+Mic channel select,GND,L/R,top-right; explicit local tie to GND below
+Mic power,3V3,VDD,bottom-center
+Mic ground,GND,GND,bottom-right
+Touch,GPIO3,I/O,touch-side-up; pins top edge GND/IO/VCC L->R
+SD CS,GPIO0,CS,
+SD SCK,GPIO10,SCK,
+SD MOSI,GPIO21,MOSI,
+SD MISO,GPIO20,MISO,
+Battery sense,GPIO1,divider,
+NeoPixel data,GPIO8,DIN via 330R,emitting face up

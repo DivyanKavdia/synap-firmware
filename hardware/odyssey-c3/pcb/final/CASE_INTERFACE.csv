@@ -1,0 +1,7 @@
+Feature,Side,X_mm,Y_mm,Case treatment
+Microphone acoustic port center,TOP,8.00,20.50,Opening directly above module acoustic port; no carrier PCB hole
+TTP223 touch center,TOP,8.35,6.50,Thin non-metallic wall; no battery/metal behind sensing zone
+NeoPixel center,TOP,20.00,7.00,Transparent window/light pipe
+C3 USB-C,TOP EDGE,20.0,60.0,Edge cutout
+microSD slot,RIGHT EDGE,42.0,24.45,Card access
+charger USB-C,BOTTOM EDGE,36.5,0.0,Charge-port cutout
