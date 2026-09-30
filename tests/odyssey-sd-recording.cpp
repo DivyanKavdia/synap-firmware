@@ -14,7 +14,7 @@ constexpr uint32_t SAMPLE_RATE=16000;
 constexpr uint16_t SAMPLES_PER_FRAME=800;
 constexpr int pdPASS=1;
 std::atomic<bool> odysseyRecording{false},odysseyStopRequested{false},deviceConnected{false},streamingEnabled{false};
-bool sleepPending=false,critical=false,ota=false,micOk=true,cardOk=true,allocOk=true,reconnect=false,pathOk=true;
+bool sleepPending=false,critical=false,ota=false,micOk=true,cardOk=true,allocOk=true,reconnect=false,pathOk=true,finalizeOnDelay=false;
 uint8_t odysseySdBootState=1;
 uint32_t clockMs=0,randomCounter=0;
 int reads=0,micStarts=0,micStops=0,powerActive=0,powerIdle=0;
@@ -23,6 +23,10 @@ std::string lastPath;
 struct Logger {void println(const char*){} template<class... T> void printf(const char*,T...){} } Serial;
 void put32le(uint8_t* p,uint32_t v){for(int i=0;i<4;++i)p[i]=v>>(i*8);}
 uint32_t millis(){return clockMs;}
+void delay(unsigned ms){
+ clockMs+=ms;
+ if(finalizeOnDelay && odysseyStopRequested.load()) odysseyRecording=false;
+}
 uint32_t esp_random(){return ++randomCounter;}
 bool otaBusy(){return ota;}
 bool batteryCritical(){return critical;}
@@ -58,7 +62,7 @@ void vTaskDelete(void*){}
 
 void reset(){
  odysseyRecording=false;odysseyStopRequested=false;deviceConnected=false;streamingEnabled=false;
- sleepPending=critical=ota=reconnect=false;micOk=cardOk=allocOk=pathOk=true;odysseySdBootState=1;
+ sleepPending=critical=ota=reconnect=finalizeOnDelay=false;micOk=cardOk=allocOk=pathOk=true;odysseySdBootState=1;
  clockMs=randomCounter=0;reads=micStarts=micStops=powerActive=powerIdle=0;pendingTask=nullptr;lastPath.clear();
  {const int rc=system("rm -rf /tmp/synap-odyssey-test");assert(rc==0);}
  assert(mkdir("/tmp/synap-odyssey-test",0755)==0);
@@ -104,6 +108,14 @@ int main(){
  reset();pathOk=false;odysseyToggleRecording();run();assert(micStarts==0);
  reset();micOk=false;odysseyToggleRecording();run();data=load();assert(get32(data,40)==0);
  reset();allocOk=false;odysseyToggleRecording();assert(!odysseyRecording&&!pendingTask&&powerActive==1&&powerIdle==1);
+
+ reset();odysseyRecording=true;finalizeOnDelay=true;
+ assert(odysseyPrepareForConnectedStreaming(100));
+ assert(odysseyStopRequested && !odysseyRecording);
+
+ reset();odysseyRecording=true;
+ assert(!odysseyPrepareForConnectedStreaming(20));
+ assert(odysseyStopRequested && odysseyRecording && clockMs>=20);
 
  for(int guard=0;guard<5;++guard){
   reset();
