@@ -1,0 +1,7 @@
+Rev K exact Gerber/drill tar.xz archive:
+cf004abe2c5e4d5f530c0d971979131f8a9623b473943a529b0706343b552191  Synap_Odyssey_C3_Carrier_RevK_FINAL_Gerbers.tar.xz
+
+Original local fabrication ZIP used during validation:
+7b506e75cbba401511d516741fec63c4cabca963fbed6af9bf872915458835b6  Synap_Odyssey_C3_Carrier_RevK_FINAL_Gerbers.zip
+
+The tar.xz rebuild contains the exact Gerber/drill files. Its byte stream is intentionally different from the original ZIP container.
