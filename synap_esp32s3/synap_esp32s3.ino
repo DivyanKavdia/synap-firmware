@@ -2004,7 +2004,6 @@ static_assert(ODYSSEY_SD_CS != ODYSSEY_SD_SCK && ODYSSEY_SD_CS != ODYSSEY_SD_MOS
 static std::atomic<uint8_t> odysseySdBootState{0};
 #if CONFIG_IDF_TARGET_ESP32C3
 static SPIClass odysseySdSpi(FSPI);
-static constexpr uint32_t ODYSSEY_SD_STARTUP_SETTLE_MS=3000u;
 static constexpr uint32_t ODYSSEY_SD_RETRY_SETTLE_MS=350u;
 static constexpr uint8_t ODYSSEY_SD_MOUNT_ATTEMPTS=3;
 #endif
@@ -2068,7 +2067,9 @@ static bool odysseyMountWithRetries(const char* reason,uint32_t initialSettleMs)
   return false;
 }
 bool odysseyInitializeSdCardBeforeBle() {
-  const bool ready=odysseyMountWithRetries("boot",ODYSSEY_SD_STARTUP_SETTLE_MS);
+  // Preserve the proven 1445 boot mount exactly: one immediate mount attempt.
+  odysseyDetectSdCard();
+  const bool ready=odysseySdBootState.load()==1;
   Serial.printf("[SD] boot initialization complete state=%u before BLE\n",unsigned(odysseySdBootState.load()));
   return ready;
 }
