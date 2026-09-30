@@ -53,10 +53,14 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 #if CONFIG_IDF_TARGET_ESP32C3
 static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
-static constexpr uint32_t ODYSSEY_SD_MAX_FREQ_KHZ=10000u;
+// Always complete protocol discovery + FAT mount at the SD probing clock.
+ // Only after the card is fully in SPI mode and VFS is live do we promote
+ // the bus to a conservative runtime frequency.
+static constexpr uint32_t ODYSSEY_SD_INIT_FREQ_KHZ=SDMMC_FREQ_PROBING;
+static constexpr uint32_t ODYSSEY_SD_RUN_FREQ_KHZ=4000u;
 static constexpr uint8_t ODYSSEY_SD_BOOT_ATTEMPTS=2;
 static constexpr uint8_t ODYSSEY_SD_RECOVERY_ATTEMPTS=3;
-static constexpr uint32_t ODYSSEY_SD_RETRY_BACKOFF_MS=150u;
+static constexpr uint32_t ODYSSEY_SD_RETRY_BACKOFF_MS=250u;
 static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=4;
 
 static sdmmc_card_t* odysseySdCard=nullptr;
@@ -92,6 +96,29 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
   return n>0 && size_t(n)<capacity;
 }
 
+static uint32_t odysseySdPromoteClockLocked(sdmmc_card_t* card) {
+  if (!card || !card->host.set_card_clk) return ODYSSEY_SD_INIT_FREQ_KHZ;
+  const int result=int(card->host.set_card_clk(card->host.slot,ODYSSEY_SD_RUN_FREQ_KHZ));
+  if (result!=ESP_OK) {
+    Serial.printf("[SD] runtime clock promotion failed: %s (%d); retaining %u kHz\n",
+      esp_err_to_name(result),result,unsigned(ODYSSEY_SD_INIT_FREQ_KHZ));
+    return ODYSSEY_SD_INIT_FREQ_KHZ;
+  }
+  const int status=int(sdmmc_get_status(card));
+  if (status!=ESP_OK) {
+    const int fallback=int(card->host.set_card_clk(card->host.slot,ODYSSEY_SD_INIT_FREQ_KHZ));
+    Serial.printf("[SD] %u kHz validation failed: %s (%d); fallback=%s (%d)\n",
+      unsigned(ODYSSEY_SD_RUN_FREQ_KHZ),esp_err_to_name(status),status,
+      esp_err_to_name(fallback),fallback);
+    return ODYSSEY_SD_INIT_FREQ_KHZ;
+  }
+  int realFreq=0;
+  if (card->host.get_real_freq) card->host.get_real_freq(card->host.slot,&realFreq);
+  Serial.printf("[SD] runtime clock promoted to %d kHz after successful mount\n",
+    realFreq>0?realFreq:int(ODYSSEY_SD_RUN_FREQ_KHZ));
+  return realFreq>0?uint32_t(realFreq):ODYSSEY_SD_RUN_FREQ_KHZ;
+}
+
 static void odysseySdReleaseLocked() {
   if (odysseySdCard) {
     const int result=int(esp_vfs_fat_sdcard_unmount(ODYSSEY_SD_MOUNT_POINT,odysseySdCard));
@@ -114,13 +141,21 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   odysseySdProbeStage=0;
   odysseySdReleaseLocked();
 
-  // Keep CS inactive before the SPI peripheral is connected to the GPIO matrix.
+  // Return all SD pins to a known GPIO state before every fresh bus attach.
+  // This matters after failed SDSPI attempts because GPIO-matrix ownership is
+  // torn down independently from the card's internal SPI-mode state.
+  gpio_reset_pin(static_cast<gpio_num_t>(ODYSSEY_SD_SCK));
+  gpio_reset_pin(static_cast<gpio_num_t>(ODYSSEY_SD_MOSI));
+  gpio_reset_pin(static_cast<gpio_num_t>(ODYSSEY_SD_MISO));
+  gpio_reset_pin(static_cast<gpio_num_t>(ODYSSEY_SD_CS));
+  gpio_set_pull_mode(static_cast<gpio_num_t>(ODYSSEY_SD_MISO),GPIO_PULLUP_ONLY);
+  gpio_set_pull_mode(static_cast<gpio_num_t>(ODYSSEY_SD_MOSI),GPIO_PULLUP_ONLY);
   pinMode(ODYSSEY_SD_CS,OUTPUT);
   digitalWrite(ODYSSEY_SD_CS,HIGH);
-  delay(5);
+  delay(20);
 
   sdmmc_host_t host=SDSPI_HOST_DEFAULT();
-  host.max_freq_khz=ODYSSEY_SD_MAX_FREQ_KHZ;
+  host.max_freq_khz=ODYSSEY_SD_INIT_FREQ_KHZ;
 
   spi_bus_config_t bus{};
   bus.mosi_io_num=ODYSSEY_SD_MOSI;
@@ -195,11 +230,12 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
     return ESP_FAIL;
   }
 
+  const uint32_t runtimeFreq=odysseySdPromoteClockLocked(card);
   odysseySdBootState=1;
   odysseySdProbeStage=6;
   const unsigned long long bytes=uint64_t(card->csd.capacity)*uint64_t(card->csd.sector_size);
-  Serial.printf("[SD] ready via ESP-IDF SDSPI: %llu MiB, %u kHz max, pins CS=%d SCK=%d MOSI=%d MISO=%d\n",
-    bytes/(1024ULL*1024ULL),unsigned(ODYSSEY_SD_MAX_FREQ_KHZ),
+  Serial.printf("[SD] ready via ESP-IDF SDSPI: %llu MiB, init=%u kHz runtime=%u kHz, pins CS=%d SCK=%d MOSI=%d MISO=%d\n",
+    bytes/(1024ULL*1024ULL),unsigned(ODYSSEY_SD_INIT_FREQ_KHZ),unsigned(runtimeFreq),
     ODYSSEY_SD_CS,ODYSSEY_SD_SCK,ODYSSEY_SD_MOSI,ODYSSEY_SD_MISO);
   return ESP_OK;
 }
