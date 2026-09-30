@@ -2088,7 +2088,8 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
   return n>0 && size_t(n)<capacity;
 }
 
-static uint32_t odysseySdPromoteClockLocked(sdmmc_card_t* card) {
+static uint32_t odysseySdPromoteClockLocked() {
+  sdmmc_card_t* card=odysseySdCard;
   if (!card || !card->host.set_card_clk) return ODYSSEY_SD_INIT_FREQ_KHZ;
   const int result=int(card->host.set_card_clk(card->host.slot,ODYSSEY_SD_RUN_FREQ_KHZ));
   if (result!=ESP_OK) {
@@ -2222,7 +2223,7 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
     return ESP_FAIL;
   }
 
-  const uint32_t runtimeFreq=odysseySdPromoteClockLocked(card);
+  const uint32_t runtimeFreq=odysseySdPromoteClockLocked();
   odysseySdBootState=1;
   odysseySdProbeStage=6;
   const unsigned long long bytes=uint64_t(card->csd.capacity)*uint64_t(card->csd.sector_size);
