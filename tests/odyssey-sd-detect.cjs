@@ -86,15 +86,13 @@ for(const chip of ['ESP32C3','ESP32S3'])test(`${chip}: restored 1445 SD mount pa
  `,[`-DCONFIG_IDF_TARGET_${chip}=1`,'-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags(chip)]);
 });
 
-test('C3 boot waits three seconds, retries mount, and completes before BLE may start',()=>{
+test('C3 boot performs the exact single immediate 1445 mount before BLE',()=>{
  nativeTest(stub+source+`
  int main(){
-   SD.failBegins=2;
    assert(odysseyInitializeSdCardBeforeBle());
-   assert(beginCalls==3);
-   assert(delayedMs==3700u);
+   assert(beginCalls==1);
+   assert(delayedMs==0u);
    assert(odysseySdDetectionState()==1 && odysseySdProbeState()==6);
-   assert(Serial.log.find("boot mount attempt 1/3")!=std::string::npos);
    assert(Serial.log.find("boot initialization complete state=1 before BLE")!=std::string::npos);
  }
  `,['-DCONFIG_IDF_TARGET_ESP32C3=1','-DARDUINO_USB_CDC_ON_BOOT=1',...sdFlags('ESP32C3')]);
