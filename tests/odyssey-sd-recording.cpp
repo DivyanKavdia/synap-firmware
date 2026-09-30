@@ -80,8 +80,9 @@ int main(){
  assert(opened.find("/synap/odyssey_audio_")==0);
  reset();reconnect=true;odysseyToggleRecording();run();assert(deviceConnected && get32(40)==3200);
  reset();odysseyToggleRecording();odysseyToggleRecording();assert(odysseyStopRequested);run();assert(!micStarts && get32(40)==0);
- reset();cardOk=false;odysseySdBootState=2;odysseyToggleRecording();assert(detectCalls==1 && !odysseyRecording && !pendingTask && data.empty() && !micStarts);
- cardOk=true;odysseyToggleRecording();assert(detectCalls==2 && odysseyRecording && pendingTask);run();assert(get32(40)==3200); // retry succeeds
+ reset();cardOk=false;odysseySdBootState=2;odysseyToggleRecording();assert(detectCalls==0 && !odysseyRecording && !pendingTask && data.empty() && !micStarts);
+ cardOk=true;odysseyToggleRecording();assert(detectCalls==0 && !odysseyRecording && !pendingTask); // no implicit remount
+ odysseySdBootState=1;odysseyToggleRecording();assert(detectCalls==0 && odysseyRecording && pendingTask);run();assert(get32(40)==3200); // boot/recovery-owned mount is consumed
  reset();shortWrite=true;odysseyToggleRecording();run();assert(get32(40)==8 && odysseySdBootState==2 && closed==1);
  reset();openOk=false;odysseyToggleRecording();run();assert(!micStarts);
  reset();micOk=false;odysseyToggleRecording();run();assert(closed==1 && get32(40)==0);
