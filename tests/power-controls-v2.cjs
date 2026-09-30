@@ -40,6 +40,8 @@ test('standby is internal and remains protocol-v2 CONNECTED_IDLE',()=>{
   const s3=productionS3();
   assert.match(s3,/CMD_STANDBY = 0x03/);
   assert.match(s3,/CMD_WAKE = 0x04/);
+  assert.match(s3,/CMD_RESTART = 0x05/);
+  assert.match(s3,/case CMD_RESTART:[\s\S]*?ESP\.restart\(\)/);
   assert.match(s3,/remoteStandby = false/);
   assert.match(s3,/POWER_STATE_AWAKE = 1/);
   assert.match(s3,/Standby remains CONNECTED_IDLE on protocol v2/);
