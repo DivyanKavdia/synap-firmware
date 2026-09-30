@@ -48,6 +48,10 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(c3,/double tap -> STOP \+ POWER SAVER/);
   assert.match(c3,/double tap -> SD audio START/);
   assert.match(c3,/double tap -> SD audio STOP/);
+  assert.match(c3,/odysseyPrepareForConnectedStreaming\(1500u\)/);
+  assert.match(c3,/BLE capture requested; finalizing local audio before live stream/);
+  const connect=c3.match(/void onConnect\(BLEServer\* server\) override \{[\s\S]*?\n  \}/)?.[0]||'';
+  assert.match(connect,/if \(odysseyRecording\.load\(\)\) odysseyStopRequested=true/);
   assert.match(c3,/double tap ignored: SD unavailable/);
   assert.match(c3,/!odysseySdReady\(\)/);
   assert.match(c3,/ready\|=SYNAP_CAP_SDAUDIO/);
