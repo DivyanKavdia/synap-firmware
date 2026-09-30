@@ -107,6 +107,7 @@ constexpr uint8_t CMD_START = 0x01;
 constexpr uint8_t CMD_GET_STATUS = 0x02;
 constexpr uint8_t CMD_STANDBY = 0x03;
 constexpr uint8_t CMD_WAKE = 0x04;
+constexpr uint8_t CMD_RESTART = 0x05;
 constexpr uint8_t POWER_EVENT_MAGIC = 0xE2;
 constexpr uint8_t POWER_EVENT_VERSION = 1;
 constexpr uint8_t POWER_STATE_AWAKE = 1;
@@ -1671,6 +1672,20 @@ void processCommand(uint8_t command, uint8_t version) {
       break;
     case CMD_WAKE:
       exitRemoteStandby();
+      break;
+    case CMD_RESTART:
+      // Firmware restart is intentionally idle-only. Never interrupt a live
+      // recording, an SD-owned local take, Chakshu media work, OTA or sleep.
+      if (streamingEnabled.load()) { updateStatusCharacteristic(true); break; }
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      if (odysseyRecording.load()) { updateStatusCharacteristic(true); break; }
+#endif
+#if SYNAP_CHAKSHU
+      if (mediaBusy()) { updateStatusCharacteristic(true); break; }
+#endif
+      Serial.println("[SYSTEM] restart requested over BLE");
+      delay(120); // GATT write response has already returned; allow logs to flush.
+      ESP.restart();
       break;
     default:
       stopStreaming(ErrorCode::BAD_COMMAND);
