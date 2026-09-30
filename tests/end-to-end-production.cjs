@@ -86,7 +86,7 @@ test('C3 native SD owner is the only initialization and remount path',()=>{
   const ble=c3.indexOf('initializeBLE();',worker);
   assert(sd>0 && worker>sd && ble>worker,'C3 storage must mount before SD worker and BLE advertising');
   assert.match(c3,/sdmmc_host_t host=SDSPI_HOST_DEFAULT\(\)/);
-  assert.match(c3,/spi_bus_initialize\\(static_cast<spi_host_device_t>\\(host\\.slot\\),&bus,SDSPI_DEFAULT_DMA\\)/);
+  assert.match(c3,/spi_bus_initialize\(static_cast<spi_host_device_t>\(host\.slot\),&bus,SDSPI_DEFAULT_DMA\)/);
   assert.match(c3,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT,&host,&slot,&mount,&card\)/);
   assert.match(c3,/esp_vfs_fat_sdcard_unmount\(ODYSSEY_SD_MOUNT_POINT,odysseySdCard\)/);
   assert.match(c3,/spi_bus_free\(SPI2_HOST\)/);
