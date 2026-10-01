@@ -6,7 +6,9 @@ void updateStatusLed(bool force) {
     if (phase<55u || (phase>=180u && phase<235u)) { r=LED_DIM; g=2; }
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   } else if (odysseyRecording.load()) {
-    if (now%2000u<45u) g=LED_DIM+1;
+    // Offline SD capture is purple; live BLE streaming remains green below.
+    // Stop acknowledgement turns the pulse off immediately while WAV finalization finishes.
+    if (!odysseyStopRequested.load() && now%2000u<45u) { r=LED_DIM; b=LED_DIM; }
 #endif
   } else if (remoteStandby) {
     // Standby stays dark; battery telemetry remains available over BLE.

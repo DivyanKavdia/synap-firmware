@@ -120,8 +120,13 @@ int main(){
   sleepPending=false;deviceConnected=false;streamingEnabled=false;odysseyRecording=false;settle();
   const int previousStarts=starts;
   tap();tap();assert(odysseyRecording && starts==previousStarts && localToggles==1);
-  // A reconnect keeps local ownership; double tap stops that local take.
-  deviceConnected=true;settle();tap();tap();assert(odysseyStopRequested && starts==previousStarts);
+  // Stop must work immediately after START, even while the normal post-action
+  // lockout is still active and BLE remains disconnected.
+  tap();tap();assert(odysseyStopRequested && starts==previousStarts && localToggles==2);
+  odysseyRecording=false;odysseyStopRequested=false;settle();
+  // A reconnect keeps local ownership; double tap stops that local take too.
+  tap();tap();assert(odysseyRecording && localToggles==3);
+  deviceConnected=true;settle();tap();tap();assert(odysseyStopRequested && starts==previousStarts && localToggles==4);
   odysseyStopRequested=false;
   const int beforeLocalSleep=sleeps;
   settle();advance(4100,true);advance(100,false);

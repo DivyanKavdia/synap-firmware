@@ -23,7 +23,7 @@ Recording ends at the WAV length limit; it never deletes older recordings.
 
 SD pins remain CS GPIO0, SCK GPIO10, MOSI GPIO21, MISO GPIO20. Touch remains
 GPIO3; microphone GPIO4/5/6; NeoPixel GPIO8; battery ADC GPIO1. USB CDC must be
-enabled to keep UART0 off the SD pins. A dim green pulse indicates local activity.
+enabled to keep UART0 off the SD pins. A dim purple pulse indicates offline SD recording; connected BLE recording continues to use the green pulse. The purple pulse stops immediately when a stop gesture is accepted, while the WAV header/file finishes closing.
 
 Local capture blocks OTA, idle sleep and competing microphone use. It does not
 change the connected BLE audio/recovery protocol or the S3/Chakshu recording

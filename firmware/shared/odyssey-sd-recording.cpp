@@ -94,7 +94,9 @@ static void odysseyRecordTask(void*) {
     failed?" (mount retained for explicit recovery)":"");
 
   odysseyRecording=false;
+  odysseyStopRequested=false;
   applyCpuPowerProfile(false);
+  updateStatusLed(true);
   vTaskDelete(nullptr);
 }
 bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs) {
@@ -115,6 +117,7 @@ bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs) {
 void odysseyToggleRecording() {
   if (odysseyRecording.load()) {
     odysseyStopRequested=true;
+    updateStatusLed(true);
     Serial.println("[TOUCH] double tap -> SD audio STOP");
     return;
   }
@@ -126,9 +129,12 @@ void odysseyToggleRecording() {
   odysseyStopRequested=false;
   odysseyRecording=true;
   applyCpuPowerProfile(true);
+  updateStatusLed(true);
   if (xTaskCreate(odysseyRecordTask,"sd-audio",8192,nullptr,2,nullptr)!=pdPASS) {
     odysseyRecording=false;
+    odysseyStopRequested=false;
     applyCpuPowerProfile(false);
+    updateStatusLed(true);
     Serial.println("[SD] local audio task allocation failed");
     return;
   }

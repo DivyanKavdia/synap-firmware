@@ -309,7 +309,14 @@ void pollTouchControl() {
   if (raw!=touchStableState && uint32_t(now-touchChangedAt)>=TOUCH_DEBOUNCE_MS) {
     touchStableState=raw;
     if (touchStableState) {
-      if (otaBusy() || sleepPending || static_cast<int32_t>(now-touchRearmAt)<0) {
+      bool localSdRecording=false;
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      localSdRecording=odysseyRecording.load();
+#endif
+      // A just-started offline take must still accept an immediate second
+      // double tap to stop. The normal 250 ms lockout remains for every other action.
+      if (otaBusy() || sleepPending ||
+          (static_cast<int32_t>(now-touchRearmAt)<0 && !localSdRecording)) {
         touchPressedAt=0;
         tapCount=0;
         lastTapAt=0;
