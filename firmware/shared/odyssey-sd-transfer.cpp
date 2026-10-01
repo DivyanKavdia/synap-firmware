@@ -232,7 +232,22 @@ static void worker(void*) {
     switch (request.operation) {
       case 3: error=selectFile(request.path,total); break;
       case 4: error=readSelected(request.path,request.offset,total,bytes,size); break;
-      case 7: error=catalogue(total); break;
+      case 7:
+        error=catalogue(total);
+        // A card can still report ready after its FAT/VFS handle has become
+        // stale. Repair that lifecycle here and satisfy the same catalogue
+        // request, instead of forcing the phone through repeated failures.
+        if (error==IO_ERROR || error==NO_SD) {
+          Serial.printf("[SD] catalogue failed error=%u despite capability state=%u/%u; remounting\\n",
+            unsigned(error),unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()));
+          selectedPath[0]=0;catalogueBuffer="";
+          if (odysseyRecoverSdCard()) {
+            automaticRetries=0;
+            error=catalogue(total);
+          } else error=NO_SD;
+          nextRetryAt=millis()+5000u;
+        }
+        break;
       case 8: total=catalogueBuffer.length();if(!total)error=FILE_UNAVAILABLE;break;
       case 14:
         selectedPath[0]=0;catalogueBuffer="";
