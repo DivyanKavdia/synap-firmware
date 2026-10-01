@@ -270,6 +270,23 @@ void otaTick() {
     if (!connected || message.connection!=generation) continue;
     applyCpuPowerProfile(true);
     otaLastActivityAt=millis();
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+    // OTA BEGIN is an explicit request to take the device offline. Seal a
+    // currently running C3 SD WAV before acquiring the flash partition; a BLE
+    // reconnect alone must still leave that recording untouched. Validate the
+    // packet envelope and device ID before stopping any user recording.
+    if (message.length==59 && message.data[0]==1 && !streamingEnabled.load() &&
+        odysseyRecording.load() && !batteryCritical() &&
+        otaSession.state==Synap::AVAILABLE && otaSession.capacity &&
+        Synap::OtaSession::u32(message.data+1)!=0 &&
+        Synap::OtaSession::u32(message.data+5)>=36 &&
+        Synap::OtaSession::u32(message.data+5)<=otaSession.capacity &&
+        otaBackend.matchesDevice(message.data+41)) {
+      Serial.println("[OTA] C3 finalizing SD recording before update");
+      if (!odysseyPrepareForConnectedStreaming(2500u))
+        Serial.println("[OTA] SD recording still active; keeping flash locked");
+    }
+#endif
     // Treat a confirmed critically-low battery like another busy condition: never
     // start or continue a new flash transaction when brownout margin is inadequate.
     otaSession.packet(message.data,message.length,millis(),generation,
