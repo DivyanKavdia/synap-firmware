@@ -36,7 +36,7 @@ Shared runtime behavior lives under `firmware/shared/`. Target adapters material
 
 Chakshu-specific camera, SD, media-transfer and local-voice behavior lives under `firmware/xiao-sense/` without changing the common Odyssey S3/C3 audio contract.
 
-The checked-in/generated target sketches are derived from the owned source components. Do not create or revive parallel firmware implementations for the same production target. See [`docs/CODEBASE.md`](docs/CODEBASE.md) for the current source graph, generated-artifact boundary and cleanup rules.
+The checked-in/generated target sketches are derived from the owned source components. Do not create or revive parallel firmware implementations for the same production target. See [`docs/CODEBASE.md`](docs/CODEBASE.md) for the current source graph, generated-artifact boundary and cleanup rules. The source-graph test prevents retired C3 LED code and unused target adapters from returning.
 
 ## Odyssey C3 with and without SD
 
