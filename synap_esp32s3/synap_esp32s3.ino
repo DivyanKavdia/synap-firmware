@@ -664,7 +664,9 @@ void updateStatusLed(bool force) {
     if (phase<55u || (phase>=180u && phase<235u)) { r=LED_DIM; g=2; }
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   } else if (odysseyRecording.load()) {
-    if (now%2000u<45u) g=LED_DIM+1;
+    // Offline SD capture is purple; live BLE streaming remains green below.
+    // Stop acknowledgement turns the pulse off immediately while WAV finalization finishes.
+    if (!odysseyStopRequested.load() && now%2000u<45u) { r=LED_DIM; b=LED_DIM; }
 #endif
   } else if (remoteStandby) {
     // Standby stays dark; battery telemetry remains available over BLE.
@@ -1156,7 +1158,14 @@ void pollTouchControl() {
   if (raw!=touchStableState && uint32_t(now-touchChangedAt)>=TOUCH_DEBOUNCE_MS) {
     touchStableState=raw;
     if (touchStableState) {
-      if (otaBusy() || sleepPending || static_cast<int32_t>(now-touchRearmAt)<0) {
+      bool localSdRecording=false;
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      localSdRecording=odysseyRecording.load();
+#endif
+      // A just-started offline take must still accept an immediate second
+      // double tap to stop. The normal 250 ms lockout remains for every other action.
+      if (otaBusy() || sleepPending ||
+          (static_cast<int32_t>(now-touchRearmAt)<0 && !localSdRecording)) {
         touchPressedAt=0;
         tapCount=0;
         lastTapAt=0;
@@ -2393,7 +2402,9 @@ static void odysseyRecordTask(void*) {
     failed?" (mount retained for explicit recovery)":"");
 
   odysseyRecording=false;
+  odysseyStopRequested=false;
   applyCpuPowerProfile(false);
+  updateStatusLed(true);
   vTaskDelete(nullptr);
 }
 bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs) {
@@ -2414,6 +2425,7 @@ bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs) {
 void odysseyToggleRecording() {
   if (odysseyRecording.load()) {
     odysseyStopRequested=true;
+    updateStatusLed(true);
     Serial.println("[TOUCH] double tap -> SD audio STOP");
     return;
   }
@@ -2425,9 +2437,12 @@ void odysseyToggleRecording() {
   odysseyStopRequested=false;
   odysseyRecording=true;
   applyCpuPowerProfile(true);
+  updateStatusLed(true);
   if (xTaskCreate(odysseyRecordTask,"sd-audio",8192,nullptr,2,nullptr)!=pdPASS) {
     odysseyRecording=false;
+    odysseyStopRequested=false;
     applyCpuPowerProfile(false);
+    updateStatusLed(true);
     Serial.println("[SD] local audio task allocation failed");
     return;
   }
