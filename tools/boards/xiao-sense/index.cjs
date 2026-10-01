@@ -50,7 +50,7 @@ function materializeChakshu(source,target) {
     "    const uint32_t phase=now%3000u;\n    if (phase<20u) { r=LED_DIM; g=1; }","Minimize Chakshu OTA LED duty cycle");
   replace("    const uint32_t phase=now%5000u;\n    if (phase<40u || (phase>=180u && phase<220u)) r=LED_DIM;",
     "    if (now%15000u<20u) r=LED_DIM;","Minimize Chakshu low-battery LED duty cycle");
-  replace("  } else if (deviceState == DeviceState::DISCONNECTED) {\n    if (now%5000u<35u) r=LED_DIM;\n  } else if (deviceState == DeviceState::CONNECTED_IDLE) {\n    if (now%6000u<30u) b=LED_DIM;",
+  replace("  } else if (deviceState == DeviceState::DISCONNECTED) {\n    if (now%5000u<35u) r=LED_DIM;\n  } else if (deviceState == DeviceState::CONNECTED_IDLE) {\n    // Three visible green acknowledgements confirm the PWA/BLE connection.\n    // Connected idle stays dark after the burst to conserve battery.\n    const uint32_t connectedAt=connectedLedAt.load();\n    const uint32_t elapsed=uint32_t(now-connectedAt);\n    if (connectedAt && elapsed<1500u && elapsed%500u<180u) g=LED_DIM+5;",
     "  } else if (deviceState == DeviceState::DISCONNECTED) {\n    // Dark by default for maximum battery life.\n  } else if (deviceState == DeviceState::CONNECTED_IDLE) {\n    // Dark by default for maximum battery life.","Disable Chakshu idle heartbeats");
   replace("  } else if (deviceState == DeviceState::STREAMING) {\n    if (now%1800u<45u) g=LED_DIM+1;\n  } else {\n    if (now%1200u<70u) { r=LED_DIM; b=LED_DIM; }",
     "  } else if (deviceState == DeviceState::STREAMING) {\n    if (now%5000u<20u) g=LED_DIM;\n  } else {\n    if (now%10000u<25u) { r=LED_DIM; b=LED_DIM; }","Minimize Chakshu active and error LED duty cycle");
