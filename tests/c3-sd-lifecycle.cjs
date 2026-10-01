@@ -62,3 +62,15 @@ test('C3 offline recording has visible purple heartbeat and failed-start feedbac
   assert.match(recorder,/if \(failed \|\| bytes==0\) odysseyRecordFaultAt=millis\(\)/);
   assert.match(recorder,/odysseySdRequestRecovery\(\);\s*odysseyRecordFaultAt=millis\(\)/);
 });
+
+test('C3 catalogue self-heals stale VFS state and PWA connect gets three green acknowledgements',()=>{
+  const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
+  const led=read('firmware/shared/status-led.cpp');
+  const ble=read('firmware/shared/ble-control.cpp');
+  assert.match(transfer,/case 7:[\s\S]*?error=catalogue\(total\);[\s\S]*?error==IO_ERROR \|\| error==NO_SD[\s\S]*?odysseyRecoverSdCard\(\)[\s\S]*?error=catalogue\(total\)/);
+  assert.match(transfer,/catalogue failed error=%u despite capability state=%u\/%u/);
+  assert.match(ble,/deviceConnected\.store\(true\);\s*connectedLedAt=millis\(\);/);
+  assert.match(led,/elapsed<1500u/);
+  assert.match(led,/phase=elapsed%500u/);
+  assert.match(led,/phase<180u\) g=LED_DIM\+5/);
+});
