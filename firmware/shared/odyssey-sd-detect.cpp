@@ -255,14 +255,14 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   if (!verified) {
     const int saved=errno;
     odysseySdBootState=2;odysseySdProbeStage=4;
-    Serial.printf("[SD] %s attempt %u recordings opendir failed errno=%d\\n",
+    Serial.printf("[SD] %s attempt %u recordings opendir failed errno=%d\n",
       reason,unsigned(attempt),saved);
     odysseySdReleaseLocked();return ESP_FAIL;
   }
   if (closedir(verified)!=0) {
     const int saved=errno;
     odysseySdBootState=2;odysseySdProbeStage=4;
-    Serial.printf("[SD] %s attempt %u recordings closedir failed errno=%d\\n",
+    Serial.printf("[SD] %s attempt %u recordings closedir failed errno=%d\n",
       reason,unsigned(attempt),saved);
     odysseySdReleaseLocked();return ESP_FAIL;
   }
@@ -271,7 +271,7 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   if (!probe) {
     const int saved=errno;
     odysseySdBootState=2;odysseySdProbeStage=4;
-    Serial.printf("[SD] %s attempt %u recordings not writable errno=%d\\n",
+    Serial.printf("[SD] %s attempt %u recordings not writable errno=%d\n",
       reason,unsigned(attempt),saved);
     odysseySdReleaseLocked();return ESP_FAIL;
   }
@@ -281,8 +281,8 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   const bool removeOk=unlink(probePath)==0;
   if (!writeOk || !closeOk || !removeOk) {
     odysseySdBootState=2;odysseySdProbeStage=4;
-    Serial.printf("[SD] %s attempt %u write/readiness probe failed errno=%d\\n",
-      reason,unsigned(attempt),writeOk?(closeOk?errno:errno):writeErrno);
+    Serial.printf("[SD] %s attempt %u write/readiness probe failed errno=%d\n",
+      reason,unsigned(attempt),writeOk?errno:writeErrno);
     odysseySdReleaseLocked();return ESP_FAIL;
   }
 
