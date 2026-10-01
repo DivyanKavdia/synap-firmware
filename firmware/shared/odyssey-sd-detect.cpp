@@ -71,9 +71,14 @@ static constexpr uint8_t ODYSSEY_SD_RECOVERY_ATTEMPTS=3;
 static constexpr uint32_t ODYSSEY_SD_RETRY_BACKOFF_MS=250u;
 static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=8;
 static std::atomic<bool> odysseySdProbingClockOnly{false};
+static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
+static std::atomic<uint32_t> odysseySdMountAttempts{0};
+int32_t odysseySdLastError() { return odysseySdLastMountError.load(); }
+uint32_t odysseySdAttemptCount() { return odysseySdMountAttempts.load(); }
 void odysseySdUseProbingClock() { odysseySdProbingClockOnly=true; }
 void odysseySdMarkVfsFailure() {
   odysseySdBootState=2; odysseySdProbeStage=4;
+  odysseySdLastMountError=ESP_FAIL;
   odysseySdRequestRecovery();
 }
 
@@ -157,6 +162,7 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   // stale ready state while VFS/card/bus ownership is being recycled.
   odysseySdBootState=0;
   odysseySdProbeStage=0;
+  ++odysseySdMountAttempts;
   odysseySdReleaseLocked();
 
   // Return all SD pins to a known GPIO state before every fresh bus attach.
@@ -185,6 +191,7 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
 
   int result=int(spi_bus_initialize(static_cast<spi_host_device_t>(host.slot),&bus,SDSPI_DEFAULT_DMA));
   if (result!=ESP_OK) {
+    odysseySdLastMountError=result;
     odysseySdBootState=2;odysseySdProbeStage=1;
     Serial.printf("[SD] %s attempt %u bus init failed: %s (%d)\n",
       reason,unsigned(attempt),esp_err_to_name(result),result);
@@ -207,6 +214,7 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   sdmmc_card_t* card=nullptr;
   result=int(esp_vfs_fat_sdspi_mount(ODYSSEY_SD_MOUNT_POINT,&host,&slot,&mount,&card));
   if (result!=ESP_OK || !card) {
+    odysseySdLastMountError=result==ESP_OK?ESP_FAIL:result;
     odysseySdBootState=(result==ESP_ERR_NOT_FOUND)?3:2;
     odysseySdProbeStage=(result==ESP_FAIL)?3:2;
     Serial.printf("[SD] %s attempt %u card/FAT init failed: %s (%d), stage=%u\n",
@@ -226,6 +234,7 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
 
   struct stat root{};
   if (stat(ODYSSEY_SD_MOUNT_POINT,&root)!=0 || !S_ISDIR(root.st_mode)) {
+    odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=4;
     Serial.printf("[SD] %s attempt %u VFS validation failed errno=%d\n",reason,unsigned(attempt),errno);
     odysseySdReleaseLocked();
@@ -235,13 +244,15 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   struct stat recordings{};
   if (stat(ODYSSEY_SD_RECORDING_DIR,&recordings)!=0) {
     if (errno!=ENOENT || mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) {
-      odysseySdBootState=2;odysseySdProbeStage=4;
+      odysseySdLastMountError=ESP_FAIL;
+    odysseySdBootState=2;odysseySdProbeStage=4;
       Serial.printf("[SD] %s attempt %u recording directory unavailable errno=%d\n",
         reason,unsigned(attempt),errno);
       odysseySdReleaseLocked();
       return ESP_FAIL;
     }
   } else if (!S_ISDIR(recordings.st_mode)) {
+    odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=4;
     Serial.printf("[SD] %s attempt %u /synap is not a directory\n",reason,unsigned(attempt));
     odysseySdReleaseLocked();
@@ -254,6 +265,7 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   DIR* verified=opendir(ODYSSEY_SD_RECORDING_DIR);
   if (!verified) {
     const int saved=errno;
+    odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=4;
     Serial.printf("[SD] %s attempt %u recordings opendir failed errno=%d\n",
       reason,unsigned(attempt),saved);
@@ -261,6 +273,7 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   }
   if (closedir(verified)!=0) {
     const int saved=errno;
+    odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=4;
     Serial.printf("[SD] %s attempt %u recordings closedir failed errno=%d\n",
       reason,unsigned(attempt),saved);
@@ -270,6 +283,7 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   FILE* probe=fopen(probePath,"wb");
   if (!probe) {
     const int saved=errno;
+    odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=4;
     Serial.printf("[SD] %s attempt %u recordings not writable errno=%d\n",
       reason,unsigned(attempt),saved);
@@ -280,6 +294,7 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   const bool closeOk=fclose(probe)==0;
   const bool removeOk=unlink(probePath)==0;
   if (!writeOk || !closeOk || !removeOk) {
+    odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=4;
     Serial.printf("[SD] %s attempt %u write/readiness probe failed errno=%d\n",
       reason,unsigned(attempt),writeOk?errno:writeErrno);
@@ -287,6 +302,7 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   }
 
   const uint32_t runtimeFreq=odysseySdPromoteClockLocked();
+  odysseySdLastMountError=ESP_OK;
   odysseySdBootState=1;
   odysseySdProbeStage=6;
   const unsigned long long bytes=uint64_t(card->csd.capacity)*uint64_t(card->csd.sector_size);

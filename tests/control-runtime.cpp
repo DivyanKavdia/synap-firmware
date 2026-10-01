@@ -17,6 +17,7 @@ void portEXIT_CRITICAL(portMUX_TYPE* mutex){mutex->unlock();}
 // INSERT FAULT STATE
 std::atomic<bool> deviceConnected{false},streamingEnabled{false},connectionEventPending{false};
 std::atomic<uint32_t> connectionGeneration{0},streamGeneration{0};
+std::atomic<uint32_t> connectedLedAt{0};
 std::atomic<uint32_t> capturedFrames{0},captureDrops{0},notifyRejected{0},controlDrops{0};
 std::atomic<uint32_t> linkDisconnects{0},lastDisconnectAt{0};
 std::atomic<uint16_t> lastDisconnectReason{0xFFFF};
