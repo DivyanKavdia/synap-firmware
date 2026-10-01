@@ -26,3 +26,9 @@ test('C3 supports background mounting without remounting under active capture',(
   assert.match(transfer,/!streamingEnabled\.load\(\)/);
   assert.match(recorder,/odysseySdRequestRecovery\(\)/);
 });
+test('BLE STOP and reconnect cannot release SD-owned I2S or block the control task',()=>{
+  const session=read('firmware/shared/audio-session.cpp');
+  const stop=session.split('void stopStreaming(ErrorCode reason) {')[1].split('bool configureTransportFromPeerMtu() {')[0];
+  assert.match(stop,/if \(!odysseyRecording\.load\(\)\) stopMicrophone\(\)/);
+  assert.match(stop,/#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU/);
+});
