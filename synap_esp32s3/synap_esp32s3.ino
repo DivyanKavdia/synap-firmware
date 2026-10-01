@@ -2101,11 +2101,19 @@ static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
  // Only after the card is fully in SPI mode and VFS is live do we promote
  // the bus to a conservative runtime frequency.
 static constexpr uint32_t ODYSSEY_SD_INIT_FREQ_KHZ=SDMMC_FREQ_PROBING;
-static constexpr uint32_t ODYSSEY_SD_RUN_FREQ_KHZ=4000u;
+// 1 MHz gives the C3 SD carrier headroom over 16 kHz PCM while avoiding
+// marginal 4 MHz SPI wiring. Fall back to the 400 kHz probe clock after I/O faults.
+static constexpr uint32_t ODYSSEY_SD_RUN_FREQ_KHZ=1000u;
 static constexpr uint8_t ODYSSEY_SD_BOOT_ATTEMPTS=2;
 static constexpr uint8_t ODYSSEY_SD_RECOVERY_ATTEMPTS=3;
 static constexpr uint32_t ODYSSEY_SD_RETRY_BACKOFF_MS=250u;
-static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=4;
+static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=8;
+static std::atomic<bool> odysseySdProbingClockOnly{false};
+void odysseySdUseProbingClock() { odysseySdProbingClockOnly=true; }
+void odysseySdMarkVfsFailure() {
+  odysseySdBootState=2; odysseySdProbeStage=4;
+  odysseySdRequestRecovery();
+}
 
 static sdmmc_card_t* odysseySdCard=nullptr;
 static bool odysseySdBusInitialized=false;
@@ -2142,7 +2150,10 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
 
 static uint32_t odysseySdPromoteClockLocked() {
   sdmmc_card_t* card=odysseySdCard;
-  if (!card || !card->host.set_card_clk) return ODYSSEY_SD_INIT_FREQ_KHZ;
+  if (!card || !card->host.set_card_clk || odysseySdProbingClockOnly.load()) {
+    if (odysseySdProbingClockOnly.load()) Serial.println("[SD] retaining 400 kHz probe clock after media I/O fault");
+    return ODYSSEY_SD_INIT_FREQ_KHZ;
+  }
   const int result=int(card->host.set_card_clk(card->host.slot,ODYSSEY_SD_RUN_FREQ_KHZ));
   if (result!=ESP_OK) {
     Serial.printf("[SD] runtime clock promotion failed: %s (%d); retaining %u kHz\n",
@@ -2273,6 +2284,44 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
     Serial.printf("[SD] %s attempt %u /synap is not a directory\n",reason,unsigned(attempt));
     odysseySdReleaseLocked();
     return ESP_FAIL;
+  }
+
+  // A successful mount and stat() do not prove opendir() works: the failed
+  // C3 logs report stage=6 yet every catalogue returns IO_ERROR. Validate
+  // the exact /synap directory and a disposable write before claiming READY.
+  DIR* verified=opendir(ODYSSEY_SD_RECORDING_DIR);
+  if (!verified) {
+    const int saved=errno;
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    Serial.printf("[SD] %s attempt %u recordings opendir failed errno=%d\\n",
+      reason,unsigned(attempt),saved);
+    odysseySdReleaseLocked();return ESP_FAIL;
+  }
+  if (closedir(verified)!=0) {
+    const int saved=errno;
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    Serial.printf("[SD] %s attempt %u recordings closedir failed errno=%d\\n",
+      reason,unsigned(attempt),saved);
+    odysseySdReleaseLocked();return ESP_FAIL;
+  }
+  const char* probePath="/odyssey-sd/synap/.synap-media-probe.tmp";
+  FILE* probe=fopen(probePath,"wb");
+  if (!probe) {
+    const int saved=errno;
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    Serial.printf("[SD] %s attempt %u recordings not writable errno=%d\\n",
+      reason,unsigned(attempt),saved);
+    odysseySdReleaseLocked();return ESP_FAIL;
+  }
+  const bool writeOk=fputc('S',probe)!=EOF && fflush(probe)==0;
+  const int writeErrno=errno;
+  const bool closeOk=fclose(probe)==0;
+  const bool removeOk=unlink(probePath)==0;
+  if (!writeOk || !closeOk || !removeOk) {
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    Serial.printf("[SD] %s attempt %u write/readiness probe failed errno=%d\\n",
+      reason,unsigned(attempt),writeOk?(closeOk?errno:errno):writeErrno);
+    odysseySdReleaseLocked();return ESP_FAIL;
   }
 
   const uint32_t runtimeFreq=odysseySdPromoteClockLocked();
@@ -2515,6 +2564,7 @@ static size_t responseSize=16;
 static uint32_t responseConnection=0;
 static char selectedPath[64]{};
 static String catalogueBuffer;
+static int catalogueErrno=0;
 
 enum : uint8_t {
   OK=0,BUSY=1,BAD_COMMAND=2,NO_SD=3,IO_ERROR=7,FILE_UNAVAILABLE=11
@@ -2523,7 +2573,8 @@ enum : uint8_t {
 static bool safeWavPath(const char* path) {
   if (!path || strncmp(path,"/synap/",7)!=0) return false;
   const size_t n=strlen(path);
-  if (n<12 || n>63 || strcmp(path+n-4,".wav")!=0) return false;
+  if (n<12 || n>63 ||
+      (strcmp(path+n-4,".wav")!=0 && strcmp(path+n-4,".WAV")!=0)) return false;
   for (size_t i=7;i<n-4;++i) {
     const char c=path[i];
     if (!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='-'||c=='.')) return false;
@@ -2629,18 +2680,33 @@ static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& 
 static uint8_t catalogue(uint32_t& total) {
   selectedPath[0]=0;
   catalogueBuffer="";
+  catalogueErrno=0;
   OdysseySdGuard guard;
   if (!guard || !storageReady()) return NO_SD;
 
   char directoryPath[96];
-  if (!odysseySdPath("/synap",directoryPath,sizeof(directoryPath))) return IO_ERROR;
+  if (!odysseySdPath("/synap",directoryPath,sizeof(directoryPath))) {
+    catalogueErrno=EINVAL; return IO_ERROR;
+  }
   DIR* directory=opendir(directoryPath);
-  if (!directory) return IO_ERROR;
+  if (!directory) {
+    catalogueErrno=errno;
+    Serial.printf("[SD] catalogue opendir failed errno=%d path=%s\\n",catalogueErrno,directoryPath);
+    return IO_ERROR;
+  }
 
-  catalogueBuffer.reserve(2048);
+  if (!catalogueBuffer.reserve(2048)) {
+    catalogueErrno=ENOMEM;closedir(directory);return IO_ERROR;
+  }
   catalogueBuffer="[";
   unsigned count=0;
-  while (dirent* entry=readdir(directory)) {
+  for (;;) {
+    errno=0;
+    dirent* entry=readdir(directory);
+    if (!entry) {
+      if (errno) catalogueErrno=errno;
+      break;
+    }
     if (!entry->d_name || !strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
     char logical[64];
     const int n=snprintf(logical,sizeof(logical),"/synap/%s",entry->d_name);
@@ -2650,10 +2716,15 @@ static uint8_t catalogue(uint32_t& total) {
     struct stat st{};
     if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<0) continue;
     if (count++) catalogueBuffer+=",";
-    catalogueBuffer+="{\"path\":\""+String(logical)+"\",\"bytes\":"+String(uint32_t(st.st_size))+"}";
+    catalogueBuffer+="{\\"path\\":\\""+String(logical)+"\\",\\"bytes\\":"+String(uint32_t(st.st_size))+"}";
     if (count>=100) break;
   }
-  closedir(directory);
+  if (closedir(directory)!=0 && !catalogueErrno) catalogueErrno=errno;
+  if (catalogueErrno) {
+    catalogueBuffer="";
+    Serial.printf("[SD] catalogue readdir/closedir failed errno=%d\\n",catalogueErrno);
+    return IO_ERROR; // Never send a silently truncated catalogue after an I/O fault.
+  }
   catalogueBuffer+="]";
   total=catalogueBuffer.length();
   return OK;
@@ -2707,11 +2778,12 @@ static void worker(void*) {
   uint8_t bytes[480];
   uint8_t automaticRetries=0;
   uint32_t nextRetryAt=millis()+5000u;
+  uint32_t lastCatalogueRecoveryAt=0;
   for (;;) {
     if (xQueueReceive(requests,&request,pdMS_TO_TICKS(500))!=pdTRUE) {
       const bool requested=odysseySdConsumeRecoveryRequest();
       const uint32_t now=millis();
-      if (!odysseySdReady() && !odysseyRecording.load() && !streamingEnabled.load() &&
+      if ((requested || !odysseySdReady()) && !odysseyRecording.load() && !streamingEnabled.load() &&
           !otaBusy() && !sleepPending &&
           (requested || (automaticRetries<3 && static_cast<int32_t>(now-nextRetryAt)>=0))) {
         if (!requested) ++automaticRetries;
@@ -2730,8 +2802,26 @@ static void worker(void*) {
     uint8_t error=OK;uint32_t total=0;size_t size=0;
     switch (request.operation) {
       case 3: error=selectFile(request.path,total); break;
-      case 4: error=readSelected(request.path,request.offset,total,bytes,size); break;
-      case 7: error=catalogue(total); break;
+      case 4:
+        error=readSelected(request.path,request.offset,total,bytes,size);
+        if (error==IO_ERROR) { odysseySdUseProbingClock();odysseySdRequestRecovery(); }
+        break;
+      case 7:
+        error=catalogue(total);
+        // DIR access may fail after an otherwise successful FAT mount. A
+        // controlled unmount/remount runs only after catalogue() released its
+        // SD mutex; never tear VFS down while the recorder has a file open.
+        if (error==IO_ERROR &&
+            (!lastCatalogueRecoveryAt ||
+             uint32_t(millis()-lastCatalogueRecoveryAt)>=30000u)) {
+          lastCatalogueRecoveryAt=millis();
+          odysseySdUseProbingClock();
+          Serial.printf("[SD] C3 catalogue I/O failed errno=%d; recovery at 400 kHz\\n",catalogueErrno);
+          if (odysseyRecoverSdCard()) error=catalogue(total);
+          else error=NO_SD;
+        }
+        if (error==IO_ERROR) odysseySdMarkVfsFailure();
+        break;
       case 8: total=catalogueBuffer.length();if(!total)error=FILE_UNAVAILABLE;break;
       case 14:
         selectedPath[0]=0;catalogueBuffer="";
@@ -2746,7 +2836,14 @@ static void worker(void*) {
         break;
       default:error=BAD_COMMAND;break;
     }
-    reply(request,error,total,request.offset,bytes,size);
+    if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
+      char detail[112];
+      const int n=snprintf(detail,sizeof(detail),
+        "{\\"stage\\":\\"catalogue\\",\\"errno\\":%d,\\"sdState\\":%u,\\"sdProbe\\":%u}",
+        catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()));
+      reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),
+        n>0?std::min(size_t(n),sizeof(detail)-1):0);
+    } else reply(request,error,total,request.offset,bytes,size);
   }
 }
 
