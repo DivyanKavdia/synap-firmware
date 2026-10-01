@@ -32,3 +32,12 @@ test('production publishes one build with target-specific URLs and GitHub proven
   assert.equal(manifests[target].build,manifests['esp32c3-supermini-4m'].build);
   assert.throws(()=>createManifest(image(target),1001,commit,'main',target),/branch/);
 });
+
+test('publisher finds exact release ref without a first-page branch assumption',()=>{
+  const fs=require('node:fs'),path=require('node:path');
+  const source=fs.readFileSync(path.join(__dirname,'../tools/publish.cjs'),'utf8');
+  assert(source.includes('git/ref/heads/${branch}'));
+  assert(!source.includes('branches?per_page=100'));
+  assert(source.includes('found.object.sha'));
+  assert(source.includes('Not Found'));
+});
