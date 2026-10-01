@@ -84,7 +84,7 @@ static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& 
       return OK;
     }
     if (!safeWavPath(requestedPath)) return BAD_COMMAND;
-    if (offset==0) Serial.printf("[SD] transfer begin path=%s\\n",requestedPath);
+    if (offset==0) Serial.printf("[SD] transfer begin path=%s\n",requestedPath);
     OdysseySdGuard guard;
     if (!guard || !storageReady()) return NO_SD;
     char full[96];
@@ -143,7 +143,7 @@ static uint8_t catalogue(uint32_t& total) {
   DIR* directory=opendir(directoryPath);
   if (!directory) {
     catalogueErrno=errno;
-    Serial.printf("[SD] catalogue opendir failed errno=%d path=%s\\n",catalogueErrno,directoryPath);
+    Serial.printf("[SD] catalogue opendir failed errno=%d path=%s\n",catalogueErrno,directoryPath);
     return IO_ERROR;
   }
 
@@ -168,13 +168,13 @@ static uint8_t catalogue(uint32_t& total) {
     struct stat st{};
     if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<0) continue;
     if (count++) catalogueBuffer+=",";
-    catalogueBuffer+="{\\"path\\":\\""+String(logical)+"\\",\\"bytes\\":"+String(uint32_t(st.st_size))+"}";
+    catalogueBuffer+="{\"path\":\""+String(logical)+"\",\"bytes\":"+String(uint32_t(st.st_size))+"}";
     if (count>=100) break;
   }
   if (closedir(directory)!=0 && !catalogueErrno) catalogueErrno=errno;
   if (catalogueErrno) {
     catalogueBuffer="";
-    Serial.printf("[SD] catalogue readdir/closedir failed errno=%d\\n",catalogueErrno);
+    Serial.printf("[SD] catalogue readdir/closedir failed errno=%d\n",catalogueErrno);
     return IO_ERROR; // Never send a silently truncated catalogue after an I/O fault.
   }
   catalogueBuffer+="]";
@@ -268,7 +268,7 @@ static void worker(void*) {
              uint32_t(millis()-lastCatalogueRecoveryAt)>=30000u)) {
           lastCatalogueRecoveryAt=millis();
           odysseySdUseProbingClock();
-          Serial.printf("[SD] C3 catalogue I/O failed errno=%d; recovery at 400 kHz\\n",catalogueErrno);
+          Serial.printf("[SD] C3 catalogue I/O failed errno=%d; recovery at 400 kHz\n",catalogueErrno);
           if (odysseyRecoverSdCard()) error=catalogue(total);
           else error=NO_SD;
         }
@@ -291,7 +291,7 @@ static void worker(void*) {
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
       char detail[112];
       const int n=snprintf(detail,sizeof(detail),
-        "{\\"stage\\":\\"catalogue\\",\\"errno\\":%d,\\"sdState\\":%u,\\"sdProbe\\":%u}",
+        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u}",
         catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()));
       reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),
         n>0?std::min(size_t(n),sizeof(detail)-1):0);
