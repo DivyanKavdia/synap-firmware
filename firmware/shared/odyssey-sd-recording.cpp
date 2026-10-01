@@ -92,7 +92,8 @@ static void odysseyRecordTake() {
   Serial.printf("[SD] local audio %s: %s, %lu PCM bytes%s\n",
     failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),
     failed?" (mount retained for explicit recovery)":"");
-
+  // A mounted SD card can still fail to open a WAV or start the microphone.
+  if (failed || bytes==0) odysseyRecordFaultAt=millis();
 }
 // FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
 // function first so SD and microphone guards release their mutexes.
@@ -129,16 +130,21 @@ void odysseyToggleRecording() {
   if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) return;
   if (!odysseySdReady()) {
     odysseySdRequestRecovery();
+    odysseyRecordFaultAt=millis();
+    updateStatusLed(true);
     Serial.println("[TOUCH] SD unavailable; requesting background recovery. Retry double tap after mount.");
     return;
   }
   odysseyStopRequested=false;
+  odysseyRecordingStartedAt=millis();
+  odysseyRecordFaultAt=0;
   odysseyRecording=true;
   applyCpuPowerProfile(true);
   updateStatusLed(true);
   if (xTaskCreate(odysseyRecordTask,"sd-audio",8192,nullptr,2,nullptr)!=pdPASS) {
     odysseyRecording=false;
     odysseyStopRequested=false;
+    odysseyRecordFaultAt=millis();
     applyCpuPowerProfile(false);
     updateStatusLed(true);
     Serial.println("[SD] local audio task allocation failed");
