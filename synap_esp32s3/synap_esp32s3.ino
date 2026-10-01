@@ -237,6 +237,7 @@ uint32_t touchPressedAt = 0;
 bool touchRawState = false, touchStableState = false;
 uint32_t touchChangedAt = 0;
 uint32_t lastLedPattern = UINT32_MAX;
+std::atomic<uint32_t> connectedLedAt{0};
 uint32_t lastBatterySampleAt = 0;
 uint16_t batteryMillivolts = 0, batteryAdcMillivolts = 0, batteryAdcRaw = 0;
 uint8_t batteryPercent = 0, batteryValidSamples = 0, batteryCriticalSamples = 0;
@@ -701,7 +702,11 @@ void updateStatusLed(bool force) {
   } else if (deviceState == DeviceState::DISCONNECTED) {
     if (now%5000u<35u) r=LED_DIM;
   } else if (deviceState == DeviceState::CONNECTED_IDLE) {
-    if (now%6000u<30u) b=LED_DIM;
+    // Three visible green acknowledgements confirm the PWA/BLE connection.
+    // Connected idle stays dark after the burst to conserve battery.
+    const uint32_t connectedAt=connectedLedAt.load();
+    const uint32_t elapsed=uint32_t(now-connectedAt);
+    if (connectedAt && elapsed<1500u && elapsed%500u<180u) g=LED_DIM+5;
   } else if (deviceState == DeviceState::STREAMING) {
     if (now%1800u<45u) g=LED_DIM+1;
   } else {
@@ -1602,6 +1607,7 @@ class ServerCallbacks : public BLEServerCallbacks {
     ++connectionGeneration;
     if(!recoveryWaiting.load())streamingEnabled.store(false);
     deviceConnected.store(true);
+    connectedLedAt=millis();
     connectionEventPending.store(true);
   }
   void onDisconnect(BLEServer* server) override {

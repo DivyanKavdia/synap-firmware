@@ -30,6 +30,7 @@ class ServerCallbacks : public BLEServerCallbacks {
     ++connectionGeneration;
     if(!recoveryWaiting.load())streamingEnabled.store(false);
     deviceConnected.store(true);
+    connectedLedAt=millis();
     connectionEventPending.store(true);
   }
   void onDisconnect(BLEServer* server) override {

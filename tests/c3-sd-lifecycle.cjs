@@ -82,3 +82,9 @@ test('C3 SD catalogue I/O recovery never tears down live recording and reports e
   const guard=transfer.split('if (odysseyRecording.load() || streamingEnabled.load() || otaBusy() || sleepPending)')[1];
   assert(guard.indexOf('case 7:')>0 && guard.indexOf('odysseyRecoverSdCard()')>guard.indexOf('case 7:'));
 });
+
+test('C3 PWA connection is acknowledged by three visible green flashes',()=>{
+  const led=read('firmware/shared/status-led.cpp'),ble=read('firmware/shared/ble-control.cpp');
+  assert.match(ble,/deviceConnected\.store\(true\);\s*connectedLedAt=millis\(\);/);
+  assert.match(led,/elapsed<1500u && elapsed%500u<180u\) g=LED_DIM\+5/);
+});

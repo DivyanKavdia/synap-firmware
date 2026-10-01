@@ -201,6 +201,7 @@ uint32_t touchPressedAt = 0;
 bool touchRawState = false, touchStableState = false;
 uint32_t touchChangedAt = 0;
 uint32_t lastLedPattern = UINT32_MAX;
+std::atomic<uint32_t> connectedLedAt{0};
 uint32_t lastBatterySampleAt = 0;
 uint16_t batteryMillivolts = 0, batteryAdcMillivolts = 0, batteryAdcRaw = 0;
 uint8_t batteryPercent = 0, batteryValidSamples = 0, batteryCriticalSamples = 0;
