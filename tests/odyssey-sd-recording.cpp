@@ -31,6 +31,7 @@ uint32_t esp_random(){return ++randomCounter;}
 bool otaBusy(){return ota;}
 bool batteryCritical(){return critical;}
 void applyCpuPowerProfile(bool active){if(active)++powerActive;else ++powerIdle;}
+void updateStatusLed(bool=false){}
 struct MicrophoneGuard { ~MicrophoneGuard(){} };
 bool startMicrophone(){++micStarts;return micOk;}
 void stopMicrophone(){++micStops;}
