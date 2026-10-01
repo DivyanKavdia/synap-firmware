@@ -25,11 +25,8 @@ void processStreamError() {
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* server) override {
     (void)server;
-#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-    // Reconnection ends disconnected-capture ownership. Ask a local SD take to
-    // finalize early so the first PWA START does not silently remain idle.
-    if (odysseyRecording.load()) odysseyStopRequested=true;
-#endif
+// A BLE connection alone must never stop an SD-owned recording.
+    // An explicit PWA START is the only link-triggered microphone handoff.
     ++connectionGeneration;
     if(!recoveryWaiting.load())streamingEnabled.store(false);
     deviceConnected.store(true);
@@ -240,7 +237,11 @@ void controlTask(void* parameter) {
     ChakshuMedia::tick();
 #endif
     powerTick();
-    applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu());
+    applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu()
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      || odysseyRecording.load()
+#endif
+    );
     updateStatusLed();
   }
 }
