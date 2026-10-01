@@ -6,9 +6,16 @@ void updateStatusLed(bool force) {
     if (phase<55u || (phase>=180u && phase<235u)) { r=LED_DIM; g=2; }
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   } else if (odysseyRecording.load()) {
-    // Offline SD capture is purple; live BLE streaming remains green below.
-    // Stop acknowledgement turns the pulse off immediately while WAV finalization finishes.
-    if (!odysseyStopRequested.load() && now%2000u<45u) { r=LED_DIM; b=LED_DIM; }
+    // An immediate 260 ms purple pulse repeats every 1.8 s while SD audio is
+    // running. Keep the duty cycle low for pendant battery life.
+    const uint32_t phase=uint32_t(now-odysseyRecordingStartedAt.load())%1800u;
+    if (!odysseyStopRequested.load() && phase<260u) { r=LED_DIM+4; b=LED_DIM+6; }
+  } else if (odysseyRecordFaultAt.load() &&
+             uint32_t(now-odysseyRecordFaultAt.load())<6000u) {
+    // Two red pulses distinguish missing SD / failed capture from active
+    // purple recording. Resume normal LED state after six seconds.
+    const uint32_t phase=uint32_t(now-odysseyRecordFaultAt.load())%900u;
+    if (phase<140u || (phase>=260u && phase<400u)) r=LED_DIM+3;
 #endif
   } else if (remoteStandby) {
     // Standby stays dark; battery telemetry remains available over BLE.
