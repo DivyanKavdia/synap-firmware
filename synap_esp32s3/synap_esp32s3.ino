@@ -1776,11 +1776,7 @@ void controlTask(void* parameter) {
     ChakshuMedia::tick();
 #endif
     powerTick();
-    applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu()
-#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-      || odysseyRecording.load()
-#endif
-    );
+    applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu());
     updateStatusLed();
   }
 }
