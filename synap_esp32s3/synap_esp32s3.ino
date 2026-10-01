@@ -2678,7 +2678,7 @@ static void worker(void*) {
         if (!requested) ++automaticRetries;
         Serial.printf("[SD] background mount retry %u/3%s\n",unsigned(automaticRetries),requested?" (touch)":"");
         if (odysseyRecoverSdCard()) automaticRetries=0;
-        nextRetryAt=millis()+15000u*uint32_t(automaticRetries+1);
+        nextRetryAt=millis()+5000u*uint32_t(automaticRetries+1);
       }
       continue;
     }
