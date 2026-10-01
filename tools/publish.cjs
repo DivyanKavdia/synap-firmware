@@ -38,7 +38,15 @@ for(const item of artifacts){
 if(api('commits/main').sha!==commit){setPublished(false);console.log('Superseded source commit; not advertising an older release.');process.exit(0);}
 
 const production=branch==='ota-releases';
-const branches=api('branches?per_page=100'),existing=branches.find(b=>b.name===branch);let base;
+ // Query exact ref: first 100 branches omit ota-releases in large repositories.
+let existing=null,base;
+try {
+  const found=api(`git/ref/heads/${branch}`);
+  existing={commit:{sha:found.object.sha}};
+} catch(error) {
+  const details=String(error.stderr||error.message||error);
+  if (!/\b404\b|Not Found/.test(details)) throw error;
+}
 if(existing){
   base=api(`git/commits/${existing.commit.sha}`);
   const old=api(`contents/latest.json?ref=${branch}`),previous=JSON.parse(Buffer.from(old.content,'base64').toString());
