@@ -106,7 +106,7 @@ int main(){
  assert(!micStarts&&get32(data,40)==0);
 
  reset();cardOk=false;odysseySdBootState=2;odysseyToggleRecording();
- assert(!odysseyRecording&&!pendingTask&&micStarts==0);
+ assert(!odysseyRecording&&!pendingTask&&micStarts==0&&odysseyRecordFaultAt==millis());
  cardOk=true;odysseyToggleRecording();
  assert(!odysseyRecording&&!pendingTask); // no implicit remount
  odysseySdBootState=1;odysseyToggleRecording();assert(odysseyRecording&&pendingTask);run();data=load();
