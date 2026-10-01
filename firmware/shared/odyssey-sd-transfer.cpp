@@ -206,8 +206,22 @@ static uint16_t clearRecordings() {
 static void worker(void*) {
   Request request;
   uint8_t bytes[480];
+  uint8_t automaticRetries=0;
+  uint32_t nextRetryAt=millis()+5000u;
   for (;;) {
-    if (xQueueReceive(requests,&request,portMAX_DELAY)!=pdTRUE) continue;
+    if (xQueueReceive(requests,&request,pdMS_TO_TICKS(500))!=pdTRUE) {
+      const bool requested=odysseySdConsumeRecoveryRequest();
+      const uint32_t now=millis();
+      if (!odysseySdReady() && !odysseyRecording.load() && !streamingEnabled.load() &&
+          !otaBusy() && !sleepPending && !remoteStandby &&
+          (requested || (automaticRetries<3 && static_cast<int32_t>(now-nextRetryAt)>=0))) {
+        if (!requested) ++automaticRetries;
+        Serial.printf("[SD] background mount retry %u/3%s\n",unsigned(automaticRetries),requested?" (touch)":"");
+        if (odysseyRecoverSdCard()) automaticRetries=0;
+        nextRetryAt=millis()+15000u*uint32_t(automaticRetries+1);
+      }
+      continue;
+    }
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load()) continue;
     if (odysseyRecording.load() || streamingEnabled.load() || otaBusy() || remoteStandby || sleepPending) {
       reply(request,BUSY);continue;
@@ -221,6 +235,8 @@ static void worker(void*) {
       case 14:
         selectedPath[0]=0;catalogueBuffer="";
         error=odysseyRecoverSdCard()?OK:NO_SD;
+        if (!error) automaticRetries=0;
+        nextRetryAt=millis()+5000u;
         break;
       case 17: error=removeFile(request.path); break;
       case 18:
