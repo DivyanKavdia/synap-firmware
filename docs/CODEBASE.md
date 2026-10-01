@@ -94,7 +94,7 @@ A firmware runtime file is removable only when it is absent from:
 - generated-source checks;
 - production tests/tooling.
 
-At this review every production runtime module is reachable from the materialization graph, so no firmware runtime file was removed.
+The retired C3 discrete-LED implementation has been removed: `firmware/esp32c3/status-led.cpp` and `tools/boards/esp32c3/led.cjs`. C3 uses GPIO8 NeoPixel through the shared status engine. `tests/source-graph.cjs` now rejects unlisted shared source, unused target templates and unreachable board adapters.
 
 The non-runtime tools are also intentional:
 - `tools/train-tiny-voice.py` and `tools/test-train-tiny-voice.py` reproduce and validate experimental Chakshu voice candidates;
