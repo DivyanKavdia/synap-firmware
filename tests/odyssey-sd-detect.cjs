@@ -19,7 +19,7 @@ test('C3 SD owner uses ESP-IDF SDSPI/FAT on the fixed Odyssey pins',()=>{
   assert.match(source,/bus\.mosi_io_num=ODYSSEY_SD_MOSI/);
   assert.match(source,/bus\.miso_io_num=ODYSSEY_SD_MISO/);
   assert.match(source,/ODYSSEY_SD_INIT_FREQ_KHZ=SDMMC_FREQ_PROBING/);
-  assert.match(source,/ODYSSEY_SD_RUN_FREQ_KHZ=4000u/);
+  assert.match(source,/ODYSSEY_SD_RUN_FREQ_KHZ=1000u/);
   assert.match(source,/host\.max_freq_khz=ODYSSEY_SD_INIT_FREQ_KHZ/);
   assert.match(source,/sdmmc_get_status\(card\)/);
   assert.match(source,/set_card_clk\(card->host\.slot,ODYSSEY_SD_RUN_FREQ_KHZ\)/);

@@ -62,3 +62,23 @@ test('C3 offline recording has visible purple heartbeat and failed-start feedbac
   assert.match(recorder,/if \(failed \|\| bytes==0\) odysseyRecordFaultAt=millis\(\)/);
   assert.match(recorder,/odysseySdRequestRecovery\(\);\s*odysseyRecordFaultAt=millis\(\)/);
 });
+
+test('C3 SD readiness validates directory and writable media before publishing ready',()=>{
+  const sd=read('firmware/shared/odyssey-sd-detect.cpp');
+  assert.match(sd,/DIR\* verified=opendir\(ODYSSEY_SD_RECORDING_DIR\)/);
+  assert.match(sd,/FILE\* probe=fopen\(probePath,"wb"\)/);
+  assert.match(sd,/!writeOk \|\| !closeOk \|\| !removeOk/);
+  assert(sd.indexOf('DIR* verified=opendir')<sd.indexOf('odysseySdBootState=1;\n  odysseySdProbeStage=6;'));
+  assert.match(sd,/ODYSSEY_SD_RUN_FREQ_KHZ=1000u/);
+});
+test('C3 SD catalogue I/O recovery never tears down live recording and reports errno',()=>{
+  const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
+  assert.match(transfer,/case 7:[\s\S]*?error=catalogue\(total\)/);
+  assert.match(transfer,/odysseySdUseProbingClock\(\)/);
+  assert.match(transfer,/if \(odysseyRecoverSdCard\(\)\) error=catalogue\(total\)/);
+  assert.match(transfer,/if \(error==IO_ERROR\) odysseySdMarkVfsFailure\(\)/);
+  assert.match(transfer,/sdProbe/);
+  assert.match(transfer,/\(requested \|\| !odysseySdReady\(\)\)/);
+  const guard=transfer.split('if (odysseyRecording.load() || streamingEnabled.load() || otaBusy() || sleepPending)')[1];
+  assert(guard.indexOf('case 7:')>0 && guard.indexOf('odysseyRecoverSdCard()')>guard.indexOf('case 7:'));
+});

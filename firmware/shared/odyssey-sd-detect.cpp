@@ -63,11 +63,19 @@ static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
  // Only after the card is fully in SPI mode and VFS is live do we promote
  // the bus to a conservative runtime frequency.
 static constexpr uint32_t ODYSSEY_SD_INIT_FREQ_KHZ=SDMMC_FREQ_PROBING;
-static constexpr uint32_t ODYSSEY_SD_RUN_FREQ_KHZ=4000u;
+// 1 MHz gives the C3 SD carrier headroom over 16 kHz PCM while avoiding
+// marginal 4 MHz SPI wiring. Fall back to the 400 kHz probe clock after I/O faults.
+static constexpr uint32_t ODYSSEY_SD_RUN_FREQ_KHZ=1000u;
 static constexpr uint8_t ODYSSEY_SD_BOOT_ATTEMPTS=2;
 static constexpr uint8_t ODYSSEY_SD_RECOVERY_ATTEMPTS=3;
 static constexpr uint32_t ODYSSEY_SD_RETRY_BACKOFF_MS=250u;
-static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=4;
+static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=8;
+static std::atomic<bool> odysseySdProbingClockOnly{false};
+void odysseySdUseProbingClock() { odysseySdProbingClockOnly=true; }
+void odysseySdMarkVfsFailure() {
+  odysseySdBootState=2; odysseySdProbeStage=4;
+  odysseySdRequestRecovery();
+}
 
 static sdmmc_card_t* odysseySdCard=nullptr;
 static bool odysseySdBusInitialized=false;
@@ -104,7 +112,10 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
 
 static uint32_t odysseySdPromoteClockLocked() {
   sdmmc_card_t* card=odysseySdCard;
-  if (!card || !card->host.set_card_clk) return ODYSSEY_SD_INIT_FREQ_KHZ;
+  if (!card || !card->host.set_card_clk || odysseySdProbingClockOnly.load()) {
+    if (odysseySdProbingClockOnly.load()) Serial.println("[SD] retaining 400 kHz probe clock after media I/O fault");
+    return ODYSSEY_SD_INIT_FREQ_KHZ;
+  }
   const int result=int(card->host.set_card_clk(card->host.slot,ODYSSEY_SD_RUN_FREQ_KHZ));
   if (result!=ESP_OK) {
     Serial.printf("[SD] runtime clock promotion failed: %s (%d); retaining %u kHz\n",
@@ -235,6 +246,44 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
     Serial.printf("[SD] %s attempt %u /synap is not a directory\n",reason,unsigned(attempt));
     odysseySdReleaseLocked();
     return ESP_FAIL;
+  }
+
+  // A successful mount and stat() do not prove opendir() works: the failed
+  // C3 logs report stage=6 yet every catalogue returns IO_ERROR. Validate
+  // the exact /synap directory and a disposable write before claiming READY.
+  DIR* verified=opendir(ODYSSEY_SD_RECORDING_DIR);
+  if (!verified) {
+    const int saved=errno;
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    Serial.printf("[SD] %s attempt %u recordings opendir failed errno=%d\n",
+      reason,unsigned(attempt),saved);
+    odysseySdReleaseLocked();return ESP_FAIL;
+  }
+  if (closedir(verified)!=0) {
+    const int saved=errno;
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    Serial.printf("[SD] %s attempt %u recordings closedir failed errno=%d\n",
+      reason,unsigned(attempt),saved);
+    odysseySdReleaseLocked();return ESP_FAIL;
+  }
+  const char* probePath="/odyssey-sd/synap/.synap-media-probe.tmp";
+  FILE* probe=fopen(probePath,"wb");
+  if (!probe) {
+    const int saved=errno;
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    Serial.printf("[SD] %s attempt %u recordings not writable errno=%d\n",
+      reason,unsigned(attempt),saved);
+    odysseySdReleaseLocked();return ESP_FAIL;
+  }
+  const bool writeOk=fputc('S',probe)!=EOF && fflush(probe)==0;
+  const int writeErrno=errno;
+  const bool closeOk=fclose(probe)==0;
+  const bool removeOk=unlink(probePath)==0;
+  if (!writeOk || !closeOk || !removeOk) {
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    Serial.printf("[SD] %s attempt %u write/readiness probe failed errno=%d\n",
+      reason,unsigned(attempt),writeOk?errno:writeErrno);
+    odysseySdReleaseLocked();return ESP_FAIL;
   }
 
   const uint32_t runtimeFreq=odysseySdPromoteClockLocked();
