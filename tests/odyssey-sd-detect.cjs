@@ -80,3 +80,13 @@ test('production build no longer patches the Arduino SD core',()=>{
   assert.doesNotMatch(workflow,/patch-arduino-sd|SYNAP_ARDUINO_SD_SRC/);
   assert.equal(fs.existsSync(path.join(root,'tools/patch-arduino-sd.cjs')),false);
 });
+
+test('C3 preserves the native mount error and attempt count for BLE diagnostics',()=>{
+  assert.match(source,/odysseySdLastMountError\{ESP_OK\}/);
+  assert.match(source,/\+\+odysseySdMountAttempts/);
+  assert.match(source,/odysseySdLastMountError=result==ESP_OK\?ESP_FAIL:result/);
+  assert.match(source,/odysseySdLastMountError=ESP_OK;[\s\S]*odysseySdBootState=1/);
+  assert.match(transfer,/odysseySdLastError\(\)/);
+  assert.match(transfer,/odysseySdAttemptCount\(\)/);
+  assert.match(transfer,/mountAttempts/);
+});
