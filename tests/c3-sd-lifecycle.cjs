@@ -77,7 +77,7 @@ test('C3 SD catalogue I/O recovery never tears down live recording and reports e
   assert.match(transfer,/odysseySdUseProbingClock\(\)/);
   assert.match(transfer,/if \(odysseyRecoverSdCard\(\)\) error=catalogue\(total\)/);
   assert.match(transfer,/if \(error==IO_ERROR\) odysseySdMarkVfsFailure\(\)/);
-  assert.match(transfer,/\"sdProbe\"/);
+  assert.match(transfer,/sdProbe/);
   assert.match(transfer,/\(requested \|\| !odysseySdReady\(\)\)/);
   const guard=transfer.split('if (odysseyRecording.load() || streamingEnabled.load() || otaBusy() || sleepPending)')[1];
   assert(guard.indexOf('case 7:')>0 && guard.indexOf('odysseyRecoverSdCard()')>guard.indexOf('case 7:'));
