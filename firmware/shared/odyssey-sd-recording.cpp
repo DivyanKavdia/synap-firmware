@@ -16,7 +16,7 @@ static bool odysseyCheckpointWav(FILE* file,uint8_t* header,uint32_t bytes) {
   if (fseek(file,long(44u+bytes),SEEK_SET)!=0) return false;
   return fflush(file)==0;
 }
-static void odysseyRecordTask(void*) {
+static void odysseyRecordTake() {
   bool failed=false;
   uint32_t bytes=0;
   char logicalPath[64]{};
@@ -93,6 +93,11 @@ static void odysseyRecordTask(void*) {
     failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),
     failed?" (mount retained for explicit recovery)":"");
 
+}
+// FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
+// function first so SD and microphone guards release their mutexes.
+static void odysseyRecordTask(void*) {
+  odysseyRecordTake();
   odysseyRecording=false;
   odysseyStopRequested=false;
   applyCpuPowerProfile(false);
@@ -123,7 +128,8 @@ void odysseyToggleRecording() {
   }
   if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) return;
   if (!odysseySdReady()) {
-    Serial.println("[TOUCH] double tap ignored: SD unavailable");
+    odysseySdRequestRecovery();
+    Serial.println("[TOUCH] SD unavailable; requesting background recovery. Retry double tap after mount.");
     return;
   }
   odysseyStopRequested=false;
