@@ -244,6 +244,7 @@ std::atomic<bool> batteryAvailable{false};
 
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 std::atomic<bool> odysseyRecording{false}, odysseyStopRequested{false};
+std::atomic<uint32_t> odysseyRecordingStartedAt{0}, odysseyRecordFaultAt{0};
 void odysseyToggleRecording();
 bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs);
 namespace OdysseyTransfer {
@@ -681,9 +682,16 @@ void updateStatusLed(bool force) {
     if (phase<55u || (phase>=180u && phase<235u)) { r=LED_DIM; g=2; }
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   } else if (odysseyRecording.load()) {
-    // Offline SD capture is purple; live BLE streaming remains green below.
-    // Stop acknowledgement turns the pulse off immediately while WAV finalization finishes.
-    if (!odysseyStopRequested.load() && now%2000u<45u) { r=LED_DIM; b=LED_DIM; }
+    // An immediate 260 ms purple pulse repeats every 1.8 s while SD audio is
+    // running. Keep the duty cycle low for pendant battery life.
+    const uint32_t phase=uint32_t(now-odysseyRecordingStartedAt.load())%1800u;
+    if (!odysseyStopRequested.load() && phase<260u) { r=LED_DIM+4; b=LED_DIM+6; }
+  } else if (odysseyRecordFaultAt.load() &&
+             uint32_t(now-odysseyRecordFaultAt.load())<6000u) {
+    // Two red pulses distinguish missing SD / failed capture from active
+    // purple recording. Resume normal LED state after six seconds.
+    const uint32_t phase=uint32_t(now-odysseyRecordFaultAt.load())%900u;
+    if (phase<140u || (phase>=260u && phase<400u)) r=LED_DIM+3;
 #endif
   } else if (remoteStandby) {
     // Standby stays dark; battery telemetry remains available over BLE.
@@ -2428,7 +2436,8 @@ static void odysseyRecordTake() {
   Serial.printf("[SD] local audio %s: %s, %lu PCM bytes%s\n",
     failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),
     failed?" (mount retained for explicit recovery)":"");
-
+  // A mounted SD card can still fail to open a WAV or start the microphone.
+  if (failed || bytes==0) odysseyRecordFaultAt=millis();
 }
 // FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
 // function first so SD and microphone guards release their mutexes.
@@ -2465,16 +2474,21 @@ void odysseyToggleRecording() {
   if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) return;
   if (!odysseySdReady()) {
     odysseySdRequestRecovery();
+    odysseyRecordFaultAt=millis();
+    updateStatusLed(true);
     Serial.println("[TOUCH] SD unavailable; requesting background recovery. Retry double tap after mount.");
     return;
   }
   odysseyStopRequested=false;
+  odysseyRecordingStartedAt=millis();
+  odysseyRecordFaultAt=0;
   odysseyRecording=true;
   applyCpuPowerProfile(true);
   updateStatusLed(true);
   if (xTaskCreate(odysseyRecordTask,"sd-audio",8192,nullptr,2,nullptr)!=pdPASS) {
     odysseyRecording=false;
     odysseyStopRequested=false;
+    odysseyRecordFaultAt=millis();
     applyCpuPowerProfile(false);
     updateStatusLed(true);
     Serial.println("[SD] local audio task allocation failed");
