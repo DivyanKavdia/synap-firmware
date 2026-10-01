@@ -88,3 +88,12 @@ test('C3 PWA connection is acknowledged by three visible green flashes',()=>{
   assert.match(ble,/deviceConnected\.store\(true\);\s*connectedLedAt=millis\(\);/);
   assert.match(led,/elapsed<1500u && elapsed%500u<180u\) g=LED_DIM\+5/);
 });
+
+test('C3 failed mount reports raw ESP-IDF result without formatting or deleting WAVs',()=>{
+  const detect=read('firmware/shared/odyssey-sd-detect.cpp');
+  const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
+  assert.match(detect,/format_if_mount_failed=false/);
+  assert.match(detect,/odysseySdLastMountError=result==ESP_OK\?ESP_FAIL:result/);
+  assert.match(transfer,/espErr/);
+  assert.match(transfer,/mountAttempts/);
+});
