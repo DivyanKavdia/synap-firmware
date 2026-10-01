@@ -63,7 +63,7 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(c3,/ODYSSEY_SD_INIT_FREQ_KHZ=SDMMC_FREQ_PROBING/);
   assert.match(c3,/host\.max_freq_khz=ODYSSEY_SD_INIT_FREQ_KHZ/);
   assert.match(c3,/sdmmc_get_status\(card\)/);
-  assert.match(c3,/ODYSSEY_SD_RUN_FREQ_KHZ=4000u/);
+  assert.match(c3,/ODYSSEY_SD_RUN_FREQ_KHZ=1000u/);
   assert.match(c3,/Normal PWA reads are observational only\. Only operation 14 may remount/);
   const sdBoot=c3.indexOf('odysseyInitializeSdCardBeforeBle();');
   const transferInit=c3.indexOf('OdysseyTransfer::initialize();',sdBoot);
