@@ -1,40 +1,45 @@
-# Odyssey C3: local SD audio
+# Odyssey C3: standard and SD-equipped firmware behavior
 
-C3 retains a successfully mounted SD card at boot. It re-probes on every offline
-recording start, so a boot-time mount failure or later card recovery does not
-require rebooting. A recorder task starts only after the filesystem is confirmed
-mounted. No card is formatted and existing files are never replaced.
-An SPI adapter without a usable card/filesystem cannot be reported as ready.
+**Reviewed: 1 October 2026.** Standard Odyssey C3 and Odyssey C3 + SD run **the same** `esp32c3-supermini-4m` firmware image (module 2). The distinction is whether a usable microSD card is physically installed, mounted and ready. Standard C3 must continue normal BLE/PWA audio even when SD is absent or fails.
 
-| Control/state | Result |
+## Mount and recording
+
+The C3 owns SD via native ESP-IDF SDSPI/FAT and POSIX/VFS. A bounded boot mount completes at **400 kHz before BLE** and promotes to **4 MHz only after validated FAT/VFS mount**. Normal catalogue/recording requests do not trigger repeated remounts; media operation **14** explicitly requests recovery. A failed mount does not format the card or silently delete unsynced files.
+
+| State/action | Expected result |
 | --- | --- |
-| Double tap, BLE disconnected | Start 16 kHz mono PCM16 WAV on SD |
-| Double tap, BLE connected, no local take | Existing PWA audio start/stop path |
-| Double tap during an SD take | Finalize and close that SD take |
-| BLE connects during an SD take | Continue saving the same take to SD; double tap stops it |
-| Four-second hold during an SD take | Finalize the take, then enter sleep |
-| Missing/unwritable card | Log failure; retain normal BLE operation; retry on next offline start |
+| Standard C3, no card, BLE connected | PWA audio remains functional; SD recording is unavailable |
+| C3 + SD, BLE disconnected, first double tap | Start local 16 kHz mono PCM16 WAV under `/synap/`; dim **purple** status pulse |
+| C3 + SD, second double tap | Request stop immediately, extinguish purple pulse, checkpoint/finalize WAV |
+| BLE connects during an offline take | Existing take stays on SD until explicitly stopped or required PWA capture handoff |
+| PWA START while a local take is active | Finalize SD WAV and release microphone before live BLE capture; otherwise fail safely at the handoff deadline |
+| BLE connected, no local take | Existing connected PWA audio start/stop; **green** active-recording pulse |
+| Four-second hold during local capture | Finalize the take before entering the normal sleep path |
+| Card missing, unmounted or unwritable | Log/diagnose failure without breaking BLE; use explicit SD recovery when needed |
+| OTA or conflicting media operation | Deny while the local recorder owns storage/microphone |
 
-Files are named `/synap/odyssey_audio_<random>_<random>.wav`. The header is
-checkpointed every two seconds and finalized on stop. A write failure closes the
-file and marks SD unavailable; already written data is retained where the card
-still permits finalization. Abrupt power loss or removal can still damage FAT data.
-Recording ends at the WAV length limit; it never deletes older recordings.
+The WAV header is checkpointed every two seconds and finalized on stop. A real power loss/removal can still damage FAT metadata. Recording never overwrites or evicts older unsynced source files.
 
-SD pins remain CS GPIO0, SCK GPIO10, MOSI GPIO21, MISO GPIO20. Touch remains
-GPIO3; microphone GPIO4/5/6; NeoPixel GPIO8; battery ADC GPIO1. USB CDC must be
-enabled to keep UART0 off the SD pins. A dim purple pulse indicates offline SD recording; connected BLE recording continues to use the green pulse. The purple pulse stops immediately when a stop gesture is accepted, while the WAV header/file finishes closing.
+## Pins and variant identity
 
-Local capture blocks OTA, idle sleep and competing microphone use. It does not
-change the connected BLE audio/recovery protocol or the S3/Chakshu recording
-implementation. C3 advertises SD-audio readiness only when both the microphone and
-mounted SD card are ready. On the next BLE connection, the media-v1 SD catalogue
-lists local WAV files in the PWA; a file is deleted from SD only after the app
-imports and verifies it successfully.
+| Function | C3 GPIO |
+| --- | ---: |
+| I2S BCLK / WS / DATA | 4 / 5 / 6 |
+| TTP223 touch | 3 |
+| NeoPixel | 8 |
+| Battery ADC | 1 |
+| SD CS / SCK / MOSI / MISO | 0 / 10 / 21 / 20 |
 
-Validation: native recorder tests cover PCM conversion with partial reads, WAV
-lengths/checkpoints, stop, reconnect, filename collisions, unavailable card, retry,
-short writes, microphone/open/task failures and busy guards. Touch tests cover all
-three targets. Hardware acceptance still requires boot/mount, offline capture and
-playback, reconnect during capture, connected PWA capture, and card failure tests
-on a physical C3 with this wiring.
+USB CDC on boot is required to avoid UART0 ownership of SD GPIO20/21. The same C3 module ID, BLE identity, OTA marker and manifest are used whether SD is fitted or not. A compiled `sd`/ `sdAudio` capability does **not** prove that a card is mounted; UI actions must respect runtime readiness.
+
+## PWA SD catalogue and verified synchronization
+
+After reconnect, the PWA can list local C3 WAV files and offer manual sync to Memories. The media-v1 protocol uses operation **7** for catalogue discovery and operation **4** for chunked reads with the explicit WAV path on **every chunk**; `@catalogue` identifies catalogue-byte reads. This prevents an intervening catalogue refresh from replacing the selected foreground file. Legacy selected-file reads remain for compatible older clients.
+
+The PWA downloads source bytes, imports into durable local storage, verifies the imported copy, and **only then** requests operation **17** to delete that SD original. If download, import or verification fails, the original remains. Operation **18** is an explicit user-facing clear of Synap-owned C3 recordings, guarded against active recording. Routine catalogue reads never clear storage.
+
+## Validation boundary
+
+The native/unit contract suite covers recorder lifecycle, STOP gestures, collision/short-write failures, SD media protocol and ownership transitions. A passing build is not a physical-device pass. Test **both** the standard no-card C3 and the Rev K SD-equipped C3 on hardware: cold mount, failed mount with working BLE, offline start/stop and purple indicator, repeated double tap, reconnect, PWA START handoff, verified sync, failed-sync original retention, clear SD and OTA/restart while idle.
+
+See [Firmware variants](FIRMWARE_VARIANTS.md), `firmware/shared/odyssey-sd-{detect,recording,transfer}.cpp`, and `hardware/odyssey-c3/pcb/final/`.
