@@ -1457,12 +1457,6 @@ class RecoveryCallbacks : public BLECharacteristicCallbacks {
 };
 
 void stopStreaming(ErrorCode reason) {
-#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  if (!odysseyPrepareForConnectedStreaming(1500u)) {
-    stopStreaming(ErrorCode::AUDIO_SOURCE_FAILED);
-    return;
-  }
-#endif
   streamingEnabled.store(false);
   ++streamGeneration; // Invalidates queued AND already-in-flight old task work.
   if (audioFrameQueue) xQueueReset(audioFrameQueue);
@@ -1501,7 +1495,11 @@ bool configureTransportFromPeerMtu() {
 }
 void startStreaming(uint8_t version) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  if (odysseyRecording.load()) { updateStatusCharacteristic(true); return; }
+  if (!odysseyPrepareForConnectedStreaming(1500u)) {
+    setDeviceState(DeviceState::ERROR, ErrorCode::AUDIO_SOURCE_FAILED);
+    updateStatusCharacteristic(true);
+    return;
+  }
 #endif
 #if SYNAP_CHAKSHU
   if (mediaBusy()) { updateStatusCharacteristic(true);return; }
