@@ -1,6 +1,6 @@
 # Synap firmware codebase guide
 
-**Reviewed: 22 September 2026**
+**Reviewed: 1 October 2026**
 
 ## Production source graph
 
@@ -31,8 +31,10 @@ Arduino compile → OTA/factory artifacts → ota-releases
 ## Target ownership
 
 - **Synap Odyssey S3** — target `esp32s3-fh4r2-qspi-4m`, module 1.
-- **Synap Odyssey C3** — target `esp32c3-supermini-4m`, module 2; GPIO8 is a NeoPixel driven through the shared RGB status engine.
+- **Standard Synap Odyssey C3 and Odyssey C3 + SD** — one target `esp32c3-supermini-4m`, module 2, one binary; GPIO8 NeoPixel. The SD-equipped functional variant activates local WAV recording/sync only when the optional card mounts and is ready.
 - **Chakshu** — target `xiao-esp32s3-sense-8m`, module 3; camera, SD, media transfer, Wi-Fi download and local voice live under `firmware/xiao-sense/`; shared touch/battery/standby/status behavior is enabled on GPIO1/GPIO2/GPIO5.
+
+There are **four functional variants on three compile/OTA targets**: Odyssey S3, standard C3 (no SD), C3 + SD, and Chakshu. The presence/readiness of optional C3 SD is a runtime distinction, not a fourth device identity or OTA binary. See [Firmware variants](FIRMWARE_VARIANTS.md).
 
 Display names are not compatibility IDs. Do not rename target IDs, product markers, manifest paths or BLE advertising identities as part of branding work.
 
@@ -74,7 +76,7 @@ Production CI additionally installs the pinned ESP32 toolchain/libraries, applie
 
 ## Release truth
 
-The authoritative installable version is the `ota-releases` feed. At this review it reports **build 1412** for all three targets, source commit `a2c3dd98730a3e38f21d0c191e7a6137ac00c6f0`.
+The authoritative installable version is the `ota-releases` feed. As checked on 1 October 2026, it reports **build 1546** for all three compiled targets, source commit `21bb5488ecdf7b128e560d59b30b583bcd634feb`.
 
 A later `main` commit is development source until a successful publish updates that feed.
 
@@ -103,15 +105,12 @@ The companion PWA has its own reachability/cleanup policy in [its development gu
 
 Git history is the rollback store; do not keep retired production implementations beside their replacements.
 
-### Odyssey SD startup status (28 September 2026)
+### Odyssey C3 optional SD lifecycle (current)
 
-The boot probe uses the existing non-overlapping catalog pin maps. It never writes,
-formats, retries or enables SD recording/sync, and releases SPI after the check.
-The existing 20-byte module descriptor now reports an optional Odyssey-only
-extension: byte 17 is version 1, byte 18 is 0 (not checked), 1 (detected and
-filesystem mounted), 2 (mount failed), or 3 (no card reported); byte 19 stays zero.
-The SD supported/ready capability bits stay clear. Chakshu's descriptor is unchanged.
-The result is a startup snapshot, not live card presence. Insert/change the card,
-restart the pendant, then reconnect. A mount failure alone does not prove absence;
-check power, wiring and filesystem. PWA shell166 shows this result in Device settings;
-older firmware requires an update before a result can be displayed.
+The standard C3 and C3 + SD run the same compiled firmware. The C3 initializes native ESP-IDF SDSPI/FAT at probing speed **400 kHz** before BLE, then validates promotion to **4 MHz** after a successful FAT/VFS mount. The wired pins are CS GPIO0, SCK GPIO10, MOSI GPIO21 and MISO GPIO20; USB CDC on boot keeps UART0 off GPIO20/21.
+
+Mounted SD readiness gates offline local recording. Disconnected double tap toggles a WAV recording and purple NeoPixel pulse; a failed/absent card does not disable ordinary BLE audio. BLE reconnect does not silently change an active SD take's destination, while a subsequent PWA START first finalizes any active SD take.
+
+The media-v1 SD API supplies an explicit path on every operation-4 chunk read and `@catalogue` for catalogue bytes. Normal reads are non-remounting; operation 14 is explicit recovery. The PWA owns verified source import followed by deletion, never deletion before verification. See [C3 SD audio](ODYSSEY_C3_SD_AUDIO.md) and [Firmware variants](FIRMWARE_VARIANTS.md).
+
+The Odyssey module-descriptor startup probe extension (version at byte 17, result at byte 18) is diagnostic information, not a fourth target ID and not a substitute for live SD capability/readiness checks. S3's optional SD check remains detection-only.
