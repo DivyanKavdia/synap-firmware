@@ -47,3 +47,18 @@ test('validated C3 OTA begin gracefully seals an active SD WAV before flashing',
   assert.match(control,/otaSession.packet\(message.data,message.length[\s\S]*?\|\| odysseyRecording.load\(\)/);
   assert(preflight.indexOf('odysseyPrepareForConnectedStreaming(2500u)')<control.indexOf('otaSession.packet(message.data,message.length'),'SD recording must be sealed before OTA begin');
 });
+
+
+test('C3 offline recording has visible purple heartbeat and failed-start feedback',()=>{
+  const sketch=read('synap_esp32s3/synap_esp32s3.ino');
+  const led=read('firmware/shared/status-led.cpp');
+  const recorder=read('firmware/shared/odyssey-sd-recording.cpp');
+  assert.match(sketch,/odysseyRecordingStartedAt\{0\}, odysseyRecordFaultAt\{0\}/);
+  assert.match(led,/now-odysseyRecordingStartedAt\.load\(\)\)%1800u/);
+  assert.match(led,/phase<260u\) \{ r=LED_DIM\+4; b=LED_DIM\+6;/);
+  assert.match(led,/uint32_t\(now-odysseyRecordFaultAt\.load\(\)\)<6000u/);
+  assert.match(led,/phase<140u \|\| \(phase>=260u && phase<400u\)/);
+  assert.match(recorder,/odysseyRecordingStartedAt=millis\(\);[\s\S]*?odysseyRecording=true/);
+  assert.match(recorder,/if \(failed \|\| bytes==0\) odysseyRecordFaultAt=millis\(\)/);
+  assert.match(recorder,/odysseySdRequestRecovery\(\);\s*odysseyRecordFaultAt=millis\(\)/);
+});
