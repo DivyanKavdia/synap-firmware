@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <iostream>
 uint32_t now=0,lastLedPattern=UINT32_MAX;
+std::atomic<uint32_t> connectedLedAt{0};
 uint32_t millis(){return now;}
 bool updating=false,remoteStandby=false,batteryAvailable=false;
 uint16_t batteryMillivolts=3600;
@@ -29,7 +30,7 @@ void delay(unsigned ms){waitMs=ms;}
 struct SerialPort {template<typename... T> void printf(const char*,T...) {}} Serial;
 // INSERT LOOP
 int main(){
-  updateStatusLed(false);assert(statusLed.pattern==4);
+  now=10;connectedLedAt=10;updateStatusLed(false);assert(statusLed.pattern==0x000900);
   remoteStandby=true;updateStatusLed(false);assert(statusLed.pattern==0);
   batteryAvailable=true;deviceState=DeviceState::DISCONNECTED;
   const auto writes=statusLed.writes;
