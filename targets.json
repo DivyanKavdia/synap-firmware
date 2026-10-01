@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "version": "synap-os1-build1570",
-  "build": 1570,
+  "version": "synap-os1-build1578",
+  "build": 1578,
   "channel": "production",
   "primary": "esp32s3-fh4r2-qspi-4m",
   "targets": {
