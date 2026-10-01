@@ -32,3 +32,18 @@ test('BLE STOP and reconnect cannot release SD-owned I2S or block the control ta
   assert.match(stop,/if \(!odysseyRecording\.load\(\)\) stopMicrophone\(\)/);
   assert.match(stop,/#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU/);
 });
+
+test('validated C3 OTA begin gracefully seals an active SD WAV before flashing',()=>{
+  const source=read('firmware/shared/ota.cpp');
+  const control=source.split('void otaTick() {')[1];
+  const preflight=control.split('otaSession.packet(message.data,message.length')[0];
+  assert.match(preflight,/#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU/);
+  assert.match(preflight,/message.length==59 && message.data\[0\]==1/);
+  assert.match(preflight,/!streamingEnabled.load\(\)/);
+  assert.match(preflight,/odysseyRecording.load\(\) && !batteryCritical\(\)/);
+  assert.match(preflight,/otaSession.state==Synap::AVAILABLE/);
+  assert.match(preflight,/otaBackend.matchesDevice\(message.data\+41\)/);
+  assert.match(preflight,/odysseyPrepareForConnectedStreaming\(2500u\)/);
+  assert.match(control,/otaSession.packet\(message.data,message.length[\s\S]*?\|\| odysseyRecording.load\(\)/);
+  assert(preflight.indexOf('odysseyPrepareForConnectedStreaming(2500u)')<control.indexOf('otaSession.packet(message.data,message.length'),'SD recording must be sealed before OTA begin');
+});
