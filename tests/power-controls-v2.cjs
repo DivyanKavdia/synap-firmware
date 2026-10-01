@@ -53,7 +53,7 @@ test('idle and normal STOP power down the microphone while START keeps hardened 
   const s3=productionS3();
   assert.match(s3,/MIC_START_ATTEMPTS=3/);
   assert.match(s3,/microphoneRecoveryUsed=false/);
-  assert.match(s3,/void stopStreaming\(ErrorCode reason\)[\s\S]*?#if USE_REAL_I2S_MIC\s*stopMicrophone\(\);/);
+  assert.match(s3,/void stopStreaming\(ErrorCode reason\)[\s\S]*?#if USE_REAL_I2S_MIC[\s\S]*?#else\s*stopMicrophone\(\);\s*#endif/);
   assert.match(s3,/microphoneValidated=startMicrophone\(\);\n  if \(microphoneValidated\) stopMicrophone\(\);/);
   assert.match(s3,/remote standby -> awake; microphone remains off until START/);
 });

@@ -47,6 +47,12 @@ static_assert(ODYSSEY_SD_CS != ODYSSEY_SD_SCK && ODYSSEY_SD_CS != ODYSSEY_SD_MOS
 //       3=FAT mount failed, 4=VFS validation failed, 6=ready.
 static std::atomic<uint8_t> odysseySdBootState{0};
 static std::atomic<uint8_t> odysseySdProbeStage{0};
+#if CONFIG_IDF_TARGET_ESP32C3
+// Touch requests recovery without blocking the control/gesture loop.
+static std::atomic<bool> odysseySdRecoveryRequested{false};
+void odysseySdRequestRecovery() { odysseySdRecoveryRequested=true; }
+bool odysseySdConsumeRecoveryRequest() { return odysseySdRecoveryRequested.exchange(false); }
+#endif
 uint8_t odysseySdDetectionState() { return odysseySdBootState.load(); }
 uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 
@@ -190,7 +196,7 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   sdmmc_card_t* card=nullptr;
   result=int(esp_vfs_fat_sdspi_mount(ODYSSEY_SD_MOUNT_POINT,&host,&slot,&mount,&card));
   if (result!=ESP_OK || !card) {
-    odysseySdBootState=2;
+    odysseySdBootState=(result==ESP_ERR_NOT_FOUND)?3:2;
     odysseySdProbeStage=(result==ESP_FAIL)?3:2;
     Serial.printf("[SD] %s attempt %u card/FAT init failed: %s (%d), stage=%u\n",
       reason,unsigned(attempt),esp_err_to_name(result),result,unsigned(odysseySdProbeStage.load()));
@@ -266,7 +272,7 @@ bool odysseyInitializeSdCardBeforeBle() {
   return ready;
 }
 bool odysseyRecoverSdCard() {
-  OdysseySdGuard guard;
+  OdysseySdGuard guard(pdMS_TO_TICKS(2000));
   if (!guard) return false;
   // Recovery is a deliberate full lifecycle reset: publish INITIALIZING, then
   // VFS/card -> SPI device -> SPI bus -> fresh mount attempts.

@@ -14,6 +14,11 @@ function materializeC3(source,target){
       xTaskCreate(acquisitionTask, "capture", 4096, nullptr, 2, &captureTaskHandle) != pdPASS ||
       xTaskCreate(transmitterTask, "transmit", 8192, nullptr, 2, nullptr) != pdPASS) {`;
   out=replaceOnce(out,taskBefore,taskAfter,'single-core task creation');
+  // Offline SD audio owns the C3 CPU while the shared S3/Chakshu source
+  // retains its independent power-profile materialization anchor.
+  out=replaceOnce(out,'applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu());',
+    'applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu() || odysseyRecording.load());',
+    'C3 SD capture CPU profile');
 
   if(out.includes(PRIMARY_TARGET))throw Error('C3 source still contains the S3 target identity');
   if(out.includes('SYNAP-ESP32S3-OTA-ID-V3'))throw Error('C3 source still contains the S3 product marker');

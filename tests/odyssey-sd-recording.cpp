@@ -29,6 +29,10 @@ void delay(unsigned ms){
 }
 uint32_t esp_random(){return ++randomCounter;}
 bool otaBusy(){return ota;}
+// Native harness records the deferred request; the production transfer worker
+// is responsible for remounting away from the touch/control task.
+int recoveryRequests=0;
+void odysseySdRequestRecovery(){++recoveryRequests;}
 bool batteryCritical(){return critical;}
 void applyCpuPowerProfile(bool active){if(active)++powerActive;else ++powerIdle;}
 void updateStatusLed(bool=false){}

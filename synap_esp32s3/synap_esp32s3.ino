@@ -1470,7 +1470,15 @@ void stopStreaming(ErrorCode reason) {
   ++streamGeneration; // Invalidates queued AND already-in-flight old task work.
   if (audioFrameQueue) xQueueReset(audioFrameQueue);
 #if USE_REAL_I2S_MIC
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  // BLE connect/disconnect resets only the BLE audio session. The standalone
+  // SD take retains I2S ownership until touch stop or explicit PWA START.
+  // stopMicrophone() takes the recorder's recursive mutex and otherwise waits
+  // for an entire offline take, blocking the BLE control task on reconnect.
+  if (!odysseyRecording.load()) stopMicrophone();
+#else
   stopMicrophone();
+#endif
 #endif
   // Acknowledge STOP only after the final in-flight notification has returned.
   while (transmitterActive.load()) vTaskDelay(1);
@@ -1564,11 +1572,8 @@ void processStreamError() {
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* server) override {
     (void)server;
-#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-    // Reconnection ends disconnected-capture ownership. Ask a local SD take to
-    // finalize early so the first PWA START does not silently remain idle.
-    if (odysseyRecording.load()) odysseyStopRequested=true;
-#endif
+// A BLE connection alone must never stop an SD-owned recording.
+    // An explicit PWA START is the only link-triggered microphone handoff.
     ++connectionGeneration;
     if(!recoveryWaiting.load())streamingEnabled.store(false);
     deviceConnected.store(true);
@@ -2055,6 +2060,12 @@ static_assert(ODYSSEY_SD_CS != ODYSSEY_SD_SCK && ODYSSEY_SD_CS != ODYSSEY_SD_MOS
 //       3=FAT mount failed, 4=VFS validation failed, 6=ready.
 static std::atomic<uint8_t> odysseySdBootState{0};
 static std::atomic<uint8_t> odysseySdProbeStage{0};
+#if CONFIG_IDF_TARGET_ESP32C3
+// Touch requests recovery without blocking the control/gesture loop.
+static std::atomic<bool> odysseySdRecoveryRequested{false};
+void odysseySdRequestRecovery() { odysseySdRecoveryRequested=true; }
+bool odysseySdConsumeRecoveryRequest() { return odysseySdRecoveryRequested.exchange(false); }
+#endif
 uint8_t odysseySdDetectionState() { return odysseySdBootState.load(); }
 uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 
@@ -2198,7 +2209,7 @@ static int odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   sdmmc_card_t* card=nullptr;
   result=int(esp_vfs_fat_sdspi_mount(ODYSSEY_SD_MOUNT_POINT,&host,&slot,&mount,&card));
   if (result!=ESP_OK || !card) {
-    odysseySdBootState=2;
+    odysseySdBootState=(result==ESP_ERR_NOT_FOUND)?3:2;
     odysseySdProbeStage=(result==ESP_FAIL)?3:2;
     Serial.printf("[SD] %s attempt %u card/FAT init failed: %s (%d), stage=%u\n",
       reason,unsigned(attempt),esp_err_to_name(result),result,unsigned(odysseySdProbeStage.load()));
@@ -2274,7 +2285,7 @@ bool odysseyInitializeSdCardBeforeBle() {
   return ready;
 }
 bool odysseyRecoverSdCard() {
-  OdysseySdGuard guard;
+  OdysseySdGuard guard(pdMS_TO_TICKS(2000));
   if (!guard) return false;
   // Recovery is a deliberate full lifecycle reset: publish INITIALIZING, then
   // VFS/card -> SPI device -> SPI bus -> fresh mount attempts.
@@ -2324,7 +2335,7 @@ static bool odysseyCheckpointWav(FILE* file,uint8_t* header,uint32_t bytes) {
   if (fseek(file,long(44u+bytes),SEEK_SET)!=0) return false;
   return fflush(file)==0;
 }
-static void odysseyRecordTask(void*) {
+static void odysseyRecordTake() {
   bool failed=false;
   uint32_t bytes=0;
   char logicalPath[64]{};
@@ -2401,6 +2412,11 @@ static void odysseyRecordTask(void*) {
     failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),
     failed?" (mount retained for explicit recovery)":"");
 
+}
+// FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
+// function first so SD and microphone guards release their mutexes.
+static void odysseyRecordTask(void*) {
+  odysseyRecordTake();
   odysseyRecording=false;
   odysseyStopRequested=false;
   applyCpuPowerProfile(false);
@@ -2431,7 +2447,8 @@ void odysseyToggleRecording() {
   }
   if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) return;
   if (!odysseySdReady()) {
-    Serial.println("[TOUCH] double tap ignored: SD unavailable");
+    odysseySdRequestRecovery();
+    Serial.println("[TOUCH] SD unavailable; requesting background recovery. Retry double tap after mount.");
     return;
   }
   odysseyStopRequested=false;
@@ -2657,10 +2674,26 @@ static uint16_t clearRecordings() {
 static void worker(void*) {
   Request request;
   uint8_t bytes[480];
+  uint8_t automaticRetries=0;
+  uint32_t nextRetryAt=millis()+5000u;
   for (;;) {
-    if (xQueueReceive(requests,&request,portMAX_DELAY)!=pdTRUE) continue;
+    if (xQueueReceive(requests,&request,pdMS_TO_TICKS(500))!=pdTRUE) {
+      const bool requested=odysseySdConsumeRecoveryRequest();
+      const uint32_t now=millis();
+      if (!odysseySdReady() && !odysseyRecording.load() && !streamingEnabled.load() &&
+          !otaBusy() && !sleepPending &&
+          (requested || (automaticRetries<3 && static_cast<int32_t>(now-nextRetryAt)>=0))) {
+        if (!requested) ++automaticRetries;
+        Serial.printf("[SD] background mount retry %u/3%s\n",unsigned(automaticRetries),requested?" (touch)":"");
+        if (odysseyRecoverSdCard()) automaticRetries=0;
+        nextRetryAt=millis()+5000u*uint32_t(automaticRetries+1);
+      }
+      continue;
+    }
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load()) continue;
-    if (odysseyRecording.load() || streamingEnabled.load() || otaBusy() || remoteStandby || sleepPending) {
+    // Connected remote standby only idles the microphone/CPU; SD media must
+    // remain readable for verified sync and recovery without a forced wake.
+    if (odysseyRecording.load() || streamingEnabled.load() || otaBusy() || sleepPending) {
       reply(request,BUSY);continue;
     }
     uint8_t error=OK;uint32_t total=0;size_t size=0;
@@ -2672,6 +2705,8 @@ static void worker(void*) {
       case 14:
         selectedPath[0]=0;catalogueBuffer="";
         error=odysseyRecoverSdCard()?OK:NO_SD;
+        if (!error) automaticRetries=0;
+        nextRetryAt=millis()+5000u;
         break;
       case 17: error=removeFile(request.path); break;
       case 18:

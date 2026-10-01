@@ -234,7 +234,15 @@ void stopStreaming(ErrorCode reason) {
   ++streamGeneration; // Invalidates queued AND already-in-flight old task work.
   if (audioFrameQueue) xQueueReset(audioFrameQueue);
 #if USE_REAL_I2S_MIC
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  // BLE connect/disconnect resets only the BLE audio session. The standalone
+  // SD take retains I2S ownership until touch stop or explicit PWA START.
+  // stopMicrophone() takes the recorder's recursive mutex and otherwise waits
+  // for an entire offline take, blocking the BLE control task on reconnect.
+  if (!odysseyRecording.load()) stopMicrophone();
+#else
   stopMicrophone();
+#endif
 #endif
   // Acknowledge STOP only after the final in-flight notification has returned.
   while (transmitterActive.load()) vTaskDelay(1);

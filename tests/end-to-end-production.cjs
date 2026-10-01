@@ -11,7 +11,7 @@ test('final production S3 source matches audio, touch, low-power and OTA contrac
   assert.match(s3,/MIN_CHUNKS_PER_FRAME = 1/);assert.match(s3,/MIN_REQUIRED_MTU = 32/);assert.match(s3,/MAX_AUDIO_PAYLOAD_BYTES = 500/);
   assert.match(s3,/MIC_START_ATTEMPTS=3[\s\S]*?attempt<=MIC_START_ATTEMPTS/);
   assert.match(s3,/microphoneValidated=startMicrophone\(\);\n  if \(microphoneValidated\) stopMicrophone\(\);/);
-  assert.match(s3,/void stopStreaming\(ErrorCode reason\)[\s\S]*?#if USE_REAL_I2S_MIC\s*stopMicrophone\(\);/);
+  assert.match(s3,/void stopStreaming\(ErrorCode reason\)[\s\S]*?#if USE_REAL_I2S_MIC[\s\S]*?#else\s*stopMicrophone\(\);\s*#endif/);
   assert.match(s3,/remote standby -> awake; microphone remains off until START/);
   assert.match(s3,/TOUCH_TAP_MIN_MS = 60/);assert.match(s3,/TOUCH_TAP_MAX_MS = 500/);
   assert.match(s3,/TOUCH_DOUBLE_TAP_GAP_MS = 550/);assert.match(s3,/TOUCH_STATE_LOCKOUT_MS = 250/);
@@ -53,8 +53,8 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.doesNotMatch(c3,/void stopStreaming\(ErrorCode reason\) \{[\s\S]{0,220}?odysseyPrepareForConnectedStreaming/);
   assert.match(c3,/BLE capture requested; finalizing local audio before live stream/);
   const connect=c3.match(/void onConnect\(BLEServer\* server\) override \{[\s\S]*?\n  \}/)?.[0]||'';
-  assert.match(connect,/if \(odysseyRecording\.load\(\)\) odysseyStopRequested=true/);
-  assert.match(c3,/double tap ignored: SD unavailable/);
+  assert.doesNotMatch(connect,/odysseyStopRequested\s*=\s*true/);
+  assert.match(c3,/SD unavailable; requesting background recovery/);
   assert.match(c3,/!odysseySdReady\(\)/);
   assert.match(c3,/ready\|=SYNAP_CAP_SDAUDIO/);
   assert.match(c3,/esp_vfs_fat_sdspi_mount/);
