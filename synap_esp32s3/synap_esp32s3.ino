@@ -237,6 +237,7 @@ uint32_t touchPressedAt = 0;
 bool touchRawState = false, touchStableState = false;
 uint32_t touchChangedAt = 0;
 uint32_t lastLedPattern = UINT32_MAX;
+std::atomic<uint32_t> connectedLedAt{0};
 uint32_t lastBatterySampleAt = 0;
 uint16_t batteryMillivolts = 0, batteryAdcMillivolts = 0, batteryAdcRaw = 0;
 uint8_t batteryPercent = 0, batteryValidSamples = 0, batteryCriticalSamples = 0;
@@ -701,7 +702,14 @@ void updateStatusLed(bool force) {
   } else if (deviceState == DeviceState::DISCONNECTED) {
     if (now%5000u<35u) r=LED_DIM;
   } else if (deviceState == DeviceState::CONNECTED_IDLE) {
-    if (now%6000u<30u) b=LED_DIM;
+    // Three unmistakable green acknowledgements after the PWA connects.
+    // After the burst, connected idle stays dark to conserve battery.
+    const uint32_t connectedAt=connectedLedAt.load();
+    const uint32_t elapsed=uint32_t(now-connectedAt);
+    if (connectedAt && elapsed<1500u) {
+      const uint32_t phase=elapsed%500u;
+      if (phase<180u) g=LED_DIM+5;
+    }
   } else if (deviceState == DeviceState::STREAMING) {
     if (now%1800u<45u) g=LED_DIM+1;
   } else {
@@ -1602,6 +1610,7 @@ class ServerCallbacks : public BLEServerCallbacks {
     ++connectionGeneration;
     if(!recoveryWaiting.load())streamingEnabled.store(false);
     deviceConnected.store(true);
+    connectedLedAt=millis();
     connectionEventPending.store(true);
   }
   void onDisconnect(BLEServer* server) override {
@@ -2731,7 +2740,22 @@ static void worker(void*) {
     switch (request.operation) {
       case 3: error=selectFile(request.path,total); break;
       case 4: error=readSelected(request.path,request.offset,total,bytes,size); break;
-      case 7: error=catalogue(total); break;
+      case 7:
+        error=catalogue(total);
+        // A card can still report ready after its FAT/VFS handle has become
+        // stale. Repair that lifecycle here and satisfy the same catalogue
+        // request, instead of forcing the phone through repeated failures.
+        if (error==IO_ERROR || error==NO_SD) {
+          Serial.printf("[SD] catalogue failed error=%u despite capability state=%u/%u; remounting\\n",
+            unsigned(error),unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()));
+          selectedPath[0]=0;catalogueBuffer="";
+          if (odysseyRecoverSdCard()) {
+            automaticRetries=0;
+            error=catalogue(total);
+          } else error=NO_SD;
+          nextRetryAt=millis()+5000u;
+        }
+        break;
       case 8: total=catalogueBuffer.length();if(!total)error=FILE_UNAVAILABLE;break;
       case 14:
         selectedPath[0]=0;catalogueBuffer="";
