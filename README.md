@@ -1,27 +1,30 @@
 # Synap Firmware
 
-**Current firmware baseline — 24 September 2026**
+**Four functional firmware variants — reviewed 1 October 2026**
 
 This repository owns production firmware for the Synap wearable family.
 
 ## Release and source status
 
-- **Current production release:** Synap OS build **1412** (`synap-os1-build1412`).
-- **Production source:** `a2c3dd98730a3e38f21d0c191e7a6137ac00c6f0`.
+- **Published OTA release at this review:** Synap OS build **1546** for all three target binaries; check the `ota-releases` manifests for newer releases.
+- **Published build-1546 source:** `21bb5488ecdf7b128e560d59b30b583bcd634feb`.
 - **Current development baseline:** `main`.
 - **Release channel:** `ota-releases`.
-- **Production targets:** Synap Odyssey S3, Synap Odyssey C3 and Chakshu.
-- Build 1409 retains the current experimental eight-class Chakshu voice model and hardened SD/Hey Snap lifecycle, and corrects the Chakshu hardware controls to TTP223 GPIO1 / D0, battery ADC GPIO2 / D1 and NeoPixel GPIO5 / D4. It also adds hardware diagnostics and disconnected touch-to-SD-audio toggling. The OTA feed remains authoritative for what is installable on a physical device.
+- **Product variants:** Odyssey S3, standard Odyssey C3 (without SD), Odyssey C3 + SD, and Chakshu. These are **four functional variants on three compiled/OTA targets**.
+- The C3 image supports both standard and SD-equipped hardware; SD features are usable only when the card mounts and is ready. The OTA feed, not the source tree or this date-stamped summary, is authoritative for installable builds.
 
 Every production release is compiled in CI, published atomically, attested with GitHub OIDC provenance and checked through the public firmware feed for digests, provenance and browser CORS.
 
-## Supported targets
+## Functional variants and release targets
 
-| Target id | Product | Board | Core capabilities |
+| Variant | Target / module | Connected | Disconnected |
 | --- | --- | --- | --- |
-| `esp32s3-fh4r2-qspi-4m` | **Synap Odyssey S3** | ESP32-S3 SuperMini | audio, settings, touch, battery, standby |
-| `esp32c3-supermini-4m` | **Synap Odyssey C3** | ESP32-C3 SuperMini | audio, settings, touch, battery, standby |
-| `xiao-esp32s3-sense-8m` | **Chakshu** | XIAO ESP32-S3 Sense | audio, camera, SD, settings, touch, battery, standby, video, SD audio, photo |
+| **Odyssey S3** | `esp32s3-fh4r2-qspi-4m` / 1 | BLE/PWA audio | No offline SD recorder |
+| **Odyssey C3 (standard)** | `esp32c3-supermini-4m` / 2 | BLE/PWA audio | No SD recording without a ready card |
+| **Odyssey C3 + SD** | **Same** `esp32c3-supermini-4m` / 2 | BLE/PWA audio; catalogue/sync of prior SD takes | Double-tap local SD WAV, purple indicator |
+| **Chakshu** | `xiao-esp32s3-sense-8m` / 3 | PWA audio/photo/video; Hey Snap to SD when PWA capture idle | Hey Snap photo/video/audio and touch SD audio |
+
+See [Firmware variants](docs/FIRMWARE_VARIANTS.md) for routing, storage safety and the physical acceptance matrix. The build workflow compiles three binaries, not one binary per functional variant.
 
 The Odyssey naming is a **display/product-name change only**. Existing target ids, BLE advertising identities, OTA product markers, manifest paths and update compatibility identifiers must remain stable so devices already in the field are not orphaned.
 
@@ -35,14 +38,11 @@ Chakshu-specific camera, SD, media-transfer and local-voice behavior lives under
 
 The checked-in/generated target sketches are derived from the owned source components. Do not create or revive parallel firmware implementations for the same production target. See [`docs/CODEBASE.md`](docs/CODEBASE.md) for the current source graph, generated-artifact boundary and cleanup rules.
 
-## Odyssey C3 SD audio
+## Odyssey C3 with and without SD
 
-Odyssey C3 now keeps a detected SD card mounted. Double tap starts/stops local
-16 kHz WAV recording when BLE is disconnected, or uses the existing app recording
-path when connected. A local take continues on SD if BLE reconnects; double tap
-finalizes it before app recording can begin. Detection retries on local start.
-See [C3 SD audio](docs/ODYSSEY_C3_SD_AUDIO.md) for wiring, behavior and validation.
-C3 SD-to-PWA file transfer is not included in this change.
+The **standard C3** uses BLE audio normally even when no SD card is fitted or mounted. The **C3 + SD** is the same firmware image with a usable card: boot initializes native ESP-IDF SDSPI/FAT before BLE; disconnected double tap starts/stops a 16 kHz WAV and pulses purple (connected PWA recording pulses green). A BLE reconnect does not silently redirect an active SD take; a later PWA START first finalizes it and transfers microphone ownership or fails safely.
+
+The PWA can list pending C3 WAV files when BLE is connected. Media-v1 chunks identify the file path on every read, and SD originals are deleted only after verified durable PWA import. No-card or failed SD mounts must not disable normal BLE audio. See [C3 SD audio](docs/ODYSSEY_C3_SD_AUDIO.md) and [Firmware variants](docs/FIRMWARE_VARIANTS.md).
 
 ## Audio and BLE baseline
 
@@ -59,7 +59,7 @@ A successful BLE notification enqueue is not proof that the browser persisted th
 
 ## Chakshu baseline
 
-Chakshu is the camera/SD member of the Synap family. Its current firmware path includes BLE audio, camera, SD media, OTA and a lightweight local TinyML wake/command runtime.
+Chakshu is the camera, SD-photo/video and local Hey Snap member of the Synap family; Odyssey C3 + SD separately supports offline WAV recording. Its current firmware path includes BLE audio, camera, SD media, OTA and a lightweight local TinyML wake/command runtime.
 
 ### Hey Snap
 
@@ -256,7 +256,7 @@ The current hardware acceptance list is:
 - Sync to app followed by verified source deletion,
 - complete device → PWA → transcript → memory flow.
 
-Build **1412** is the current production hardware baseline. It retains the build-1400 personalized voice model and uses the corrected Chakshu GPIO1/D0 touch, GPIO2/D1 battery ADC and GPIO5/D4 NeoPixel hardware profile. Physical testing should record the installed build explicitly and compare device logs against this README before attributing behavior to current source. A later `main` commit is not a device behavior until it is published through the OTA feed and installed.
+At this review the published feed reports **build 1546** for each of the three targets. Physical testing should record the installed target and build explicitly. A later `main` commit is not installed behavior until the matching OTA release is published and applied.
 
 ## Live-source cleanup policy
 
@@ -266,6 +266,6 @@ Production firmware is materialized only from the shared source graph plus the c
 
 `main` is the only current development baseline.
 
-New work should branch from current `main`; do not revive superseded audit branches, abandoned voice implementations or older parallel architecture paths.
+Make release changes against current `main` and preserve the existing three target identities; do not revive superseded audit branches, abandoned voice implementations or older parallel architecture paths.
 
 Keep this README focused on current product truth. Detailed implementation history belongs in Git commits, merged pull requests and published releases.
