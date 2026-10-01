@@ -25,7 +25,11 @@ void updateStatusLed(bool force) {
   } else if (deviceState == DeviceState::DISCONNECTED) {
     if (now%5000u<35u) r=LED_DIM;
   } else if (deviceState == DeviceState::CONNECTED_IDLE) {
-    if (now%6000u<30u) b=LED_DIM;
+    // Three visible green acknowledgements confirm the PWA/BLE connection.
+    // Connected idle stays dark after the burst to conserve battery.
+    const uint32_t connectedAt=connectedLedAt.load();
+    const uint32_t elapsed=uint32_t(now-connectedAt);
+    if (connectedAt && elapsed<1500u && elapsed%500u<180u) g=LED_DIM+5;
   } else if (deviceState == DeviceState::STREAMING) {
     if (now%1800u<45u) g=LED_DIM+1;
   } else {
