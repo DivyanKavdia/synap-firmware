@@ -2255,11 +2255,20 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
   return n>0 && size_t(n)<capacity;
 }
 
+void odysseySdHoldBusIdleEarly() {
+  // The SD adapter remains powered across ESP resets. Establish a defined bus
+  // state immediately on boot instead of leaving a continuously powered card
+  // exposed to floating CS/clock/data during the startup settle interval.
+  pinMode(ODYSSEY_SD_CS,OUTPUT);digitalWrite(ODYSSEY_SD_CS,HIGH);
+  pinMode(ODYSSEY_SD_SCK,OUTPUT);digitalWrite(ODYSSEY_SD_SCK,LOW);
+  pinMode(ODYSSEY_SD_MOSI,OUTPUT);digitalWrite(ODYSSEY_SD_MOSI,HIGH);
+  pinMode(ODYSSEY_SD_MISO,INPUT);
+}
+
 static void odysseySdReleaseLocked() {
   SD.end();
   odysseySdSpi.end();
-  pinMode(ODYSSEY_SD_CS,OUTPUT);
-  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  odysseySdHoldBusIdleEarly();
 }
 
 static void odysseyWaitForSdStartupSettle() {
@@ -3158,6 +3167,9 @@ void fatalSetup(const char* message) {
 }
 void setup() {
   Serial.begin(115200);
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  odysseySdHoldBusIdleEarly();
+#endif
 #if USE_REAL_I2S_MIC
   microphoneMutex=xSemaphoreCreateRecursiveMutexStatic(&microphoneMutexStorage);
   if (!microphoneMutex) fatalSetup("[FATAL] microphone lock unavailable");
