@@ -23,7 +23,7 @@ test('C3 reproduces build-1445 first mount and isolates SPI with GPIO bitbang',(
   assert.match(source,/odysseySdBitBangCommand\(0u,0u,0x95u\)/);
   assert.match(source,/odysseySdBitBangCommand\(8u,0x1AAu,0x87u/);
   assert.match(source,/digitalRead\(ODYSSEY_SD_MISO\)/);
-  assert(source.indexOf('bool mounted=odysseySdBeginLocked();')<source.indexOf('odysseySdBitBangProbeLocked(reason)'));
+  assert(source.indexOf('bool mounted=odysseySdBeginLocked();')<source.indexOf('odysseySdBitBangRecoverLocked(reason)'));
   assert.doesNotMatch(source,/odysseySdHoldBusIdleEarly|odysseySdRearmProtocolLocked|odysseySdStopWriteLocked/);
   assert.match(source,/if \(mounted\) markOdysseySdBatteryDividerPresent\(\)/);
   assert.match(boot,/OdysseyTransfer::initialize\(\);[\s\S]*odysseyInitializeSdCardBeforeBle\(\);/);
@@ -52,10 +52,18 @@ test('C3 hard init failures expose direct GPIO probe and never format media',()=
   assert.match(source,/odysseySdBootState=2;odysseySdProbeStage=2/);
   assert.match(source,/odysseySdBitBangCsHigh/);
   assert.match(source,/odysseySdBitBangCsLow/);
+  assert.match(source,/pinMode\(ODYSSEY_SD_MISO,INPUT_PULLUP\)/);
+  assert.match(source,/odysseySdBitBangStopWriteLocked/);
+  assert.match(source,/odysseySdBitBangTransfer\(0xFD\)/);
+  assert.match(source,/odysseySdBitBangCommand\(12u,0u,0x61u,nullptr,0,true\)/);
+  assert.match(source,/odysseySdBitBangCmd12/);
   assert.match(source,/odysseySdBitBangCmd0/);
   assert.match(source,/odysseySdBitBangCmd8/);
   assert.match(transfer,/bbHigh/);
   assert.match(transfer,/bbLow/);
+  assert.match(transfer,/mountWhy/);
+  assert.match(transfer,/bbStop/);
+  assert.match(transfer,/bbCmd12/);
   assert.match(transfer,/bbCmd0/);
   assert.match(transfer,/bbCmd8/);
   assert.match(transfer,/bbR7/);

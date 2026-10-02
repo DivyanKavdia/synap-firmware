@@ -1,5 +1,5 @@
 // Odyssey SD storage.
-// C3 owns SD through ESP-IDF SDSPI + FAT/VFS; S3 keeps its legacy one-shot detection.
+// C3 mounts through the stock Arduino-ESP32 SD SPI path and uses FAT/VFS at runtime; S3 keeps its legacy one-shot detection.
 // Hardware pins remain device-profile controlled and are never remapped here.
 #if !SYNAP_CHAKSHU
 #include <SPI.h>
@@ -68,8 +68,11 @@ static SPIClass odysseySdSpi(FSPI);
 static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
 static std::atomic<uint32_t> odysseySdBeginAttempts{0};
+static std::atomic<uint8_t> odysseySdLastMountReason{0}; // 1=boot,2=op14,3=touch,4=probe
 static std::atomic<int16_t> odysseySdBitBangCsHigh{-2};
 static std::atomic<int16_t> odysseySdBitBangCsLow{-2};
+static std::atomic<uint8_t> odysseySdBitBangStopState{0}; // 1=released,2=still-busy,3=no-ready
+static std::atomic<int16_t> odysseySdBitBangCmd12{-2};
 static std::atomic<int16_t> odysseySdBitBangCmd0{-2};
 static std::atomic<int16_t> odysseySdBitBangCmd8{-2};
 static std::atomic<uint32_t> odysseySdBitBangR7{0};
@@ -79,16 +82,21 @@ static SemaphoreHandle_t odysseySdMutex=nullptr;
 int32_t odysseySdLastError() { return odysseySdLastMountError.load(); }
 uint32_t odysseySdAttemptCount() { return odysseySdMountAttempts.load(); }
 uint32_t odysseySdBeginAttemptCount() { return odysseySdBeginAttempts.load(); }
+uint8_t odysseySdLastMountReasonCode() { return odysseySdLastMountReason.load(); }
 int16_t odysseySdBitBangCsHighState() { return odysseySdBitBangCsHigh.load(); }
 int16_t odysseySdBitBangCsLowState() { return odysseySdBitBangCsLow.load(); }
+uint8_t odysseySdBitBangStopStateValue() { return odysseySdBitBangStopState.load(); }
+int16_t odysseySdBitBangCmd12Response() { return odysseySdBitBangCmd12.load(); }
 int16_t odysseySdBitBangCmd0Response() { return odysseySdBitBangCmd0.load(); }
 int16_t odysseySdBitBangCmd8Response() { return odysseySdBitBangCmd8.load(); }
 uint32_t odysseySdBitBangR7Response() { return odysseySdBitBangR7.load(); }
 void odysseySdUseProbingClock() {}
 void odysseySdMarkVfsFailure() {
+  // Observation only. Catalogue/read errors must never schedule a destructive
+  // remount behind the user's back. Explicit PWA Check SD (op14) or a physical
+  // disconnected double-tap may request recovery.
   odysseySdBootState=2;odysseySdProbeStage=4;
   odysseySdLastMountError=ESP_FAIL;
-  odysseySdRequestRecovery();
 }
 
 static void odysseySdEnsureMutex() {
@@ -144,8 +152,17 @@ static uint8_t odysseySdBitBangTransfer(uint8_t out) {
   return in;
 }
 
+static bool odysseySdBitBangWaitReady(uint32_t timeoutMs,uint8_t& lastByte) {
+  const uint32_t started=millis();
+  do {
+    lastByte=odysseySdBitBangTransfer(0xFF);
+    if (lastByte==0xFF) return true;
+  } while (uint32_t(millis()-started)<timeoutMs);
+  return false;
+}
+
 static uint8_t odysseySdBitBangCommand(uint8_t command,uint32_t argument,uint8_t crc,
-    uint8_t* tail=nullptr,size_t tailSize=0) {
+    uint8_t* tail=nullptr,size_t tailSize=0,bool skipStuffByte=false) {
   digitalWrite(ODYSSEY_SD_CS,LOW);
   odysseySdBitBangTransfer(uint8_t(0x40u|command));
   odysseySdBitBangTransfer(uint8_t(argument>>24));
@@ -153,6 +170,7 @@ static uint8_t odysseySdBitBangCommand(uint8_t command,uint32_t argument,uint8_t
   odysseySdBitBangTransfer(uint8_t(argument>>8));
   odysseySdBitBangTransfer(uint8_t(argument));
   odysseySdBitBangTransfer(crc);
+  if (skipStuffByte) (void)odysseySdBitBangTransfer(0xFF);
   uint8_t response=0xFF;
   for (uint8_t i=0;i<32;++i) {
     response=odysseySdBitBangTransfer(0xFF);
@@ -166,25 +184,70 @@ static uint8_t odysseySdBitBangCommand(uint8_t command,uint32_t argument,uint8_t
   return response;
 }
 
-static uint8_t odysseySdBitBangProbeLocked(const char* reason) {
-  // This probe intentionally bypasses SPIClass, SD and FatFS. It runs only
-  // after the exact 1445 SD.begin() path has already failed, so its result
-  // distinguishes a GPIO/card-level response from an ESP SPI-stack problem.
+static uint8_t odysseySdBitBangStopWriteLocked() {
+  // If a reset interrupted CMD25, the card can be waiting for another data
+  // token rather than a command. Wait through any program-busy interval, then
+  // send the SPI multi-block write stop token 0xFD.
+  digitalWrite(ODYSSEY_SD_CS,LOW);
+  uint8_t last=0;
+  if (!odysseySdBitBangWaitReady(1500u,last)) {
+    digitalWrite(ODYSSEY_SD_CS,HIGH);
+    (void)odysseySdBitBangTransfer(0xFF);
+    return 3;
+  }
+  (void)odysseySdBitBangTransfer(0xFD);
+  const bool released=odysseySdBitBangWaitReady(3000u,last);
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  (void)odysseySdBitBangTransfer(0xFF);
+  return released?1:2;
+}
+
+static uint8_t odysseySdBitBangRecoverLocked(const char* reason) {
+  // Runs only after the exact known-good 1445 SD.begin() has failed. The
+  // sequence deliberately bypasses SPIClass/SD/FatFS so it can recover a card
+  // whose previous host reset happened inside CMD18/CMD25.
   odysseySdReleaseLocked();
   pinMode(ODYSSEY_SD_CS,OUTPUT);digitalWrite(ODYSSEY_SD_CS,HIGH);
   pinMode(ODYSSEY_SD_SCK,OUTPUT);digitalWrite(ODYSSEY_SD_SCK,LOW);
   pinMode(ODYSSEY_SD_MOSI,OUTPUT);digitalWrite(ODYSSEY_SD_MOSI,HIGH);
-  pinMode(ODYSSEY_SD_MISO,INPUT);
+  // A deselected SD DO line is allowed to float. Pull it high weakly so a
+  // tri-stated bus is distinguishable from a card actively driving busy-low.
+  pinMode(ODYSSEY_SD_MISO,INPUT_PULLUP);
   delay(1);
   odysseySdBitBangCsHigh=digitalRead(ODYSSEY_SD_MISO)==HIGH?1:0;
-  for (uint8_t i=0;i<16;++i) (void)odysseySdBitBangTransfer(0xFF);
+  for (uint8_t i=0;i<32;++i) (void)odysseySdBitBangTransfer(0xFF);
+
   digitalWrite(ODYSSEY_SD_CS,LOW);delayMicroseconds(20);
   odysseySdBitBangCsLow=digitalRead(ODYSSEY_SD_MISO)==HIGH?1:0;
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   (void)odysseySdBitBangTransfer(0xFF);
 
-  const uint8_t cmd0=odysseySdBitBangCommand(0u,0u,0x95u);
+  // Recover either possible interrupted multi-block direction. 0xFD is only a
+  // data token, so a card in command mode ignores it. CMD12 is the specified
+  // stop for a multi-block read and has one mandatory stuff byte before R1.
+  const uint8_t stopState=odysseySdBitBangStopWriteLocked();
+  odysseySdBitBangStopState=stopState;
+  const uint8_t cmd12=odysseySdBitBangCommand(12u,0u,0x61u,nullptr,0,true);
+  odysseySdBitBangCmd12=int16_t(cmd12);
+
+  // Drain any R1b/program busy interval, then return the card to SPI idle.
+  digitalWrite(ODYSSEY_SD_CS,LOW);
+  uint8_t last=0;
+  (void)odysseySdBitBangWaitReady(1500u,last);
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  for (uint8_t i=0;i<32;++i) (void)odysseySdBitBangTransfer(0xFF);
+
+  uint8_t cmd0=0xFF;
+  for (uint8_t attempt=0;attempt<2 && cmd0!=0x01;++attempt) {
+    cmd0=odysseySdBitBangCommand(0u,0u,0x95u);
+    if (cmd0!=0x01) {
+      digitalWrite(ODYSSEY_SD_CS,HIGH);
+      for (uint8_t i=0;i<20;++i) (void)odysseySdBitBangTransfer(0xFF);
+      delay(2);
+    }
+  }
   odysseySdBitBangCmd0=int16_t(cmd0);
+
   uint8_t r7[4]{};
   uint8_t cmd8=0xFF;
   if (cmd0==0x01) cmd8=odysseySdBitBangCommand(8u,0x1AAu,0x87u,r7,sizeof(r7));
@@ -194,9 +257,10 @@ static uint8_t odysseySdBitBangProbeLocked(const char* reason) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   digitalWrite(ODYSSEY_SD_SCK,LOW);
   digitalWrite(ODYSSEY_SD_MOSI,HIGH);
-  Serial.printf("[SD] %s GPIO bitbang csHigh=%d csLow=%d CMD0=0x%02X CMD8=0x%02X R7=0x%08lX\n",
+  Serial.printf("[SD] %s GPIO recovery high=%d low=%d stop=%u CMD12=0x%02X CMD0=0x%02X CMD8=0x%02X R7=0x%08lX\n",
     reason,int(odysseySdBitBangCsHigh.load()),int(odysseySdBitBangCsLow.load()),
-    unsigned(cmd0),unsigned(cmd8),static_cast<unsigned long>(odysseySdBitBangR7.load()));
+    unsigned(stopState),unsigned(cmd12),unsigned(cmd0),unsigned(cmd8),
+    static_cast<unsigned long>(odysseySdBitBangR7.load()));
   return cmd0;
 }
 
@@ -276,9 +340,17 @@ static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
   return true;
 }
 
+static uint8_t odysseySdMountReasonCode(const char* reason) {
+  if (!strcmp(reason,"boot")) return 1;
+  if (!strcmp(reason,"op14")) return 2;
+  if (!strcmp(reason,"touch")) return 3;
+  return 4;
+}
+
 static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   odysseySdBootState=0;
   odysseySdProbeStage=0;
+  odysseySdLastMountReason=odysseySdMountReasonCode(reason);
   ++odysseySdMountAttempts;
   odysseySdReleaseLocked();
 
@@ -290,10 +362,9 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
 
   bool mounted=odysseySdBeginLocked();
   if (!mounted) {
-    const uint8_t bitBangCmd0=odysseySdBitBangProbeLocked(reason);
-    // If direct GPIO SPI can put the card into idle, retry the exact stock
-    // Arduino path once. A success here proves the hardware SPI/SD lifecycle,
-    // not the card or its power rail, caused the original failure.
+    const uint8_t bitBangCmd0=odysseySdBitBangRecoverLocked(reason);
+    // If direct GPIO recovery returns the card to SPI idle, retry the exact
+    // stock Arduino path once. No formatting or media mutation is performed.
     if (bitBangCmd0==0x01) {
       delay(20);
       mounted=odysseySdBeginLocked();
@@ -357,12 +428,12 @@ bool odysseyInitializeSdCardBeforeBle() {
     unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()));
   return ready;
 }
-bool odysseyRecoverSdCard() {
-  OdysseySdGuard guard(pdMS_TO_TICKS(2000));
+bool odysseyRecoverSdCard(const char* reason) {
+  OdysseySdGuard guard(pdMS_TO_TICKS(5000));
   if (!guard) return false;
   odysseySdBootState=0;odysseySdProbeStage=0;
   odysseySdReleaseLocked();
-  return odysseySdMountLocked("recovery",ODYSSEY_SD_RECOVERY_ATTEMPTS);
+  return odysseySdMountLocked(reason?reason:"op14",ODYSSEY_SD_RECOVERY_ATTEMPTS);
 }
 
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {

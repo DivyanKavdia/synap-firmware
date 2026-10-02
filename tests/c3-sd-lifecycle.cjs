@@ -16,12 +16,15 @@ test('C3 reconnect never stops SD capture; START performs explicit handoff',()=>
   const session=read('firmware/shared/audio-session.cpp');
   assert.match(session,/odysseyPrepareForConnectedStreaming\(1500u\)/);
 });
-test('C3 never auto-remounts storage in the background',()=>{
+test('C3 remounts only after explicit PWA op14 or physical touch recovery',()=>{
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
   const recorder=read('firmware/shared/odyssey-sd-recording.cpp');
   assert.doesNotMatch(transfer,/automaticRetries|background mount retry/);
-  assert.match(transfer,/Keep all remounts explicit through operation 14/);
-  assert.match(transfer,/case 14:[\s\S]*odysseyRecoverSdCard\(\)/);
+  assert.match(transfer,/physical touch requested software recovery/);
+  assert.match(transfer,/odysseyRecoverSdCard\("touch"\)/);
+  assert.match(transfer,/case 14:[\s\S]*odysseyRecoverSdCard\("op14"\)/);
+  const readCase=transfer.split('case 4:')[1].split('case 7:')[0];
+  assert.doesNotMatch(readCase,/odysseySdRequestRecovery\(/);
   assert.match(recorder,/odysseySdRequestRecovery\(\)/);
 });
 test('BLE STOP and reconnect cannot release SD-owned I2S or block the control task',()=>{
@@ -75,7 +78,7 @@ test('C3 catalogue failure is observational and never auto-remounts',()=>{
   const catalogueCase=transfer.split('case 7:')[1].split('case 8:')[0];
   assert.doesNotMatch(catalogueCase,/odysseyRecoverSdCard\(/);
   assert.match(catalogueCase,/odysseySdMarkVfsFailure\(\)/);
-  assert.match(transfer,/case 14:[\s\S]*odysseyRecoverSdCard\(\)/);
+  assert.match(transfer,/case 14:[\s\S]*odysseyRecoverSdCard\("op14"\)/);
   assert.match(transfer,/sdProbe/);
 });
 test('C3 PWA connection is acknowledged by three visible green flashes',()=>{
@@ -99,14 +102,20 @@ test('C3 GPIO bitbang fallback bypasses SPIClass only after exact mount failure'
   const detect=read('firmware/shared/odyssey-sd-detect.cpp');
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
   assert.match(detect,/odysseySdBitBangTransfer/);
+  assert.match(detect,/pinMode\(ODYSSEY_SD_MISO,INPUT_PULLUP\)/);
+  assert.match(detect,/odysseySdBitBangTransfer\(0xFD\)/);
+  assert.match(detect,/odysseySdBitBangCommand\(12u,0u,0x61u,nullptr,0,true\)/);
   assert.match(detect,/odysseySdBitBangCommand\(0u,0u,0x95u\)/);
   assert.match(detect,/odysseySdBitBangCommand\(8u,0x1AAu,0x87u/);
   assert.match(detect,/digitalRead\(ODYSSEY_SD_MISO\)/);
-  assert(detect.indexOf('bool mounted=odysseySdBeginLocked();')<detect.indexOf('odysseySdBitBangProbeLocked(reason)'));
+  assert(detect.indexOf('bool mounted=odysseySdBeginLocked();')<detect.indexOf('odysseySdBitBangRecoverLocked(reason)'));
   assert.match(detect,/if \(bitBangCmd0==0x01\)[\s\S]*mounted=odysseySdBeginLocked\(\)/);
   assert.doesNotMatch(detect,/odysseySdRearmProtocolLocked|ODYSSEY_SD_RESCUE_FREQ_HZ/);
   assert.match(transfer,/bbHigh/);
   assert.match(transfer,/bbLow/);
+  assert.match(transfer,/mountWhy/);
+  assert.match(transfer,/bbStop/);
+  assert.match(transfer,/bbCmd12/);
   assert.match(transfer,/bbCmd0/);
   assert.match(transfer,/bbCmd8/);
   assert.match(transfer,/bbR7/);
@@ -121,7 +130,7 @@ test('C3 quiesces SD before OTA reboot, app restart and deep sleep',()=>{
   assert.match(detect,/bool odysseyPrepareSdForPowerTransition\(uint32_t timeoutMs\)/);
   const transition=detect.split('bool odysseyPrepareSdForPowerTransition')[1];
   assert.match(transition,/odysseySdReleaseLocked\(\)/);
-  assert.doesNotMatch(transition,/odysseySdRearmProtocolLocked|odysseySdBitBangProbeLocked/);
+  assert.doesNotMatch(transition,/odysseySdRearmProtocolLocked|odysseySdBitBangRecoverLocked/);
   assert.match(ota,/otaSession\.state==Synap::COMMITTED[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*ESP\.restart\(\)/);
   assert.match(ble,/CMD_RESTART:[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*ESP\.restart\(\)/);
   assert.match(power,/entering deep sleep request=[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*esp_deep_sleep_start\(\)/);
