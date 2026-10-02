@@ -3,6 +3,7 @@
 static std::atomic<bool> odysseySdBatteryDividerObserved{false};
 void markOdysseySdBatteryDividerPresent() { odysseySdBatteryDividerObserved=true; }
 bool odysseySdBatteryDividerPresent() { return odysseySdBatteryDividerObserved.load(); }
+#if SYNAP_BATTERY_MONITOR_ENABLE
 static bool detectOdysseySdBatteryDividerFromAdc(uint32_t adcMv) {
   if (odysseySdBatteryDividerObserved.load()) return true;
   const uint32_t standardMv=(adcMv*SYNAP_BATTERY_SCALE_NUMERATOR + SYNAP_BATTERY_SCALE_DENOMINATOR/2u)/SYNAP_BATTERY_SCALE_DENOMINATOR;
@@ -17,10 +18,10 @@ static bool detectOdysseySdBatteryDividerFromAdc(uint32_t adcMv) {
   }
   return false;
 }
+#endif
 #else
 void markOdysseySdBatteryDividerPresent() {}
 bool odysseySdBatteryDividerPresent() { return false; }
-static bool detectOdysseySdBatteryDividerFromAdc(uint32_t) { return false; }
 #endif
 
 uint16_t batteryFullMillivolts() {
