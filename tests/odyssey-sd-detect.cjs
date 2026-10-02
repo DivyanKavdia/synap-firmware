@@ -23,7 +23,7 @@ test('C3 restores proven Arduino SD SPI initialization on fixed Odyssey pins',()
   assert.match(source,/ODYSSEY_SD_RECOVERY_ATTEMPTS=1/);
   assert.doesNotMatch(source,/esp_vfs_fat_sdspi_mount|spi_bus_initialize|gpio_reset_pin|gpio_set_pull_mode/);
   assert.match(source,/odysseySdWaitReadyLocked\(500u,readyByte\)/);
-  assert.match(source,/readyByte==0xFF/);
+  assert.match(source,/lastByte==0xFF/);
   assert.match(source,/response==0x00 \|\| response==0x01\) markOdysseySdBatteryDividerPresent\(\)/);
   assert.match(source,/if \(mounted\) markOdysseySdBatteryDividerPresent\(\)/);
   assert.match(source,/odysseyWaitForSdStartupSettle\(\);[\s\S]*OdysseySdGuard guard/);
