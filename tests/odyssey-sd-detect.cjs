@@ -54,10 +54,11 @@ test('C3 hard init failures expose direct GPIO probe and never format media',()=
   assert.match(source,/odysseySdBitBangCsLow/);
   assert.match(source,/pinMode\(ODYSSEY_SD_MISO,INPUT_PULLUP\)/);
   assert.match(source,/odysseySdBitBangStopWriteLocked/);
-  assert.match(source,/R1b is not complete/);
-  assert.match(source,/odysseySdBitBangWaitReady\(3000u,last\)\?1:2/);
+  assert.match(source,/CMD12 may be issued while CMD18 data is still flowing/);
+  assert.match(source,/REQUIRED_IDLE_BYTES=64u/);
+  assert.match(source,/MAX_DRAIN_BYTES=8192u/);
   assert.match(source,/odysseySdBitBangTransfer\(0xFD\)/);
-  assert.match(source,/odysseySdBitBangCommandR1b\(12u,0u,0x61u,cmd12Ready\)/);
+  assert.match(source,/odysseySdBitBangStopReadLocked\(cmd12,drainBytes\)/);
   assert.match(source,/odysseySdBitBangCmd12/);
   assert.match(source,/odysseySdBitBangCmd0/);
   assert.match(source,/odysseySdBitBangCmd8/);
@@ -65,8 +66,9 @@ test('C3 hard init failures expose direct GPIO probe and never format media',()=
   assert.match(transfer,/bbLow/);
   assert.match(transfer,/mountWhy/);
   assert.match(transfer,/bbStop/);
-  assert.match(transfer,/bbCmd12/);
-  assert.match(transfer,/bbR1b/);
+  assert.match(transfer,/bbCmd12Candidate/);
+  assert.match(transfer,/bbReadIdle/);
+  assert.match(transfer,/bbDrain/);
   assert.match(transfer,/bbCmd0/);
   assert.match(transfer,/bbCmd8/);
   assert.match(transfer,/bbR7/);
