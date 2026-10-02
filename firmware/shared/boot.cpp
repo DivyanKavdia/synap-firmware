@@ -61,9 +61,6 @@ void fatalSetup(const char* message) {
 }
 void setup() {
   Serial.begin(115200);
-#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  odysseySdHoldBusIdleEarly();
-#endif
 #if USE_REAL_I2S_MIC
   microphoneMutex=xSemaphoreCreateRecursiveMutexStatic(&microphoneMutexStorage);
   if (!microphoneMutex) fatalSetup("[FATAL] microphone lock unavailable");
@@ -110,12 +107,14 @@ void setup() {
   ChakshuMedia::initialize();
   ChakshuTransfer::initialize();
 #elif CONFIG_IDF_TARGET_ESP32C3
-  // Storage owns SPI2/FAT before any SD worker or BLE characteristic can use it.
+  // Reproduce the last independently observed healthy lifecycle (build 1445 /
+  // 1481): create the transfer worker first, then perform one mount before BLE.
+  // The worker cannot touch storage until BLE submits a request.
+  OdysseyTransfer::initialize();
   odysseyInitializeSdCardBeforeBle();
   // The first battery sample precedes SD probing. Re-sample only when SD
   // hardware was positively observed so standard C3 behavior stays unchanged.
   if (odysseySdBatteryDividerPresent()) sampleBattery(true);
-  OdysseyTransfer::initialize();
 #else
   // Odyssey S3 remains a detection-only target.
   odysseyDetectSdCard();

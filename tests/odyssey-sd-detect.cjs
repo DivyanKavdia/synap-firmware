@@ -10,37 +10,24 @@ const transfer=fs.readFileSync(path.join(root,'firmware/shared/odyssey-sd-transf
 const boot=fs.readFileSync(path.join(root,'firmware/shared/boot.cpp'),'utf8');
 const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
 
-test('C3 restores proven Arduino SD SPI initialization on fixed Odyssey pins',()=>{
+test('C3 reproduces build-1445 first mount and isolates SPI with GPIO bitbang',()=>{
   const target=getTarget('esp32c3-supermini-4m');
   assert.deepEqual(target.hardware.sdDetection,{cs:0,sck:10,mosi:21,miso:20});
   assert.match(source,/static SPIClass odysseySdSpi\(FSPI\)/);
   assert.match(source,/ODYSSEY_SD_INIT_FREQ_HZ=400000u/);
-  assert.match(source,/ODYSSEY_SD_RESCUE_FREQ_HZ=100000u/);
-  assert.match(source,/ODYSSEY_SD_RESCUE_BUSY_MS=3000u/);
-  assert.match(source,/ODYSSEY_SD_STARTUP_SETTLE_MS=3000u/);
+  assert.match(source,/ODYSSEY_SD_MAX_OPEN_FILES=1/);
+  assert.doesNotMatch(source,/ODYSSEY_SD_RESCUE_FREQ_HZ|ODYSSEY_SD_STARTUP_SETTLE_MS/);
   assert.match(source,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,/);
   assert.match(source,/ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false/);
-  assert.match(source,/ODYSSEY_SD_BOOT_ATTEMPTS=1/);
-  assert.match(source,/ODYSSEY_SD_RECOVERY_ATTEMPTS=1/);
-  assert.doesNotMatch(source,/esp_vfs_fat_sdspi_mount|spi_bus_initialize|gpio_reset_pin|gpio_set_pull_mode/);
-  assert.match(source,/odysseySdWaitReadyLocked\(500u,readyByte\)/);
-  assert.match(source,/lastByte==0xFF/);
-  assert.match(source,/odysseySdLastCsHighByte/);
-  assert.match(source,/csHighByte=odysseySdSpi\.transfer\(0xFF\)/);
-  assert.match(source,/odysseySdStopWriteLocked\(ODYSSEY_SD_RESCUE_BUSY_MS,rescueByte\)/);
-  assert.match(source,/odysseySdCommandLocked\(12u,0u,0x61u,true\)/);
-  assert.match(source,/odysseySdWaitReadyLocked\(500u,cmd12Byte\)/);
-  assert.match(source,/odysseySdCommandLocked\(0u,0u,0x95u,false\)/);
-  assert.doesNotMatch(source,/if \(!ready\)[\s\S]*continue;/);
-  assert.match(source,/response==0x00 \|\| response==0x01\) markOdysseySdBatteryDividerPresent\(\)/);
+  assert.match(source,/odysseySdBitBangTransfer/);
+  assert.match(source,/odysseySdBitBangCommand\(0u,0u,0x95u\)/);
+  assert.match(source,/odysseySdBitBangCommand\(8u,0x1AAu,0x87u/);
+  assert.match(source,/digitalRead\(ODYSSEY_SD_MISO\)/);
+  assert(source.indexOf('bool mounted=odysseySdBeginLocked();')<source.indexOf('odysseySdBitBangProbeLocked(reason)'));
+  assert.doesNotMatch(source,/odysseySdHoldBusIdleEarly|odysseySdRearmProtocolLocked|odysseySdStopWriteLocked/);
   assert.match(source,/if \(mounted\) markOdysseySdBatteryDividerPresent\(\)/);
-  assert.match(source,/odysseySdHoldBusIdleEarly\(\)/);
-  assert.match(source,/pinMode\(ODYSSEY_SD_CS,OUTPUT\);digitalWrite\(ODYSSEY_SD_CS,HIGH\)/);
-  assert.match(source,/pinMode\(ODYSSEY_SD_SCK,OUTPUT\);digitalWrite\(ODYSSEY_SD_SCK,LOW\)/);
-  assert.match(source,/pinMode\(ODYSSEY_SD_MOSI,OUTPUT\);digitalWrite\(ODYSSEY_SD_MOSI,HIGH\)/);
-  assert.match(source,/odysseyWaitForSdStartupSettle\(\);[\s\S]*OdysseySdGuard guard/);
-  assert.match(boot,/Serial\.begin\(115200\);[\s\S]*odysseySdHoldBusIdleEarly\(\);/);
-  assert(boot.indexOf('odysseySdHoldBusIdleEarly();')<boot.indexOf('bootResetReason=esp_reset_reason();'));
+  assert.match(boot,/OdysseyTransfer::initialize\(\);[\s\S]*odysseyInitializeSdCardBeforeBle\(\);/);
+  assert.doesNotMatch(boot,/odysseySdHoldBusIdleEarly/);
   assert.match(boot,/odysseyInitializeSdCardBeforeBle\(\);[\s\S]*if \(odysseySdBatteryDividerPresent\(\)\) sampleBattery\(true\);/);
 });
 
@@ -59,23 +46,19 @@ test('C3 retains current guarded POSIX recording and verified sync runtime',()=>
   assert.match(transfer,/unlink\(full\)/);
 });
 
-test('C3 hard init failures retain BLE diagnostics and never format media',()=>{
+test('C3 hard init failures expose direct GPIO probe and never format media',()=>{
   assert.match(source,/odysseySdLastMountError\{ESP_OK\}/);
   assert.match(source,/\+\+odysseySdMountAttempts/);
   assert.match(source,/odysseySdBootState=2;odysseySdProbeStage=2/);
-  assert.match(source,/odysseySdLastMountError=ESP_FAIL/);
-  assert.match(source,/odysseySdLastMountError=ESP_OK;[\s\S]*odysseySdBootState=1/);
-  assert.match(transfer,/odysseySdLastError\(\)/);
-  assert.match(transfer,/odysseySdAttemptCount\(\)/);
-  assert.match(transfer,/mountAttempts/);
-  assert.match(transfer,/cmd12/);
-  assert.match(transfer,/cmd12Ready/);
-  assert.match(transfer,/rescueReady/);
-  assert.match(transfer,/cmdReady/);
-  assert.match(transfer,/odysseySdLastCmd12Response\(\)/);
-  assert.match(transfer,/odysseySdLastCmd12ReadyState\(\)/);
-  assert.match(transfer,/odysseySdLastRescueReadyState\(\)/);
-  assert.match(transfer,/odysseySdLastCmdReadyState\(\)/);
+  assert.match(source,/odysseySdBitBangCsHigh/);
+  assert.match(source,/odysseySdBitBangCsLow/);
+  assert.match(source,/odysseySdBitBangCmd0/);
+  assert.match(source,/odysseySdBitBangCmd8/);
+  assert.match(transfer,/bbHigh/);
+  assert.match(transfer,/bbLow/);
+  assert.match(transfer,/bbCmd0/);
+  assert.match(transfer,/bbCmd8/);
+  assert.match(transfer,/bbR7/);
   assert.doesNotMatch(source,/format_if_mount_failed=true/);
 });
 

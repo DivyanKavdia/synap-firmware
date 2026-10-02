@@ -228,21 +228,13 @@ static uint16_t clearRecordings() {
 static void worker(void*) {
   Request request;
   uint8_t bytes[480];
-  uint8_t automaticRetries=0;
-  uint32_t nextRetryAt=millis()+5000u;
-  uint32_t lastCatalogueRecoveryAt=0;
   for (;;) {
     if (xQueueReceive(requests,&request,pdMS_TO_TICKS(500))!=pdTRUE) {
-      const bool requested=odysseySdConsumeRecoveryRequest();
-      const uint32_t now=millis();
-      if ((requested || !odysseySdReady()) && !odysseyRecording.load() && !streamingEnabled.load() &&
-          !otaBusy() && !sleepPending &&
-          (requested || (automaticRetries<3 && static_cast<int32_t>(now-nextRetryAt)>=0))) {
-        if (!requested) ++automaticRetries;
-        Serial.printf("[SD] background mount retry %u/3%s\n",unsigned(automaticRetries),requested?" (touch)":"");
-        if (odysseyRecoverSdCard()) automaticRetries=0;
-        nextRetryAt=millis()+5000u*uint32_t(automaticRetries+1);
-      }
+      // Regression diagnostic: never mutate SD state merely because the worker
+      // is idle or a previous operation failed. Build 1481 proved that a card
+      // could be healthy at boot and later be demoted during runtime recovery.
+      // Keep all remounts explicit through operation 14.
+      (void)odysseySdConsumeRecoveryRequest();
       continue;
     }
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load()) continue;
@@ -260,26 +252,15 @@ static void worker(void*) {
         break;
       case 7:
         error=catalogue(total);
-        // DIR access may fail after an otherwise successful FAT mount. A
-        // controlled unmount/remount runs only after catalogue() released its
-        // SD mutex; never tear VFS down while the recorder has a file open.
-        if (error==IO_ERROR &&
-            (!lastCatalogueRecoveryAt ||
-             uint32_t(millis()-lastCatalogueRecoveryAt)>=30000u)) {
-          lastCatalogueRecoveryAt=millis();
-          odysseySdUseProbingClock();
-          Serial.printf("[SD] C3 catalogue I/O failed errno=%d; recovery at 400 kHz\n",catalogueErrno);
-          if (odysseyRecoverSdCard()) error=catalogue(total);
-          else error=NO_SD;
-        }
+        // Never auto-unmount/remount a mounted card because a catalogue read
+        // failed. Preserve the observed state for diagnosis; explicit op 14 is
+        // the only connected remount path.
         if (error==IO_ERROR) odysseySdMarkVfsFailure();
         break;
       case 8: total=catalogueBuffer.length();if(!total)error=FILE_UNAVAILABLE;break;
       case 14:
         selectedPath[0]=0;catalogueBuffer="";
         error=odysseyRecoverSdCard()?OK:NO_SD;
-        if (!error) automaticRetries=0;
-        nextRetryAt=millis()+5000u;
         break;
       case 17: error=removeFile(request.path); break;
       case 18:
@@ -291,13 +272,12 @@ static void worker(void*) {
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
       char detail[288];
       const int n=snprintf(detail,sizeof(detail),
-        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"csHigh\":%d,\"cmd12\":%d,\"cmd12Ready\":%u,\"rescueReady\":%u,\"cmdReady\":%u,\"cmd0\":%d}",
+        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"bbHigh\":%d,\"bbLow\":%d,\"bbCmd0\":%d,\"bbCmd8\":%d,\"bbR7\":%lu}",
         catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
         static_cast<long>(odysseySdLastError()),static_cast<unsigned long>(odysseySdAttemptCount()),
-        static_cast<unsigned long>(odysseySdBeginAttemptCount()),int(odysseySdLastCsHighResponse()),
-        int(odysseySdLastCmd12Response()),unsigned(odysseySdLastCmd12ReadyState()),
-        unsigned(odysseySdLastRescueReadyState()),unsigned(odysseySdLastCmdReadyState()),
-        int(odysseySdLastCmd0Response()));
+        static_cast<unsigned long>(odysseySdBeginAttemptCount()),int(odysseySdBitBangCsHighState()),
+        int(odysseySdBitBangCsLowState()),int(odysseySdBitBangCmd0Response()),
+        int(odysseySdBitBangCmd8Response()),static_cast<unsigned long>(odysseySdBitBangR7Response()));
       reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),
         n>0?std::min(size_t(n),sizeof(detail)-1):0);
     } else reply(request,error,total,request.offset,bytes,size);
