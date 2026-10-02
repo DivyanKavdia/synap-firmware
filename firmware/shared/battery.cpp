@@ -3,9 +3,24 @@
 static std::atomic<bool> odysseySdBatteryDividerObserved{false};
 void markOdysseySdBatteryDividerPresent() { odysseySdBatteryDividerObserved=true; }
 bool odysseySdBatteryDividerPresent() { return odysseySdBatteryDividerObserved.load(); }
+static bool detectOdysseySdBatteryDividerFromAdc(uint32_t adcMv) {
+  if (odysseySdBatteryDividerObserved.load()) return true;
+  const uint32_t standardMv=(adcMv*SYNAP_BATTERY_SCALE_NUMERATOR + SYNAP_BATTERY_SCALE_DENOMINATOR/2u)/SYNAP_BATTERY_SCALE_DENOMINATOR;
+  const uint32_t sdMv=(adcMv*SYNAP_SD_BATTERY_SCALE_NUMERATOR + SYNAP_SD_BATTERY_SCALE_DENOMINATOR/2u)/SYNAP_SD_BATTERY_SCALE_DENOMINATOR;
+  // A healthy LiPo cannot sustain the C3 below 2.8 V. If the legacy 2:1
+  // reconstruction is therefore impossible while the 1 MOhm/470 kOhm
+  // reconstruction lands in the normal LiPo window, the divider itself is
+  // sufficient evidence of the SD-equipped hardware even when SD init fails.
+  if (standardMv<2800u && sdMv>=3300u && sdMv<=4350u) {
+    odysseySdBatteryDividerObserved=true;
+    return true;
+  }
+  return false;
+}
 #else
 void markOdysseySdBatteryDividerPresent() {}
 bool odysseySdBatteryDividerPresent() { return false; }
+static bool detectOdysseySdBatteryDividerFromAdc(uint32_t) { return false; }
 #endif
 
 uint16_t batteryFullMillivolts() {
@@ -101,6 +116,12 @@ void sampleBattery(bool force) {
   const uint32_t adcRaw=rawTotal/16u;
   batteryAdcMillivolts=uint16_t(adcMv>65535u?65535u:adcMv);
   batteryAdcRaw=uint16_t(adcRaw>65535u?65535u:adcRaw);
+#if CONFIG_IDF_TARGET_ESP32C3
+  const bool dividerWasObserved=odysseySdBatteryDividerPresent();
+  if (!dividerWasObserved && detectOdysseySdBatteryDividerFromAdc(adcMv)) {
+    Serial.printf("[BATTERY] inferred SD divider from adc=%lumV\n",static_cast<unsigned long>(adcMv));
+  }
+#endif
   const uint32_t cellMv=batteryCellMillivoltsFromAdc(adcMv);
   if (cellMv>=2800u && cellMv<=4350u) {
     batteryMillivolts=uint16_t(cellMv);
