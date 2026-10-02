@@ -49,20 +49,6 @@ static std::atomic<bool> odysseySdRecoveryRequested{false};
 void odysseySdRequestRecovery() { odysseySdRecoveryRequested=true; }
 bool odysseySdConsumeRecoveryRequest() { return odysseySdRecoveryRequested.exchange(false); }
 
-// A failed boot mount used to leave storage dead until the user found "Check
-// SD" or double-tapped, which is a poor answer to a card that simply needed
-// another moment. Three backed-off retries are armed by a failed BOOT mount
-// only. A catalogue or read failure during use still never schedules a
-// remount behind the user's back - that stays an explicit request.
-static constexpr uint8_t ODYSSEY_SD_REARM_STEPS=3;
-static constexpr uint32_t ODYSSEY_SD_REARM_DELAYS_MS[ODYSSEY_SD_REARM_STEPS]={5000u,20000u,60000u};
-static std::atomic<uint8_t> odysseySdRearmStep{ODYSSEY_SD_REARM_STEPS};
-static std::atomic<uint32_t> odysseySdRearmAt{0};
-static void odysseySdDisarmRearm() { odysseySdRearmStep=ODYSSEY_SD_REARM_STEPS; }
-static void odysseySdArmBootRearm() {
-  odysseySdRearmStep=0;
-  odysseySdRearmAt=millis()+ODYSSEY_SD_REARM_DELAYS_MS[0];
-}
 #endif
 uint8_t odysseySdDetectionState() { return odysseySdBootState.load(); }
 uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
@@ -71,12 +57,12 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
 static constexpr uint32_t ODYSSEY_SD_INIT_FREQ_HZ=400000u;
-// A single attempt is enough only for a card that is already idle. After a
-// software reset the card can still be finishing a transfer it was mid-way
-// through, so the first SD.begin() legitimately fails and a retry succeeds.
-static constexpr uint8_t ODYSSEY_SD_BOOT_ATTEMPTS=3;
-static constexpr uint8_t ODYSSEY_SD_RECOVERY_ATTEMPTS=2;
-static constexpr uint32_t ODYSSEY_SD_ATTEMPT_SETTLE_MS=60u;
+// Preserve the known-good build-1445 lifecycle: one mount attempt per
+// explicit action. Repeating SD.end()/SPI.end()/SD.begin() autonomously on a
+// continuously powered card is itself a state mutation and obscures the first
+// failure we need to diagnose.
+static constexpr uint8_t ODYSSEY_SD_BOOT_ATTEMPTS=1;
+static constexpr uint8_t ODYSSEY_SD_RECOVERY_ATTEMPTS=1;
 // Stopping an open-ended CMD18 read costs about one 512-byte block of clocking.
 // Budget generously but never let a reset path stall on a card that will not
 // answer: a healthy idle card breaks out of the drain within a millisecond.
@@ -91,13 +77,18 @@ static SPIClass odysseySdSpi(FSPI);
 static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
 static std::atomic<uint32_t> odysseySdBeginAttempts{0};
-static std::atomic<uint8_t> odysseySdLastMountReason{0}; // 1=boot,2=op14,3=touch,4=probe,5=rearm
+static std::atomic<uint8_t> odysseySdLastMountReason{0}; // 1=boot,2=op14,3=touch,4=probe
 static std::atomic<int16_t> odysseySdBitBangCsHigh{-2};
 static std::atomic<int16_t> odysseySdBitBangCsLow{-2};
 static std::atomic<uint8_t> odysseySdBitBangStopState{0}; // 1=released,2=still-busy,3=no-ready
 static std::atomic<int16_t> odysseySdBitBangCmd12{-2};
 static std::atomic<uint8_t> odysseySdBitBangCmd12Ready{0}; // 1=sustained idle after CMD12,2=no idle window
 static std::atomic<uint32_t> odysseySdBitBangDrainBytes{0};
+static std::atomic<uint16_t> odysseySdRawZero{0};
+static std::atomic<uint16_t> odysseySdRawFF{0};
+static std::atomic<uint16_t> odysseySdRawFE{0};
+static std::atomic<uint16_t> odysseySdRawOther{0};
+static std::atomic<uint16_t> odysseySdRawMaxFFRun{0};
 static std::atomic<int16_t> odysseySdBitBangCmd0{-2};
 static std::atomic<int16_t> odysseySdBitBangCmd8{-2};
 static std::atomic<uint32_t> odysseySdBitBangR7{0};
@@ -114,6 +105,11 @@ uint8_t odysseySdBitBangStopStateValue() { return odysseySdBitBangStopState.load
 int16_t odysseySdBitBangCmd12Response() { return odysseySdBitBangCmd12.load(); }
 uint8_t odysseySdBitBangCmd12ReadyState() { return odysseySdBitBangCmd12Ready.load(); }
 uint32_t odysseySdBitBangDrainByteCount() { return odysseySdBitBangDrainBytes.load(); }
+uint16_t odysseySdRawZeroCount() { return odysseySdRawZero.load(); }
+uint16_t odysseySdRawFFCount() { return odysseySdRawFF.load(); }
+uint16_t odysseySdRawFECount() { return odysseySdRawFE.load(); }
+uint16_t odysseySdRawOtherCount() { return odysseySdRawOther.load(); }
+uint16_t odysseySdRawMaxFFRunCount() { return odysseySdRawMaxFFRun.load(); }
 int16_t odysseySdBitBangCmd0Response() { return odysseySdBitBangCmd0.load(); }
 int16_t odysseySdBitBangCmd8Response() { return odysseySdBitBangCmd8.load(); }
 uint32_t odysseySdBitBangR7Response() { return odysseySdBitBangR7.load(); }
@@ -289,6 +285,34 @@ static uint8_t odysseySdBitBangStopWriteLocked(uint32_t readyMs=1500u,uint32_t r
   return released?1:2;
 }
 
+static void odysseySdSampleRawLocked() {
+  // Passive classification before sending any recovery command. Clock 1024
+  // bytes with MOSI high and record what DO is actually doing. An idle command
+  // bus is overwhelmingly 0xFF; a program-busy/stuck-low card is overwhelmingly
+  // 0x00; an active CMD18 stream produces varied bytes and often 0xFE tokens.
+  uint16_t zero=0,ff=0,fe=0,other=0,maxFFRun=0,ffRun=0;
+  digitalWrite(ODYSSEY_SD_CS,LOW);
+  for (uint16_t i=0;i<1024u;++i) {
+    const uint8_t value=odysseySdBitBangTransfer(0xFF);
+    if (value==0x00) ++zero;
+    else if (value==0xFF) ++ff;
+    else if (value==0xFE) ++fe;
+    else ++other;
+    if (value==0xFF) {
+      if (++ffRun>maxFFRun) maxFFRun=ffRun;
+    } else {
+      ffRun=0;
+    }
+  }
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  (void)odysseySdBitBangTransfer(0xFF);
+  odysseySdRawZero=zero;
+  odysseySdRawFF=ff;
+  odysseySdRawFE=fe;
+  odysseySdRawOther=other;
+  odysseySdRawMaxFFRun=maxFFRun;
+}
+
 static uint8_t odysseySdBitBangRecoverLocked(const char* reason) {
   // Runs only after the exact known-good 1445 SD.begin() has failed. The
   // sequence deliberately bypasses SPIClass/SD/FatFS so it can recover a card
@@ -308,6 +332,8 @@ static uint8_t odysseySdBitBangRecoverLocked(const char* reason) {
   odysseySdBitBangCsLow=digitalRead(ODYSSEY_SD_MISO)==HIGH?1:0;
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   (void)odysseySdBitBangTransfer(0xFF);
+
+  odysseySdSampleRawLocked();
 
   // The historical failure was first observed after catalogue/read activity.
   // Drain the open-ended CMD18 stream after CMD12 instead of trying to parse
@@ -341,10 +367,12 @@ static uint8_t odysseySdBitBangRecoverLocked(const char* reason) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   digitalWrite(ODYSSEY_SD_SCK,LOW);
   digitalWrite(ODYSSEY_SD_MOSI,HIGH);
-  Serial.printf("[SD] %s GPIO recovery high=%d low=%d CMD12candidate=0x%02X readIdle=%u drain=%lu stop=%u CMD0=0x%02X CMD8=0x%02X R7=0x%08lX\n",
+  Serial.printf("[SD] %s GPIO recovery high=%d low=%d raw0=%u rawFF=%u rawFE=%u rawOther=%u rawMaxFF=%u CMD12candidate=0x%02X readIdle=%u drain=%lu stop=%u CMD0=0x%02X CMD8=0x%02X R7=0x%08lX\n",
     reason,int(odysseySdBitBangCsHigh.load()),int(odysseySdBitBangCsLow.load()),
-    unsigned(cmd12),unsigned(cmd12Ready),static_cast<unsigned long>(drainBytes),
-    unsigned(stopState),unsigned(cmd0),unsigned(cmd8),
+    unsigned(odysseySdRawZero.load()),unsigned(odysseySdRawFF.load()),
+    unsigned(odysseySdRawFE.load()),unsigned(odysseySdRawOther.load()),
+    unsigned(odysseySdRawMaxFFRun.load()),unsigned(cmd12),unsigned(cmd12Ready),
+    static_cast<unsigned long>(drainBytes),unsigned(stopState),unsigned(cmd0),unsigned(cmd8),
     static_cast<unsigned long>(odysseySdBitBangR7.load()));
   return cmd0;
 }
@@ -567,38 +595,16 @@ bool odysseyInitializeSdCardBeforeBle() {
   OdysseySdGuard guard;
   if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return false; }
   const bool ready=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
-  if (ready) odysseySdDisarmRearm();
-  else odysseySdArmBootRearm();
-  Serial.printf("[SD] boot initialization complete state=%u stage=%u rearm=%u before BLE\n",
-    unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()),ready?0u:1u);
+  Serial.printf("[SD] boot initialization complete state=%u stage=%u before BLE\n",
+    unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()));
   return ready;
-}
-
-// True at most ODYSSEY_SD_REARM_STEPS times after a failed boot mount, and only
-// once the next backoff has elapsed. The caller still decides whether the
-// device is idle enough to act on it.
-bool odysseySdConsumeAutoRearm() {
-  const uint8_t step=odysseySdRearmStep.load();
-  if (step>=ODYSSEY_SD_REARM_STEPS) return false;
-  if (odysseySdReady()) { odysseySdDisarmRearm(); return false; }
-  if (int32_t(millis()-odysseySdRearmAt.load())<0) return false;
-  const uint8_t next=uint8_t(step+1);
-  if (next>=ODYSSEY_SD_REARM_STEPS) {
-    odysseySdDisarmRearm();
-  } else {
-    odysseySdRearmStep=next;
-    odysseySdRearmAt=millis()+ODYSSEY_SD_REARM_DELAYS_MS[next];
-  }
-  return true;
 }
 bool odysseyRecoverSdCard(const char* reason) {
   OdysseySdGuard guard(pdMS_TO_TICKS(5000));
   if (!guard) return false;
   odysseySdBootState=0;odysseySdProbeStage=0;
   odysseySdReleaseLocked();
-  const bool ready=odysseySdMountLocked(reason?reason:"op14",ODYSSEY_SD_RECOVERY_ATTEMPTS);
-  if (ready) odysseySdDisarmRearm();
-  return ready;
+  return odysseySdMountLocked(reason?reason:"op14",ODYSSEY_SD_RECOVERY_ATTEMPTS);
 }
 
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
@@ -615,22 +621,18 @@ bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
   const uint8_t state=odysseySdBootState.load();
   odysseySdBootState=0;odysseySdProbeStage=0;
 
-  // state 3 is "card type NONE" - the host mounted a bus with nothing on it,
-  // so there is no transfer to stop and no reason to spend the budget.
-  if (state==3) {
+  // Only a successfully mounted session can have an application-owned CMD18
+  // or CMD25 transfer to close. If initialization already failed, do not inject
+  // another raw recovery sequence on every reset/deep-sleep transition.
+  if (!wasReady) {
     odysseySdReleaseLocked();
-    Serial.println("[SD] power transition prepared: no card to quiesce");
+    Serial.printf("[SD] power transition prepared without quiesce state=%u\n",unsigned(state));
     return true;
   }
 
-  // Everything else gets the stop sequence, including a card that failed to
-  // mount: a failed mount is the strongest single indicator that the card is
-  // mid-transfer, and that is exactly the case worth cleaning up before the
-  // host disappears again.
   const uint8_t idle=odysseySdQuiesceLocked(ODYSSEY_SD_QUIESCE_BUDGET_MS);
   odysseySdReleaseLocked();
-  Serial.printf("[SD] power transition prepared ready=%u quiesced=%u\n",
-    wasReady?1u:0u,idle==1?1u:0u);
+  Serial.printf("[SD] power transition prepared ready=1 quiesced=%u\n",idle==1?1u:0u);
   return true;
 }
 #else
