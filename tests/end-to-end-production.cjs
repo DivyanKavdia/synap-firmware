@@ -55,6 +55,7 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   const connect=c3.match(/void onConnect\(BLEServer\* server\) override \{[\s\S]*?\n  \}/)?.[0]||'';
   assert.doesNotMatch(connect,/odysseyStopRequested\s*=\s*true/);
   assert.match(c3,/SD unavailable; requesting background recovery/);
+  assert.match(c3,/physical touch requested software recovery/);
   assert.match(c3,/!odysseySdReady\(\)/);
   assert.match(c3,/ready\|=SYNAP_CAP_SDAUDIO/);
   assert.match(c3,/static SPIClass odysseySdSpi\(FSPI\)/);
@@ -95,7 +96,7 @@ test('C3 exact Arduino first mount precedes BLE while GPIO fallback remains post
   const sd=c3.indexOf('odysseyInitializeSdCardBeforeBle();',worker);
   const ble=c3.indexOf('initializeBLE();',sd);
   assert(worker>0 && sd>worker && ble>sd,'C3 must reproduce 1445 worker -> mount -> BLE ordering');
-  assert(c3.indexOf('bool mounted=odysseySdBeginLocked();')<c3.indexOf('odysseySdBitBangProbeLocked(reason)'));
+  assert(c3.indexOf('bool mounted=odysseySdBeginLocked();')<c3.indexOf('odysseySdBitBangRecoverLocked(reason)'));
   assert.match(c3,/static SPIClass odysseySdSpi\(FSPI\)/);
   assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,/);
   assert.match(c3,/SD\.end\(\)/);
