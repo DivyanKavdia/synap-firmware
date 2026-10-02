@@ -1,7 +1,38 @@
+// SYNAP_BATTERY_RUNTIME_BEGIN
+#if CONFIG_IDF_TARGET_ESP32C3
+static std::atomic<bool> odysseySdBatteryDividerObserved{false};
+void markOdysseySdBatteryDividerPresent() { odysseySdBatteryDividerObserved=true; }
+bool odysseySdBatteryDividerPresent() { return odysseySdBatteryDividerObserved.load(); }
+#else
+void markOdysseySdBatteryDividerPresent() {}
+bool odysseySdBatteryDividerPresent() { return false; }
+#endif
+
+uint16_t batteryFullMillivolts() {
+#if CONFIG_IDF_TARGET_ESP32C3
+  if (odysseySdBatteryDividerPresent()) return SYNAP_SD_BATTERY_FULL_MV;
+#endif
+  return SYNAP_BATTERY_FULL_MV;
+}
+
+uint32_t batteryCellMillivoltsFromAdc(uint32_t adcMv) {
+  uint32_t numerator=SYNAP_BATTERY_SCALE_NUMERATOR;
+  uint32_t denominator=SYNAP_BATTERY_SCALE_DENOMINATOR;
+#if CONFIG_IDF_TARGET_ESP32C3
+  if (odysseySdBatteryDividerPresent()) {
+    numerator=SYNAP_SD_BATTERY_SCALE_NUMERATOR;
+    denominator=SYNAP_SD_BATTERY_SCALE_DENOMINATOR;
+  }
+#endif
+  return (adcMv*numerator + denominator/2u)/denominator;
+}
+
 uint8_t batteryPercentFromMillivolts(uint16_t mv) {
-  // Board calibration sets the full-charge anchor; lower LiPo anchors are shared.
-  if (mv>=SYNAP_BATTERY_FULL_MV) return 100;
-  if (mv>=4050) return 90 + uint32_t(mv-4050)*10/(SYNAP_BATTERY_FULL_MV-4050);
+  // Standard C3 keeps its historical 2:1 calibration. Once SD hardware is
+  // positively observed, the SD-equipped C3 uses its 1 MOhm / 470 kOhm divider.
+  const uint16_t fullMv=batteryFullMillivolts();
+  if (mv>=fullMv) return 100;
+  if (mv>=4050) return 90 + uint32_t(mv-4050)*10/(fullMv-4050);
   if (mv>=3950) return 80 + uint32_t(mv-3950)*10/100;
   if (mv>=3850) return 70 + uint32_t(mv-3850)*10/100;
   if (mv>=3780) return 60 + uint32_t(mv-3780)*10/70;
@@ -70,7 +101,7 @@ void sampleBattery(bool force) {
   const uint32_t adcRaw=rawTotal/16u;
   batteryAdcMillivolts=uint16_t(adcMv>65535u?65535u:adcMv);
   batteryAdcRaw=uint16_t(adcRaw>65535u?65535u:adcRaw);
-  const uint32_t cellMv=(adcMv*SYNAP_BATTERY_SCALE_NUMERATOR + SYNAP_BATTERY_SCALE_DENOMINATOR/2u)/SYNAP_BATTERY_SCALE_DENOMINATOR;
+  const uint32_t cellMv=batteryCellMillivoltsFromAdc(adcMv);
   if (cellMv>=2800u && cellMv<=4350u) {
     batteryMillivolts=uint16_t(cellMv);
     batteryPercent=batteryPercentFromMillivolts(batteryMillivolts);

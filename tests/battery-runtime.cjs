@@ -7,7 +7,7 @@ const source=fs.readFileSync(path.join(__dirname,'../synap_esp32s3/synap_esp32s3
 for(const [c3,disabled] of [[false,false],[true,false],[true,true]]){
   test(`battery sampling uses the actual target conversion and policy (C3=${c3}, disabled=${disabled})`,()=>{
     const code=materialize(source,c3?'esp32c3-supermini-4m':'esp32s3-fh4r2-qspi-4m');
-    const battery=code.slice(code.indexOf('uint8_t batteryPercentFromMillivolts('),code.indexOf('bool armTouchWakeSource() {'));
+    const battery=code.slice(code.indexOf('// SYNAP_BATTERY_RUNTIME_BEGIN'),code.indexOf('bool armTouchWakeSource() {'));
     const attenuation=code.match(/analogSetPinAttenuation\(BATTERY_ADC_PIN, ADC_\w+\);/)[0];
     const profile=require('../tools/device-profile.cjs').profileBlock(code).split('\n').filter(line=>!line.startsWith('constexpr ')).join('\n');
     const fixture=fs.readFileSync(path.join(__dirname,'battery-runtime.cpp'),'utf8');
@@ -16,9 +16,12 @@ for(const [c3,disabled] of [[false,false],[true,false],[true,true]]){
     assert.match(nativeTest(fixture.replace('// INSERT CONFIGURATION',profile+'\n'+`void configureBatteryAdc(){${attenuation}}`).replace('// INSERT BATTERY',battery),flags),/PASS battery/);
     if(c3){
       assert.match(code,/#define SYNAP_BATTERY_ADC_PIN 1/);
-      assert.match(code,/#define SYNAP_BATTERY_SCALE_NUMERATOR 1470/);
-      assert.match(code,/#define SYNAP_BATTERY_SCALE_DENOMINATOR 470/);
-      assert.match(code,/#define SYNAP_BATTERY_FULL_MV 4200/);
+      assert.match(code,/#define SYNAP_BATTERY_SCALE_NUMERATOR 2/);
+      assert.match(code,/#define SYNAP_BATTERY_SCALE_DENOMINATOR 1/);
+      assert.match(code,/#define SYNAP_BATTERY_FULL_MV 4150/);
+      assert.match(code,/#define SYNAP_SD_BATTERY_SCALE_NUMERATOR 1470/);
+      assert.match(code,/#define SYNAP_SD_BATTERY_SCALE_DENOMINATOR 470/);
+      assert.match(code,/#define SYNAP_SD_BATTERY_FULL_MV 4200/);
       assert.doesNotMatch(code,/BATTERY_CAL_ADC_MV|raw 1544/);
       assert.match(code,/TOUCH_SLEEP_HOLD_MS = 4000/);
     }

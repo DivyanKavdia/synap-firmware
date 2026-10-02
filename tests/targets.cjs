@@ -17,9 +17,10 @@ test('target catalog keeps S3 SuperMini as primary',()=>{
   assert.equal(TARGETS['esp32c3-supermini-4m'].hardware.ledDriver,'neopixel');
   const c3sd=TARGETS['esp32c3-supermini-4m'];
   assert(c3sd.features.includes('sd') && c3sd.features.includes('sdAudio'));
-  assert.equal(c3sd.hardware.batteryCellMv,1470);
-  assert.equal(c3sd.hardware.batteryAdcMv,470);
-  assert.equal(c3sd.hardware.batteryFullMv,4200);
+  assert.equal(c3sd.hardware.batteryCellMv,2);
+  assert.equal(c3sd.hardware.batteryAdcMv,1);
+  assert.equal(c3sd.hardware.batteryFullMv,4150);
+  assert.deepEqual(c3sd.hardware.sdBatteryCalibration,{batteryAdcMv:470,batteryCellMv:1470,batteryFullMv:4200});
 });
 
 test('secondary generated target preserves the production interaction contract',()=>{

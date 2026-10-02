@@ -24,6 +24,11 @@ function renderProfile(target) {
     define('SYNAP_BATTERY_FULL_MV', h.batteryFullMv ?? 4130),
     define('SYNAP_BATTERY_SCALE_NUMERATOR', h.batteryCellMv ?? 1),
     define('SYNAP_BATTERY_SCALE_DENOMINATOR', h.batteryAdcMv ?? 1),
+    ...(h.sdBatteryCalibration ? [
+      define('SYNAP_SD_BATTERY_SCALE_NUMERATOR', h.sdBatteryCalibration.batteryCellMv),
+      define('SYNAP_SD_BATTERY_SCALE_DENOMINATOR', h.sdBatteryCalibration.batteryAdcMv),
+      define('SYNAP_SD_BATTERY_FULL_MV', h.sdBatteryCalibration.batteryFullMv),
+    ] : []),
     `constexpr uint8_t RGB_LED_PIN = ${h.led ?? 255};`,
     `constexpr int8_t I2S_BCLK_PIN = ${h.bclk ?? -1}, I2S_WS_PIN = ${h.ws ?? -1}, I2S_DATA_IN_PIN = ${h.data};`,
     `constexpr uint32_t IDLE_CPU_MHZ = ${h.idleMHz}, ACTIVE_CPU_MHZ = ${h.activeMHz};`,
