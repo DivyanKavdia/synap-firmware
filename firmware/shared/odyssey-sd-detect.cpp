@@ -73,7 +73,8 @@ static std::atomic<int16_t> odysseySdBitBangCsHigh{-2};
 static std::atomic<int16_t> odysseySdBitBangCsLow{-2};
 static std::atomic<uint8_t> odysseySdBitBangStopState{0}; // 1=released,2=still-busy,3=no-ready
 static std::atomic<int16_t> odysseySdBitBangCmd12{-2};
-static std::atomic<uint8_t> odysseySdBitBangCmd12Ready{0}; // 1=R1b released,2=busy timeout,3=no R1
+static std::atomic<uint8_t> odysseySdBitBangCmd12Ready{0}; // 1=sustained idle after CMD12,2=no idle window
+static std::atomic<uint32_t> odysseySdBitBangDrainBytes{0};
 static std::atomic<int16_t> odysseySdBitBangCmd0{-2};
 static std::atomic<int16_t> odysseySdBitBangCmd8{-2};
 static std::atomic<uint32_t> odysseySdBitBangR7{0};
@@ -89,6 +90,7 @@ int16_t odysseySdBitBangCsLowState() { return odysseySdBitBangCsLow.load(); }
 uint8_t odysseySdBitBangStopStateValue() { return odysseySdBitBangStopState.load(); }
 int16_t odysseySdBitBangCmd12Response() { return odysseySdBitBangCmd12.load(); }
 uint8_t odysseySdBitBangCmd12ReadyState() { return odysseySdBitBangCmd12Ready.load(); }
+uint32_t odysseySdBitBangDrainByteCount() { return odysseySdBitBangDrainBytes.load(); }
 int16_t odysseySdBitBangCmd0Response() { return odysseySdBitBangCmd0.load(); }
 int16_t odysseySdBitBangCmd8Response() { return odysseySdBitBangCmd8.load(); }
 uint32_t odysseySdBitBangR7Response() { return odysseySdBitBangR7.load(); }
@@ -186,35 +188,45 @@ static uint8_t odysseySdBitBangCommand(uint8_t command,uint32_t argument,uint8_t
   return response;
 }
 
-static uint8_t odysseySdBitBangCommandR1b(uint8_t command,uint32_t argument,uint8_t crc,
-    uint8_t& readyState) {
-  // R1b is not complete when the one-byte R1 arrives. Keep CS asserted and
-  // keep clocking until DO releases high; raising CS at the R1 byte can leave
-  // a continuously powered card in the very state we are trying to recover.
+static uint8_t odysseySdBitBangStopReadLocked(uint8_t& responseCandidate,uint32_t& drainedBytes) {
+  // CMD12 may be issued while CMD18 data is still flowing. Bytes returned
+  // immediately after the mandatory stuff byte can therefore be payload and
+  // must not be classified as R1 merely because bit 7 is clear. Keep CS low,
+  // continue clocking, and require a sustained 0xFF idle window before
+  // considering the read stream quiesced.
   digitalWrite(ODYSSEY_SD_CS,LOW);
-  odysseySdBitBangTransfer(uint8_t(0x40u|command));
-  odysseySdBitBangTransfer(uint8_t(argument>>24));
-  odysseySdBitBangTransfer(uint8_t(argument>>16));
-  odysseySdBitBangTransfer(uint8_t(argument>>8));
-  odysseySdBitBangTransfer(uint8_t(argument));
-  odysseySdBitBangTransfer(crc);
-  // CMD12 has one mandatory stuff byte before its R1 response.
-  (void)odysseySdBitBangTransfer(0xFF);
-  uint8_t response=0xFF;
-  for (uint8_t i=0;i<32;++i) {
-    response=odysseySdBitBangTransfer(0xFF);
-    if ((response&0x80u)==0) break;
-  }
-  if ((response&0x80u)!=0) {
-    readyState=3;
-  } else {
-    uint8_t last=0;
-    readyState=odysseySdBitBangWaitReady(3000u,last)?1:2;
+  odysseySdBitBangTransfer(0x4Cu); // CMD12
+  odysseySdBitBangTransfer(0x00);
+  odysseySdBitBangTransfer(0x00);
+  odysseySdBitBangTransfer(0x00);
+  odysseySdBitBangTransfer(0x00);
+  odysseySdBitBangTransfer(0x61u);
+  (void)odysseySdBitBangTransfer(0xFF); // mandatory CMD12 stuff byte
+
+  responseCandidate=0xFF;
+  drainedBytes=0;
+  uint16_t idleRun=0;
+  static constexpr uint32_t MAX_DRAIN_BYTES=8192u;
+  static constexpr uint16_t REQUIRED_IDLE_BYTES=64u;
+  bool idle=false;
+  for (;drainedBytes<MAX_DRAIN_BYTES;++drainedBytes) {
+    const uint8_t value=odysseySdBitBangTransfer(0xFF);
+    if (responseCandidate==0xFF && (value&0x80u)==0) responseCandidate=value;
+    if (value==0xFF) {
+      if (++idleRun>=REQUIRED_IDLE_BYTES) {
+        idle=true;
+        ++drainedBytes;
+        break;
+      }
+    } else {
+      idleRun=0;
+    }
   }
   digitalWrite(ODYSSEY_SD_CS,HIGH);
-  (void)odysseySdBitBangTransfer(0xFF);
-  return response;
+  for (uint8_t i=0;i<10;++i) (void)odysseySdBitBangTransfer(0xFF);
+  return idle?1:2;
 }
+
 
 static uint8_t odysseySdBitBangGoIdleLocked() {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
@@ -270,12 +282,14 @@ static uint8_t odysseySdBitBangRecoverLocked(const char* reason) {
   (void)odysseySdBitBangTransfer(0xFF);
 
   // The historical failure was first observed after catalogue/read activity.
-  // Try the read-side stop first. CMD12 is R1b: unlike a normal command, CS
-  // must remain asserted until the card releases its busy-low response.
-  uint8_t cmd12Ready=0;
-  const uint8_t cmd12=odysseySdBitBangCommandR1b(12u,0u,0x61u,cmd12Ready);
+  // Drain the open-ended CMD18 stream after CMD12 instead of trying to parse
+  // an R1 byte out of data that may still be arriving from the card.
+  uint8_t cmd12=0xFF;
+  uint32_t drainBytes=0;
+  const uint8_t cmd12Ready=odysseySdBitBangStopReadLocked(cmd12,drainBytes);
   odysseySdBitBangCmd12=int16_t(cmd12);
   odysseySdBitBangCmd12Ready=cmd12Ready;
+  odysseySdBitBangDrainBytes=drainBytes;
 
   uint8_t cmd0=odysseySdBitBangGoIdleLocked();
 
@@ -299,9 +313,10 @@ static uint8_t odysseySdBitBangRecoverLocked(const char* reason) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   digitalWrite(ODYSSEY_SD_SCK,LOW);
   digitalWrite(ODYSSEY_SD_MOSI,HIGH);
-  Serial.printf("[SD] %s GPIO recovery high=%d low=%d CMD12=0x%02X r1b=%u stop=%u CMD0=0x%02X CMD8=0x%02X R7=0x%08lX\n",
+  Serial.printf("[SD] %s GPIO recovery high=%d low=%d CMD12candidate=0x%02X readIdle=%u drain=%lu stop=%u CMD0=0x%02X CMD8=0x%02X R7=0x%08lX\n",
     reason,int(odysseySdBitBangCsHigh.load()),int(odysseySdBitBangCsLow.load()),
-    unsigned(cmd12),unsigned(cmd12Ready),unsigned(stopState),unsigned(cmd0),unsigned(cmd8),
+    unsigned(cmd12),unsigned(cmd12Ready),static_cast<unsigned long>(drainBytes),
+    unsigned(stopState),unsigned(cmd0),unsigned(cmd8),
     static_cast<unsigned long>(odysseySdBitBangR7.load()));
   return cmd0;
 }
