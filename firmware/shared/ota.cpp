@@ -312,7 +312,12 @@ void otaTick() {
   }
   if (otaSession.state==Synap::COMMITTED) {
     if (!rebootAt) rebootAt=millis();
-    if (uint32_t(millis()-rebootAt)>1500) ESP.restart();
+    if (uint32_t(millis()-rebootAt)>1500) {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      if (!odysseyPrepareSdForPowerTransition(1000u)) return;
+#endif
+      ESP.restart();
+    }
   }
 }
 
