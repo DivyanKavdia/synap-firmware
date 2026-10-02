@@ -791,9 +791,24 @@ void stopMicrophone() {
 static std::atomic<bool> odysseySdBatteryDividerObserved{false};
 void markOdysseySdBatteryDividerPresent() { odysseySdBatteryDividerObserved=true; }
 bool odysseySdBatteryDividerPresent() { return odysseySdBatteryDividerObserved.load(); }
+static bool detectOdysseySdBatteryDividerFromAdc(uint32_t adcMv) {
+  if (odysseySdBatteryDividerObserved.load()) return true;
+  const uint32_t standardMv=(adcMv*SYNAP_BATTERY_SCALE_NUMERATOR + SYNAP_BATTERY_SCALE_DENOMINATOR/2u)/SYNAP_BATTERY_SCALE_DENOMINATOR;
+  const uint32_t sdMv=(adcMv*SYNAP_SD_BATTERY_SCALE_NUMERATOR + SYNAP_SD_BATTERY_SCALE_DENOMINATOR/2u)/SYNAP_SD_BATTERY_SCALE_DENOMINATOR;
+  // A healthy LiPo cannot sustain the C3 below 2.8 V. If the legacy 2:1
+  // reconstruction is therefore impossible while the 1 MOhm/470 kOhm
+  // reconstruction lands in the normal LiPo window, the divider itself is
+  // sufficient evidence of the SD-equipped hardware even when SD init fails.
+  if (standardMv<2800u && sdMv>=3300u && sdMv<=4350u) {
+    odysseySdBatteryDividerObserved=true;
+    return true;
+  }
+  return false;
+}
 #else
 void markOdysseySdBatteryDividerPresent() {}
 bool odysseySdBatteryDividerPresent() { return false; }
+static bool detectOdysseySdBatteryDividerFromAdc(uint32_t) { return false; }
 #endif
 
 uint16_t batteryFullMillivolts() {
@@ -889,6 +904,12 @@ void sampleBattery(bool force) {
   const uint32_t adcRaw=rawTotal/16u;
   batteryAdcMillivolts=uint16_t(adcMv>65535u?65535u:adcMv);
   batteryAdcRaw=uint16_t(adcRaw>65535u?65535u:adcRaw);
+#if CONFIG_IDF_TARGET_ESP32C3
+  const bool dividerWasObserved=odysseySdBatteryDividerPresent();
+  if (!dividerWasObserved && detectOdysseySdBatteryDividerFromAdc(adcMv)) {
+    Serial.printf("[BATTERY] inferred SD divider from adc=%lumV\n",static_cast<unsigned long>(adcMv));
+  }
+#endif
   const uint32_t cellMv=batteryCellMillivoltsFromAdc(adcMv);
   if (cellMv>=2800u && cellMv<=4350u) {
     batteryMillivolts=uint16_t(cellMv);
@@ -2171,15 +2192,16 @@ static constexpr uint8_t ODYSSEY_SD_BOOT_ATTEMPTS=1;
 static constexpr uint8_t ODYSSEY_SD_RECOVERY_ATTEMPTS=1;
 static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=8;
 
-// Restore the proven Arduino-ESP32 SD SPI initialization path used by build 1510.
-// The pinned 3.3.5 core is patched in CI with Espressif's SPI-init compatibility fix.
-// Runtime recording/sync continues to use the current POSIX/VFS implementation.
+// Restore the exact Arduino-ESP32 3.3.5 stock SD initialization used by the
+// known-good Odyssey C3 build 1445. Runtime recording/sync continues to use
+// the current guarded POSIX/VFS implementation after the mount succeeds.
 static SPIClass odysseySdSpi(FSPI);
 static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
 static std::atomic<uint32_t> odysseySdBeginAttempts{0};
 static std::atomic<int16_t> odysseySdLastCmd0{-2};
 static std::atomic<uint8_t> odysseySdLastCmdReady{0};
+static std::atomic<int16_t> odysseySdLastCsHighByte{-2};
 static StaticSemaphore_t odysseySdMutexStorage;
 static SemaphoreHandle_t odysseySdMutex=nullptr;
 
@@ -2188,6 +2210,7 @@ uint32_t odysseySdAttemptCount() { return odysseySdMountAttempts.load(); }
 uint32_t odysseySdBeginAttemptCount() { return odysseySdBeginAttempts.load(); }
 int16_t odysseySdLastCmd0Response() { return odysseySdLastCmd0.load(); }
 uint8_t odysseySdLastCmdReadyState() { return odysseySdLastCmdReady.load(); }
+int16_t odysseySdLastCsHighResponse() { return odysseySdLastCsHighByte.load(); }
 void odysseySdUseProbingClock() {}
 void odysseySdMarkVfsFailure() {
   odysseySdBootState=2;odysseySdProbeStage=4;
@@ -2258,7 +2281,9 @@ static uint8_t odysseySdRearmProtocolLocked(const char* reason) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
   odysseySdSpi.beginTransaction(SPISettings(ODYSSEY_SD_INIT_FREQ_HZ,MSBFIRST,SPI_MODE0));
-  for (uint8_t i=0;i<20;++i) odysseySdSpi.transfer(0xFF);
+  uint8_t csHighByte=0x00;
+  for (uint8_t i=0;i<20;++i) csHighByte=odysseySdSpi.transfer(0xFF);
+  odysseySdLastCsHighByte=int16_t(csHighByte);
 
   uint8_t response=0xFF;
   odysseySdLastCmdReady=0;
@@ -2267,13 +2292,9 @@ static uint8_t odysseySdRearmProtocolLocked(const char* reason) {
     uint8_t readyByte=0x00;
     const bool ready=odysseySdWaitReadyLocked(500u,readyByte);
     odysseySdLastCmdReady=ready?1u:2u;
-    if (!ready) {
-      response=0xFE;
-      digitalWrite(ODYSSEY_SD_CS,HIGH);
-      odysseySdSpi.transfer(0xFF);
-      delay(20);
-      continue;
-    }
+    // Match the stock 3.3.5 initializer: readiness is diagnostic only before
+    // CMD0. A card stuck returning busy may still accept GO_IDLE_STATE, so do
+    // not suppress the reset command merely because sdWait-style polling failed.
     odysseySdSpi.transfer(0x40);
     odysseySdSpi.transfer(0);odysseySdSpi.transfer(0);
     odysseySdSpi.transfer(0);odysseySdSpi.transfer(0);
@@ -2292,8 +2313,9 @@ static uint8_t odysseySdRearmProtocolLocked(const char* reason) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   odysseySdLastCmd0=int16_t(response);
   if (response==0x00 || response==0x01) markOdysseySdBatteryDividerPresent();
-  Serial.printf("[SD] %s protocol re-arm ready=%u CMD0=0x%02X\n",
-    reason,unsigned(odysseySdLastCmdReady.load()),unsigned(response));
+  Serial.printf("[SD] %s protocol re-arm csHigh=0x%02X ready=%u CMD0=0x%02X\n",
+    reason,unsigned(uint8_t(odysseySdLastCsHighByte.load())),
+    unsigned(odysseySdLastCmdReady.load()),unsigned(response));
   return response;
 }
 
@@ -2947,13 +2969,13 @@ static void worker(void*) {
       default:error=BAD_COMMAND;break;
     }
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
-      char detail[224];
+      char detail[240];
       const int n=snprintf(detail,sizeof(detail),
-        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"cmdReady\":%u,\"cmd0\":%d}",
+        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"csHigh\":%d,\"cmdReady\":%u,\"cmd0\":%d}",
         catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
         static_cast<long>(odysseySdLastError()),static_cast<unsigned long>(odysseySdAttemptCount()),
-        static_cast<unsigned long>(odysseySdBeginAttemptCount()),unsigned(odysseySdLastCmdReadyState()),
-        int(odysseySdLastCmd0Response()));
+        static_cast<unsigned long>(odysseySdBeginAttemptCount()),int(odysseySdLastCsHighResponse()),
+        unsigned(odysseySdLastCmdReadyState()),int(odysseySdLastCmd0Response()));
       reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),
         n>0?std::min(size_t(n),sizeof(detail)-1):0);
     } else reply(request,error,total,request.offset,bytes,size);
