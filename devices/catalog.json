@@ -99,9 +99,9 @@
         "ledDriver": "neopixel",
         "idleMHz": 80,
         "activeMHz": 160,
-        "batteryAdcMv": 1,
-        "batteryCellMv": 2,
-        "batteryFullMv": 4150,
+        "batteryAdcMv": 470,
+        "batteryCellMv": 1470,
+        "batteryFullMv": 4200,
         "batteryAttenuation": "ADC_11db",
         "batteryCutoff": false,
         "sdDetection": {
