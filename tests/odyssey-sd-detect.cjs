@@ -9,7 +9,6 @@ const recording=fs.readFileSync(path.join(root,'firmware/shared/odyssey-sd-recor
 const transfer=fs.readFileSync(path.join(root,'firmware/shared/odyssey-sd-transfer.cpp'),'utf8');
 const boot=fs.readFileSync(path.join(root,'firmware/shared/boot.cpp'),'utf8');
 const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
-const patch=fs.readFileSync(path.join(root,'tools/patch-arduino-sd.cjs'),'utf8');
 
 test('C3 restores proven Arduino SD SPI initialization on fixed Odyssey pins',()=>{
   const target=getTarget('esp32c3-supermini-4m');
@@ -24,6 +23,9 @@ test('C3 restores proven Arduino SD SPI initialization on fixed Odyssey pins',()
   assert.doesNotMatch(source,/esp_vfs_fat_sdspi_mount|spi_bus_initialize|gpio_reset_pin|gpio_set_pull_mode/);
   assert.match(source,/odysseySdWaitReadyLocked\(500u,readyByte\)/);
   assert.match(source,/lastByte==0xFF/);
+  assert.match(source,/odysseySdLastCsHighByte/);
+  assert.match(source,/csHighByte=odysseySdSpi\.transfer\(0xFF\)/);
+  assert.doesNotMatch(source,/if \(!ready\)[\s\S]*continue;/);
   assert.match(source,/response==0x00 \|\| response==0x01\) markOdysseySdBatteryDividerPresent\(\)/);
   assert.match(source,/if \(mounted\) markOdysseySdBatteryDividerPresent\(\)/);
   assert.match(source,/odysseyWaitForSdStartupSettle\(\);[\s\S]*OdysseySdGuard guard/);
@@ -59,15 +61,9 @@ test('C3 hard init failures retain BLE diagnostics and never format media',()=>{
   assert.doesNotMatch(source,/format_if_mount_failed=true/);
 });
 
-test('production build reapplies pinned Espressif Arduino SD init compatibility fix',()=>{
-  assert.match(workflow,/Backport proven Arduino SD SPI initialization fix/);
-  assert.match(workflow,/patch-arduino-sd\.cjs/);
-  assert.match(workflow,/SYNAP_ARDUINO_SD_SRC/);
-  assert.match(patch,/sd_go_idle_delay_ms = 20/);
-  assert.match(patch,/sd_op_cond_timeout_ms = 3000/);
-  assert.match(patch,/APP_OP_COND, 0x40000000/);
-  assert.match(patch,/APP_OP_COND, 0, NULL/);
-  assert.match(patch,/SEND_OP_COND, 0, NULL/);
+test('production build preserves the stock Arduino 3.3.5 SD initializer used by build 1445',()=>{
+  assert.match(workflow,/arduino-cli core install esp32:esp32@3\.3\.5/);
+  assert.doesNotMatch(workflow,/patch-arduino-sd\.cjs|SYNAP_ARDUINO_SD_SRC/);
 });
 
 test('device profile still emits original Odyssey pins and only C3 advertises SD sync',()=>{

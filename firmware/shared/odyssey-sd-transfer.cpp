@@ -289,13 +289,13 @@ static void worker(void*) {
       default:error=BAD_COMMAND;break;
     }
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
-      char detail[224];
+      char detail[240];
       const int n=snprintf(detail,sizeof(detail),
-        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"cmdReady\":%u,\"cmd0\":%d}",
+        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"csHigh\":%d,\"cmdReady\":%u,\"cmd0\":%d}",
         catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
         static_cast<long>(odysseySdLastError()),static_cast<unsigned long>(odysseySdAttemptCount()),
-        static_cast<unsigned long>(odysseySdBeginAttemptCount()),unsigned(odysseySdLastCmdReadyState()),
-        int(odysseySdLastCmd0Response()));
+        static_cast<unsigned long>(odysseySdBeginAttemptCount()),int(odysseySdLastCsHighResponse()),
+        unsigned(odysseySdLastCmdReadyState()),int(odysseySdLastCmd0Response()));
       reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),
         n>0?std::min(size_t(n),sizeof(detail)-1):0);
     } else reply(request,error,total,request.offset,bytes,size);
