@@ -109,7 +109,10 @@ test('C3 re-arms a still-powered SD card and reports the raw CMD0 response',()=>
   assert.match(detect,/mounted=odysseySdBeginLocked\(\);[\s\S]*odysseySdRearmProtocolLocked\(reason\)[\s\S]*mounted=odysseySdBeginLocked\(\)/);
   assert.match(detect,/odysseySdBeginAttempts/);
   assert.match(detect,/odysseySdLastCmd0/);
+  assert.match(detect,/odysseySdLastCsHighByte/);
+  assert.match(detect,/odysseySdWaitReadyLocked\(500u,readyByte\)[\s\S]*odysseySdSpi\.transfer\(0x40\)/);
   assert.match(transfer,/beginAttempts/);
+  assert.match(transfer,/csHigh/);
   assert.match(transfer,/cmd0/);
 });
 
