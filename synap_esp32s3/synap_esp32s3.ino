@@ -2767,7 +2767,7 @@ void odysseyToggleRecording() {
 }
 #endif
 // Odyssey C3 SD media-v1: catalogue/read/delete for locally recorded WAV files.
-// C3 storage is mounted once through ESP-IDF SDSPI/FAT and accessed through VFS.
+// C3 storage is mounted through the stock Arduino SD SPI path and accessed through FAT/VFS.
 // Files are deleted only after the PWA has imported and verified them.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 namespace OdysseyTransfer {
@@ -3022,7 +3022,7 @@ static void worker(void*) {
       case 3: error=selectFile(request.path,total); break;
       case 4:
         error=readSelected(request.path,request.offset,total,bytes,size);
-        if (error==IO_ERROR) { odysseySdUseProbingClock();odysseySdRequestRecovery(); }
+        if (error==IO_ERROR) odysseySdMarkVfsFailure();
         break;
       case 7:
         error=catalogue(total);
