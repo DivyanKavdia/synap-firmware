@@ -59,11 +59,11 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(c3,/!odysseySdReady\(\)/);
   assert.match(c3,/ready\|=SYNAP_CAP_SDAUDIO/);
   assert.match(c3,/static SPIClass odysseySdSpi\(FSPI\)/);
-  // A card dragged out of a stranded transfer needs more than one shot, and
-  // more than zero settling time between shots.
-  assert.match(c3,/ODYSSEY_SD_BOOT_ATTEMPTS=3/);
-  assert.match(c3,/ODYSSEY_SD_RECOVERY_ATTEMPTS=2/);
-  assert.match(c3,/if \(attempt<attempts\) delay\(ODYSSEY_SD_ATTEMPT_SETTLE_MS\)/);
+  // Preserve the known-good build-1445 lifecycle: one attempt per explicit
+  // action. Automatic teardown/re-init loops are forbidden.
+  assert.match(c3,/ODYSSEY_SD_BOOT_ATTEMPTS=1/);
+  assert.match(c3,/ODYSSEY_SD_RECOVERY_ATTEMPTS=1/);
+  assert.doesNotMatch(c3,/ODYSSEY_SD_ATTEMPT_SETTLE_MS|odysseySdConsumeAutoRearm|scheduled re-arm/);
   // The host must stop the card before it stops existing, or the next boot
   // inherits a bus that answers 0x00 to every command.
   assert.match(c3,/static uint8_t odysseySdQuiesceLocked\(uint32_t budgetMs\)/);
@@ -75,9 +75,9 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   const mountOnce=c3.split('static bool odysseySdMountOnceLocked')[1].split('\n}')[0];
   assert.match(mountOnce,/digitalWrite\(ODYSSEY_SD_CS,HIGH\);\s*\n\s*pinMode\(ODYSSEY_SD_CS,OUTPUT\);/);
   assert.doesNotMatch(mountOnce,/pinMode\(ODYSSEY_SD_CS,OUTPUT\);\s*\n\s*digitalWrite\(ODYSSEY_SD_CS,HIGH\);/);
-  // Re-arm is armed by a failed boot mount only, never by a catalogue failure.
-  assert.match(c3,/bool odysseySdConsumeAutoRearm\(\)/);
-  assert.match(c3,/scheduled re-arm after failed boot mount/);
+  // No autonomous remount after a failed boot; recovery is explicit.
+  assert.doesNotMatch(c3,/odysseySdConsumeAutoRearm|scheduled re-arm after failed boot mount/);
+  assert.match(c3,/static void odysseySdSampleRawLocked\(\)/);
   assert.match(c3,/ODYSSEY_SD_INIT_FREQ_HZ=400000u/);
   assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,/);
   assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|spi_bus_initialize/);
