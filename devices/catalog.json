@@ -99,9 +99,15 @@
         "ledDriver": "neopixel",
         "idleMHz": 80,
         "activeMHz": 160,
-        "batteryAdcMv": 470,
-        "batteryCellMv": 1470,
-        "batteryFullMv": 4200,
+        "batteryAdcMv": 1,
+        "batteryCellMv": 2,
+        "batteryFullMv": 4150,
+        "batteryAlternate": {
+          "name": "sd-1m-470k",
+          "adcMv": 470,
+          "cellMv": 1470,
+          "fullMv": 4200
+        },
         "batteryAttenuation": "ADC_11db",
         "batteryCutoff": false,
         "sdDetection": {

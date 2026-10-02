@@ -32,6 +32,10 @@
 #define SYNAP_BATTERY_FULL_MV 4130
 #define SYNAP_BATTERY_SCALE_NUMERATOR 4130
 #define SYNAP_BATTERY_SCALE_DENOMINATOR 1320
+#define SYNAP_BATTERY_ALT_ENABLE 0
+#define SYNAP_BATTERY_ALT_FULL_MV 4130
+#define SYNAP_BATTERY_ALT_SCALE_NUMERATOR 1
+#define SYNAP_BATTERY_ALT_SCALE_DENOMINATOR 1
 constexpr uint8_t RGB_LED_PIN = 48;
 constexpr int8_t I2S_BCLK_PIN = 4, I2S_WS_PIN = 5, I2S_DATA_IN_PIN = 6;
 constexpr uint32_t IDLE_CPU_MHZ = 80, ACTIVE_CPU_MHZ = 240;
@@ -786,10 +790,10 @@ void stopMicrophone() {
 #endif
 }
 
-uint8_t batteryPercentFromMillivolts(uint16_t mv) {
-  // Board calibration sets the full-charge anchor; lower LiPo anchors are shared.
-  if (mv>=SYNAP_BATTERY_FULL_MV) return 100;
-  if (mv>=4050) return 90 + uint32_t(mv-4050)*10/(SYNAP_BATTERY_FULL_MV-4050);
+uint8_t batteryPercentFromMillivolts(uint16_t mv, uint16_t fullMv=SYNAP_BATTERY_FULL_MV) {
+  // The lower LiPo curve is shared; only the board-specific full-charge anchor varies.
+  if (mv>=fullMv) return 100;
+  if (mv>=4050) return 90 + uint32_t(mv-4050)*10/(fullMv-4050);
   if (mv>=3950) return 80 + uint32_t(mv-3950)*10/100;
   if (mv>=3850) return 70 + uint32_t(mv-3850)*10/100;
   if (mv>=3780) return 60 + uint32_t(mv-3780)*10/70;
@@ -858,10 +862,33 @@ void sampleBattery(bool force) {
   const uint32_t adcRaw=rawTotal/16u;
   batteryAdcMillivolts=uint16_t(adcMv>65535u?65535u:adcMv);
   batteryAdcRaw=uint16_t(adcRaw>65535u?65535u:adcRaw);
-  const uint32_t cellMv=(adcMv*SYNAP_BATTERY_SCALE_NUMERATOR + SYNAP_BATTERY_SCALE_DENOMINATOR/2u)/SYNAP_BATTERY_SCALE_DENOMINATOR;
-  if (cellMv>=2800u && cellMv<=4350u) {
+
+  const auto reconstruct=[](uint32_t input,uint32_t numerator,uint32_t denominator) {
+    return (input*numerator + denominator/2u)/denominator;
+  };
+  const auto plausible=[](uint32_t cell) { return cell>=2800u && cell<=4350u; };
+  const uint32_t primaryCell=reconstruct(adcMv,SYNAP_BATTERY_SCALE_NUMERATOR,SYNAP_BATTERY_SCALE_DENOMINATOR);
+  uint32_t cellMv=primaryCell;
+  uint16_t fullMv=SYNAP_BATTERY_FULL_MV;
+  uint8_t batteryProfile=0;
+#if SYNAP_BATTERY_ALT_ENABLE
+  // Legacy non-SD C3 and the newer SD carrier share the same firmware target.
+  // Their divider ranges are naturally disjoint over a valid 1-cell LiPo:
+  // legacy 2:1 -> ADC about 1.40-2.18 V; SD 1M/470k -> about 0.90-1.39 V.
+  // Prefer the legacy profile whenever it is plausible, and select the SD
+  // profile only when legacy reconstruction is impossible but SD is valid.
+  const uint32_t alternateCell=reconstruct(adcMv,
+    SYNAP_BATTERY_ALT_SCALE_NUMERATOR,SYNAP_BATTERY_ALT_SCALE_DENOMINATOR);
+  if (!plausible(primaryCell) && plausible(alternateCell)) {
+    cellMv=alternateCell;
+    fullMv=SYNAP_BATTERY_ALT_FULL_MV;
+    batteryProfile=1;
+  }
+#endif
+
+  if (plausible(cellMv)) {
     batteryMillivolts=uint16_t(cellMv);
-    batteryPercent=batteryPercentFromMillivolts(batteryMillivolts);
+    batteryPercent=batteryPercentFromMillivolts(batteryMillivolts,fullMv);
     if (batteryValidSamples<255) ++batteryValidSamples;
     // A single averaged conversion is sufficient for UI availability. Critical
     // actions still require multiple corroborating samples via batteryCritical().
@@ -870,14 +897,15 @@ void sampleBattery(bool force) {
       if (batteryCriticalSamples<255) ++batteryCriticalSamples;
     } else batteryCriticalSamples=0;
   } else {
-    // Preserve the reconstructed voltage even when it is outside the expected
-    // LiPo range. The PWA can then distinguish bad wiring/ADC from missing BLE.
+    // Preserve the primary reconstruction when neither hardware profile is
+    // electrically plausible so diagnostics remain useful without guessing.
     batteryAvailable=false;batteryValidSamples=0;batteryCriticalSamples=0;
     batteryMillivolts=uint16_t(cellMv>65535u?65535u:cellMv);batteryPercent=0;
   }
-  Serial.printf("[BATTERY] gpio=%u raw=%u adc=%umV cell=%umV available=%u percent=%u\n",
+  Serial.printf("[BATTERY] gpio=%u raw=%u adc=%umV cell=%umV available=%u percent=%u profile=%u full=%umV\n",
     static_cast<unsigned>(BATTERY_ADC_PIN),static_cast<unsigned>(batteryAdcRaw),static_cast<unsigned>(batteryAdcMillivolts),
-    static_cast<unsigned>(batteryMillivolts),batteryAvailable?1u:0u,static_cast<unsigned>(batteryPercent));
+    static_cast<unsigned>(batteryMillivolts),batteryAvailable?1u:0u,static_cast<unsigned>(batteryPercent),
+    unsigned(batteryProfile),unsigned(fullMv));
   if (!streamingEnabled.load()) publishBatteryEvent();
   updateStatusLed(true);
 #endif
