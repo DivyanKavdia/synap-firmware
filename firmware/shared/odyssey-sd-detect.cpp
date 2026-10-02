@@ -149,6 +149,7 @@ static uint8_t odysseySdRearmProtocolLocked(const char* reason) {
   odysseySdSpi.end();
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   odysseySdLastCmd0=int16_t(response);
+  if (response==0x00 || response==0x01) markOdysseySdBatteryDividerPresent();
   Serial.printf("[SD] %s protocol re-arm CMD0=0x%02X\n",reason,unsigned(response));
   return response;
 }
@@ -158,7 +159,8 @@ static bool odysseySdBeginLocked() {
   odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
   const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,
     ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false);
-  if (!mounted) odysseySdReleaseLocked();
+  if (mounted) markOdysseySdBatteryDividerPresent();
+  else odysseySdReleaseLocked();
   return mounted;
 }
 
