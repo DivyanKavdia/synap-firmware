@@ -16,6 +16,9 @@ for(const [c3,disabled] of [[false,false],[true,false],[true,true]]){
     assert.match(nativeTest(fixture.replace('// INSERT CONFIGURATION',profile+'\n'+`void configureBatteryAdc(){${attenuation}}`).replace('// INSERT BATTERY',battery),flags),/PASS battery/);
     if(c3){
       assert.match(code,/#define SYNAP_BATTERY_ADC_PIN 1/);
+      assert.match(code,/#define SYNAP_BATTERY_SCALE_NUMERATOR 1470/);
+      assert.match(code,/#define SYNAP_BATTERY_SCALE_DENOMINATOR 470/);
+      assert.match(code,/#define SYNAP_BATTERY_FULL_MV 4200/);
       assert.doesNotMatch(code,/BATTERY_CAL_ADC_MV|raw 1544/);
       assert.match(code,/TOUCH_SLEEP_HOLD_MS = 4000/);
     }
