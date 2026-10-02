@@ -69,7 +69,7 @@ test('C3 SD readiness validates directory and writable media before publishing r
   assert.match(sd,/FILE\* probe=fopen\(probePath,"wb"\)/);
   assert.match(sd,/!writeOk \|\| !closeOk \|\| !removeOk/);
   assert(sd.indexOf('DIR* verified=opendir')<sd.indexOf('odysseySdBootState=1;\n  odysseySdProbeStage=6;'));
-  assert.match(sd,/ODYSSEY_SD_RUN_FREQ_KHZ=1000u/);
+  assert.match(sd,/ODYSSEY_SD_INIT_FREQ_HZ=400000u/);
 });
 test('C3 SD catalogue I/O recovery never tears down live recording and reports errno',()=>{
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
@@ -89,11 +89,12 @@ test('C3 PWA connection is acknowledged by three visible green flashes',()=>{
   assert.match(led,/elapsed<1500u && elapsed%500u<180u\) g=LED_DIM\+5/);
 });
 
-test('C3 failed mount reports raw ESP-IDF result without formatting or deleting WAVs',()=>{
+test('C3 failed mount reports compatibility diagnostics without formatting or deleting WAVs',()=>{
   const detect=read('firmware/shared/odyssey-sd-detect.cpp');
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
-  assert.match(detect,/format_if_mount_failed=false/);
-  assert.match(detect,/odysseySdLastMountError=result==ESP_OK\?ESP_FAIL:result/);
+  assert.match(detect,/ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false/);
+  assert.match(detect,/odysseySdLastMountError=ESP_FAIL/);
+  assert.match(detect,/odysseySdBootState=2;odysseySdProbeStage=2/);
   assert.match(transfer,/espErr/);
   assert.match(transfer,/mountAttempts/);
 });
