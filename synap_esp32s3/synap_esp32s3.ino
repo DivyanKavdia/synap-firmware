@@ -2188,6 +2188,8 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
 static constexpr uint32_t ODYSSEY_SD_INIT_FREQ_HZ=400000u;
+static constexpr uint32_t ODYSSEY_SD_RESCUE_FREQ_HZ=100000u;
+static constexpr uint32_t ODYSSEY_SD_RESCUE_BUSY_MS=3000u;
 static constexpr uint32_t ODYSSEY_SD_STARTUP_SETTLE_MS=3000u;
 static constexpr uint8_t ODYSSEY_SD_BOOT_ATTEMPTS=1;
 static constexpr uint8_t ODYSSEY_SD_RECOVERY_ATTEMPTS=1;
@@ -2201,7 +2203,10 @@ static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
 static std::atomic<uint32_t> odysseySdBeginAttempts{0};
 static std::atomic<int16_t> odysseySdLastCmd0{-2};
+static std::atomic<int16_t> odysseySdLastCmd12{-2};
+static std::atomic<uint8_t> odysseySdLastCmd12Ready{0};
 static std::atomic<uint8_t> odysseySdLastCmdReady{0};
+static std::atomic<uint8_t> odysseySdLastRescueReady{0};
 static std::atomic<int16_t> odysseySdLastCsHighByte{-2};
 static StaticSemaphore_t odysseySdMutexStorage;
 static SemaphoreHandle_t odysseySdMutex=nullptr;
@@ -2210,7 +2215,10 @@ int32_t odysseySdLastError() { return odysseySdLastMountError.load(); }
 uint32_t odysseySdAttemptCount() { return odysseySdMountAttempts.load(); }
 uint32_t odysseySdBeginAttemptCount() { return odysseySdBeginAttempts.load(); }
 int16_t odysseySdLastCmd0Response() { return odysseySdLastCmd0.load(); }
+int16_t odysseySdLastCmd12Response() { return odysseySdLastCmd12.load(); }
+uint8_t odysseySdLastCmd12ReadyState() { return odysseySdLastCmd12Ready.load(); }
 uint8_t odysseySdLastCmdReadyState() { return odysseySdLastCmdReady.load(); }
+uint8_t odysseySdLastRescueReadyState() { return odysseySdLastRescueReady.load(); }
 int16_t odysseySdLastCsHighResponse() { return odysseySdLastCsHighByte.load(); }
 void odysseySdUseProbingClock() {}
 void odysseySdMarkVfsFailure() {
@@ -2247,11 +2255,20 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
   return n>0 && size_t(n)<capacity;
 }
 
+void odysseySdHoldBusIdleEarly() {
+  // The SD adapter remains powered across ESP resets. Establish a defined bus
+  // state immediately on boot instead of leaving a continuously powered card
+  // exposed to floating CS/clock/data during the startup settle interval.
+  pinMode(ODYSSEY_SD_CS,OUTPUT);digitalWrite(ODYSSEY_SD_CS,HIGH);
+  pinMode(ODYSSEY_SD_SCK,OUTPUT);digitalWrite(ODYSSEY_SD_SCK,LOW);
+  pinMode(ODYSSEY_SD_MOSI,OUTPUT);digitalWrite(ODYSSEY_SD_MOSI,HIGH);
+  pinMode(ODYSSEY_SD_MISO,INPUT);
+}
+
 static void odysseySdReleaseLocked() {
   SD.end();
   odysseySdSpi.end();
-  pinMode(ODYSSEY_SD_CS,OUTPUT);
-  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  odysseySdHoldBusIdleEarly();
 }
 
 static void odysseyWaitForSdStartupSettle() {
@@ -2273,18 +2290,73 @@ static bool odysseySdWaitReadyLocked(uint32_t timeoutMs,uint8_t& lastByte) {
   return false;
 }
 
+static bool odysseySdStopWriteLocked(uint32_t timeoutMs,uint8_t& lastByte) {
+  // A multi-block write accepts 0xFD only after the previous block's busy
+  // period ends. Repeat the token at a low rate so a continuously powered card
+  // can be caught as soon as it becomes receptive after a host reset.
+  const uint32_t started=millis();
+  do {
+    lastByte=odysseySdSpi.transfer(0xFD);
+    for (uint8_t i=0;i<4;++i) {
+      lastByte=odysseySdSpi.transfer(0xFF);
+      if (lastByte==0xFF) return true;
+    }
+    delay(5);
+  } while (uint32_t(millis()-started)<timeoutMs);
+  return false;
+}
+
+static uint8_t odysseySdCommandLocked(uint8_t command,uint32_t argument,uint8_t crc,bool skipStuffByte=false) {
+  odysseySdSpi.transfer(uint8_t(0x40u|command));
+  odysseySdSpi.transfer(uint8_t(argument>>24));
+  odysseySdSpi.transfer(uint8_t(argument>>16));
+  odysseySdSpi.transfer(uint8_t(argument>>8));
+  odysseySdSpi.transfer(uint8_t(argument));
+  odysseySdSpi.transfer(crc);
+  // CMD12 (STOP_TRANSMISSION) has one mandatory stuff byte before its R1 response in SPI mode.
+  if (skipStuffByte) (void)odysseySdSpi.transfer(0xFF);
+  uint8_t response=0xFF;
+  for (uint8_t wait=0;wait<32;++wait) {
+    response=odysseySdSpi.transfer(0xFF);
+    if ((response&0x80u)==0) break;
+  }
+  return response;
+}
+
 static uint8_t odysseySdRearmProtocolLocked(const char* reason) {
-  // ESP software reset and deep sleep leave the external SD module powered.
-  // Give the card >74 clocks with CS high, then two CMD0 chances at 400 kHz
-  // so a card left mid-transaction can return to SPI idle without formatting.
+  // A host reset can leave a continuously powered card inside a multi-block
+  // read/write transaction. First run a recovery-only sequence at 100 kHz:
+  // deselected clocks, write STOP token, CMD12, a bounded busy drain, then
+  // two CMD0 chances. Healthy mounts never enter this path.
   odysseySdReleaseLocked();
   pinMode(ODYSSEY_SD_CS,OUTPUT);
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
-  odysseySdSpi.beginTransaction(SPISettings(ODYSSEY_SD_INIT_FREQ_HZ,MSBFIRST,SPI_MODE0));
+  odysseySdSpi.beginTransaction(SPISettings(ODYSSEY_SD_RESCUE_FREQ_HZ,MSBFIRST,SPI_MODE0));
+
   uint8_t csHighByte=0x00;
-  for (uint8_t i=0;i<20;++i) csHighByte=odysseySdSpi.transfer(0xFF);
+  for (uint8_t i=0;i<64;++i) csHighByte=odysseySdSpi.transfer(0xFF);
   odysseySdLastCsHighByte=int16_t(csHighByte);
+
+  digitalWrite(ODYSSEY_SD_CS,LOW);
+  // CMD12 terminates a stranded multi-block read. It uses a valid CRC because
+  // the previous session may have enabled command CRC before the host reset.
+  const uint8_t cmd12=odysseySdCommandLocked(12u,0u,0x61u,true);
+  odysseySdLastCmd12=int16_t(cmd12);
+  uint8_t cmd12Byte=0x00;
+  const bool cmd12Ready=odysseySdWaitReadyLocked(500u,cmd12Byte);
+  odysseySdLastCmd12Ready=cmd12Ready?1u:2u;
+
+  // 0xFD terminates a stranded multi-block write. If the card is still busy
+  // programming its last block, repeat the stop token until that busy period
+  // ends, bounded so a bad card cannot stall the device indefinitely.
+  uint8_t rescueByte=cmd12Byte;
+  const bool stopReady=odysseySdStopWriteLocked(ODYSSEY_SD_RESCUE_BUSY_MS,rescueByte);
+  const bool rescueReady=stopReady && odysseySdWaitReadyLocked(500u,rescueByte);
+  odysseySdLastRescueReady=rescueReady?1u:2u;
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  for (uint8_t i=0;i<20;++i) (void)odysseySdSpi.transfer(0xFF);
+  delay(20);
 
   uint8_t response=0xFF;
   odysseySdLastCmdReady=0;
@@ -2293,29 +2365,23 @@ static uint8_t odysseySdRearmProtocolLocked(const char* reason) {
     uint8_t readyByte=0x00;
     const bool ready=odysseySdWaitReadyLocked(500u,readyByte);
     odysseySdLastCmdReady=ready?1u:2u;
-    // Match the stock 3.3.5 initializer: readiness is diagnostic only before
-    // CMD0. A card stuck returning busy may still accept GO_IDLE_STATE, so do
-    // not suppress the reset command merely because sdWait-style polling failed.
-    odysseySdSpi.transfer(0x40);
-    odysseySdSpi.transfer(0);odysseySdSpi.transfer(0);
-    odysseySdSpi.transfer(0);odysseySdSpi.transfer(0);
-    odysseySdSpi.transfer(0x95);
-    response=0xFF;
-    for (uint8_t wait=0;wait<24;++wait) {
-      response=odysseySdSpi.transfer(0xFF);
-      if ((response&0x80u)==0) break;
-    }
+    // Send GO_IDLE_STATE even when the card still reports busy; this matches
+    // the stock 3.3.5 initializer and is our last software reset primitive.
+    response=odysseySdCommandLocked(0u,0u,0x95u,false);
     digitalWrite(ODYSSEY_SD_CS,HIGH);
-    odysseySdSpi.transfer(0xFF);
+    for (uint8_t i=0;i<20;++i) (void)odysseySdSpi.transfer(0xFF);
     if (response!=0x01) delay(20);
   }
+
   odysseySdSpi.endTransaction();
   odysseySdSpi.end();
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   odysseySdLastCmd0=int16_t(response);
   if (response==0x00 || response==0x01) markOdysseySdBatteryDividerPresent();
-  Serial.printf("[SD] %s protocol re-arm csHigh=0x%02X ready=%u CMD0=0x%02X\n",
-    reason,unsigned(uint8_t(odysseySdLastCsHighByte.load())),
+  Serial.printf("[SD] %s powered-card rescue %lu Hz csHigh=0x%02X CMD12=0x%02X cmd12Ready=%u rescueReady=%u cmdReady=%u CMD0=0x%02X\n",
+    reason,static_cast<unsigned long>(ODYSSEY_SD_RESCUE_FREQ_HZ),
+    unsigned(uint8_t(odysseySdLastCsHighByte.load())),unsigned(cmd12),
+    unsigned(odysseySdLastCmd12Ready.load()),unsigned(odysseySdLastRescueReady.load()),
     unsigned(odysseySdLastCmdReady.load()),unsigned(response));
   return response;
 }
@@ -2970,13 +3036,15 @@ static void worker(void*) {
       default:error=BAD_COMMAND;break;
     }
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
-      char detail[240];
+      char detail[288];
       const int n=snprintf(detail,sizeof(detail),
-        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"csHigh\":%d,\"cmdReady\":%u,\"cmd0\":%d}",
+        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"csHigh\":%d,\"cmd12\":%d,\"cmd12Ready\":%u,\"rescueReady\":%u,\"cmdReady\":%u,\"cmd0\":%d}",
         catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
         static_cast<long>(odysseySdLastError()),static_cast<unsigned long>(odysseySdAttemptCount()),
         static_cast<unsigned long>(odysseySdBeginAttemptCount()),int(odysseySdLastCsHighResponse()),
-        unsigned(odysseySdLastCmdReadyState()),int(odysseySdLastCmd0Response()));
+        int(odysseySdLastCmd12Response()),unsigned(odysseySdLastCmd12ReadyState()),
+        unsigned(odysseySdLastRescueReadyState()),unsigned(odysseySdLastCmdReadyState()),
+        int(odysseySdLastCmd0Response()));
       reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),
         n>0?std::min(size_t(n),sizeof(detail)-1):0);
     } else reply(request,error,total,request.offset,bytes,size);
@@ -3099,6 +3167,9 @@ void fatalSetup(const char* message) {
 }
 void setup() {
   Serial.begin(115200);
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  odysseySdHoldBusIdleEarly();
+#endif
 #if USE_REAL_I2S_MIC
   microphoneMutex=xSemaphoreCreateRecursiveMutexStatic(&microphoneMutexStorage);
   if (!microphoneMutex) fatalSetup("[FATAL] microphone lock unavailable");

@@ -15,6 +15,8 @@ test('C3 restores proven Arduino SD SPI initialization on fixed Odyssey pins',()
   assert.deepEqual(target.hardware.sdDetection,{cs:0,sck:10,mosi:21,miso:20});
   assert.match(source,/static SPIClass odysseySdSpi\(FSPI\)/);
   assert.match(source,/ODYSSEY_SD_INIT_FREQ_HZ=400000u/);
+  assert.match(source,/ODYSSEY_SD_RESCUE_FREQ_HZ=100000u/);
+  assert.match(source,/ODYSSEY_SD_RESCUE_BUSY_MS=3000u/);
   assert.match(source,/ODYSSEY_SD_STARTUP_SETTLE_MS=3000u/);
   assert.match(source,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,/);
   assert.match(source,/ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false/);
@@ -25,10 +27,20 @@ test('C3 restores proven Arduino SD SPI initialization on fixed Odyssey pins',()
   assert.match(source,/lastByte==0xFF/);
   assert.match(source,/odysseySdLastCsHighByte/);
   assert.match(source,/csHighByte=odysseySdSpi\.transfer\(0xFF\)/);
+  assert.match(source,/odysseySdStopWriteLocked\(ODYSSEY_SD_RESCUE_BUSY_MS,rescueByte\)/);
+  assert.match(source,/odysseySdCommandLocked\(12u,0u,0x61u,true\)/);
+  assert.match(source,/odysseySdWaitReadyLocked\(500u,cmd12Byte\)/);
+  assert.match(source,/odysseySdCommandLocked\(0u,0u,0x95u,false\)/);
   assert.doesNotMatch(source,/if \(!ready\)[\s\S]*continue;/);
   assert.match(source,/response==0x00 \|\| response==0x01\) markOdysseySdBatteryDividerPresent\(\)/);
   assert.match(source,/if \(mounted\) markOdysseySdBatteryDividerPresent\(\)/);
+  assert.match(source,/odysseySdHoldBusIdleEarly\(\)/);
+  assert.match(source,/pinMode\(ODYSSEY_SD_CS,OUTPUT\);digitalWrite\(ODYSSEY_SD_CS,HIGH\)/);
+  assert.match(source,/pinMode\(ODYSSEY_SD_SCK,OUTPUT\);digitalWrite\(ODYSSEY_SD_SCK,LOW\)/);
+  assert.match(source,/pinMode\(ODYSSEY_SD_MOSI,OUTPUT\);digitalWrite\(ODYSSEY_SD_MOSI,HIGH\)/);
   assert.match(source,/odysseyWaitForSdStartupSettle\(\);[\s\S]*OdysseySdGuard guard/);
+  assert.match(boot,/Serial\.begin\(115200\);[\s\S]*odysseySdHoldBusIdleEarly\(\);/);
+  assert(boot.indexOf('odysseySdHoldBusIdleEarly();')<boot.indexOf('bootResetReason=esp_reset_reason();'));
   assert.match(boot,/odysseyInitializeSdCardBeforeBle\(\);[\s\S]*if \(odysseySdBatteryDividerPresent\(\)\) sampleBattery\(true\);/);
 });
 
@@ -56,7 +68,13 @@ test('C3 hard init failures retain BLE diagnostics and never format media',()=>{
   assert.match(transfer,/odysseySdLastError\(\)/);
   assert.match(transfer,/odysseySdAttemptCount\(\)/);
   assert.match(transfer,/mountAttempts/);
+  assert.match(transfer,/cmd12/);
+  assert.match(transfer,/cmd12Ready/);
+  assert.match(transfer,/rescueReady/);
   assert.match(transfer,/cmdReady/);
+  assert.match(transfer,/odysseySdLastCmd12Response\(\)/);
+  assert.match(transfer,/odysseySdLastCmd12ReadyState\(\)/);
+  assert.match(transfer,/odysseySdLastRescueReadyState\(\)/);
   assert.match(transfer,/odysseySdLastCmdReadyState\(\)/);
   assert.doesNotMatch(source,/format_if_mount_failed=true/);
 });
