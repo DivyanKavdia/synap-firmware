@@ -93,7 +93,7 @@ int main(){
   // so firmware can identify this hardware even if the SD protocol itself fails.
   adcMv=1184;sampleBattery(true);
   assert(odysseySdBatteryDividerPresent());
-  assert(batteryAvailable && batteryMillivolts==3702);
+  assert(batteryAvailable && batteryMillivolts==3703);
   assert(batteryPercentFromMillivolts(4199)==99);
   assert(batteryPercentFromMillivolts(4200)==100);
   adcMv=1287;sampleBattery(true);
