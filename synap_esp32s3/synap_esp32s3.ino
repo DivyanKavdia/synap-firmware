@@ -2205,6 +2205,7 @@ static std::atomic<int16_t> odysseySdBitBangCsHigh{-2};
 static std::atomic<int16_t> odysseySdBitBangCsLow{-2};
 static std::atomic<uint8_t> odysseySdBitBangStopState{0}; // 1=released,2=still-busy,3=no-ready
 static std::atomic<int16_t> odysseySdBitBangCmd12{-2};
+static std::atomic<uint8_t> odysseySdBitBangCmd12Ready{0}; // 1=R1b released,2=busy timeout,3=no R1
 static std::atomic<int16_t> odysseySdBitBangCmd0{-2};
 static std::atomic<int16_t> odysseySdBitBangCmd8{-2};
 static std::atomic<uint32_t> odysseySdBitBangR7{0};
@@ -2219,6 +2220,7 @@ int16_t odysseySdBitBangCsHighState() { return odysseySdBitBangCsHigh.load(); }
 int16_t odysseySdBitBangCsLowState() { return odysseySdBitBangCsLow.load(); }
 uint8_t odysseySdBitBangStopStateValue() { return odysseySdBitBangStopState.load(); }
 int16_t odysseySdBitBangCmd12Response() { return odysseySdBitBangCmd12.load(); }
+uint8_t odysseySdBitBangCmd12ReadyState() { return odysseySdBitBangCmd12Ready.load(); }
 int16_t odysseySdBitBangCmd0Response() { return odysseySdBitBangCmd0.load(); }
 int16_t odysseySdBitBangCmd8Response() { return odysseySdBitBangCmd8.load(); }
 uint32_t odysseySdBitBangR7Response() { return odysseySdBitBangR7.load(); }
@@ -2316,6 +2318,51 @@ static uint8_t odysseySdBitBangCommand(uint8_t command,uint32_t argument,uint8_t
   return response;
 }
 
+static uint8_t odysseySdBitBangCommandR1b(uint8_t command,uint32_t argument,uint8_t crc,
+    uint8_t& readyState) {
+  // R1b is not complete when the one-byte R1 arrives. Keep CS asserted and
+  // keep clocking until DO releases high; raising CS at the R1 byte can leave
+  // a continuously powered card in the very state we are trying to recover.
+  digitalWrite(ODYSSEY_SD_CS,LOW);
+  odysseySdBitBangTransfer(uint8_t(0x40u|command));
+  odysseySdBitBangTransfer(uint8_t(argument>>24));
+  odysseySdBitBangTransfer(uint8_t(argument>>16));
+  odysseySdBitBangTransfer(uint8_t(argument>>8));
+  odysseySdBitBangTransfer(uint8_t(argument));
+  odysseySdBitBangTransfer(crc);
+  // CMD12 has one mandatory stuff byte before its R1 response.
+  (void)odysseySdBitBangTransfer(0xFF);
+  uint8_t response=0xFF;
+  for (uint8_t i=0;i<32;++i) {
+    response=odysseySdBitBangTransfer(0xFF);
+    if ((response&0x80u)==0) break;
+  }
+  if ((response&0x80u)!=0) {
+    readyState=3;
+  } else {
+    uint8_t last=0;
+    readyState=odysseySdBitBangWaitReady(3000u,last)?1:2;
+  }
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  (void)odysseySdBitBangTransfer(0xFF);
+  return response;
+}
+
+static uint8_t odysseySdBitBangGoIdleLocked() {
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  for (uint8_t i=0;i<20;++i) (void)odysseySdBitBangTransfer(0xFF);
+  uint8_t cmd0=0xFF;
+  for (uint8_t attempt=0;attempt<2 && cmd0!=0x01;++attempt) {
+    cmd0=odysseySdBitBangCommand(0u,0u,0x95u);
+    if (cmd0!=0x01) {
+      digitalWrite(ODYSSEY_SD_CS,HIGH);
+      for (uint8_t i=0;i<20;++i) (void)odysseySdBitBangTransfer(0xFF);
+      delay(20);
+    }
+  }
+  return cmd0;
+}
+
 static uint8_t odysseySdBitBangStopWriteLocked() {
   // If a reset interrupted CMD25, the card can be waiting for another data
   // token rather than a command. Wait through any program-busy interval, then
@@ -2354,30 +2401,25 @@ static uint8_t odysseySdBitBangRecoverLocked(const char* reason) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   (void)odysseySdBitBangTransfer(0xFF);
 
-  // Recover either possible interrupted multi-block direction. 0xFD is only a
-  // data token, so a card in command mode ignores it. CMD12 is the specified
-  // stop for a multi-block read and has one mandatory stuff byte before R1.
-  const uint8_t stopState=odysseySdBitBangStopWriteLocked();
-  odysseySdBitBangStopState=stopState;
-  const uint8_t cmd12=odysseySdBitBangCommand(12u,0u,0x61u,nullptr,0,true);
+  // The historical failure was first observed after catalogue/read activity.
+  // Try the read-side stop first. CMD12 is R1b: unlike a normal command, CS
+  // must remain asserted until the card releases its busy-low response.
+  uint8_t cmd12Ready=0;
+  const uint8_t cmd12=odysseySdBitBangCommandR1b(12u,0u,0x61u,cmd12Ready);
   odysseySdBitBangCmd12=int16_t(cmd12);
+  odysseySdBitBangCmd12Ready=cmd12Ready;
 
-  // Drain any R1b/program busy interval, then return the card to SPI idle.
-  digitalWrite(ODYSSEY_SD_CS,LOW);
-  uint8_t last=0;
-  (void)odysseySdBitBangWaitReady(1500u,last);
-  digitalWrite(ODYSSEY_SD_CS,HIGH);
-  for (uint8_t i=0;i<32;++i) (void)odysseySdBitBangTransfer(0xFF);
+  uint8_t cmd0=odysseySdBitBangGoIdleLocked();
 
-  uint8_t cmd0=0xFF;
-  for (uint8_t attempt=0;attempt<2 && cmd0!=0x01;++attempt) {
-    cmd0=odysseySdBitBangCommand(0u,0u,0x95u);
-    if (cmd0!=0x01) {
-      digitalWrite(ODYSSEY_SD_CS,HIGH);
-      for (uint8_t i=0;i<20;++i) (void)odysseySdBitBangTransfer(0xFF);
-      delay(2);
-    }
+  // If CMD12 did not restore command mode, the other recoverable state is an
+  // interrupted CMD25 multi-block write. A waiting writer accepts 0xFD only
+  // after it is no longer program-busy; then try GO_IDLE_STATE again.
+  uint8_t stopState=0;
+  if (cmd0!=0x01) {
+    stopState=odysseySdBitBangStopWriteLocked();
+    if (stopState==1) cmd0=odysseySdBitBangGoIdleLocked();
   }
+  odysseySdBitBangStopState=stopState;
   odysseySdBitBangCmd0=int16_t(cmd0);
 
   uint8_t r7[4]{};
@@ -2389,9 +2431,9 @@ static uint8_t odysseySdBitBangRecoverLocked(const char* reason) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   digitalWrite(ODYSSEY_SD_SCK,LOW);
   digitalWrite(ODYSSEY_SD_MOSI,HIGH);
-  Serial.printf("[SD] %s GPIO recovery high=%d low=%d stop=%u CMD12=0x%02X CMD0=0x%02X CMD8=0x%02X R7=0x%08lX\n",
+  Serial.printf("[SD] %s GPIO recovery high=%d low=%d CMD12=0x%02X r1b=%u stop=%u CMD0=0x%02X CMD8=0x%02X R7=0x%08lX\n",
     reason,int(odysseySdBitBangCsHigh.load()),int(odysseySdBitBangCsLow.load()),
-    unsigned(stopState),unsigned(cmd12),unsigned(cmd0),unsigned(cmd8),
+    unsigned(cmd12),unsigned(cmd12Ready),unsigned(stopState),unsigned(cmd0),unsigned(cmd8),
     static_cast<unsigned long>(odysseySdBitBangR7.load()));
   return cmd0;
 }
@@ -3044,14 +3086,14 @@ static void worker(void*) {
       default:error=BAD_COMMAND;break;
     }
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
-      char detail[288];
+      char detail[320];
       const int n=snprintf(detail,sizeof(detail),
-        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"mountWhy\":%u,\"bbHigh\":%d,\"bbLow\":%d,\"bbStop\":%u,\"bbCmd12\":%d,\"bbCmd0\":%d,\"bbCmd8\":%d,\"bbR7\":%lu}",
+        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"mountWhy\":%u,\"bbHigh\":%d,\"bbLow\":%d,\"bbCmd12\":%d,\"bbR1b\":%u,\"bbStop\":%u,\"bbCmd0\":%d,\"bbCmd8\":%d,\"bbR7\":%lu}",
         catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
         static_cast<long>(odysseySdLastError()),static_cast<unsigned long>(odysseySdAttemptCount()),
         static_cast<unsigned long>(odysseySdBeginAttemptCount()),unsigned(odysseySdLastMountReasonCode()),
-        int(odysseySdBitBangCsHighState()),int(odysseySdBitBangCsLowState()),
-        unsigned(odysseySdBitBangStopStateValue()),int(odysseySdBitBangCmd12Response()),
+        int(odysseySdBitBangCsHighState()),int(odysseySdBitBangCsLowState()),int(odysseySdBitBangCmd12Response()),
+        unsigned(odysseySdBitBangCmd12ReadyState()),unsigned(odysseySdBitBangStopStateValue()),
         int(odysseySdBitBangCmd0Response()),int(odysseySdBitBangCmd8Response()),
         static_cast<unsigned long>(odysseySdBitBangR7Response()));
       reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),
