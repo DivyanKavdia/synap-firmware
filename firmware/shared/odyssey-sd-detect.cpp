@@ -72,6 +72,7 @@ static std::atomic<uint32_t> odysseySdMountAttempts{0};
 static std::atomic<uint32_t> odysseySdBeginAttempts{0};
 static std::atomic<int16_t> odysseySdLastCmd0{-2};
 static std::atomic<int16_t> odysseySdLastCmd12{-2};
+static std::atomic<uint8_t> odysseySdLastCmd12Ready{0};
 static std::atomic<uint8_t> odysseySdLastCmdReady{0};
 static std::atomic<uint8_t> odysseySdLastRescueReady{0};
 static std::atomic<int16_t> odysseySdLastCsHighByte{-2};
@@ -83,6 +84,7 @@ uint32_t odysseySdAttemptCount() { return odysseySdMountAttempts.load(); }
 uint32_t odysseySdBeginAttemptCount() { return odysseySdBeginAttempts.load(); }
 int16_t odysseySdLastCmd0Response() { return odysseySdLastCmd0.load(); }
 int16_t odysseySdLastCmd12Response() { return odysseySdLastCmd12.load(); }
+uint8_t odysseySdLastCmd12ReadyState() { return odysseySdLastCmd12Ready.load(); }
 uint8_t odysseySdLastCmdReadyState() { return odysseySdLastCmdReady.load(); }
 uint8_t odysseySdLastRescueReadyState() { return odysseySdLastRescueReady.load(); }
 int16_t odysseySdLastCsHighResponse() { return odysseySdLastCsHighByte.load(); }
@@ -147,6 +149,22 @@ static bool odysseySdWaitReadyLocked(uint32_t timeoutMs,uint8_t& lastByte) {
   return false;
 }
 
+static bool odysseySdStopWriteLocked(uint32_t timeoutMs,uint8_t& lastByte) {
+  // A multi-block write accepts 0xFD only after the previous block's busy
+  // period ends. Repeat the token at a low rate so a continuously powered card
+  // can be caught as soon as it becomes receptive after a host reset.
+  const uint32_t started=millis();
+  do {
+    lastByte=odysseySdSpi.transfer(0xFD);
+    for (uint8_t i=0;i<4;++i) {
+      lastByte=odysseySdSpi.transfer(0xFF);
+      if (lastByte==0xFF) return true;
+    }
+    delay(5);
+  } while (uint32_t(millis()-started)<timeoutMs);
+  return false;
+}
+
 static uint8_t odysseySdCommandLocked(uint8_t command,uint32_t argument,uint8_t crc,bool skipStuffByte=false) {
   odysseySdSpi.transfer(uint8_t(0x40u|command));
   odysseySdSpi.transfer(uint8_t(argument>>24));
@@ -180,18 +198,20 @@ static uint8_t odysseySdRearmProtocolLocked(const char* reason) {
   odysseySdLastCsHighByte=int16_t(csHighByte);
 
   digitalWrite(ODYSSEY_SD_CS,LOW);
-  // 0xFD is the SPI stop-transmission token for an interrupted multi-block write.
-  // It is ignored when the card is not in that state. CMD12 handles an
-  // interrupted multi-block read and uses a valid CRC in case CRC was enabled
-  // by the previous firmware session.
-  for (uint8_t i=0;i<8;++i) (void)odysseySdSpi.transfer(0xFF);
-  (void)odysseySdSpi.transfer(0xFD);
-  for (uint8_t i=0;i<8;++i) (void)odysseySdSpi.transfer(0xFF);
+  // CMD12 terminates a stranded multi-block read. It uses a valid CRC because
+  // the previous session may have enabled command CRC before the host reset.
   const uint8_t cmd12=odysseySdCommandLocked(12u,0u,0x61u,true);
   odysseySdLastCmd12=int16_t(cmd12);
+  uint8_t cmd12Byte=0x00;
+  const bool cmd12Ready=odysseySdWaitReadyLocked(500u,cmd12Byte);
+  odysseySdLastCmd12Ready=cmd12Ready?1u:2u;
 
-  uint8_t rescueByte=0x00;
-  const bool rescueReady=odysseySdWaitReadyLocked(ODYSSEY_SD_RESCUE_BUSY_MS,rescueByte);
+  // 0xFD terminates a stranded multi-block write. If the card is still busy
+  // programming its last block, repeat the stop token until that busy period
+  // ends, bounded so a bad card cannot stall the device indefinitely.
+  uint8_t rescueByte=cmd12Byte;
+  const bool stopReady=odysseySdStopWriteLocked(ODYSSEY_SD_RESCUE_BUSY_MS,rescueByte);
+  const bool rescueReady=stopReady && odysseySdWaitReadyLocked(500u,rescueByte);
   odysseySdLastRescueReady=rescueReady?1u:2u;
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   for (uint8_t i=0;i<20;++i) (void)odysseySdSpi.transfer(0xFF);
@@ -217,10 +237,11 @@ static uint8_t odysseySdRearmProtocolLocked(const char* reason) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   odysseySdLastCmd0=int16_t(response);
   if (response==0x00 || response==0x01) markOdysseySdBatteryDividerPresent();
-  Serial.printf("[SD] %s powered-card rescue %lu Hz csHigh=0x%02X CMD12=0x%02X rescueReady=%u cmdReady=%u CMD0=0x%02X\n",
+  Serial.printf("[SD] %s powered-card rescue %lu Hz csHigh=0x%02X CMD12=0x%02X cmd12Ready=%u rescueReady=%u cmdReady=%u CMD0=0x%02X\n",
     reason,static_cast<unsigned long>(ODYSSEY_SD_RESCUE_FREQ_HZ),
     unsigned(uint8_t(odysseySdLastCsHighByte.load())),unsigned(cmd12),
-    unsigned(odysseySdLastRescueReady.load()),unsigned(odysseySdLastCmdReady.load()),unsigned(response));
+    unsigned(odysseySdLastCmd12Ready.load()),unsigned(odysseySdLastRescueReady.load()),
+    unsigned(odysseySdLastCmdReady.load()),unsigned(response));
   return response;
 }
 
