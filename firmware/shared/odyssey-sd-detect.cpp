@@ -56,6 +56,7 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
 static constexpr uint32_t ODYSSEY_SD_INIT_FREQ_HZ=400000u;
+static constexpr uint32_t ODYSSEY_SD_STARTUP_SETTLE_MS=3000u;
 static constexpr uint8_t ODYSSEY_SD_BOOT_ATTEMPTS=1;
 static constexpr uint8_t ODYSSEY_SD_RECOVERY_ATTEMPTS=1;
 static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=8;
@@ -68,6 +69,7 @@ static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
 static std::atomic<uint32_t> odysseySdBeginAttempts{0};
 static std::atomic<int16_t> odysseySdLastCmd0{-2};
+static std::atomic<uint8_t> odysseySdLastCmdReady{0};
 static StaticSemaphore_t odysseySdMutexStorage;
 static SemaphoreHandle_t odysseySdMutex=nullptr;
 
@@ -75,6 +77,7 @@ int32_t odysseySdLastError() { return odysseySdLastMountError.load(); }
 uint32_t odysseySdAttemptCount() { return odysseySdMountAttempts.load(); }
 uint32_t odysseySdBeginAttemptCount() { return odysseySdBeginAttempts.load(); }
 int16_t odysseySdLastCmd0Response() { return odysseySdLastCmd0.load(); }
+uint8_t odysseySdLastCmdReadyState() { return odysseySdLastCmdReady.load(); }
 void odysseySdUseProbingClock() {}
 void odysseySdMarkVfsFailure() {
   odysseySdBootState=2;odysseySdProbeStage=4;
@@ -117,6 +120,25 @@ static void odysseySdReleaseLocked() {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
 }
 
+static void odysseyWaitForSdStartupSettle() {
+  const uint32_t now=millis();
+  if (now<ODYSSEY_SD_STARTUP_SETTLE_MS) {
+    const uint32_t waitMs=ODYSSEY_SD_STARTUP_SETTLE_MS-now;
+    Serial.printf("[SD] startup settle wait %lu ms before first transaction\n",
+      static_cast<unsigned long>(waitMs));
+    delay(waitMs);
+  }
+}
+
+static bool odysseySdWaitReadyLocked(uint32_t timeoutMs,uint8_t& lastByte) {
+  const uint32_t started=millis();
+  do {
+    lastByte=odysseySdSpi.transfer(0xFF);
+    if (lastByte==0xFF) return true;
+  } while (uint32_t(millis()-started)<timeoutMs);
+  return false;
+}
+
 static uint8_t odysseySdRearmProtocolLocked(const char* reason) {
   // ESP software reset and deep sleep leave the external SD module powered.
   // Give the card >74 clocks with CS high, then two CMD0 chances at 400 kHz
@@ -126,12 +148,22 @@ static uint8_t odysseySdRearmProtocolLocked(const char* reason) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
   odysseySdSpi.beginTransaction(SPISettings(ODYSSEY_SD_INIT_FREQ_HZ,MSBFIRST,SPI_MODE0));
-  for (uint8_t i=0;i<16;++i) odysseySdSpi.transfer(0xFF);
+  for (uint8_t i=0;i<20;++i) odysseySdSpi.transfer(0xFF);
 
   uint8_t response=0xFF;
+  odysseySdLastCmdReady=0;
   for (uint8_t attempt=0;attempt<2 && response!=0x01;++attempt) {
     digitalWrite(ODYSSEY_SD_CS,LOW);
-    odysseySdSpi.transfer(0xFF);
+    uint8_t readyByte=0x00;
+    const bool ready=odysseySdWaitReadyLocked(500u,readyByte);
+    odysseySdLastCmdReady=ready?1u:2u;
+    if (!ready) {
+      response=0xFE;
+      digitalWrite(ODYSSEY_SD_CS,HIGH);
+      odysseySdSpi.transfer(0xFF);
+      delay(20);
+      continue;
+    }
     odysseySdSpi.transfer(0x40);
     odysseySdSpi.transfer(0);odysseySdSpi.transfer(0);
     odysseySdSpi.transfer(0);odysseySdSpi.transfer(0);
@@ -150,7 +182,8 @@ static uint8_t odysseySdRearmProtocolLocked(const char* reason) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   odysseySdLastCmd0=int16_t(response);
   if (response==0x00 || response==0x01) markOdysseySdBatteryDividerPresent();
-  Serial.printf("[SD] %s protocol re-arm CMD0=0x%02X\n",reason,unsigned(response));
+  Serial.printf("[SD] %s protocol re-arm ready=%u CMD0=0x%02X\n",
+    reason,unsigned(odysseySdLastCmdReady.load()),unsigned(response));
   return response;
 }
 
@@ -297,6 +330,10 @@ void odysseyDetectSdCard() {
   odysseySdMountLocked("probe",1);
 }
 bool odysseyInitializeSdCardBeforeBle() {
+  // A powered SD adapter can be less tolerant than the C3 itself during boot.
+  // Preserve the proven 3 s first-transaction settle window, but keep the
+  // mount before BLE so catalogue state is deterministic at connection time.
+  odysseyWaitForSdStartupSettle();
   OdysseySdGuard guard;
   if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return false; }
   const bool ready=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
