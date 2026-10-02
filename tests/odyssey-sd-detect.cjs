@@ -7,62 +7,57 @@ const root=path.join(__dirname,'..');
 const source=fs.readFileSync(path.join(root,'firmware/shared/odyssey-sd-detect.cpp'),'utf8');
 const recording=fs.readFileSync(path.join(root,'firmware/shared/odyssey-sd-recording.cpp'),'utf8');
 const transfer=fs.readFileSync(path.join(root,'firmware/shared/odyssey-sd-transfer.cpp'),'utf8');
+const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
+const patch=fs.readFileSync(path.join(root,'tools/patch-arduino-sd.cjs'),'utf8');
 
-test('C3 SD owner uses ESP-IDF SDSPI/FAT on the fixed Odyssey pins',()=>{
+test('C3 restores proven Arduino SD SPI initialization on fixed Odyssey pins',()=>{
   const target=getTarget('esp32c3-supermini-4m');
   assert.deepEqual(target.hardware.sdDetection,{cs:0,sck:10,mosi:21,miso:20});
-  assert.match(source,/esp_vfs_fat_sdspi_mount/);
-  assert.match(source,/sdmmc_host_t host=SDSPI_HOST_DEFAULT\(\)/);
-  assert.match(source,/spi_bus_initialize\(static_cast<spi_host_device_t>\(host\.slot\),&bus,SDSPI_DEFAULT_DMA\)/);
-  assert.match(source,/slot\.gpio_cs=static_cast<gpio_num_t>\(ODYSSEY_SD_CS\)/);
-  assert.match(source,/bus\.sclk_io_num=ODYSSEY_SD_SCK/);
-  assert.match(source,/bus\.mosi_io_num=ODYSSEY_SD_MOSI/);
-  assert.match(source,/bus\.miso_io_num=ODYSSEY_SD_MISO/);
-  assert.match(source,/ODYSSEY_SD_INIT_FREQ_KHZ=SDMMC_FREQ_PROBING/);
-  assert.match(source,/ODYSSEY_SD_RUN_FREQ_KHZ=1000u/);
-  assert.match(source,/host\.max_freq_khz=ODYSSEY_SD_INIT_FREQ_KHZ/);
-  assert.match(source,/sdmmc_get_status\(card\)/);
-  assert.match(source,/set_card_clk\(card->host\.slot,ODYSSEY_SD_RUN_FREQ_KHZ\)/);
-  assert.match(source,/set_card_clk\(card->host\.slot,ODYSSEY_SD_INIT_FREQ_KHZ\)/);
-  assert.doesNotMatch(source,/ODYSSEY_SD_MAX_FREQ_KHZ=10000u/);
-  assert.match(source,/format_if_mount_failed=false/);
-  assert.match(source,/allocation_unit_size=16\*1024/);
+  assert.match(source,/static SPIClass odysseySdSpi\(FSPI\)/);
+  assert.match(source,/ODYSSEY_SD_INIT_FREQ_HZ=400000u/);
+  assert.match(source,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,/);
+  assert.match(source,/ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false/);
+  assert.match(source,/ODYSSEY_SD_BOOT_ATTEMPTS=1/);
+  assert.match(source,/ODYSSEY_SD_RECOVERY_ATTEMPTS=1/);
+  assert.doesNotMatch(source,/esp_vfs_fat_sdspi_mount|spi_bus_initialize|gpio_reset_pin|gpio_set_pull_mode/);
 });
 
-test('C3 SD lifecycle has one owner, bounded retries and complete cleanup',()=>{
+test('C3 retains current guarded POSIX recording and verified sync runtime',()=>{
   assert.match(source,/class OdysseySdGuard/);
   assert.match(source,/xSemaphoreCreateMutexStatic/);
-  assert.match(source,/esp_vfs_fat_sdcard_unmount\(ODYSSEY_SD_MOUNT_POINT,odysseySdCard\)/);
-  assert.match(source,/spi_bus_free\(SPI2_HOST\)/);
-  assert.match(source,/ODYSSEY_SD_BOOT_ATTEMPTS=2/);
-  assert.match(source,/ODYSSEY_SD_RECOVERY_ATTEMPTS=3/);
-  assert.match(source,/ODYSSEY_SD_RETRY_BACKOFF_MS=250u/);
-  assert.match(source,/gpio_reset_pin\(static_cast<gpio_num_t>\(ODYSSEY_SD_SCK\)\)/);
-  assert.match(source,/gpio_set_pull_mode\(static_cast<gpio_num_t>\(ODYSSEY_SD_MISO\),GPIO_PULLUP_ONLY\)/);
-  assert.match(source,/odysseySdMountLocked\("boot",ODYSSEY_SD_BOOT_ATTEMPTS\)/);
-  assert.match(source,/odysseySdMountLocked\("recovery",ODYSSEY_SD_RECOVERY_ATTEMPTS\)/);
-  assert.doesNotMatch(source,/odysseySdRawCommand|odysseySdProtocolProbe|odysseySdReadSectorZero/);
-});
-
-test('C3 runtime storage uses VFS/POSIX rather than Arduino SD/File',()=>{
+  assert.match(source,/SD\.end\(\)/);
+  assert.match(source,/odysseySdSpi\.end\(\)/);
+  assert.match(source,/odysseySdValidateVfsLocked/);
+  assert.match(source,/opendir\(ODYSSEY_SD_RECORDING_DIR\)/);
+  assert.match(source,/\.synap-media-probe\.tmp/);
   assert.match(recording,/fopen\(fullPath,"wb\+"\)/);
-  assert.match(recording,/fwrite\(pcm,1,sizeof\(pcm\),file\)/);
-  assert.match(recording,/fseek\(file,0,SEEK_SET\)/);
   assert.match(recording,/OdysseySdGuard storage/);
-  assert.doesNotMatch(recording,/\bSD\.|\bFile\b/);
-
   assert.match(transfer,/opendir\(directoryPath\)/);
   assert.match(transfer,/fopen\(full,"rb"\)/);
   assert.match(transfer,/unlink\(full\)/);
-  assert.match(transfer,/OdysseySdGuard guard/);
-  assert.doesNotMatch(transfer,/\bSD\.|\bFile\b/);
 });
 
-test('C3 capability stages describe native storage lifecycle',()=>{
-  assert.match(source,/probe 0=not checked, 1=SPI bus setup failed, 2=card protocol init failed/);
-  assert.match(source,/3=FAT mount failed, 4=VFS validation failed, 6=ready/);
-  assert.match(source,/odysseySdBootState=1;\n  odysseySdProbeStage=6/);
-  assert.match(source,/result==ESP_FAIL\)\?3:2/);
+test('C3 hard init failures retain BLE diagnostics and never format media',()=>{
+  assert.match(source,/odysseySdLastMountError\{ESP_OK\}/);
+  assert.match(source,/\+\+odysseySdMountAttempts/);
+  assert.match(source,/odysseySdBootState=2;odysseySdProbeStage=2/);
+  assert.match(source,/odysseySdLastMountError=ESP_FAIL/);
+  assert.match(source,/odysseySdLastMountError=ESP_OK;[\s\S]*odysseySdBootState=1/);
+  assert.match(transfer,/odysseySdLastError\(\)/);
+  assert.match(transfer,/odysseySdAttemptCount\(\)/);
+  assert.match(transfer,/mountAttempts/);
+  assert.doesNotMatch(source,/format_if_mount_failed=true/);
+});
+
+test('production build reapplies pinned Espressif Arduino SD init compatibility fix',()=>{
+  assert.match(workflow,/Backport proven Arduino SD SPI initialization fix/);
+  assert.match(workflow,/patch-arduino-sd\.cjs/);
+  assert.match(workflow,/SYNAP_ARDUINO_SD_SRC/);
+  assert.match(patch,/sd_go_idle_delay_ms = 20/);
+  assert.match(patch,/sd_op_cond_timeout_ms = 3000/);
+  assert.match(patch,/APP_OP_COND, 0x40000000/);
+  assert.match(patch,/APP_OP_COND, 0, NULL/);
+  assert.match(patch,/SEND_OP_COND, 0, NULL/);
 });
 
 test('device profile still emits original Odyssey pins and only C3 advertises SD sync',()=>{
@@ -73,20 +68,4 @@ test('device profile still emits original Odyssey pins and only C3 advertises SD
     assert.equal(target.features.includes('sd'),id==='esp32c3-supermini-4m');
   }
   assert(!renderProfile(getTarget('xiao-esp32s3-sense-8m')).includes('SYNAP_SD_'));
-});
-
-test('production build no longer patches the Arduino SD core',()=>{
-  const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
-  assert.doesNotMatch(workflow,/patch-arduino-sd|SYNAP_ARDUINO_SD_SRC/);
-  assert.equal(fs.existsSync(path.join(root,'tools/patch-arduino-sd.cjs')),false);
-});
-
-test('C3 preserves the native mount error and attempt count for BLE diagnostics',()=>{
-  assert.match(source,/odysseySdLastMountError\{ESP_OK\}/);
-  assert.match(source,/\+\+odysseySdMountAttempts/);
-  assert.match(source,/odysseySdLastMountError=result==ESP_OK\?ESP_FAIL:result/);
-  assert.match(source,/odysseySdLastMountError=ESP_OK;[\s\S]*odysseySdBootState=1/);
-  assert.match(transfer,/odysseySdLastError\(\)/);
-  assert.match(transfer,/odysseySdAttemptCount\(\)/);
-  assert.match(transfer,/mountAttempts/);
 });
