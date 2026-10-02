@@ -7,6 +7,7 @@ const root=path.join(__dirname,'..');
 const source=fs.readFileSync(path.join(root,'firmware/shared/odyssey-sd-detect.cpp'),'utf8');
 const recording=fs.readFileSync(path.join(root,'firmware/shared/odyssey-sd-recording.cpp'),'utf8');
 const transfer=fs.readFileSync(path.join(root,'firmware/shared/odyssey-sd-transfer.cpp'),'utf8');
+const boot=fs.readFileSync(path.join(root,'firmware/shared/boot.cpp'),'utf8');
 const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
 const patch=fs.readFileSync(path.join(root,'tools/patch-arduino-sd.cjs'),'utf8');
 
@@ -20,6 +21,9 @@ test('C3 restores proven Arduino SD SPI initialization on fixed Odyssey pins',()
   assert.match(source,/ODYSSEY_SD_BOOT_ATTEMPTS=1/);
   assert.match(source,/ODYSSEY_SD_RECOVERY_ATTEMPTS=1/);
   assert.doesNotMatch(source,/esp_vfs_fat_sdspi_mount|spi_bus_initialize|gpio_reset_pin|gpio_set_pull_mode/);
+  assert.match(source,/response==0x00 \|\| response==0x01\) markOdysseySdBatteryDividerPresent\(\)/);
+  assert.match(source,/if \(mounted\) markOdysseySdBatteryDividerPresent\(\)/);
+  assert.match(boot,/odysseyInitializeSdCardBeforeBle\(\);[\s\S]*if \(odysseySdBatteryDividerPresent\(\)\) sampleBattery\(true\);/);
 });
 
 test('C3 retains current guarded POSIX recording and verified sync runtime',()=>{
