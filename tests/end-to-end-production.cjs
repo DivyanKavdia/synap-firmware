@@ -64,12 +64,12 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,/);
   assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|spi_bus_initialize/);
   assert.match(c3,/Normal PWA reads are observational only\. Only operation 14 may remount/);
-  const sdBoot=c3.indexOf('odysseyInitializeSdCardBeforeBle();');
-  const transferInit=c3.indexOf('OdysseyTransfer::initialize();',sdBoot);
-  const bleInit=c3.indexOf('initializeBLE();',transferInit);
+  const transferInit=c3.indexOf('OdysseyTransfer::initialize();');
+  const sdBoot=c3.indexOf('odysseyInitializeSdCardBeforeBle();',transferInit);
+  const bleInit=c3.indexOf('initializeBLE();',sdBoot);
   const tasks=c3.indexOf('xTaskCreate(controlTask, "control"',bleInit);
-  assert.ok(sdBoot>0 && transferInit>sdBoot && bleInit>transferInit && tasks>bleInit,
-    'C3 SD must mount before transfer worker, BLE advertising and runtime tasks');
+  assert.ok(transferInit>0 && sdBoot>transferInit && bleInit>sdBoot && tasks>bleInit,
+    'C3 diagnostic lifecycle must reproduce 1445 worker -> mount -> BLE ordering');
   assert.doesNotMatch(c3,/odysseyScheduleSdCardDetection/);
   assert.match(c3,/enterDeepSleep\("touch-hold"\)/);
   assert.match(c3,/enterDeepSleep\("touch-hold-after-stop"\)/);
@@ -89,12 +89,13 @@ test('release workflow compiles the shared complete production pipeline',()=>{
   assert.match(workflow,/arduino-cli core install esp32:esp32@3\.3\.5/);
   assert.doesNotMatch(workflow,/patch-arduino-sd\.cjs|SYNAP_ARDUINO_SD_SRC/);
 });
-test('C3 restored Arduino initializer is the only mount path while runtime stays VFS-backed',()=>{
+test('C3 exact Arduino first mount precedes BLE while GPIO fallback remains post-failure only',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
-  const sd=c3.indexOf('odysseyInitializeSdCardBeforeBle();');
-  const worker=c3.indexOf('OdysseyTransfer::initialize();',sd);
-  const ble=c3.indexOf('initializeBLE();',worker);
-  assert(sd>0 && worker>sd && ble>worker,'C3 storage must mount before SD worker and BLE advertising');
+  const worker=c3.indexOf('OdysseyTransfer::initialize();');
+  const sd=c3.indexOf('odysseyInitializeSdCardBeforeBle();',worker);
+  const ble=c3.indexOf('initializeBLE();',sd);
+  assert(worker>0 && sd>worker && ble>sd,'C3 must reproduce 1445 worker -> mount -> BLE ordering');
+  assert(c3.indexOf('bool mounted=odysseySdBeginLocked();')<c3.indexOf('odysseySdBitBangProbeLocked(reason)'));
   assert.match(c3,/static SPIClass odysseySdSpi\(FSPI\)/);
   assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,/);
   assert.match(c3,/SD\.end\(\)/);
