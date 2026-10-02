@@ -20,8 +20,11 @@ test('C3 remounts only after explicit PWA op14 or physical touch recovery',()=>{
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
   const recorder=read('firmware/shared/odyssey-sd-recording.cpp');
   assert.doesNotMatch(transfer,/automaticRetries|background mount retry/);
-  assert.match(transfer,/Keep all remounts explicit through operation 14/);
-  assert.match(transfer,/case 14:[\s\S]*odysseyRecoverSdCard\(\)/);
+  assert.match(transfer,/physical touch requested software recovery/);
+  assert.match(transfer,/odysseyRecoverSdCard\("touch"\)/);
+  assert.match(transfer,/case 14:[\s\S]*odysseyRecoverSdCard\("op14"\)/);
+  const readCase=transfer.split('case 4:')[1].split('case 7:')[0];
+  assert.doesNotMatch(readCase,/odysseySdRequestRecovery\(/);
   assert.match(recorder,/odysseySdRequestRecovery\(\)/);
 });
 test('BLE STOP and reconnect cannot release SD-owned I2S or block the control task',()=>{
@@ -75,7 +78,7 @@ test('C3 catalogue failure is observational and never auto-remounts',()=>{
   const catalogueCase=transfer.split('case 7:')[1].split('case 8:')[0];
   assert.doesNotMatch(catalogueCase,/odysseyRecoverSdCard\(/);
   assert.match(catalogueCase,/odysseySdMarkVfsFailure\(\)/);
-  assert.match(transfer,/case 14:[\s\S]*odysseyRecoverSdCard\(\)/);
+  assert.match(transfer,/case 14:[\s\S]*odysseyRecoverSdCard\("op14"\)/);
   assert.match(transfer,/sdProbe/);
 });
 test('C3 PWA connection is acknowledged by three visible green flashes',()=>{
