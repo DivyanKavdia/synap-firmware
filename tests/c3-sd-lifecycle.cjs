@@ -16,19 +16,14 @@ test('C3 reconnect never stops SD capture; START performs explicit handoff',()=>
   const session=read('firmware/shared/audio-session.cpp');
   assert.match(session,/odysseyPrepareForConnectedStreaming\(1500u\)/);
 });
-test('C3 remounts on explicit op14, physical touch, or a bounded post-boot re-arm',()=>{
+test('C3 remounts only on explicit op14 or physical touch',()=>{
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
   const recorder=read('firmware/shared/odyssey-sd-recording.cpp');
   const detect=read('firmware/shared/odyssey-sd-detect.cpp');
-  assert.doesNotMatch(transfer,/automaticRetries|background mount retry/);
-  // The re-arm exists so a failed boot mount is not permanent, and it is armed
-  // in exactly one place: the boot path. Three attempts, then it stops for good.
-  assert.match(transfer,/odysseySdConsumeAutoRearm\(\)[\s\S]*odysseyRecoverSdCard\("rearm"\)/);
-  assert.match(detect,/ODYSSEY_SD_REARM_STEPS=3/);
-  const armCallers=detect.match(/odysseySdArmBootRearm\(\)/g)||[];
-  assert.equal(armCallers.length,2,'declared once and called once, from the boot path only');
-  const boot=detect.split('bool odysseyInitializeSdCardBeforeBle')[1].split('\n}')[0];
-  assert.match(boot,/else odysseySdArmBootRearm\(\)/);
+  assert.doesNotMatch(transfer,/automaticRetries|background mount retry|odysseySdConsumeAutoRearm|scheduled re-arm/);
+  assert.doesNotMatch(detect,/ODYSSEY_SD_REARM_STEPS|odysseySdArmBootRearm|odysseySdConsumeAutoRearm/);
+  assert.match(detect,/ODYSSEY_SD_BOOT_ATTEMPTS=1/);
+  assert.match(detect,/ODYSSEY_SD_RECOVERY_ATTEMPTS=1/);
   assert.match(transfer,/physical touch requested software recovery/);
   assert.match(transfer,/odysseyRecoverSdCard\("touch"\)/);
   assert.match(transfer,/case 14:[\s\S]*odysseyRecoverSdCard\("op14"\)/);
@@ -125,6 +120,13 @@ test('C3 GPIO bitbang fallback bypasses SPIClass only after exact mount failure'
   assert.doesNotMatch(detect,/odysseySdRearmProtocolLocked|ODYSSEY_SD_RESCUE_FREQ_HZ/);
   assert.match(transfer,/bbHigh/);
   assert.match(transfer,/bbLow/);
+  assert.match(transfer,/raw0/);
+  assert.match(transfer,/rawFF/);
+  assert.match(transfer,/rawFE/);
+  assert.match(transfer,/rawOther/);
+  assert.match(transfer,/rawMaxFF/);
+  assert.match(detect,/odysseySdSampleRawLocked/);
+  assert.match(detect,/for \(uint16_t i=0;i<1024u;\+\+i\)/);
   assert.match(transfer,/mountWhy/);
   assert.match(transfer,/bbStop/);
   assert.match(transfer,/bbCmd12Candidate/);
@@ -148,8 +150,9 @@ test('C3 quiesces SD before OTA reboot, app restart and deep sleep',()=>{
   // down the host and sends the card nothing, which is how a reset mid-CMD18
   // left the next boot facing a bus stuck at 0x00.
   assert.match(transition,/odysseySdQuiesceLocked\(ODYSSEY_SD_QUIESCE_BUDGET_MS\)/);
-  // A card reporting no media has no transfer to stop; don't spend the budget.
-  assert.match(transition,/state==3[\s\S]*no card to quiesce/);
+  // Failed initialization must not inject another raw recovery sequence on
+  // every reboot; only a successfully mounted session is quiesced.
+  assert.match(transition,/if \(!wasReady\)[\s\S]*without quiesce/);
   // Full re-detection must not run on the way out of the process.
   assert.doesNotMatch(transition,/odysseySdBitBangRecoverLocked|odysseySdMountLocked/);
   const quiesce=detect.split('static uint8_t odysseySdQuiesceLocked')[1].split('\n}')[0];
