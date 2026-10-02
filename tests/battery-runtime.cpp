@@ -86,10 +86,14 @@ int main(){
   assert(batteryAvailable && batteryPercent==100 && event.value[2]==100);
   assert(batteryMillivolts==(CONFIG_IDF_TARGET_ESP32C3?4150:4130));
 #if CONFIG_IDF_TARGET_ESP32C3
-  // Standard C3 remains 2:1 until SD hardware is positively observed.
+  // Standard C3 remains 2:1 while that reconstruction is physically plausible.
   assert(!odysseySdBatteryDividerPresent());
-  markOdysseySdBatteryDividerPresent();
+  // The SD-equipped 1 MOhm / 470 kOhm divider produces ~1.18 V at the ADC for
+  // a healthy ~3.70 V LiPo. A 2:1 reconstruction would be an impossible 2.37 V,
+  // so firmware can identify this hardware even if the SD protocol itself fails.
+  adcMv=1184;sampleBattery(true);
   assert(odysseySdBatteryDividerPresent());
+  assert(batteryAvailable && batteryMillivolts==3702);
   assert(batteryPercentFromMillivolts(4199)==99);
   assert(batteryPercentFromMillivolts(4200)==100);
   adcMv=1287;sampleBattery(true);
