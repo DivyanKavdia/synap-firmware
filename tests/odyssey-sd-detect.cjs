@@ -54,8 +54,10 @@ test('C3 hard init failures expose direct GPIO probe and never format media',()=
   assert.match(source,/odysseySdBitBangCsLow/);
   assert.match(source,/pinMode\(ODYSSEY_SD_MISO,INPUT_PULLUP\)/);
   assert.match(source,/odysseySdBitBangStopWriteLocked/);
+  assert.match(source,/R1b is not complete/);
+  assert.match(source,/odysseySdBitBangWaitReady\(3000u,last\)\?1:2/);
   assert.match(source,/odysseySdBitBangTransfer\(0xFD\)/);
-  assert.match(source,/odysseySdBitBangCommand\(12u,0u,0x61u,nullptr,0,true\)/);
+  assert.match(source,/odysseySdBitBangCommandR1b\(12u,0u,0x61u,cmd12Ready\)/);
   assert.match(source,/odysseySdBitBangCmd12/);
   assert.match(source,/odysseySdBitBangCmd0/);
   assert.match(source,/odysseySdBitBangCmd8/);
@@ -64,6 +66,7 @@ test('C3 hard init failures expose direct GPIO probe and never format media',()=
   assert.match(transfer,/mountWhy/);
   assert.match(transfer,/bbStop/);
   assert.match(transfer,/bbCmd12/);
+  assert.match(transfer,/bbR1b/);
   assert.match(transfer,/bbCmd0/);
   assert.match(transfer,/bbCmd8/);
   assert.match(transfer,/bbR7/);

@@ -276,14 +276,14 @@ static void worker(void*) {
       default:error=BAD_COMMAND;break;
     }
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
-      char detail[288];
+      char detail[320];
       const int n=snprintf(detail,sizeof(detail),
-        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"mountWhy\":%u,\"bbHigh\":%d,\"bbLow\":%d,\"bbStop\":%u,\"bbCmd12\":%d,\"bbCmd0\":%d,\"bbCmd8\":%d,\"bbR7\":%lu}",
+        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"mountWhy\":%u,\"bbHigh\":%d,\"bbLow\":%d,\"bbCmd12\":%d,\"bbR1b\":%u,\"bbStop\":%u,\"bbCmd0\":%d,\"bbCmd8\":%d,\"bbR7\":%lu}",
         catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
         static_cast<long>(odysseySdLastError()),static_cast<unsigned long>(odysseySdAttemptCount()),
         static_cast<unsigned long>(odysseySdBeginAttemptCount()),unsigned(odysseySdLastMountReasonCode()),
-        int(odysseySdBitBangCsHighState()),int(odysseySdBitBangCsLowState()),
-        unsigned(odysseySdBitBangStopStateValue()),int(odysseySdBitBangCmd12Response()),
+        int(odysseySdBitBangCsHighState()),int(odysseySdBitBangCsLowState()),int(odysseySdBitBangCmd12Response()),
+        unsigned(odysseySdBitBangCmd12ReadyState()),unsigned(odysseySdBitBangStopStateValue()),
         int(odysseySdBitBangCmd0Response()),int(odysseySdBitBangCmd8Response()),
         static_cast<unsigned long>(odysseySdBitBangR7Response()));
       reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),

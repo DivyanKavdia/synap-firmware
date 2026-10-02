@@ -104,7 +104,9 @@ test('C3 GPIO bitbang fallback bypasses SPIClass only after exact mount failure'
   assert.match(detect,/odysseySdBitBangTransfer/);
   assert.match(detect,/pinMode\(ODYSSEY_SD_MISO,INPUT_PULLUP\)/);
   assert.match(detect,/odysseySdBitBangTransfer\(0xFD\)/);
-  assert.match(detect,/odysseySdBitBangCommand\(12u,0u,0x61u,nullptr,0,true\)/);
+  assert.match(detect,/odysseySdBitBangCmd12Ready/);
+  assert.match(detect,/odysseySdBitBangWaitReady\(3000u,last\)\?1:2/);
+  assert.match(detect,/odysseySdBitBangCommandR1b\(12u,0u,0x61u,cmd12Ready\)/);
   assert.match(detect,/odysseySdBitBangCommand\(0u,0u,0x95u\)/);
   assert.match(detect,/odysseySdBitBangCommand\(8u,0x1AAu,0x87u/);
   assert.match(detect,/digitalRead\(ODYSSEY_SD_MISO\)/);
@@ -116,6 +118,7 @@ test('C3 GPIO bitbang fallback bypasses SPIClass only after exact mount failure'
   assert.match(transfer,/mountWhy/);
   assert.match(transfer,/bbStop/);
   assert.match(transfer,/bbCmd12/);
+  assert.match(transfer,/bbR1b/);
   assert.match(transfer,/bbCmd0/);
   assert.match(transfer,/bbCmd8/);
   assert.match(transfer,/bbR7/);
