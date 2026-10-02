@@ -61,15 +61,16 @@ static constexpr uint8_t ODYSSEY_SD_BOOT_ATTEMPTS=1;
 static constexpr uint8_t ODYSSEY_SD_RECOVERY_ATTEMPTS=1;
 static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=8;
 
-// Restore the proven Arduino-ESP32 SD SPI initialization path used by build 1510.
-// The pinned 3.3.5 core is patched in CI with Espressif's SPI-init compatibility fix.
-// Runtime recording/sync continues to use the current POSIX/VFS implementation.
+// Restore the exact Arduino-ESP32 3.3.5 stock SD initialization used by the
+// known-good Odyssey C3 build 1445. Runtime recording/sync continues to use
+// the current guarded POSIX/VFS implementation after the mount succeeds.
 static SPIClass odysseySdSpi(FSPI);
 static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
 static std::atomic<uint32_t> odysseySdBeginAttempts{0};
 static std::atomic<int16_t> odysseySdLastCmd0{-2};
 static std::atomic<uint8_t> odysseySdLastCmdReady{0};
+static std::atomic<int16_t> odysseySdLastCsHighByte{-2};
 static StaticSemaphore_t odysseySdMutexStorage;
 static SemaphoreHandle_t odysseySdMutex=nullptr;
 
@@ -78,6 +79,7 @@ uint32_t odysseySdAttemptCount() { return odysseySdMountAttempts.load(); }
 uint32_t odysseySdBeginAttemptCount() { return odysseySdBeginAttempts.load(); }
 int16_t odysseySdLastCmd0Response() { return odysseySdLastCmd0.load(); }
 uint8_t odysseySdLastCmdReadyState() { return odysseySdLastCmdReady.load(); }
+int16_t odysseySdLastCsHighResponse() { return odysseySdLastCsHighByte.load(); }
 void odysseySdUseProbingClock() {}
 void odysseySdMarkVfsFailure() {
   odysseySdBootState=2;odysseySdProbeStage=4;
@@ -148,7 +150,9 @@ static uint8_t odysseySdRearmProtocolLocked(const char* reason) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
   odysseySdSpi.beginTransaction(SPISettings(ODYSSEY_SD_INIT_FREQ_HZ,MSBFIRST,SPI_MODE0));
-  for (uint8_t i=0;i<20;++i) odysseySdSpi.transfer(0xFF);
+  uint8_t csHighByte=0x00;
+  for (uint8_t i=0;i<20;++i) csHighByte=odysseySdSpi.transfer(0xFF);
+  odysseySdLastCsHighByte=int16_t(csHighByte);
 
   uint8_t response=0xFF;
   odysseySdLastCmdReady=0;
@@ -157,13 +161,9 @@ static uint8_t odysseySdRearmProtocolLocked(const char* reason) {
     uint8_t readyByte=0x00;
     const bool ready=odysseySdWaitReadyLocked(500u,readyByte);
     odysseySdLastCmdReady=ready?1u:2u;
-    if (!ready) {
-      response=0xFE;
-      digitalWrite(ODYSSEY_SD_CS,HIGH);
-      odysseySdSpi.transfer(0xFF);
-      delay(20);
-      continue;
-    }
+    // Match the stock 3.3.5 initializer: readiness is diagnostic only before
+    // CMD0. A card stuck returning busy may still accept GO_IDLE_STATE, so do
+    // not suppress the reset command merely because sdWait-style polling failed.
     odysseySdSpi.transfer(0x40);
     odysseySdSpi.transfer(0);odysseySdSpi.transfer(0);
     odysseySdSpi.transfer(0);odysseySdSpi.transfer(0);
@@ -182,8 +182,9 @@ static uint8_t odysseySdRearmProtocolLocked(const char* reason) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   odysseySdLastCmd0=int16_t(response);
   if (response==0x00 || response==0x01) markOdysseySdBatteryDividerPresent();
-  Serial.printf("[SD] %s protocol re-arm ready=%u CMD0=0x%02X\n",
-    reason,unsigned(odysseySdLastCmdReady.load()),unsigned(response));
+  Serial.printf("[SD] %s protocol re-arm csHigh=0x%02X ready=%u CMD0=0x%02X\n",
+    reason,unsigned(uint8_t(odysseySdLastCsHighByte.load())),
+    unsigned(odysseySdLastCmdReady.load()),unsigned(response));
   return response;
 }
 
