@@ -100,19 +100,26 @@ test('C3 failed mount reports compatibility diagnostics without formatting or de
 });
 
 
-test('C3 re-arms a still-powered SD card and reports the raw CMD0 response',()=>{
+test('C3 rescues a still-powered SD card before retrying the stock mount',()=>{
   const detect=read('firmware/shared/odyssey-sd-detect.cpp');
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
-  assert.match(detect,/for \(uint8_t i=0;i<20;\+\+i\) csHighByte=odysseySdSpi\.transfer\(0xFF\)/);
-  assert.match(detect,/odysseySdSpi\.transfer\(0x40\);/);
+  assert.match(detect,/ODYSSEY_SD_RESCUE_FREQ_HZ=100000u/);
+  assert.match(detect,/for \(uint8_t i=0;i<64;\+\+i\) csHighByte=odysseySdSpi\.transfer\(0xFF\)/);
+  assert.match(detect,/odysseySdSpi\.transfer\(0xFD\)/);
+  assert.match(detect,/odysseySdCommandLocked\(12u,0u,0x61u,true\)/);
+  assert.match(detect,/odysseySdWaitReadyLocked\(ODYSSEY_SD_RESCUE_BUSY_MS,rescueByte\)/);
   assert.match(detect,/attempt<2 && response!=0x01/);
+  assert.match(detect,/odysseySdCommandLocked\(0u,0u,0x95u,false\)/);
   assert.match(detect,/mounted=odysseySdBeginLocked\(\);[\s\S]*odysseySdRearmProtocolLocked\(reason\)[\s\S]*mounted=odysseySdBeginLocked\(\)/);
   assert.match(detect,/odysseySdBeginAttempts/);
+  assert.match(detect,/odysseySdLastCmd12/);
+  assert.match(detect,/odysseySdLastRescueReady/);
   assert.match(detect,/odysseySdLastCmd0/);
   assert.match(detect,/odysseySdLastCsHighByte/);
-  assert.match(detect,/odysseySdWaitReadyLocked\(500u,readyByte\)[\s\S]*odysseySdSpi\.transfer\(0x40\)/);
   assert.match(transfer,/beginAttempts/);
   assert.match(transfer,/csHigh/);
+  assert.match(transfer,/cmd12/);
+  assert.match(transfer,/rescueReady/);
   assert.match(transfer,/cmd0/);
 });
 
