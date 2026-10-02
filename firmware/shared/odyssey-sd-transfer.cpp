@@ -230,11 +230,17 @@ static void worker(void*) {
   uint8_t bytes[480];
   for (;;) {
     if (xQueueReceive(requests,&request,pdMS_TO_TICKS(500))!=pdTRUE) {
-      // Regression diagnostic: never mutate SD state merely because the worker
-      // is idle or a previous operation failed. Build 1481 proved that a card
-      // could be healthy at boot and later be demoted during runtime recovery.
-      // Keep all remounts explicit through operation 14.
-      (void)odysseySdConsumeRecoveryRequest();
+      // Never remount merely because the worker is idle or catalogue failed.
+      // A physical disconnected double-tap is an explicit recovery request,
+      // just like PWA operation 14, and may safely run while storage is idle.
+      if (odysseySdConsumeRecoveryRequest()) {
+        if (!odysseyRecording.load() && !streamingEnabled.load() && !otaBusy() && !sleepPending) {
+          Serial.println("[SD] physical touch requested software recovery");
+          (void)odysseyRecoverSdCard("touch");
+        } else {
+          odysseySdRequestRecovery();
+        }
+      }
       continue;
     }
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load()) continue;
@@ -260,7 +266,7 @@ static void worker(void*) {
       case 8: total=catalogueBuffer.length();if(!total)error=FILE_UNAVAILABLE;break;
       case 14:
         selectedPath[0]=0;catalogueBuffer="";
-        error=odysseyRecoverSdCard()?OK:NO_SD;
+        error=odysseyRecoverSdCard("op14")?OK:NO_SD;
         break;
       case 17: error=removeFile(request.path); break;
       case 18:
@@ -272,12 +278,14 @@ static void worker(void*) {
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
       char detail[288];
       const int n=snprintf(detail,sizeof(detail),
-        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"bbHigh\":%d,\"bbLow\":%d,\"bbCmd0\":%d,\"bbCmd8\":%d,\"bbR7\":%lu}",
+        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"mountWhy\":%u,\"bbHigh\":%d,\"bbLow\":%d,\"bbStop\":%u,\"bbCmd12\":%d,\"bbCmd0\":%d,\"bbCmd8\":%d,\"bbR7\":%lu}",
         catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
         static_cast<long>(odysseySdLastError()),static_cast<unsigned long>(odysseySdAttemptCount()),
-        static_cast<unsigned long>(odysseySdBeginAttemptCount()),int(odysseySdBitBangCsHighState()),
-        int(odysseySdBitBangCsLowState()),int(odysseySdBitBangCmd0Response()),
-        int(odysseySdBitBangCmd8Response()),static_cast<unsigned long>(odysseySdBitBangR7Response()));
+        static_cast<unsigned long>(odysseySdBeginAttemptCount()),unsigned(odysseySdLastMountReasonCode()),
+        int(odysseySdBitBangCsHighState()),int(odysseySdBitBangCsLowState()),
+        unsigned(odysseySdBitBangStopStateValue()),int(odysseySdBitBangCmd12Response()),
+        int(odysseySdBitBangCmd0Response()),int(odysseySdBitBangCmd8Response()),
+        static_cast<unsigned long>(odysseySdBitBangR7Response()));
       reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),
         n>0?std::min(size_t(n),sizeof(detail)-1):0);
     } else reply(request,error,total,request.offset,bytes,size);
