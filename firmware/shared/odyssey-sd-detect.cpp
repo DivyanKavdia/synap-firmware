@@ -574,10 +574,6 @@ static bool odysseySdMountLocked(const char* reason,uint8_t attempts) {
   if (odysseySdReady()) return true;
   for (uint8_t attempt=1;attempt<=attempts;++attempt) {
     if (odysseySdMountOnceLocked(reason,attempt)) return true;
-    // A card that has just been dragged out of a stranded transfer needs a
-    // moment before it will answer CMD0 cleanly. Retrying instantly mostly
-    // reproduces the same failure.
-    if (attempt<attempts) delay(ODYSSEY_SD_ATTEMPT_SETTLE_MS);
   }
   Serial.printf("[SD] %s failed after %u attempt(s), state=%u stage=%u\n",
     reason,unsigned(attempts),unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()));
