@@ -98,3 +98,31 @@ test('C3 failed mount reports compatibility diagnostics without formatting or de
   assert.match(transfer,/espErr/);
   assert.match(transfer,/mountAttempts/);
 });
+
+
+test('C3 re-arms a still-powered SD card and reports the raw CMD0 response',()=>{
+  const detect=read('firmware/shared/odyssey-sd-detect.cpp');
+  const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
+  assert.match(detect,/for \(uint8_t i=0;i<16;\+\+i\) odysseySdSpi\.transfer\(0xFF\)/);
+  assert.match(detect,/odysseySdSpi\.transfer\(0x40\);/);
+  assert.match(detect,/attempt<2 && response!=0x01/);
+  assert.match(detect,/mounted=odysseySdBeginLocked\(\);[\s\S]*odysseySdRearmProtocolLocked\(reason\)[\s\S]*mounted=odysseySdBeginLocked\(\)/);
+  assert.match(detect,/odysseySdBeginAttempts/);
+  assert.match(detect,/odysseySdLastCmd0/);
+  assert.match(transfer,/beginAttempts/);
+  assert.match(transfer,/cmd0/);
+});
+
+test('C3 quiesces SD before OTA reboot, app restart and deep sleep',()=>{
+  const runtime=read('firmware/shared/runtime.cpp');
+  const ota=read('firmware/shared/ota.cpp');
+  const ble=read('firmware/shared/ble-control.cpp');
+  const power=read('firmware/shared/power.cpp');
+  const detect=read('firmware/shared/odyssey-sd-detect.cpp');
+  assert.match(runtime,/bool odysseyPrepareSdForPowerTransition\(uint32_t timeoutMs\)/);
+  assert.match(detect,/bool odysseyPrepareSdForPowerTransition\(uint32_t timeoutMs\)/);
+  assert.match(detect,/odysseySdReleaseLocked\(\);[\s\S]*odysseySdRearmProtocolLocked\("power-transition"\)/);
+  assert.match(ota,/otaSession\.state==Synap::COMMITTED[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*ESP\.restart\(\)/);
+  assert.match(ble,/CMD_RESTART:[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*ESP\.restart\(\)/);
+  assert.match(power,/entering deep sleep request=[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*esp_deep_sleep_start\(\)/);
+});
