@@ -61,6 +61,9 @@ void fatalSetup(const char* message) {
 }
 void setup() {
   Serial.begin(115200);
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  odysseySdHoldBusIdleEarly();
+#endif
 #if USE_REAL_I2S_MIC
   microphoneMutex=xSemaphoreCreateRecursiveMutexStatic(&microphoneMutexStorage);
   if (!microphoneMutex) fatalSetup("[FATAL] microphone lock unavailable");
