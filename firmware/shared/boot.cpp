@@ -109,6 +109,9 @@ void setup() {
 #elif CONFIG_IDF_TARGET_ESP32C3
   // Storage owns SPI2/FAT before any SD worker or BLE characteristic can use it.
   odysseyInitializeSdCardBeforeBle();
+  // The first battery sample precedes SD probing. Re-sample only when SD
+  // hardware was positively observed so standard C3 behavior stays unchanged.
+  if (odysseySdBatteryDividerPresent()) sampleBattery(true);
   OdysseyTransfer::initialize();
 #else
   // Odyssey S3 remains a detection-only target.
