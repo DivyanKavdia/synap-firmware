@@ -34,7 +34,13 @@ test('C3 restores proven Arduino SD SPI initialization on fixed Odyssey pins',()
   assert.doesNotMatch(source,/if \(!ready\)[\s\S]*continue;/);
   assert.match(source,/response==0x00 \|\| response==0x01\) markOdysseySdBatteryDividerPresent\(\)/);
   assert.match(source,/if \(mounted\) markOdysseySdBatteryDividerPresent\(\)/);
+  assert.match(source,/odysseySdHoldBusIdleEarly\(\)/);
+  assert.match(source,/pinMode\(ODYSSEY_SD_CS,OUTPUT\);digitalWrite\(ODYSSEY_SD_CS,HIGH\)/);
+  assert.match(source,/pinMode\(ODYSSEY_SD_SCK,OUTPUT\);digitalWrite\(ODYSSEY_SD_SCK,LOW\)/);
+  assert.match(source,/pinMode\(ODYSSEY_SD_MOSI,OUTPUT\);digitalWrite\(ODYSSEY_SD_MOSI,HIGH\)/);
   assert.match(source,/odysseyWaitForSdStartupSettle\(\);[\s\S]*OdysseySdGuard guard/);
+  assert.match(boot,/Serial\.begin\(115200\);[\s\S]*odysseySdHoldBusIdleEarly\(\);/);
+  assert(boot.indexOf('odysseySdHoldBusIdleEarly();')<boot.indexOf('bootResetReason=esp_reset_reason();'));
   assert.match(boot,/odysseyInitializeSdCardBeforeBle\(\);[\s\S]*if \(odysseySdBatteryDividerPresent\(\)\) sampleBattery\(true\);/);
 });
 
