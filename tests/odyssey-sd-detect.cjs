@@ -16,13 +16,17 @@ test('C3 restores proven Arduino SD SPI initialization on fixed Odyssey pins',()
   assert.deepEqual(target.hardware.sdDetection,{cs:0,sck:10,mosi:21,miso:20});
   assert.match(source,/static SPIClass odysseySdSpi\(FSPI\)/);
   assert.match(source,/ODYSSEY_SD_INIT_FREQ_HZ=400000u/);
+  assert.match(source,/ODYSSEY_SD_STARTUP_SETTLE_MS=3000u/);
   assert.match(source,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,/);
   assert.match(source,/ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false/);
   assert.match(source,/ODYSSEY_SD_BOOT_ATTEMPTS=1/);
   assert.match(source,/ODYSSEY_SD_RECOVERY_ATTEMPTS=1/);
   assert.doesNotMatch(source,/esp_vfs_fat_sdspi_mount|spi_bus_initialize|gpio_reset_pin|gpio_set_pull_mode/);
+  assert.match(source,/odysseySdWaitReadyLocked\(500u,readyByte\)/);
+  assert.match(source,/readyByte==0xFF/);
   assert.match(source,/response==0x00 \|\| response==0x01\) markOdysseySdBatteryDividerPresent\(\)/);
   assert.match(source,/if \(mounted\) markOdysseySdBatteryDividerPresent\(\)/);
+  assert.match(source,/odysseyWaitForSdStartupSettle\(\);[\s\S]*OdysseySdGuard guard/);
   assert.match(boot,/odysseyInitializeSdCardBeforeBle\(\);[\s\S]*if \(odysseySdBatteryDividerPresent\(\)\) sampleBattery\(true\);/);
 });
 
@@ -50,6 +54,8 @@ test('C3 hard init failures retain BLE diagnostics and never format media',()=>{
   assert.match(transfer,/odysseySdLastError\(\)/);
   assert.match(transfer,/odysseySdAttemptCount\(\)/);
   assert.match(transfer,/mountAttempts/);
+  assert.match(transfer,/cmdReady/);
+  assert.match(transfer,/odysseySdLastCmdReadyState\(\)/);
   assert.doesNotMatch(source,/format_if_mount_failed=true/);
 });
 
