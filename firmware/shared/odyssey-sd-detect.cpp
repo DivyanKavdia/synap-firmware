@@ -66,11 +66,15 @@ static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=8;
 static SPIClass odysseySdSpi(FSPI);
 static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
+static std::atomic<uint32_t> odysseySdBeginAttempts{0};
+static std::atomic<int16_t> odysseySdLastCmd0{-2};
 static StaticSemaphore_t odysseySdMutexStorage;
 static SemaphoreHandle_t odysseySdMutex=nullptr;
 
 int32_t odysseySdLastError() { return odysseySdLastMountError.load(); }
 uint32_t odysseySdAttemptCount() { return odysseySdMountAttempts.load(); }
+uint32_t odysseySdBeginAttemptCount() { return odysseySdBeginAttempts.load(); }
+int16_t odysseySdLastCmd0Response() { return odysseySdLastCmd0.load(); }
 void odysseySdUseProbingClock() {}
 void odysseySdMarkVfsFailure() {
   odysseySdBootState=2;odysseySdProbeStage=4;
@@ -111,6 +115,51 @@ static void odysseySdReleaseLocked() {
   odysseySdSpi.end();
   pinMode(ODYSSEY_SD_CS,OUTPUT);
   digitalWrite(ODYSSEY_SD_CS,HIGH);
+}
+
+static uint8_t odysseySdRearmProtocolLocked(const char* reason) {
+  // ESP software reset and deep sleep leave the external SD module powered.
+  // Give the card >74 clocks with CS high, then two CMD0 chances at 400 kHz
+  // so a card left mid-transaction can return to SPI idle without formatting.
+  odysseySdReleaseLocked();
+  pinMode(ODYSSEY_SD_CS,OUTPUT);
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
+  odysseySdSpi.beginTransaction(SPISettings(ODYSSEY_SD_INIT_FREQ_HZ,MSBFIRST,SPI_MODE0));
+  for (uint8_t i=0;i<16;++i) odysseySdSpi.transfer(0xFF);
+
+  uint8_t response=0xFF;
+  for (uint8_t attempt=0;attempt<2 && response!=0x01;++attempt) {
+    digitalWrite(ODYSSEY_SD_CS,LOW);
+    odysseySdSpi.transfer(0xFF);
+    odysseySdSpi.transfer(0x40);
+    odysseySdSpi.transfer(0);odysseySdSpi.transfer(0);
+    odysseySdSpi.transfer(0);odysseySdSpi.transfer(0);
+    odysseySdSpi.transfer(0x95);
+    response=0xFF;
+    for (uint8_t wait=0;wait<24;++wait) {
+      response=odysseySdSpi.transfer(0xFF);
+      if ((response&0x80u)==0) break;
+    }
+    digitalWrite(ODYSSEY_SD_CS,HIGH);
+    odysseySdSpi.transfer(0xFF);
+    if (response!=0x01) delay(20);
+  }
+  odysseySdSpi.endTransaction();
+  odysseySdSpi.end();
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  odysseySdLastCmd0=int16_t(response);
+  Serial.printf("[SD] %s protocol re-arm CMD0=0x%02X\n",reason,unsigned(response));
+  return response;
+}
+
+static bool odysseySdBeginLocked() {
+  ++odysseySdBeginAttempts;
+  odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
+  const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,
+    ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false);
+  if (!mounted) odysseySdReleaseLocked();
+  return mounted;
 }
 
 static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
@@ -187,20 +236,23 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
 
   pinMode(ODYSSEY_SD_CS,OUTPUT);
   digitalWrite(ODYSSEY_SD_CS,HIGH);
-  odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
   Serial.printf("[SD] %s attempt %u Arduino SPI init at %lu Hz, pins CS=%d SCK=%d MOSI=%d MISO=%d\n",
     reason,unsigned(attempt),static_cast<unsigned long>(ODYSSEY_SD_INIT_FREQ_HZ),
     ODYSSEY_SD_CS,ODYSSEY_SD_SCK,ODYSSEY_SD_MOSI,ODYSSEY_SD_MISO);
 
-  const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,
-    ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false);
+  bool mounted=odysseySdBeginLocked();
   if (!mounted) {
-    odysseySdLastMountError=ESP_FAIL;
-    odysseySdBootState=2;odysseySdProbeStage=2;
-    Serial.printf("[SD] %s attempt %u Arduino SD.begin failed at protocol initialization\n",
-      reason,unsigned(attempt));
-    odysseySdReleaseLocked();
-    return false;
+    const uint8_t cmd0=odysseySdRearmProtocolLocked(reason);
+    delay(20);
+    mounted=odysseySdBeginLocked();
+    if (!mounted) {
+      odysseySdLastMountError=ESP_FAIL;
+      odysseySdBootState=2;odysseySdProbeStage=2;
+      Serial.printf("[SD] %s attempt %u SD.begin failed after re-arm CMD0=0x%02X\n",
+        reason,unsigned(attempt),unsigned(cmd0));
+      odysseySdReleaseLocked();
+      return false;
+    }
   }
 
   const uint8_t type=SD.cardType();
@@ -256,6 +308,26 @@ bool odysseyRecoverSdCard() {
   odysseySdBootState=0;odysseySdProbeStage=0;
   odysseySdReleaseLocked();
   return odysseySdMountLocked("recovery",ODYSSEY_SD_RECOVERY_ATTEMPTS);
+}
+
+bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
+  OdysseySdGuard guard(pdMS_TO_TICKS(timeoutMs));
+  if (!guard) {
+    Serial.println("[SD] power transition deferred: storage busy");
+    return false;
+  }
+  if (odysseyRecording.load()) {
+    Serial.println("[SD] power transition deferred: local recording active");
+    return false;
+  }
+  const bool wasReady=odysseySdReady();
+  odysseySdBootState=0;odysseySdProbeStage=0;
+  odysseySdReleaseLocked();
+  const uint8_t cmd0=odysseySdRearmProtocolLocked("power-transition");
+  odysseySdBootState=0;odysseySdProbeStage=0;
+  Serial.printf("[SD] power transition prepared ready=%u CMD0=0x%02X\n",
+    wasReady?1u:0u,unsigned(cmd0));
+  return true;
 }
 #else
 // Odyssey S3 remains detection-only and retains the existing Arduino SD probe.

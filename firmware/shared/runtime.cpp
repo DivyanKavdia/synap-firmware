@@ -212,6 +212,7 @@ std::atomic<bool> odysseyRecording{false}, odysseyStopRequested{false};
 std::atomic<uint32_t> odysseyRecordingStartedAt{0}, odysseyRecordFaultAt{0};
 void odysseyToggleRecording();
 bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs);
+bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs);
 namespace OdysseyTransfer {
 void initialize();
 void ble(BLEService* service);

@@ -28,6 +28,9 @@ void armTouchWakeAndSleep() {
   if (!armTouchWakeSource()) {
     synapLastSleepStage=SLEEP_STAGE_ABORTED;
     Serial.println("[POWER] fail-closed wake arm failed; rebooting with sleep lock retained");
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+    odysseyPrepareSdForPowerTransition(500u);
+#endif
     delay(250);
     ESP.restart();
     return;
@@ -35,8 +38,14 @@ void armTouchWakeAndSleep() {
   synapLastSleepStage=SLEEP_STAGE_ENTERING;
   Serial.printf("[POWER] deep sleep now request=%u gpio=%u\n",
     unsigned(synapSleepRequestCounter),unsigned(digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL));
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  odysseyPrepareSdForPowerTransition(500u);
+#endif
   esp_deep_sleep_start();
   Serial.println("[POWER] deep sleep returned unexpectedly; rebooting fail-closed");
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  odysseyPrepareSdForPowerTransition(500u);
+#endif
   delay(250);
   ESP.restart();
 }
@@ -222,10 +231,23 @@ void enterDeepSleep(const char* reason) {
   synapLastSleepStage=SLEEP_STAGE_ENTERING;
   Serial.printf("[POWER] entering deep sleep request=%u battery=%umV\n",
     unsigned(synapSleepRequestCounter),unsigned(batteryMillivolts));
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  if (!odysseyPrepareSdForPowerTransition(1000u)) {
+    writeDurableSleepLock(false);
+    synapDeepSleepMarker=0;
+    synapLastSleepStage=SLEEP_STAGE_ABORTED;
+    sleepPending=false;
+    Serial.println("[POWER] deep sleep cancelled: C3 SD storage did not quiesce");
+    return;
+  }
+#endif
   esp_deep_sleep_start();
 
   // Deep sleep should not return. If it does, retain fail-closed semantics.
   Serial.println("[POWER] deep sleep returned unexpectedly; rebooting with sleep lock retained");
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  odysseyPrepareSdForPowerTransition(500u);
+#endif
   delay(250);
   ESP.restart();
 }

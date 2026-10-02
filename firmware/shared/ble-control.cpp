@@ -159,6 +159,13 @@ void processCommand(uint8_t command, uint8_t version) {
       if (mediaBusy()) { updateStatusCharacteristic(true); break; }
 #endif
       Serial.println("[SYSTEM] restart requested over BLE");
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      if (!odysseyPrepareSdForPowerTransition(1000u)) {
+        Serial.println("[SYSTEM] restart deferred until C3 SD storage is idle");
+        updateStatusCharacteristic(true);
+        break;
+      }
+#endif
       delay(120); // GATT write response has already returned; allow logs to flush.
       ESP.restart();
       break;
