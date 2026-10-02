@@ -103,7 +103,7 @@ test('C3 failed mount reports compatibility diagnostics without formatting or de
 test('C3 re-arms a still-powered SD card and reports the raw CMD0 response',()=>{
   const detect=read('firmware/shared/odyssey-sd-detect.cpp');
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
-  assert.match(detect,/for \(uint8_t i=0;i<16;\+\+i\) odysseySdSpi\.transfer\(0xFF\)/);
+  assert.match(detect,/for \(uint8_t i=0;i<20;\+\+i\) odysseySdSpi\.transfer\(0xFF\)/);
   assert.match(detect,/odysseySdSpi\.transfer\(0x40\);/);
   assert.match(detect,/attempt<2 && response!=0x01/);
   assert.match(detect,/mounted=odysseySdBeginLocked\(\);[\s\S]*odysseySdRearmProtocolLocked\(reason\)[\s\S]*mounted=odysseySdBeginLocked\(\)/);
