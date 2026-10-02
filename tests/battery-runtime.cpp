@@ -39,8 +39,12 @@ void updateStatusLed(bool){}
 // INSERT BATTERY
 uint16_t word(size_t offset){return event.value[offset]|uint16_t(event.value[offset+1])<<8;}
 int main(){
-  assert(batteryPercentFromMillivolts(CONFIG_IDF_TARGET_ESP32C3?4199:4129)==99);
-  assert(batteryPercentFromMillivolts(CONFIG_IDF_TARGET_ESP32C3?4200:4130)==100);
+  assert(batteryPercentFromMillivolts(CONFIG_IDF_TARGET_ESP32C3?4149:4129)==99);
+  assert(batteryPercentFromMillivolts(CONFIG_IDF_TARGET_ESP32C3?4150:4130)==100);
+#if CONFIG_IDF_TARGET_ESP32C3
+  assert(batteryPercentFromMillivolts(4199,SYNAP_BATTERY_ALT_FULL_MV)==99);
+  assert(batteryPercentFromMillivolts(4200,SYNAP_BATTERY_ALT_FULL_MV)==100);
+#endif
   configureBatteryAdc();
   assert(configuredAttenuation==(CONFIG_IDF_TARGET_ESP32C3?ADC_11db:ADC_6db));
   adcMv=CONFIG_IDF_TARGET_ESP32C3?1287:1320;
@@ -93,6 +97,9 @@ int main(){
     assert(batteryAvailable && batteryMillivolts==expected);
     assert(batteryPercent==100 && event.value[2]==100 && (event.value[3]&1));
   }
+  // A legacy non-SD C3 on the same firmware target still selects its 2:1 divider.
+  adcMv=1995;sampleBattery(true);
+  assert(batteryAvailable && batteryMillivolts==3990 && batteryPercent==84);
 #endif
 #endif
   std::puts("PASS battery conversion, telemetry, range, cadence and target-specific critical policy");
