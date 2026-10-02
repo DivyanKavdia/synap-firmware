@@ -5,7 +5,7 @@ const {nativeTest}=require('./support/native.cjs');
 const source=fs.readFileSync(path.join(__dirname,'../synap_esp32s3/synap_esp32s3.ino'),'utf8');
 test('microphone shutdown waits for driver ownership during capture and recovery',()=>{
   const guard=source.slice(source.indexOf('class MicrophoneGuard {'),source.indexOf('#else\n#include <math.h>'));
-  const functions=source.slice(source.indexOf('bool startMicrophone() {'),source.indexOf('uint8_t batteryPercentFromMillivolts'));
+  const functions=source.slice(source.indexOf('bool startMicrophone() {'),source.indexOf('// SYNAP_BATTERY_RUNTIME_BEGIN'));
   const capture=source.slice(source.indexOf('bool acquireAudioFrame(AudioFrame& frame) {'),source.indexOf('void acquisitionTask(void* parameter) {'));
   const fixture=fs.readFileSync(path.join(__dirname,'microphone-lifecycle.cpp'),'utf8');
   assert.match(nativeTest(fixture.replace('// INSERT GUARD',guard).replace('// INSERT MICROPHONE FUNCTIONS',functions).replace('// INSERT CAPTURE',capture),['-pthread']),/PASS microphone shutdown/);
