@@ -27,9 +27,9 @@ test('C3 restores proven Arduino SD SPI initialization on fixed Odyssey pins',()
   assert.match(source,/lastByte==0xFF/);
   assert.match(source,/odysseySdLastCsHighByte/);
   assert.match(source,/csHighByte=odysseySdSpi\.transfer\(0xFF\)/);
-  assert.match(source,/odysseySdSpi\.transfer\(0xFD\)/);
+  assert.match(source,/odysseySdStopWriteLocked\(ODYSSEY_SD_RESCUE_BUSY_MS,rescueByte\)/);
   assert.match(source,/odysseySdCommandLocked\(12u,0u,0x61u,true\)/);
-  assert.match(source,/odysseySdWaitReadyLocked\(ODYSSEY_SD_RESCUE_BUSY_MS,rescueByte\)/);
+  assert.match(source,/odysseySdWaitReadyLocked\(500u,cmd12Byte\)/);
   assert.match(source,/odysseySdCommandLocked\(0u,0u,0x95u,false\)/);
   assert.doesNotMatch(source,/if \(!ready\)[\s\S]*continue;/);
   assert.match(source,/response==0x00 \|\| response==0x01\) markOdysseySdBatteryDividerPresent\(\)/);
@@ -63,9 +63,11 @@ test('C3 hard init failures retain BLE diagnostics and never format media',()=>{
   assert.match(transfer,/odysseySdAttemptCount\(\)/);
   assert.match(transfer,/mountAttempts/);
   assert.match(transfer,/cmd12/);
+  assert.match(transfer,/cmd12Ready/);
   assert.match(transfer,/rescueReady/);
   assert.match(transfer,/cmdReady/);
   assert.match(transfer,/odysseySdLastCmd12Response\(\)/);
+  assert.match(transfer,/odysseySdLastCmd12ReadyState\(\)/);
   assert.match(transfer,/odysseySdLastRescueReadyState\(\)/);
   assert.match(transfer,/odysseySdLastCmdReadyState\(\)/);
   assert.doesNotMatch(source,/format_if_mount_failed=true/);
