@@ -233,13 +233,20 @@ static void worker(void*) {
       // Never remount merely because the worker is idle or catalogue failed.
       // A physical disconnected double-tap is an explicit recovery request,
       // just like PWA operation 14, and may safely run while storage is idle.
+      const bool idleEnough=!odysseyRecording.load() && !streamingEnabled.load() &&
+        !otaBusy() && !sleepPending;
       if (odysseySdConsumeRecoveryRequest()) {
-        if (!odysseyRecording.load() && !streamingEnabled.load() && !otaBusy() && !sleepPending) {
+        if (idleEnough) {
           Serial.println("[SD] physical touch requested software recovery");
           (void)odysseyRecoverSdCard("touch");
         } else {
           odysseySdRequestRecovery();
         }
+      } else if (idleEnough && odysseySdConsumeAutoRearm()) {
+        // Armed only by a failed boot mount, and only three times. This is not
+        // the idle/catalogue remount the policy above rules out.
+        Serial.println("[SD] scheduled re-arm after failed boot mount");
+        (void)odysseyRecoverSdCard("rearm");
       }
       continue;
     }
