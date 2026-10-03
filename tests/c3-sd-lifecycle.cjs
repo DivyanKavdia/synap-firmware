@@ -76,12 +76,13 @@ test('C3 SD readiness validates directory and writable media before publishing r
   assert(sd.indexOf('DIR* verified=opendir')<sd.indexOf('odysseySdBootState=1;\n  odysseySdProbeStage=6;'));
   assert.match(sd,/ODYSSEY_SD_INIT_FREQ_HZ=400000u/);
 });
-test('C3 catalogue failure is observational and never auto-remounts',()=>{
+test('C3 catalogue failure cleans up the mounted session but never auto-remounts',()=>{
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
   assert.match(transfer,/case 7:[\s\S]*?error=catalogue\(total\)/);
   const catalogueCase=transfer.split('case 7:')[1].split('case 8:')[0];
   assert.doesNotMatch(catalogueCase,/odysseyRecoverSdCard\(/);
   assert.match(catalogueCase,/odysseySdMarkVfsFailure\(\)/);
+  assert.match(catalogueCase,/odysseySdQuiesceFaultedSession\(750u\)/);
   assert.match(transfer,/case 14:[\s\S]*odysseyRecoverSdCard\("op14"\)/);
   assert.match(transfer,/sdProbe/);
 });
@@ -150,9 +151,16 @@ test('C3 quiesces SD before OTA reboot, app restart and deep sleep',()=>{
   // down the host and sends the card nothing, which is how a reset mid-CMD18
   // left the next boot facing a bus stuck at 0x00.
   assert.match(transition,/odysseySdQuiesceLocked\(ODYSSEY_SD_QUIESCE_BUDGET_MS\)/);
-  // Failed initialization must not inject another raw recovery sequence on
-  // every reboot; only a successfully mounted session is quiesced.
-  assert.match(transition,/if \(!wasReady\)[\s\S]*without quiesce/);
+  const recovery=detect.split('bool odysseyRecoverSdCard')[1].split('bool odysseyPrepareSdForPowerTransition')[0];
+  assert.match(recovery,/odysseySdMountedSession\.exchange\(false\)/);
+  assert.match(recovery,/recovery pre-quiesce/);
+  // Readiness may fall after EIO. The independent mounted-session latch must
+  // still quiesce that session, while a hard boot-init failure skips it.
+  assert.match(detect,/odysseySdMountedSession\{false\}/);
+  assert.match(detect,/odysseySdMountedSession=true;[\s\S]*odysseySdValidateVfsLocked/);
+  assert.match(transition,/odysseySdMountedSession\.exchange\(false\)/);
+  assert.match(transition,/if \(!hadMountedSession\)[\s\S]*without quiesce/);
+  assert.doesNotMatch(transition,/const bool wasReady=odysseySdReady\(\)/);
   // Full re-detection must not run on the way out of the process.
   assert.doesNotMatch(transition,/odysseySdBitBangRecoverLocked|odysseySdMountLocked/);
   const quiesce=detect.split('static uint8_t odysseySdQuiesceLocked')[1].split('\n}')[0];

@@ -2210,6 +2210,11 @@ static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
 static std::atomic<uint32_t> odysseySdBeginAttempts{0};
 static std::atomic<uint8_t> odysseySdLastMountReason{0}; // 1=boot,2=op14,3=touch,4=probe
+// Readiness is allowed to fall after an I/O error, but we still need to know
+// whether this boot successfully mounted the card. That mounted-session latch
+// tells reset/recovery paths that an outstanding CMD18/CMD25 may still need a
+// clean stop even after sdState/probe have changed to failed.
+static std::atomic<bool> odysseySdMountedSession{false};
 static std::atomic<int16_t> odysseySdBitBangCsHigh{-2};
 static std::atomic<int16_t> odysseySdBitBangCsLow{-2};
 static std::atomic<uint8_t> odysseySdBitBangStopState{0}; // 1=released,2=still-busy,3=no-ready
@@ -2558,6 +2563,22 @@ static uint8_t odysseySdQuiesceLocked(uint32_t budgetMs) {
   return state;
 }
 
+bool odysseySdQuiesceFaultedSession(uint32_t timeoutMs) {
+  OdysseySdGuard guard(pdMS_TO_TICKS(timeoutMs));
+  if (!guard) {
+    Serial.println("[SD] fault cleanup deferred: storage busy");
+    return false;
+  }
+  if (!odysseySdMountedSession.exchange(false)) return true;
+  const uint32_t budget=timeoutMs && timeoutMs<ODYSSEY_SD_QUIESCE_BUDGET_MS
+    ? timeoutMs : ODYSSEY_SD_QUIESCE_BUDGET_MS;
+  const uint8_t idle=odysseySdQuiesceLocked(budget);
+  odysseySdReleaseLocked();
+  if (idle!=1) odysseySdMountedSession=true;
+  Serial.printf("[SD] faulted mounted session cleanup quiesced=%u\n",idle==1?1u:0u);
+  return idle==1;
+}
+
 static bool odysseySdBeginLocked() {
   ++odysseySdBeginAttempts;
   odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
@@ -2687,6 +2708,9 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
     return false;
   }
 
+  // From this point on the host has owned a real card in this boot. Keep this
+  // latched even if VFS validation or a later catalogue/read fails.
+  odysseySdMountedSession=true;
   if (!odysseySdValidateVfsLocked(reason,attempt)) {
     odysseySdReleaseLocked();
     return false;
@@ -2730,8 +2754,17 @@ bool odysseyInitializeSdCardBeforeBle() {
 bool odysseyRecoverSdCard(const char* reason) {
   OdysseySdGuard guard(pdMS_TO_TICKS(5000));
   if (!guard) return false;
+  // A VFS failure clears "ready" but does not mean the card stopped the
+  // low-level transaction that failed. Quiesce any session that mounted
+  // successfully before tearing the host down and attempting a remount.
+  const bool hadMountedSession=odysseySdMountedSession.exchange(false);
+  if (hadMountedSession) {
+    const uint8_t idle=odysseySdQuiesceLocked(ODYSSEY_SD_QUIESCE_BUDGET_MS);
+    Serial.printf("[SD] %s recovery pre-quiesce=%u\n",reason?reason:"op14",idle==1?1u:0u);
+  } else {
+    odysseySdReleaseLocked();
+  }
   odysseySdBootState=0;odysseySdProbeStage=0;
-  odysseySdReleaseLocked();
   return odysseySdMountLocked(reason?reason:"op14",ODYSSEY_SD_RECOVERY_ATTEMPTS);
 }
 
@@ -2745,22 +2778,24 @@ bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
     Serial.println("[SD] power transition deferred: local recording active");
     return false;
   }
-  const bool wasReady=odysseySdReady();
+  const bool hadMountedSession=odysseySdMountedSession.exchange(false);
   const uint8_t state=odysseySdBootState.load();
   odysseySdBootState=0;odysseySdProbeStage=0;
 
-  // Only a successfully mounted session can have an application-owned CMD18
-  // or CMD25 transfer to close. If initialization already failed, do not inject
-  // another raw recovery sequence on every reset/deep-sleep transition.
-  if (!wasReady) {
+  // A boot-time SD.begin failure has no mounted session to close. By contrast,
+  // a runtime VFS error changes readiness to failed while the same physical
+  // card session may still own CMD18/CMD25. The mounted-session latch keeps
+  // those two cases distinct.
+  if (!hadMountedSession) {
     odysseySdReleaseLocked();
-    Serial.printf("[SD] power transition prepared without quiesce state=%u\n",unsigned(state));
+    Serial.printf("[SD] power transition prepared without quiesce state=%u mountedSession=0\n",unsigned(state));
     return true;
   }
 
   const uint8_t idle=odysseySdQuiesceLocked(ODYSSEY_SD_QUIESCE_BUDGET_MS);
   odysseySdReleaseLocked();
-  Serial.printf("[SD] power transition prepared ready=1 quiesced=%u\n",idle==1?1u:0u);
+  Serial.printf("[SD] power transition prepared mountedSession=1 state=%u quiesced=%u\n",
+    unsigned(state),idle==1?1u:0u);
   return true;
 }
 #else
@@ -3246,14 +3281,23 @@ static void worker(void*) {
       case 3: error=selectFile(request.path,total); break;
       case 4:
         error=readSelected(request.path,request.offset,total,bytes,size);
-        if (error==IO_ERROR) odysseySdMarkVfsFailure();
+        if (error==IO_ERROR) {
+          odysseySdMarkVfsFailure();
+          // Cleanup only: stop any stranded card transaction, but do not
+          // remount. Explicit Check SD remains the only connected remount path.
+          (void)odysseySdQuiesceFaultedSession(750u);
+        }
         break;
       case 7:
         error=catalogue(total);
-        // Never auto-unmount/remount a mounted card because a catalogue read
-        // failed. Preserve the observed state for diagnosis; explicit op 14 is
-        // the only connected remount path.
-        if (error==IO_ERROR) odysseySdMarkVfsFailure();
+        // A catalogue EIO can leave the card inside the multi-block operation
+        // that failed. Quiesce that already-mounted session immediately so a
+        // later explicit remount or reboot does not inherit a busy-low card.
+        // This is cleanup, not an automatic remount.
+        if (error==IO_ERROR) {
+          odysseySdMarkVfsFailure();
+          (void)odysseySdQuiesceFaultedSession(750u);
+        }
         break;
       case 8: total=catalogueBuffer.length();if(!total)error=FILE_UNAVAILABLE;break;
       case 14:
