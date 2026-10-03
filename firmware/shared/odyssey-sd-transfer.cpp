@@ -10,6 +10,7 @@ struct Request {
 };
 static QueueHandle_t requests=nullptr;
 static constexpr uint32_t TRANSFER_STACK_BYTES=8192;
+static constexpr uint32_t WAV_HEADER_BYTES=44;
 static portMUX_TYPE responseMux=portMUX_INITIALIZER_UNLOCKED;
 static uint8_t response[496]{};
 static size_t responseSize=16;
@@ -65,7 +66,7 @@ static uint8_t selectFile(const char* path,uint32_t& total) {
   char full[96];
   if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
   struct stat st{};
-  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0) return FILE_UNAVAILABLE;
+  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=long(WAV_HEADER_BYTES)) return FILE_UNAVAILABLE;
   if (uint64_t(st.st_size)>UINT32_MAX) return FILE_UNAVAILABLE;
   total=uint32_t(st.st_size);
   snprintf(selectedPath,sizeof(selectedPath),"%s",path);
@@ -90,7 +91,7 @@ static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& 
     char full[96];
     if (!fullPath(requestedPath,full,sizeof(full))) return BAD_COMMAND;
     struct stat st{};
-    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
+    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=long(WAV_HEADER_BYTES) || uint64_t(st.st_size)>UINT32_MAX)
       return FILE_UNAVAILABLE;
     total=uint32_t(st.st_size);
     if (offset>=total) return FILE_UNAVAILABLE;
@@ -116,7 +117,7 @@ static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& 
   char full[96];
   if (!fullPath(selectedPath,full,sizeof(full))) return BAD_COMMAND;
   struct stat st{};
-  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
+  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=long(WAV_HEADER_BYTES) || uint64_t(st.st_size)>UINT32_MAX)
     return FILE_UNAVAILABLE;
   total=uint32_t(st.st_size);
   if (offset>=total) return FILE_UNAVAILABLE;
@@ -166,9 +167,22 @@ static uint8_t catalogue(uint32_t& total) {
     char full[96];
     if (!odysseySdPath(logical,full,sizeof(full))) continue;
     struct stat st{};
-    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<0) continue;
+    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<0 ||
+        uint64_t(st.st_size)>UINT32_MAX) continue;
+    const uint32_t fileBytes=uint32_t(st.st_size);
+    const bool syncable=fileBytes>WAV_HEADER_BYTES;
     if (count++) catalogueBuffer+=",";
-    catalogueBuffer+="{\"path\":\""+String(logical)+"\",\"bytes\":"+String(uint32_t(st.st_size))+"}";
+    catalogueBuffer+="{\"path\":\"";
+    catalogueBuffer+=logical;
+    catalogueBuffer+="\",\"bytes\":";
+    catalogueBuffer+=String(fileBytes);
+    catalogueBuffer+=",\"syncable\":";
+    catalogueBuffer+=syncable?"true":"false";
+    if (!syncable) catalogueBuffer+=",\"issue\":\"incomplete\"";
+    catalogueBuffer+="}";
+    if (!syncable)
+      Serial.printf("[SD] catalogue incomplete path=%s bytes=%lu\n",
+        logical,static_cast<unsigned long>(fileBytes));
     if (count>=100) break;
   }
   if (closedir(directory)!=0 && !catalogueErrno) catalogueErrno=errno;
