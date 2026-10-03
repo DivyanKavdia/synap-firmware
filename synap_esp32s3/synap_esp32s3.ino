@@ -2811,7 +2811,6 @@ static void odysseyRecordTake() {
   char fullPath[96]{};
   uint8_t header[44];
   FILE* file=nullptr;
-  bool created=false;
 
   // Hold the single storage mutex for the whole take. A recovery/remount can
   // never tear down the VFS beneath an open recording.
@@ -2826,21 +2825,14 @@ static void odysseyRecordTake() {
       if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) { failed=true; break; }
       if (stat(fullPath,&existing)!=0 && errno==ENOENT) {
         file=fopen(fullPath,"wb+");
-        if (file) { created=true; break; }
+        if (file) break;
       }
     }
     if (!file) failed=true;
   }
 
   odysseyWavHeader(header,0);
-  if (!failed) {
-    // Commit a valid zero-audio RIFF boundary immediately. Without this flush,
-    // stdio can leave a directory entry at 0 B until the first later checkpoint.
-    if (fwrite(header,1,sizeof(header),file)!=sizeof(header) || fflush(file)!=0) {
-      failed=true;
-      odysseySdMarkVfsFailure();
-    }
-  }
+  if (!failed && fwrite(header,1,sizeof(header),file)!=sizeof(header)) failed=true;
 
 #if USE_REAL_I2S_MIC
   if (!failed && !odysseyStopRequested.load()) {
@@ -2865,19 +2857,11 @@ static void odysseyRecordTake() {
       if (bytes>0xffffff00u-sizeof(pcm)) break; // RIFF length is 32-bit.
       const size_t written=fwrite(pcm,1,sizeof(pcm),file);
       bytes+=uint32_t(written & ~size_t(1));
-      if (written!=sizeof(pcm)) {
-        failed=true;
-        odysseySdMarkVfsFailure();
-        break;
-      }
+      if (written!=sizeof(pcm)) { failed=true; break; }
 
       // Keep a recoverable WAV header on media even if power is lost mid-take.
       if (uint32_t(millis()-checkpointAt)>=2000u) {
-        if (!odysseyCheckpointWav(file,header,bytes)) {
-          failed=true;
-          odysseySdMarkVfsFailure();
-          break;
-        }
+        if (!odysseyCheckpointWav(file,header,bytes)) { failed=true; break; }
         checkpointAt=millis();
       }
     }
@@ -2888,33 +2872,16 @@ static void odysseyRecordTake() {
 #endif
 
   if (file) {
-    if (!odysseyCheckpointWav(file,header,bytes)) {
-      failed=true;
-      odysseySdMarkVfsFailure();
-    }
-    if (fclose(file)!=0) {
-      failed=true;
-      odysseySdMarkVfsFailure();
-    }
+    if (!odysseyCheckpointWav(file,header,bytes)) failed=true;
+    if (fclose(file)!=0) failed=true;
     file=nullptr;
   }
 
-  long finalSize=-1;
-  if (created) {
-    struct stat finalStat{};
-    if (stat(fullPath,&finalStat)==0 && S_ISREG(finalStat.st_mode)) finalSize=long(finalStat.st_size);
-    const uint64_t expectedSize=uint64_t(sizeof(header))+uint64_t(bytes);
-    if (finalSize<0 || uint64_t(finalSize)!=expectedSize) {
-      failed=true;
-      odysseySdMarkVfsFailure();
-    }
-  }
-
-  Serial.printf("[SD] local audio %s: %s, %lu PCM bytes, file bytes=%ld%s\n",
-    failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),finalSize,
+  Serial.printf("[SD] local audio %s: %s, %lu PCM bytes%s\n",
+    failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),
     failed?" (mount retained for explicit recovery)":"");
-  // Zero-audio/header-only files are retained for diagnosis but are not syncable.
-  if (failed || bytes==0 || finalSize<=long(sizeof(header))) odysseyRecordFaultAt=millis();
+  // A mounted SD card can still fail to open a WAV or start the microphone.
+  if (failed || bytes==0) odysseyRecordFaultAt=millis();
 }
 // FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
 // function first so SD and microphone guards release their mutexes.
@@ -2986,7 +2953,6 @@ struct Request {
 };
 static QueueHandle_t requests=nullptr;
 static constexpr uint32_t TRANSFER_STACK_BYTES=8192;
-static constexpr uint32_t WAV_HEADER_BYTES=44;
 static portMUX_TYPE responseMux=portMUX_INITIALIZER_UNLOCKED;
 static uint8_t response[496]{};
 static size_t responseSize=16;
@@ -3042,7 +3008,7 @@ static uint8_t selectFile(const char* path,uint32_t& total) {
   char full[96];
   if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
   struct stat st{};
-  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=long(WAV_HEADER_BYTES)) return FILE_UNAVAILABLE;
+  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0) return FILE_UNAVAILABLE;
   if (uint64_t(st.st_size)>UINT32_MAX) return FILE_UNAVAILABLE;
   total=uint32_t(st.st_size);
   snprintf(selectedPath,sizeof(selectedPath),"%s",path);
@@ -3067,7 +3033,7 @@ static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& 
     char full[96];
     if (!fullPath(requestedPath,full,sizeof(full))) return BAD_COMMAND;
     struct stat st{};
-    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=long(WAV_HEADER_BYTES) || uint64_t(st.st_size)>UINT32_MAX)
+    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
       return FILE_UNAVAILABLE;
     total=uint32_t(st.st_size);
     if (offset>=total) return FILE_UNAVAILABLE;
@@ -3093,7 +3059,7 @@ static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& 
   char full[96];
   if (!fullPath(selectedPath,full,sizeof(full))) return BAD_COMMAND;
   struct stat st{};
-  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=long(WAV_HEADER_BYTES) || uint64_t(st.st_size)>UINT32_MAX)
+  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
     return FILE_UNAVAILABLE;
   total=uint32_t(st.st_size);
   if (offset>=total) return FILE_UNAVAILABLE;
@@ -3143,22 +3109,9 @@ static uint8_t catalogue(uint32_t& total) {
     char full[96];
     if (!odysseySdPath(logical,full,sizeof(full))) continue;
     struct stat st{};
-    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<0 ||
-        uint64_t(st.st_size)>UINT32_MAX) continue;
-    const uint32_t fileBytes=uint32_t(st.st_size);
-    const bool syncable=fileBytes>WAV_HEADER_BYTES;
+    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<0) continue;
     if (count++) catalogueBuffer+=",";
-    catalogueBuffer+="{\"path\":\"";
-    catalogueBuffer+=logical;
-    catalogueBuffer+="\",\"bytes\":";
-    catalogueBuffer+=String(fileBytes);
-    catalogueBuffer+=",\"syncable\":";
-    catalogueBuffer+=syncable?"true":"false";
-    if (!syncable) catalogueBuffer+=",\"issue\":\"incomplete\"";
-    catalogueBuffer+="}";
-    if (!syncable)
-      Serial.printf("[SD] catalogue incomplete path=%s bytes=%lu\n",
-        logical,static_cast<unsigned long>(fileBytes));
+    catalogueBuffer+="{\"path\":\""+String(logical)+"\",\"bytes\":"+String(uint32_t(st.st_size))+"}";
     if (count>=100) break;
   }
   if (closedir(directory)!=0 && !catalogueErrno) catalogueErrno=errno;
