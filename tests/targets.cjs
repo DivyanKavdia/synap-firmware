@@ -40,4 +40,9 @@ test('secondary generated target preserves the production interaction contract',
   assert.match(c3,/double tap -> STOP \+ POWER SAVER/);
   assert.match(c3,/900000u/);
   assert.match(c3,/SYNAP_BATTERY_MONITOR_ENABLE 1/);
+  assert.match(c3,/primaryAdvertisement\.setName\(DEVICE_NAME\)/);
+  assert.match(c3,/primaryAdvertisement\.setCompleteServices\(BLEUUID\(SERVICE_UUID\)\)/);
+  assert.match(c3,/scanResponse\.setPreferredParams\(BLE_MIN_INTERVAL, BLE_MAX_INTERVAL\)/);
+  assert.doesNotMatch(c3,/if\(desc\)server->updateConnParams\(desc->conn_handle/);
+  assert.doesNotMatch(c3,/if\(param\)server->updateConnParams\(param->connect\.remote_bda/);
 });
