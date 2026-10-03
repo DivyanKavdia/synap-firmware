@@ -64,7 +64,7 @@ test('C3 offline recording has visible purple heartbeat and failed-start feedbac
   assert.match(led,/uint32_t\(now-odysseyRecordFaultAt\.load\(\)\)<6000u/);
   assert.match(led,/phase<140u \|\| \(phase>=260u && phase<400u\)/);
   assert.match(recorder,/odysseyRecordingStartedAt=millis\(\);[\s\S]*?odysseyRecording=true/);
-  assert.match(recorder,/if \(failed \|\| bytes==0\) odysseyRecordFaultAt=millis\(\)/);
+  assert.match(recorder,/if \(failed \|\| bytes==0 \|\| finalSize<=long\(sizeof\(header\)\)\) odysseyRecordFaultAt=millis\(\)/);
   assert.match(recorder,/odysseySdRequestRecovery\(\);\s*odysseyRecordFaultAt=millis\(\)/);
 });
 
