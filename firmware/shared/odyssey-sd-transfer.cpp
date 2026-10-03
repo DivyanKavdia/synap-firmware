@@ -270,23 +270,14 @@ static void worker(void*) {
       case 3: error=selectFile(request.path,total); break;
       case 4:
         error=readSelected(request.path,request.offset,total,bytes,size);
-        if (error==IO_ERROR) {
-          odysseySdMarkVfsFailure();
-          // Cleanup only: stop any stranded card transaction, but do not
-          // remount. Explicit Check SD remains the only connected remount path.
-          (void)odysseySdQuiesceFaultedSession(750u);
-        }
+        if (error==IO_ERROR) odysseySdMarkVfsFailure();
         break;
       case 7:
         error=catalogue(total);
-        // A catalogue EIO can leave the card inside the multi-block operation
-        // that failed. Quiesce that already-mounted session immediately so a
-        // later explicit remount or reboot does not inherit a busy-low card.
-        // This is cleanup, not an automatic remount.
-        if (error==IO_ERROR) {
-          odysseySdMarkVfsFailure();
-          (void)odysseySdQuiesceFaultedSession(750u);
-        }
+        // Never auto-unmount/remount a mounted card because a catalogue read
+        // failed. Preserve the observed state for diagnosis; explicit op 14 is
+        // the only connected remount path.
+        if (error==IO_ERROR) odysseySdMarkVfsFailure();
         break;
       case 8: total=catalogueBuffer.length();if(!total)error=FILE_UNAVAILABLE;break;
       case 14:
