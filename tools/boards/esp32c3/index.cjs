@@ -124,8 +124,13 @@ function materializeC3Ble(source){
   replace('  advertising->setScanResponse(true);\n  advertising->setMinPreferred(BLE_MIN_INTERVAL);\n  advertising->setMaxPreferred(BLE_MAX_INTERVAL);',
     '  advertising->enableScanResponse(true);\n  advertising->setName(DEVICE_NAME);\n  advertising->setPreferredParams(BLE_MIN_INTERVAL,BLE_MAX_INTERVAL);','C3 native advertising');
 
-  if(/getData\(|getLength\(|getConnId\(|#include <BLE|\bBLECharacteristic\b|BLE2902|SUCCESS_NOTIFY|onStatus\(/.test(out))
-    throw Error('Unadapted C3 Bluetooth API');
+  const forbiddenC3Api=[
+    ['getData(',/getData\(/],['getLength(',/getLength\(/],['getConnId(',/getConnId\(/],
+    ['#include <BLE',/#include <BLE/],['BLECharacteristic',/\bBLECharacteristic\b/],
+    ['BLE2902',/BLE2902/],['SUCCESS_NOTIFY',/SUCCESS_NOTIFY/],['onStatus(',/onStatus\(/],
+  ];
+  const leftover=forbiddenC3Api.find(([,pattern])=>pattern.test(out));
+  if(leftover) throw Error('Unadapted C3 Bluetooth API: '+leftover[0]);
   return out;
 }
 
