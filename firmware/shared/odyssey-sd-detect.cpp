@@ -148,7 +148,7 @@ static esp_vfs_fat_mount_config_t odysseySdMountConfig() {
   return config;
 }
 
-static bool odysseySdBeginLocked() {
+static bool odysseySdBeginLocked(bool formatIfMountFailed=false) {
   ++odysseySdBeginAttempts;
   if (!odysseySdReleaseLocked()) return false;
   digitalWrite(ODYSSEY_SD_CS,HIGH);
@@ -176,7 +176,9 @@ static bool odysseySdBeginLocked() {
   sdspi_device_config_t slot=SDSPI_DEVICE_CONFIG_DEFAULT();
   slot.host_id=SPI2_HOST;
   slot.gpio_cs=static_cast<gpio_num_t>(ODYSSEY_SD_CS);
-  const esp_vfs_fat_mount_config_t config=odysseySdMountConfig();
+  esp_vfs_fat_mount_config_t config=odysseySdMountConfig();
+  // The only caller allowed to opt in is the explicit user Format SD action.
+  config.format_if_mount_failed=formatIfMountFailed;
   err=esp_vfs_fat_sdspi_mount(ODYSSEY_SD_MOUNT_POINT,&odysseySdHost,&slot,
     &config,&odysseySdCard);
   if (err!=ESP_OK) {
@@ -296,7 +298,11 @@ bool odysseyRecoverSdCard(const char* reason) {
 bool odysseyFormatSdCard() {
   OdysseySdGuard guard(pdMS_TO_TICKS(15000));
   if (!guard) return false;
-  if (!odysseySdReady() && !odysseySdMountLocked("format",1)) return false;
+  if (!odysseySdHostMounted.load() && !odysseySdBeginLocked(true)) {
+    odysseySdBootState=2;odysseySdProbeStage=3;
+    Serial.println("[SD] explicit format could not mount card/FAT");
+    return false;
+  }
   odysseySdLastMountReason=odysseySdMountReasonCode("format");
   const esp_err_t err=esp_vfs_fat_sdcard_format(ODYSSEY_SD_MOUNT_POINT,odysseySdCard);
   if (err!=ESP_OK) {
@@ -349,4 +355,7 @@ void odysseyDetectSdCard() {
     odysseySdBootState=2;
     Serial.println("[SD] Odyssey S3 detection/mount failed");
   }
-  SD.end();odysseySdSpi.e
+  SD.end();odysseySdSpi.end();digitalWrite(ODYSSEY_SD_CS,HIGH);
+}
+#endif
+#endif

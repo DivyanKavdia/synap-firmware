@@ -45,14 +45,16 @@ test('C3 VFS has a single guarded owner and explicit checked unmount lifecycle',
   assert.match(transfer,/unlink\(full\)/);
 });
 
-test('C3 formatting is explicit, non-destructive recovery never formats, and recovery does not bitbang SD commands',()=>{
+test('C3 only formats on explicit request and recovery does not bitbang SD commands',()=>{
   const normalMount=source.split('static bool odysseySdMountOnceLocked')[1].split('static bool odysseySdMountLocked')[0];
   const explicitFormat=source.split('bool odysseyFormatSdCard()')[1].split('bool odysseyPrepareSdForPowerTransition')[0];
   assert.match(normalMount,/odysseySdBeginLocked\(\)/);
   assert.doesNotMatch(normalMount,/format|f_mkfs|sdcard_format/i);
+  assert.match(source,/config\.format_if_mount_failed=formatIfMountFailed/);
+  assert.match(explicitFormat,/odysseySdBeginLocked\(true\)/);
   assert.match(explicitFormat,/esp_vfs_fat_sdcard_format\(ODYSSEY_SD_MOUNT_POINT,odysseySdCard\)/);
   assert.match(explicitFormat,/odysseySdValidateVfsLocked/);
-  assert.doesNotMatch(source,/writeRAW|BitBang|digitalRead\(ODYSSEY_SD_MISO\)|format_if_mount_failed=true/);
+  assert.doesNotMatch(source,/writeRAW|BitBang|digitalRead\(ODYSSEY_SD_MISO\)/);
   assert.match(transfer,/\\"stage\\":\\"catalogue\\"/);
   assert.doesNotMatch(transfer,/bbCmd0|rawFF|bbCmd12/);
 });
@@ -67,4 +69,5 @@ test('the C3-only backend leaves the S3 Arduino detection path and supported tar
       assert(profile.includes(`#define SYNAP_SD_${signal.toUpperCase()}_PIN ${pin}`));
     assert.equal(target.features.includes('sd'),id==='esp32c3-supermini-4m');
   }
-  assert(!renderProfile(getTarget('xiao-esp32s3-sense-8m')).in
+  assert(!renderProfile(getTarget('xiao-esp32s3-sense-8m')).includes('SYNAP_SD_'));
+});
