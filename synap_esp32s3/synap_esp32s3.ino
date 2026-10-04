@@ -3035,7 +3035,8 @@ void odysseyToggleRecording() {
 // Files are deleted only after the destination has durably accepted and verified them.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 #include <WiFi.h>
-#include <NetworkClientSecure.h>
+#include <esp_tls.h>
+#include <esp_tls_errors.h>
 namespace OdysseyTransfer {
 struct Request {
   uint32_t connection=0,id=0,offset=0,windowEpoch=0;
@@ -3510,65 +3511,90 @@ static bool secureEndpoint(const char* endpoint) {
   return parseHttpsEndpoint(endpoint,target);
 }
 
-static bool netWriteAll(NetworkClientSecure& client,const uint8_t* bytes,size_t size) {
-  size_t written=0;
-  while (written<size) {
-    const size_t n=client.write(bytes+written,size-written);
-    if (!n) return false;
-    written+=n;
-  }
-  return true;
+static bool tlsRetry(ssize_t result) {
+  return result==ESP_TLS_ERR_SSL_WANT_READ || result==ESP_TLS_ERR_SSL_WANT_WRITE;
 }
 
-static bool netLine(NetworkClientSecure& client,char* line,size_t capacity,uint32_t timeoutMs=30000) {
-  if (!line || capacity<2) return false;
-  size_t n=0;const uint32_t started=millis();
-  while (uint32_t(millis()-started)<timeoutMs) {
-    const int value=client.read();
-    if (value<0) {
-      if (!client.connected() && !client.available()) return false;
-      vTaskDelay(pdMS_TO_TICKS(1));continue;
-    }
+static void closeHttps(esp_tls_t*& tls) {
+  if (tls) { esp_tls_conn_destroy(tls);tls=nullptr; }
+}
+
+static bool netWriteAll(esp_tls_t* tls,const uint8_t* bytes,size_t size) {
+  if (!tls) return false;
+  size_t written=0;const uint32_t started=millis();
+  while (written<size && uint32_t(millis()-started)<30000u) {
+    const ssize_t n=esp_tls_conn_write(tls,bytes+written,size-written);
+    if (n>0) { written+=size_t(n);continue; }
+    if (!tlsRetry(n)) return false;
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
+  return written==size;
+}
+
+static int netReadByte(esp_tls_t* tls,uint32_t& last,uint32_t timeoutMs=30000) {
+  uint8_t byte=0;
+  while (uint32_t(millis()-last)<timeoutMs) {
+    const ssize_t n=esp_tls_conn_read(tls,&byte,1);
+    if (n==1) { last=millis();return int(byte); }
+    if (n==0) return -2;
+    if (!tlsRetry(n)) return -2;
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
+  return -1;
+}
+
+static bool netLine(esp_tls_t* tls,char* line,size_t capacity,uint32_t timeoutMs=30000) {
+  if (!tls || !line || capacity<2) return false;
+  size_t n=0;uint32_t last=millis();
+  for (;;) {
+    const int value=netReadByte(tls,last,timeoutMs);
+    if (value<0) { line[n]=0;return false; }
     if (value=='\n') { line[n]=0;return true; }
     if (value!='\r' && n+1<capacity) line[n++]=char(value);
   }
-  line[n]=0;return false;
 }
 
-static int netResponse(NetworkClientSecure& client,char* response,size_t capacity) {
+static int netResponse(esp_tls_t*& tls,char* response,size_t capacity) {
   char line[192]{};
-  if (!netLine(client,line,sizeof(line)) || strncmp(line,"HTTP/1.",7)!=0) { client.stop();return -1; }
+  if (!netLine(tls,line,sizeof(line)) || strncmp(line,"HTTP/1.",7)!=0) { closeHttps(tls);return -1; }
   const char* code=strchr(line,' ');
-  if (!code) { client.stop();return -1; }
+  if (!code) { closeHttps(tls);return -1; }
   const int status=atoi(code+1);
   do {
-    if (!netLine(client,line,sizeof(line))) { client.stop();return -1; }
+    if (!netLine(tls,line,sizeof(line))) { closeHttps(tls);return -1; }
   } while (line[0]);
   if (response && capacity) {
     size_t n=0;uint32_t last=millis();
-    while ((client.connected() || client.available()) && uint32_t(millis()-last)<30000u) {
-      const int value=client.read();
-      if (value<0) { vTaskDelay(pdMS_TO_TICKS(1));continue; }
+    for (;;) {
+      const int value=netReadByte(tls,last,30000);
+      if (value==-2) break;
+      if (value<0) { closeHttps(tls);return -1; }
       if (n+1<capacity) response[n++]=char(value);
-      last=millis();
     }
     response[n]=0;
   }
-  client.stop();return status;
+  closeHttps(tls);return status;
 }
 
-static bool openHttps(const char* endpoint,HttpsTarget& target,NetworkClientSecure& client) {
-  if (!parseHttpsEndpoint(endpoint,target)) return false;
-  client.setCACert(SYNAP_GTS_ROOTS);
-  client.setHandshakeTimeout(15);
-  client.setTimeout(30000);
-  return client.connect(target.host,443,30000)>0;
+static esp_tls_t* openHttps(const char* endpoint,HttpsTarget& target) {
+  if (!parseHttpsEndpoint(endpoint,target)) return nullptr;
+  esp_tls_t* tls=esp_tls_init();
+  if (!tls) return nullptr;
+  esp_tls_cfg_t cfg={};
+  cfg.cacert_buf=reinterpret_cast<const unsigned char*>(SYNAP_GTS_ROOTS);
+  cfg.cacert_bytes=sizeof(SYNAP_GTS_ROOTS);
+  cfg.common_name=target.host;
+  cfg.timeout_ms=30000;
+  if (esp_tls_conn_new_sync(target.host,int(strlen(target.host)),443,&cfg,tls)!=1) {
+    closeHttps(tls);return nullptr;
+  }
+  return tls;
 }
 
 static int httpJson(const char* endpoint,const char* method,const char* token,
                     const char* path,const char* body,char* response,size_t capacity) {
-  HttpsTarget target;NetworkClientSecure client;
-  if (!openHttps(endpoint,target,client)) return -1;
+  HttpsTarget target;esp_tls_t* client=openHttps(endpoint,target);
+  if (!client) return -1;
   char fullPath[384],header[1536];
   const int p=snprintf(fullPath,sizeof(fullPath),"%s%s",target.base,path);
   const size_t bytes=body?strlen(body):0;
@@ -3580,15 +3606,15 @@ static int httpJson(const char* endpoint,const char* method,const char* token,
   if (p<=0 || size_t(p)>=sizeof(fullPath) || h<=0 || size_t(h)>=sizeof(header) ||
       !netWriteAll(client,reinterpret_cast<const uint8_t*>(header),size_t(h)) ||
       (bytes && !netWriteAll(client,reinterpret_cast<const uint8_t*>(body),bytes))) {
-    client.stop();return -1;
+    closeHttps(client);return -1;
   }
   return netResponse(client,response,capacity);
 }
 
 static int uploadWavSegment(FILE* file,const WifiJob& job,uint32_t index,uint32_t pcmOffset,
                             uint32_t pcmBytes,uint32_t startMs,uint32_t endMs) {
-  HttpsTarget target;NetworkClientSecure client;
-  if (!openHttps(job.endpoint,target,client)) return -1;
+  HttpsTarget target;esp_tls_t* client=openHttps(job.endpoint,target);
+  if (!client) return -1;
   char path[384],header[1536];
   const int p=snprintf(path,sizeof(path),"%s/v1/device-uploads/%s/segments/%lu",
     target.base,job.recordingId,static_cast<unsigned long>(index));
@@ -3602,7 +3628,7 @@ static int uploadWavSegment(FILE* file,const WifiJob& job,uint32_t index,uint32_
     static_cast<unsigned long>(startMs),static_cast<unsigned long>(endMs));
   if (p<=0 || size_t(p)>=sizeof(path) || h<=0 || size_t(h)>=sizeof(header) ||
       !netWriteAll(client,reinterpret_cast<const uint8_t*>(header),size_t(h))) {
-    client.stop();return -1;
+    closeHttps(client);return -1;
   }
   uint8_t wav[44];::odysseyWavHeader(wav,pcmBytes);
   bool ok=netWriteAll(client,wav,sizeof(wav));
@@ -3614,7 +3640,7 @@ static int uploadWavSegment(FILE* file,const WifiJob& job,uint32_t index,uint32_
     if (fread(buffer,1,chunk,file)!=chunk || !netWriteAll(client,buffer,chunk)) { ok=false;break; }
     remaining-=uint32_t(chunk);
   }
-  if (!ok) { client.stop();return -1; }
+  if (!ok) { closeHttps(client);return -1; }
   return netResponse(client,nullptr,0);
 }
 
