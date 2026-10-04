@@ -208,6 +208,9 @@ test('C3 Wi-Fi bulk sync is additive, credential-scoped and preserves BLE fallba
   assert.match(transfer,/esp_wifi_connect\(\)/);
   assert.match(transfer,/IP_EVENT_STA_GOT_IP/);
   assert.doesNotMatch(transfer,/#include <WiFi\.h>|WiFi\./,'C3 bulk sync should not link the Arduino Wi-Fi wrapper');
+  assert.doesNotMatch(transfer,/Preferences\b|Preferences\.h/,'C3 Wi-Fi profile should use native NVS');
+  assert.match(transfer,/nvs_open\("synapwifi",NVS_READONLY/);
+  assert.match(transfer,/nvs_set_str\(handle,"ssid",ssid\)/);
   assert.match(transfer,/#include <esp_tls\.h>/);
   assert.match(transfer,/cfg\.cacert_buf=reinterpret_cast<const unsigned char\*>\(SYNAP_GTS_ROOTS\)/,
     'HTTPS must verify the Google Trust Services root chain');
