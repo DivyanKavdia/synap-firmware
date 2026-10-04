@@ -12,5 +12,7 @@ test('C3 local WAV preserves PCM, destination and final header across stop, reco
  assert.match(source,/ODYSSEY_WAV_HEADER_BYTES\+size_t\(bytes\)/);
  assert.doesNotMatch(source,/malloc\(ODYSSEY_SD_WRITE_BUFFER_BYTES\)/);
  assert.doesNotMatch(source,/checkpointAt\)>=2000u/);
+ assert.match(source,/odysseySdSleepGuardUntil=finalizedAt\+5000u/);
+ assert.match(source,/disconnectedAt=finalizedAt/);
  nativeTest(fixture.replace('// INSERT RECORDER',source),['-DCONFIG_IDF_TARGET_ESP32C3=1','-DUSE_REAL_I2S_MIC=1']);
 });
