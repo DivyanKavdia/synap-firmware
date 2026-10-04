@@ -2280,16 +2280,6 @@ static bool odysseySdReleaseLocked() {
   return true;
 }
 
-static esp_vfs_fat_mount_config_t odysseySdMountConfig() {
-  esp_vfs_fat_mount_config_t config{};
-  config.format_if_mount_failed=false;
-  config.max_files=ODYSSEY_SD_MAX_OPEN_FILES;
-  config.allocation_unit_size=0; // Keep the existing FAT32 volume's cluster geometry.
-  config.disk_status_check_enable=true;
-  config.use_one_fat=false;
-  return config;
-}
-
 static bool odysseySdBeginLocked(bool formatIfMountFailed=false) {
   ++odysseySdBeginAttempts;
   if (!odysseySdReleaseLocked()) return false;
@@ -2318,7 +2308,12 @@ static bool odysseySdBeginLocked(bool formatIfMountFailed=false) {
   sdspi_device_config_t slot=SDSPI_DEVICE_CONFIG_DEFAULT();
   slot.host_id=SPI2_HOST;
   slot.gpio_cs=static_cast<gpio_num_t>(ODYSSEY_SD_CS);
-  esp_vfs_fat_mount_config_t config=odysseySdMountConfig();
+  esp_vfs_fat_mount_config_t config{};
+  config.format_if_mount_failed=false;
+  config.max_files=ODYSSEY_SD_MAX_OPEN_FILES;
+  config.allocation_unit_size=0; // Keep the existing FAT32 volume's cluster geometry.
+  config.disk_status_check_enable=true;
+  config.use_one_fat=false;
   // The only caller allowed to opt in is the explicit user Format SD action.
   config.format_if_mount_failed=formatIfMountFailed;
   err=esp_vfs_fat_sdspi_mount(ODYSSEY_SD_MOUNT_POINT,&odysseySdHost,&slot,
