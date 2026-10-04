@@ -255,6 +255,7 @@ void ble(BLEService* service);
 bool available();
 bool streamAvailable();
 bool wifiAvailable();
+bool wifiBusy();
 }
 #endif
 
@@ -736,7 +737,7 @@ void setDeviceState(DeviceState state, ErrorCode error) {
 
 void applyCpuPowerProfile(bool active) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  active=active || odysseyRecording.load();
+  active=active || odysseyRecording.load() || OdysseyTransfer::wifiBusy();
 #endif
   static uint32_t appliedMHz = 0;
   const uint32_t targetMHz = active ? ACTIVE_CPU_MHZ : IDLE_CPU_MHZ;
@@ -1075,7 +1076,7 @@ bool exitRemoteStandby() {
 
 void enterRemoteStandby() {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  if (odysseyRecording.load()) return;
+  if (odysseyRecording.load() || OdysseyTransfer::wifiBusy()) return;
 #endif
   if (sleepPending) return;
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
@@ -1239,7 +1240,7 @@ void pollTouchControl() {
 
   if (deepSleepAfterStop && !streaming && !raw && !otaBusy()
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-      && !odysseyRecording.load()
+      && !odysseyRecording.load() && !OdysseyTransfer::wifiBusy()
 #endif
   ) {
     deepSleepAfterStop=false;
@@ -3002,7 +3003,8 @@ void odysseyToggleRecording() {
     Serial.println("[TOUCH] double tap -> SD audio STOP");
     return;
   }
-  if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) return;
+  if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending ||
+      OdysseyTransfer::wifiBusy() || batteryCritical()) return;
   if (!odysseySdReady()) {
     odysseySdRequestRecovery();
     odysseyRecordFaultAt=millis();
@@ -3875,6 +3877,7 @@ bool wifiAvailable(){
   return false;
 #endif
 }
+bool wifiBusy(){return wifiUploadActive.load();}
 
 void initialize() {
   char ssid[33]{},password[64]{};
