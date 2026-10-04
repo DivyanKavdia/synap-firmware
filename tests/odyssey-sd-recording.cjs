@@ -7,7 +7,10 @@ test('C3 local WAV preserves PCM, destination and final header across stop, reco
  assert.match(source,/ODYSSEY_SD_WRITE_BUFFER_BYTES=8192u/);
  assert.match(source,/ODYSSEY_SD_WRITE_CHUNK_BYTES=4096u/);
  assert.match(source,/ODYSSEY_SD_SECTOR_BYTES=512u/);
- assert.match(source,/setvbuf\(file,nullptr,_IONBF,0\)/);
+  assert.match(source,/setvbuf\(file,nullptr,_IONBF,0\)/);
+  assert.match(source,/fsync\(fileno\(file\)\)==0/,'recording checkpoints must reach FatFs f_sync');
+  assert.match(source,/Do not retry writes or rewrite the header[\s\S]*if \(!storageFailed\) \{/,
+    'a failed storage operation must not be followed by writes on the failed file object');
  assert.match(source,/odysseyDrainPcmBuffer/);
  assert.match(source,/ODYSSEY_WAV_HEADER_BYTES\+size_t\(bytes\)/);
  assert.doesNotMatch(source,/malloc\(ODYSSEY_SD_WRITE_BUFFER_BYTES\)/);

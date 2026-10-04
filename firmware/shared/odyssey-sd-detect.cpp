@@ -700,7 +700,7 @@ bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
   odysseySdReleaseLocked();
   Serial.printf("[SD] power transition prepared ready=%u state=%u probe=%u host=1 quiesced=%u\n",
     wasReady?1u:0u,unsigned(state),unsigned(probe),idle==1?1u:0u);
-  return true;
+  return idle==1;
 }
 #else
 // Odyssey S3 remains detection-only and retains the existing Arduino SD probe.

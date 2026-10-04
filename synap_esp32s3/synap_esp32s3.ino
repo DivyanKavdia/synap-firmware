@@ -2842,7 +2842,7 @@ bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
   odysseySdReleaseLocked();
   Serial.printf("[SD] power transition prepared ready=%u state=%u probe=%u host=1 quiesced=%u\n",
     wasReady?1u:0u,unsigned(state),unsigned(probe),idle==1?1u:0u);
-  return true;
+  return idle==1;
 }
 #else
 // Odyssey S3 remains detection-only and retains the existing Arduino SD probe.
@@ -2870,6 +2870,8 @@ void odysseyDetectSdCard() {
 // C3 local audio owns the mounted VFS and microphone until finalization.
 // BLE connection changes never redirect a take; no local PCM enters the app queue.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+#include <unistd.h>
+
 static void odysseyWavHeader(uint8_t* h,uint32_t bytes) {
   memset(h,0,44);
   memcpy(h,"RIFF",4);put32le(h+4,bytes+36);
@@ -2895,7 +2897,9 @@ static bool odysseyCheckpointWav(FILE* file,uint8_t* header,uint32_t bytes) {
   if (fseek(file,0,SEEK_SET)!=0) return false;
   if (fwrite(header,1,ODYSSEY_WAV_HEADER_BYTES,file)!=ODYSSEY_WAV_HEADER_BYTES) return false;
   if (fseek(file,long(ODYSSEY_WAV_HEADER_BYTES+bytes),SEEK_SET)!=0) return false;
-  return fflush(file)==0;
+  // With _IONBF there is no stdio payload buffer to drain; fsync() reaches
+  // the FatFs VFS callback (f_sync) and returns errors from the disk layer.
+  return fflush(file)==0 && fsync(fileno(file))==0;
 }
 
 static bool odysseyWriteBufferedChunk(FILE* file,uint8_t* buffer,size_t& buffered,
@@ -3037,11 +3041,16 @@ static void odysseyRecordTake() {
 #endif
 
   if (file) {
-    if (!odysseyDrainPcmBuffer(file,odysseySdWriteBuffer,bufferedBytes,bytes,true)) {
-      failed=true;storageFailed=true;if (!failureStage) failureStage=5;
-    }
-    if (!odysseyCheckpointWav(file,header,bytes)) {
-      failed=true;storageFailed=true;if (!failureStage) failureStage=6;
+    // Do not retry writes or rewrite the header after FatFs reports a storage
+    // error: a failed FatFs file object may be aborted, and the seek position
+    // may no longer be trustworthy. Close is still attempted for cleanup.
+    if (!storageFailed) {
+      if (!odysseyDrainPcmBuffer(file,odysseySdWriteBuffer,bufferedBytes,bytes,true)) {
+        failed=true;storageFailed=true;if (!failureStage) failureStage=5;
+      }
+      if (!storageFailed && !odysseyCheckpointWav(file,header,bytes)) {
+        failed=true;storageFailed=true;if (!failureStage) failureStage=6;
+      }
     }
     if (fclose(file)!=0) {
       failed=true;storageFailed=true;if (!failureStage) failureStage=7;

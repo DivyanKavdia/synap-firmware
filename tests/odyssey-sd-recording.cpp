@@ -15,6 +15,8 @@ constexpr uint16_t SAMPLES_PER_FRAME=800;
 constexpr int pdPASS=1;
 std::atomic<bool> odysseyRecording{false},odysseyStopRequested{false},deviceConnected{false},streamingEnabled{false};
 std::atomic<uint32_t> odysseyRecordingStartedAt{0},odysseyRecordFaultAt{0};
+std::atomic<uint32_t> odysseySdSleepGuardUntil{0};
+uint32_t disconnectedAt=0;
 bool sleepPending=false,critical=false,ota=false,micOk=true,cardOk=true,allocOk=true,reconnect=false,pathOk=true,finalizeOnDelay=false;
 int stopAfterReads=4;
 uint8_t odysseySdBootState=1;
@@ -72,6 +74,7 @@ void vTaskDelete(void*){}
 void reset(){
  odysseyRecording=false;odysseyStopRequested=false;deviceConnected=false;streamingEnabled=false;
  odysseyRecordingStartedAt=0;odysseyRecordFaultAt=0;
+ odysseySdSleepGuardUntil=0;disconnectedAt=0;
  sleepPending=critical=ota=reconnect=finalizeOnDelay=false;micOk=cardOk=allocOk=pathOk=true;odysseySdBootState=1;
  clockMs=randomCounter=0;reads=micStarts=micStops=powerActive=powerIdle=vfsFailures=0;stopAfterReads=4;pendingTask=nullptr;lastPath.clear();
  {const int rc=system("rm -rf /tmp/synap-odyssey-test");assert(rc==0);}

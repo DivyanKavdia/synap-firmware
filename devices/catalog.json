@@ -103,7 +103,7 @@
         "batteryCellMv": 2,
         "batteryFullMv": 4150,
         "batteryAttenuation": "ADC_11db",
-        "batteryCutoff": false,
+        "batteryCutoff": true,
         "sdDetection": {
           "cs": 0,
           "sck": 10,

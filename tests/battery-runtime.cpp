@@ -69,8 +69,13 @@ int main(){
   for(int i=0;i<3;++i)sampleBattery(true);
   assert(batteryAvailable && batteryMillivolts<=BATTERY_CRITICAL_MV);
   assert(bool(event.value[3]&2));
-  assert(batteryCritical()==!bool(CONFIG_IDF_TARGET_ESP32C3));
-  assert(bool(event.value[3]&4)==!bool(CONFIG_IDF_TARGET_ESP32C3));
+#if SYNAP_BATTERY_MONITOR_ENABLE && SYNAP_BATTERY_ENFORCE
+  assert(batteryCritical());
+  assert(bool(event.value[3]&4));
+#else
+  assert(!batteryCritical());
+  assert(!(event.value[3]&4));
+#endif
   for(const uint32_t invalid : {0u,340u,3000u}){
     adcMv=invalid;sampleBattery(true);
     assert(!batteryAvailable && !batteryCritical() && batteryPercent==0);
