@@ -2232,6 +2232,7 @@ static std::atomic<int16_t> odysseySdBitBangCmd8{-2};
 static std::atomic<uint32_t> odysseySdBitBangR7{0};
 static StaticSemaphore_t odysseySdMutexStorage;
 static SemaphoreHandle_t odysseySdMutex=nullptr;
+static std::atomic<bool> odysseySdHostMounted{false};
 
 int32_t odysseySdLastError() { return odysseySdLastMountError.load(); }
 uint32_t odysseySdAttemptCount() { return odysseySdMountAttempts.load(); }
@@ -2289,6 +2290,7 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
 }
 
 static void odysseySdReleaseLocked() {
+  odysseySdHostMounted=false;
   SD.end();
   odysseySdSpi.end();
   // Exact 1445 teardown: only deassert CS. Do not preconfigure SCK/MOSI/MISO
@@ -2569,8 +2571,12 @@ static bool odysseySdBeginLocked(bool formatIfEmpty=false) {
   odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
   const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,
     ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,formatIfEmpty);
-  if (mounted) markOdysseySdBatteryDividerPresent();
-  else odysseySdReleaseLocked();
+  if (mounted) {
+    odysseySdHostMounted=true;
+    markOdysseySdBatteryDividerPresent();
+  } else {
+    odysseySdReleaseLocked();
+  }
   return mounted;
 }
 
@@ -2806,22 +2812,28 @@ bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
     Serial.println("[SD] power transition deferred: local recording active");
     return false;
   }
+
+  const bool hostWasMounted=odysseySdHostMounted.load();
   const bool wasReady=odysseySdReady();
   const uint8_t state=odysseySdBootState.load();
+  const uint8_t probe=odysseySdProbeStage.load();
   odysseySdBootState=0;odysseySdProbeStage=0;
 
-  // Only a successfully mounted session can have an application-owned CMD18
-  // or CMD25 transfer to close. If initialization already failed, do not inject
-  // another raw recovery sequence on every reset/deep-sleep transition.
-  if (!wasReady) {
+  // A runtime VFS/write failure (2/4) can happen while the Arduino SD host is
+  // still mounted and the card may still be finishing a write command. Track
+  // actual host ownership separately from logical readiness so sleep/restart
+  // quiesces that card instead of dropping clocks immediately after failure.
+  if (!hostWasMounted) {
     odysseySdReleaseLocked();
-    Serial.printf("[SD] power transition prepared without quiesce state=%u\n",unsigned(state));
+    Serial.printf("[SD] power transition prepared without quiesce state=%u probe=%u host=0\n",
+      unsigned(state),unsigned(probe));
     return true;
   }
 
   const uint8_t idle=odysseySdQuiesceLocked(ODYSSEY_SD_QUIESCE_BUDGET_MS);
   odysseySdReleaseLocked();
-  Serial.printf("[SD] power transition prepared ready=1 quiesced=%u\n",idle==1?1u:0u);
+  Serial.printf("[SD] power transition prepared ready=%u state=%u probe=%u host=1 quiesced=%u\n",
+    wasReady?1u:0u,unsigned(state),unsigned(probe),idle==1?1u:0u);
   return true;
 }
 #else
