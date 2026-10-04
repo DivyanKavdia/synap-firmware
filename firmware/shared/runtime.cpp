@@ -217,6 +217,7 @@ namespace OdysseyTransfer {
 void initialize();
 void ble(BLEService* service);
 bool available();
+bool streamAvailable();
 }
 #endif
 

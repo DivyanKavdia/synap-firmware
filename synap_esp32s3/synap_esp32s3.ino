@@ -253,6 +253,7 @@ namespace OdysseyTransfer {
 void initialize();
 void ble(BLEService* service);
 bool available();
+bool streamAvailable();
 }
 #endif
 
@@ -657,7 +658,8 @@ void encodeModuleCapabilities(uint8_t* p) {
 #endif
 #if CONFIG_IDF_TARGET_ESP32C3
   if (OdysseyTransfer::available()) {
-    p[14]=1;
+    p[14]=OdysseyTransfer::streamAvailable()?2:1;
+    p[16]=OdysseyTransfer::streamAvailable()?1:0;
     if (odysseySdDetectionState()==1) {
       ready|=SYNAP_CAP_SD;
       if (ready&SYNAP_CAP_AUDIO) ready|=SYNAP_CAP_SDAUDIO;
@@ -3031,7 +3033,7 @@ void odysseyToggleRecording() {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 namespace OdysseyTransfer {
 struct Request {
-  uint32_t connection=0,id=0,offset=0;
+  uint32_t connection=0,id=0,offset=0,windowEpoch=0;
   uint8_t operation=0;
   char path[64]{};
 };
@@ -3044,6 +3046,8 @@ static uint32_t responseConnection=0;
 static char selectedPath[64]{};
 static String catalogueBuffer;
 static int catalogueErrno=0;
+static BLECharacteristic* streamCharacteristic=nullptr;
+static std::atomic<uint32_t> cancelWindow{0},streamNotifyRejected{0};
 
 enum : uint8_t {
   OK=0,BUSY=1,BAD_COMMAND=2,NO_SD=3,IO_ERROR=7,FILE_UNAVAILABLE=11
@@ -3154,6 +3158,115 @@ static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& 
   const bool ok=fseek(file,long(offset),SEEK_SET)==0 && fread(bytes,1,size,file)==size;
   fclose(file);
   return ok?OK:IO_ERROR;
+}
+
+
+class StreamCallbacks : public BLECharacteristicCallbacks {
+  void onStatus(BLECharacteristic*,Status status,uint32_t) override {
+    if (status!=SUCCESS_NOTIFY) ++streamNotifyRejected;
+  }
+};
+
+static bool sendMediaPacket(const Request& request,uint8_t kind,uint8_t error,uint32_t total,
+                            uint32_t offset,const uint8_t* bytes,size_t size) {
+  if (!streamCharacteristic || !deviceConnected.load() ||
+      request.connection!=connectionGeneration.load()) return false;
+  const uint16_t capacity=attValueCapacity.load();
+  if (capacity<16 || size>480 || 16u+size>capacity) return false;
+  static uint8_t packet[496];
+  packet[0]=0xCC;packet[1]=1;packet[2]=kind;packet[3]=error;
+  put32le(packet+4,request.id);put32le(packet+8,total);put32le(packet+12,offset);
+  if (size && bytes) memcpy(packet+16,bytes,size);
+  streamCharacteristic->setValue(packet,16+size);
+  for (uint8_t attempt=0;attempt<4;++attempt) {
+    if (request.connection!=connectionGeneration.load() || !deviceConnected.load() ||
+        request.windowEpoch!=cancelWindow.load()) return false;
+    if (attempt) vTaskDelay(pdMS_TO_TICKS(8u*attempt));
+    const uint32_t rejectedBefore=streamNotifyRejected.load();
+    streamCharacteristic->notify();
+    if (streamNotifyRejected.load()==rejectedBefore) return true;
+  }
+  return false;
+}
+
+static void endMediaWindow(const Request& request,uint8_t error,uint32_t total,uint32_t offset) {
+  for (uint8_t attempt=0;attempt<6 && request.windowEpoch==cancelWindow.load();++attempt) {
+    if (sendMediaPacket(request,2,error,total,offset,nullptr,0)) return;
+    vTaskDelay(pdMS_TO_TICKS(12));
+  }
+}
+
+static void streamWindow(const Request& request) {
+  // Credit-window protocol shared with Chakshu: no more than eight data
+  // notifications are outstanding for a single command. The app requests the
+  // next byte offset after the end marker, so reconnect/resume is naturally
+  // path/offset based.
+  const uint16_t att=attValueCapacity.load();
+  const size_t capacity=att>16 ? std::min(size_t(480),size_t(att-16)) : 0;
+  if (capacity<32) {
+    // Let the app observe an empty window three times and fall back to media-v1.
+    endMediaWindow(request,OK,0,request.offset);
+    return;
+  }
+
+  uint32_t offset=request.offset,total=0;
+  uint8_t error=OK;
+  bool storageFault=false;
+  if (!selectedPath[0]) {
+    total=catalogueBuffer.length();
+    if (!total || offset>=total) error=FILE_UNAVAILABLE;
+    for (uint8_t count=0;!error && count<8 && offset<total;++count) {
+      if (request.windowEpoch!=cancelWindow.load() ||
+          request.connection!=connectionGeneration.load() || !deviceConnected.load()) return;
+      const size_t size=std::min(capacity,size_t(total-offset));
+      if (!sendMediaPacket(request,1,OK,total,offset,
+          reinterpret_cast<const uint8_t*>(catalogueBuffer.c_str()+offset),size)) break;
+      offset+=size;
+      vTaskDelay(pdMS_TO_TICKS(6));
+    }
+  } else {
+    {
+      OdysseySdGuard guard(pdMS_TO_TICKS(2000));
+      if (!guard || !storageReady()) error=NO_SD;
+      char full[96]{};
+      struct stat st{};
+      FILE* file=nullptr;
+      if (!error && !fullPath(selectedPath,full,sizeof(full))) error=BAD_COMMAND;
+      if (!error && (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 ||
+          uint64_t(st.st_size)>UINT32_MAX)) error=FILE_UNAVAILABLE;
+      if (!error) {
+        total=uint32_t(st.st_size);
+        if (offset>=total) error=FILE_UNAVAILABLE;
+      }
+      if (!error) {
+        file=fopen(full,"rb");
+        if (!file) error=FILE_UNAVAILABLE;
+      }
+      if (!error && fseek(file,long(offset),SEEK_SET)!=0) {
+        error=IO_ERROR;storageFault=true;
+      }
+      uint8_t bytes[480];
+      for (uint8_t count=0;!error && count<8 && offset<total;++count) {
+        if (request.windowEpoch!=cancelWindow.load() ||
+            request.connection!=connectionGeneration.load() || !deviceConnected.load()) {
+          if (file) fclose(file);
+          return;
+        }
+        const size_t size=std::min(capacity,size_t(total-offset));
+        if (fread(bytes,1,size,file)!=size) {
+          error=IO_ERROR;storageFault=true;break;
+        }
+        if (!sendMediaPacket(request,1,OK,total,offset,bytes,size)) break;
+        offset+=size;
+        vTaskDelay(pdMS_TO_TICKS(6));
+      }
+      if (file && fclose(file)!=0) { error=IO_ERROR;storageFault=true; }
+      if (storageFault) odysseySdMarkVfsFailure();
+    }
+    // Never quiesce while the storage guard is held.
+    if (storageFault) (void)odysseySdQuiesceFaultedSession(750u);
+  }
+  endMediaWindow(request,error,total,offset);
 }
 
 static uint8_t catalogue(uint32_t& total) {
@@ -3281,6 +3394,7 @@ static void worker(void*) {
     uint8_t error=OK;uint32_t total=0;size_t size=0;
     switch (request.operation) {
       case 3: error=selectFile(request.path,total); break;
+      case 12: streamWindow(request); continue;
       case 4:
         error=readSelected(request.path,request.offset,total,bytes,size);
         if (error==IO_ERROR) {
@@ -3341,6 +3455,12 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
     memcpy(&request.id,p+2,4);
     memcpy(&request.offset,p+6,4);
     request.connection=connectionGeneration.load();
+    request.windowEpoch=cancelWindow.load();
+    if (request.operation==16) {
+      ++cancelWindow;
+      reply(request,OK);
+      return;
+    }
     const size_t pathLength=length-10;
     if (pathLength) memcpy(request.path,p+10,pathLength);
     request.path[pathLength]=0;
@@ -3362,6 +3482,7 @@ class DataCallbacks : public BLECharacteristicCallbacks {
 };
 
 bool available(){return requests!=nullptr;}
+bool streamAvailable(){return requests!=nullptr && streamCharacteristic!=nullptr;}
 
 void initialize() {
   requests=xQueueCreate(2,sizeof(Request));
@@ -3381,6 +3502,12 @@ void ble(BLEService* service) {
   auto* data=service->createCharacteristic("4fa12355-0000-1000-8000-00805f9b34fb",
     BLECharacteristic::PROPERTY_READ);
   data->setCallbacks(new DataCallbacks());
+  streamCharacteristic=service->createCharacteristic("4fa1235a-0000-1000-8000-00805f9b34fb",
+    BLECharacteristic::PROPERTY_NOTIFY);
+  streamCharacteristic->setCallbacks(new StreamCallbacks());
+#if defined(CONFIG_BLUEDROID_ENABLED)
+  streamCharacteristic->addDescriptor(new BLE2902());
+#endif
 }
 } // namespace OdysseyTransfer
 #endif

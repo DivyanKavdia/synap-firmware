@@ -185,3 +185,18 @@ test('C3 offline storage faults are marked, cleaned up after guard release and r
   assert.match(task,/odysseySdQuiesceFaultedSession\(750u\)/);
   assert.match(task,/odysseySdRequestRecovery\(\)/);
 });
+
+test('C3 media v2 reuses the proven eight-credit notification window with v1 fallback',()=>{
+  const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
+  const caps=read('firmware/shared/module-capabilities.cpp');
+  assert.match(transfer,/4fa1235a-0000-1000-8000-00805f9b34fb/);
+  assert.match(transfer,/case 12: streamWindow\(request\); continue;/);
+  assert.match(transfer,/request\.operation==16[\s\S]*\+\+cancelWindow/);
+  assert.match(transfer,/count<8/);
+  assert.match(transfer,/fopen\(full,"rb"\)[\s\S]*for \(uint8_t count=0;!error && count<8/);
+  assert.match(transfer,/sendMediaPacket\(request,1,OK,total,offset,bytes,size\)/);
+  assert.match(transfer,/endMediaWindow\(request,error,total,offset\)/);
+  assert.match(transfer,/case 4:/,'media-v1 read must remain as fallback');
+  assert.match(caps,/p\[14\]=OdysseyTransfer::streamAvailable\(\)\?2:1/);
+  assert.match(caps,/p\[16\]=OdysseyTransfer::streamAvailable\(\)\?1:0/);
+});
