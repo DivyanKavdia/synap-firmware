@@ -197,6 +197,6 @@ test('C3 media v2 reuses the proven eight-credit notification window with v1 fal
   assert.match(transfer,/sendMediaPacket\(request,1,OK,total,offset,bytes,size\)/);
   assert.match(transfer,/endMediaWindow\(request,error,total,offset\)/);
   assert.match(transfer,/case 4:/,'media-v1 read must remain as fallback');
-  assert.match(caps,/p\[14\]=OdysseyTransfer::streamAvailable\(\)\?2:1/);
+  assert.match(caps,/p\[14\]=1/);
   assert.match(caps,/p\[16\]=OdysseyTransfer::streamAvailable\(\)\?1:0/);
 });
