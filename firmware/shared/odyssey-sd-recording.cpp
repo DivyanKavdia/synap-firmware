@@ -16,13 +16,14 @@ static bool odysseyCheckpointWav(FILE* file,uint8_t* header,uint32_t bytes) {
   if (fseek(file,long(44u+bytes),SEEK_SET)!=0) return false;
   return fflush(file)==0;
 }
-static void odysseyRecordTake() {
-  bool failed=false;
+static bool odysseyRecordTake() {
+  bool failed=false,storageFault=false;
   uint32_t bytes=0;
   char logicalPath[64]{};
   char fullPath[96]{};
   uint8_t header[44];
   FILE* file=nullptr;
+  bool created=false;
 
   // Hold the single storage mutex for the whole take. A recovery/remount can
   // never tear down the VFS beneath an open recording.
@@ -35,16 +36,26 @@ static void odysseyRecordTake() {
       snprintf(logicalPath,sizeof(logicalPath),"/synap/odyssey_audio_%08lx_%08lx.wav",
         static_cast<unsigned long>(esp_random()),static_cast<unsigned long>(esp_random()));
       if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) { failed=true; break; }
-      if (stat(fullPath,&existing)!=0 && errno==ENOENT) {
+      if (stat(fullPath,&existing)!=0) {
+        if (errno!=ENOENT) {
+          failed=true;storageFault=true;odysseySdMarkVfsFailure();break;
+        }
         file=fopen(fullPath,"wb+");
-        if (file) break;
+        if (file) { created=true; break; }
+        failed=true;storageFault=true;odysseySdMarkVfsFailure();break;
       }
     }
     if (!file) failed=true;
   }
 
   odysseyWavHeader(header,0);
-  if (!failed && fwrite(header,1,sizeof(header),file)!=sizeof(header)) failed=true;
+  if (!failed) {
+    // Persist a valid zero-audio WAV boundary immediately. A directory entry
+    // must never remain 0 B merely because stdio had not flushed yet.
+    if (fwrite(header,1,sizeof(header),file)!=sizeof(header) || fflush(file)!=0) {
+      failed=true;storageFault=true;odysseySdMarkVfsFailure();
+    }
+  }
 
 #if USE_REAL_I2S_MIC
   if (!failed && !odysseyStopRequested.load()) {
@@ -85,11 +96,15 @@ static void odysseyRecordTake() {
       if (bytes>0xffffff00u-sizeof(pcm)) break; // RIFF length is 32-bit.
       const size_t written=fwrite(pcm,1,sizeof(pcm),file);
       bytes+=uint32_t(written & ~size_t(1));
-      if (written!=sizeof(pcm)) { failed=true; break; }
+      if (written!=sizeof(pcm)) {
+        failed=true;storageFault=true;odysseySdMarkVfsFailure();break;
+      }
 
       // Keep a recoverable WAV header on media even if power is lost mid-take.
       if (uint32_t(millis()-checkpointAt)>=2000u) {
-        if (!odysseyCheckpointWav(file,header,bytes)) { failed=true; break; }
+        if (!odysseyCheckpointWav(file,header,bytes)) {
+          failed=true;storageFault=true;odysseySdMarkVfsFailure();break;
+        }
         checkpointAt=millis();
       }
     }
@@ -100,23 +115,46 @@ static void odysseyRecordTake() {
 #endif
 
   if (file) {
-    if (!odysseyCheckpointWav(file,header,bytes)) failed=true;
-    if (fclose(file)!=0) failed=true;
+    if (!odysseyCheckpointWav(file,header,bytes)) {
+      failed=true;storageFault=true;odysseySdMarkVfsFailure();
+    }
+    if (fclose(file)!=0) {
+      failed=true;storageFault=true;odysseySdMarkVfsFailure();
+    }
     file=nullptr;
   }
 
-  Serial.printf("[SD] local audio %s: %s, %lu PCM bytes%s\n",
-    failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),
-    failed?" (mount retained for explicit recovery)":"");
-  // A mounted SD card can still fail to open a WAV or start the microphone.
-  if (failed || bytes==0) odysseyRecordFaultAt=millis();
+  long finalSize=-1;
+  if (created) {
+    struct stat finalStat{};
+    if (stat(fullPath,&finalStat)==0 && S_ISREG(finalStat.st_mode)) finalSize=long(finalStat.st_size);
+    const uint64_t expectedSize=uint64_t(sizeof(header))+uint64_t(bytes);
+    if (finalSize<0 || uint64_t(finalSize)!=expectedSize) {
+      failed=true;storageFault=true;odysseySdMarkVfsFailure();
+    }
+  }
+
+  Serial.printf("[SD] local audio %s: %s, %lu PCM bytes, file bytes=%ld%s\n",
+    failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),finalSize,
+    failed?" (storage recovery may follow)":"");
+  if (failed || bytes==0 || finalSize<=long(sizeof(header))) odysseyRecordFaultAt=millis();
+  return storageFault;
 }
 // FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
 // function first so SD and microphone guards release their mutexes.
 static void odysseyRecordTask(void*) {
-  odysseyRecordTake();
+  const bool storageFault=odysseyRecordTake();
+  // odysseyRecordTake() returned, so its SD guard has released the mutex.
+  // Only now is it safe to tear down/quiesce a faulted mounted session.
   odysseyRecording=false;
   odysseyStopRequested=false;
+  if (storageFault) {
+    (void)odysseySdQuiesceFaultedSession(750u);
+    // One bounded background recovery is appropriate here: this fault came
+    // from an explicit offline recording action, not passive catalogue polling.
+    odysseySdRequestRecovery();
+    Serial.println("[SD] offline recording storage fault; cleanup complete, recovery requested");
+  }
   applyCpuPowerProfile(false);
   updateStatusLed(true);
   vTaskDelete(nullptr);

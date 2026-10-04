@@ -256,14 +256,21 @@ static void worker(void*) {
       case 3: error=selectFile(request.path,total); break;
       case 4:
         error=readSelected(request.path,request.offset,total,bytes,size);
-        if (error==IO_ERROR) odysseySdMarkVfsFailure();
+        if (error==IO_ERROR) {
+          odysseySdMarkVfsFailure();
+          // Cleanup only. Do not auto-remount a connected transfer behind the
+          // PWA; just ensure this failed read cannot strand the card protocol.
+          (void)odysseySdQuiesceFaultedSession(750u);
+        }
         break;
       case 7:
         error=catalogue(total);
-        // Never auto-unmount/remount a mounted card because a catalogue read
-        // failed. Preserve the observed state for diagnosis; explicit op 14 is
-        // the only connected remount path.
-        if (error==IO_ERROR) odysseySdMarkVfsFailure();
+        if (error==IO_ERROR) {
+          odysseySdMarkVfsFailure();
+          // Same rule for catalogue EIO: terminate the mounted card session,
+          // leaving explicit Retry SD as the connected remount action.
+          (void)odysseySdQuiesceFaultedSession(750u);
+        }
         break;
       case 8: total=catalogueBuffer.length();if(!total)error=FILE_UNAVAILABLE;break;
       case 14:

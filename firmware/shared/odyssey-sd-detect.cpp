@@ -78,6 +78,10 @@ static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
 static std::atomic<uint32_t> odysseySdBeginAttempts{0};
 static std::atomic<uint8_t> odysseySdLastMountReason{0}; // 1=boot,2=op14,3=touch,4=probe
+// Readiness can fall after a runtime I/O error even though this boot did
+// successfully mount a real card. Keep that fact independently so a failed
+// recorder/catalogue can terminate any stranded CMD18/CMD25 before remount.
+static std::atomic<bool> odysseySdMountedSession{false};
 static std::atomic<int16_t> odysseySdBitBangCsHigh{-2};
 static std::atomic<int16_t> odysseySdBitBangCsLow{-2};
 static std::atomic<uint8_t> odysseySdBitBangStopState{0}; // 1=released,2=still-busy,3=no-ready
@@ -426,6 +430,22 @@ static uint8_t odysseySdQuiesceLocked(uint32_t budgetMs) {
   return state;
 }
 
+bool odysseySdQuiesceFaultedSession(uint32_t timeoutMs) {
+  OdysseySdGuard guard(pdMS_TO_TICKS(timeoutMs));
+  if (!guard) {
+    Serial.println("[SD] fault cleanup deferred: storage busy");
+    return false;
+  }
+  if (!odysseySdMountedSession.exchange(false)) return true;
+  const uint32_t budget=timeoutMs && timeoutMs<ODYSSEY_SD_QUIESCE_BUDGET_MS
+    ? timeoutMs : ODYSSEY_SD_QUIESCE_BUDGET_MS;
+  const uint8_t idle=odysseySdQuiesceLocked(budget);
+  odysseySdReleaseLocked();
+  if (idle!=1) odysseySdMountedSession=true;
+  Serial.printf("[SD] faulted mounted session cleanup quiesced=%u\n",idle==1?1u:0u);
+  return idle==1;
+}
+
 static bool odysseySdBeginLocked() {
   ++odysseySdBeginAttempts;
   odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
@@ -555,6 +575,9 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
     return false;
   }
 
+  // A real card has been mounted in this boot. Preserve that fact even if
+  // a later VFS operation fails and readiness is downgraded to state 2/probe 4.
+  odysseySdMountedSession=true;
   if (!odysseySdValidateVfsLocked(reason,attempt)) {
     odysseySdReleaseLocked();
     return false;
@@ -598,8 +621,14 @@ bool odysseyInitializeSdCardBeforeBle() {
 bool odysseyRecoverSdCard(const char* reason) {
   OdysseySdGuard guard(pdMS_TO_TICKS(5000));
   if (!guard) return false;
+  const bool hadMountedSession=odysseySdMountedSession.exchange(false);
+  if (hadMountedSession) {
+    const uint8_t idle=odysseySdQuiesceLocked(ODYSSEY_SD_QUIESCE_BUDGET_MS);
+    Serial.printf("[SD] %s recovery pre-quiesce=%u\n",reason?reason:"op14",idle==1?1u:0u);
+  } else {
+    odysseySdReleaseLocked();
+  }
   odysseySdBootState=0;odysseySdProbeStage=0;
-  odysseySdReleaseLocked();
   return odysseySdMountLocked(reason?reason:"op14",ODYSSEY_SD_RECOVERY_ATTEMPTS);
 }
 
@@ -613,22 +642,23 @@ bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
     Serial.println("[SD] power transition deferred: local recording active");
     return false;
   }
-  const bool wasReady=odysseySdReady();
+  const bool hadMountedSession=odysseySdMountedSession.exchange(false);
   const uint8_t state=odysseySdBootState.load();
   odysseySdBootState=0;odysseySdProbeStage=0;
 
-  // Only a successfully mounted session can have an application-owned CMD18
-  // or CMD25 transfer to close. If initialization already failed, do not inject
-  // another raw recovery sequence on every reset/deep-sleep transition.
-  if (!wasReady) {
+  // A hard init failure has no mounted session to close. A runtime recorder or
+  // VFS fault does: readiness may already be false while the card still needs
+  // the previous SPI transaction terminated before reset/deep sleep.
+  if (!hadMountedSession) {
     odysseySdReleaseLocked();
-    Serial.printf("[SD] power transition prepared without quiesce state=%u\n",unsigned(state));
+    Serial.printf("[SD] power transition prepared without quiesce state=%u mountedSession=0\n",unsigned(state));
     return true;
   }
 
   const uint8_t idle=odysseySdQuiesceLocked(ODYSSEY_SD_QUIESCE_BUDGET_MS);
   odysseySdReleaseLocked();
-  Serial.printf("[SD] power transition prepared ready=1 quiesced=%u\n",idle==1?1u:0u);
+  Serial.printf("[SD] power transition prepared mountedSession=1 state=%u quiesced=%u\n",
+    unsigned(state),idle==1?1u:0u);
   return true;
 }
 #else

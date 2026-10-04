@@ -2210,6 +2210,10 @@ static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
 static std::atomic<uint32_t> odysseySdBeginAttempts{0};
 static std::atomic<uint8_t> odysseySdLastMountReason{0}; // 1=boot,2=op14,3=touch,4=probe
+// Readiness can fall after a runtime I/O error even though this boot did
+// successfully mount a real card. Keep that fact independently so a failed
+// recorder/catalogue can terminate any stranded CMD18/CMD25 before remount.
+static std::atomic<bool> odysseySdMountedSession{false};
 static std::atomic<int16_t> odysseySdBitBangCsHigh{-2};
 static std::atomic<int16_t> odysseySdBitBangCsLow{-2};
 static std::atomic<uint8_t> odysseySdBitBangStopState{0}; // 1=released,2=still-busy,3=no-ready
@@ -2558,6 +2562,22 @@ static uint8_t odysseySdQuiesceLocked(uint32_t budgetMs) {
   return state;
 }
 
+bool odysseySdQuiesceFaultedSession(uint32_t timeoutMs) {
+  OdysseySdGuard guard(pdMS_TO_TICKS(timeoutMs));
+  if (!guard) {
+    Serial.println("[SD] fault cleanup deferred: storage busy");
+    return false;
+  }
+  if (!odysseySdMountedSession.exchange(false)) return true;
+  const uint32_t budget=timeoutMs && timeoutMs<ODYSSEY_SD_QUIESCE_BUDGET_MS
+    ? timeoutMs : ODYSSEY_SD_QUIESCE_BUDGET_MS;
+  const uint8_t idle=odysseySdQuiesceLocked(budget);
+  odysseySdReleaseLocked();
+  if (idle!=1) odysseySdMountedSession=true;
+  Serial.printf("[SD] faulted mounted session cleanup quiesced=%u\n",idle==1?1u:0u);
+  return idle==1;
+}
+
 static bool odysseySdBeginLocked() {
   ++odysseySdBeginAttempts;
   odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
@@ -2687,6 +2707,9 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
     return false;
   }
 
+  // A real card has been mounted in this boot. Preserve that fact even if
+  // a later VFS operation fails and readiness is downgraded to state 2/probe 4.
+  odysseySdMountedSession=true;
   if (!odysseySdValidateVfsLocked(reason,attempt)) {
     odysseySdReleaseLocked();
     return false;
@@ -2730,8 +2753,14 @@ bool odysseyInitializeSdCardBeforeBle() {
 bool odysseyRecoverSdCard(const char* reason) {
   OdysseySdGuard guard(pdMS_TO_TICKS(5000));
   if (!guard) return false;
+  const bool hadMountedSession=odysseySdMountedSession.exchange(false);
+  if (hadMountedSession) {
+    const uint8_t idle=odysseySdQuiesceLocked(ODYSSEY_SD_QUIESCE_BUDGET_MS);
+    Serial.printf("[SD] %s recovery pre-quiesce=%u\n",reason?reason:"op14",idle==1?1u:0u);
+  } else {
+    odysseySdReleaseLocked();
+  }
   odysseySdBootState=0;odysseySdProbeStage=0;
-  odysseySdReleaseLocked();
   return odysseySdMountLocked(reason?reason:"op14",ODYSSEY_SD_RECOVERY_ATTEMPTS);
 }
 
@@ -2745,22 +2774,23 @@ bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
     Serial.println("[SD] power transition deferred: local recording active");
     return false;
   }
-  const bool wasReady=odysseySdReady();
+  const bool hadMountedSession=odysseySdMountedSession.exchange(false);
   const uint8_t state=odysseySdBootState.load();
   odysseySdBootState=0;odysseySdProbeStage=0;
 
-  // Only a successfully mounted session can have an application-owned CMD18
-  // or CMD25 transfer to close. If initialization already failed, do not inject
-  // another raw recovery sequence on every reset/deep-sleep transition.
-  if (!wasReady) {
+  // A hard init failure has no mounted session to close. A runtime recorder or
+  // VFS fault does: readiness may already be false while the card still needs
+  // the previous SPI transaction terminated before reset/deep sleep.
+  if (!hadMountedSession) {
     odysseySdReleaseLocked();
-    Serial.printf("[SD] power transition prepared without quiesce state=%u\n",unsigned(state));
+    Serial.printf("[SD] power transition prepared without quiesce state=%u mountedSession=0\n",unsigned(state));
     return true;
   }
 
   const uint8_t idle=odysseySdQuiesceLocked(ODYSSEY_SD_QUIESCE_BUDGET_MS);
   odysseySdReleaseLocked();
-  Serial.printf("[SD] power transition prepared ready=1 quiesced=%u\n",idle==1?1u:0u);
+  Serial.printf("[SD] power transition prepared mountedSession=1 state=%u quiesced=%u\n",
+    unsigned(state),idle==1?1u:0u);
   return true;
 }
 #else
@@ -2804,13 +2834,14 @@ static bool odysseyCheckpointWav(FILE* file,uint8_t* header,uint32_t bytes) {
   if (fseek(file,long(44u+bytes),SEEK_SET)!=0) return false;
   return fflush(file)==0;
 }
-static void odysseyRecordTake() {
-  bool failed=false;
+static bool odysseyRecordTake() {
+  bool failed=false,storageFault=false;
   uint32_t bytes=0;
   char logicalPath[64]{};
   char fullPath[96]{};
   uint8_t header[44];
   FILE* file=nullptr;
+  bool created=false;
 
   // Hold the single storage mutex for the whole take. A recovery/remount can
   // never tear down the VFS beneath an open recording.
@@ -2823,16 +2854,26 @@ static void odysseyRecordTake() {
       snprintf(logicalPath,sizeof(logicalPath),"/synap/odyssey_audio_%08lx_%08lx.wav",
         static_cast<unsigned long>(esp_random()),static_cast<unsigned long>(esp_random()));
       if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) { failed=true; break; }
-      if (stat(fullPath,&existing)!=0 && errno==ENOENT) {
+      if (stat(fullPath,&existing)!=0) {
+        if (errno!=ENOENT) {
+          failed=true;storageFault=true;odysseySdMarkVfsFailure();break;
+        }
         file=fopen(fullPath,"wb+");
-        if (file) break;
+        if (file) { created=true; break; }
+        failed=true;storageFault=true;odysseySdMarkVfsFailure();break;
       }
     }
     if (!file) failed=true;
   }
 
   odysseyWavHeader(header,0);
-  if (!failed && fwrite(header,1,sizeof(header),file)!=sizeof(header)) failed=true;
+  if (!failed) {
+    // Persist a valid zero-audio WAV boundary immediately. A directory entry
+    // must never remain 0 B merely because stdio had not flushed yet.
+    if (fwrite(header,1,sizeof(header),file)!=sizeof(header) || fflush(file)!=0) {
+      failed=true;storageFault=true;odysseySdMarkVfsFailure();
+    }
+  }
 
 #if USE_REAL_I2S_MIC
   if (!failed && !odysseyStopRequested.load()) {
@@ -2873,11 +2914,15 @@ static void odysseyRecordTake() {
       if (bytes>0xffffff00u-sizeof(pcm)) break; // RIFF length is 32-bit.
       const size_t written=fwrite(pcm,1,sizeof(pcm),file);
       bytes+=uint32_t(written & ~size_t(1));
-      if (written!=sizeof(pcm)) { failed=true; break; }
+      if (written!=sizeof(pcm)) {
+        failed=true;storageFault=true;odysseySdMarkVfsFailure();break;
+      }
 
       // Keep a recoverable WAV header on media even if power is lost mid-take.
       if (uint32_t(millis()-checkpointAt)>=2000u) {
-        if (!odysseyCheckpointWav(file,header,bytes)) { failed=true; break; }
+        if (!odysseyCheckpointWav(file,header,bytes)) {
+          failed=true;storageFault=true;odysseySdMarkVfsFailure();break;
+        }
         checkpointAt=millis();
       }
     }
@@ -2888,23 +2933,46 @@ static void odysseyRecordTake() {
 #endif
 
   if (file) {
-    if (!odysseyCheckpointWav(file,header,bytes)) failed=true;
-    if (fclose(file)!=0) failed=true;
+    if (!odysseyCheckpointWav(file,header,bytes)) {
+      failed=true;storageFault=true;odysseySdMarkVfsFailure();
+    }
+    if (fclose(file)!=0) {
+      failed=true;storageFault=true;odysseySdMarkVfsFailure();
+    }
     file=nullptr;
   }
 
-  Serial.printf("[SD] local audio %s: %s, %lu PCM bytes%s\n",
-    failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),
-    failed?" (mount retained for explicit recovery)":"");
-  // A mounted SD card can still fail to open a WAV or start the microphone.
-  if (failed || bytes==0) odysseyRecordFaultAt=millis();
+  long finalSize=-1;
+  if (created) {
+    struct stat finalStat{};
+    if (stat(fullPath,&finalStat)==0 && S_ISREG(finalStat.st_mode)) finalSize=long(finalStat.st_size);
+    const uint64_t expectedSize=uint64_t(sizeof(header))+uint64_t(bytes);
+    if (finalSize<0 || uint64_t(finalSize)!=expectedSize) {
+      failed=true;storageFault=true;odysseySdMarkVfsFailure();
+    }
+  }
+
+  Serial.printf("[SD] local audio %s: %s, %lu PCM bytes, file bytes=%ld%s\n",
+    failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),finalSize,
+    failed?" (storage recovery may follow)":"");
+  if (failed || bytes==0 || finalSize<=long(sizeof(header))) odysseyRecordFaultAt=millis();
+  return storageFault;
 }
 // FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
 // function first so SD and microphone guards release their mutexes.
 static void odysseyRecordTask(void*) {
-  odysseyRecordTake();
+  const bool storageFault=odysseyRecordTake();
+  // odysseyRecordTake() returned, so its SD guard has released the mutex.
+  // Only now is it safe to tear down/quiesce a faulted mounted session.
   odysseyRecording=false;
   odysseyStopRequested=false;
+  if (storageFault) {
+    (void)odysseySdQuiesceFaultedSession(750u);
+    // One bounded background recovery is appropriate here: this fault came
+    // from an explicit offline recording action, not passive catalogue polling.
+    odysseySdRequestRecovery();
+    Serial.println("[SD] offline recording storage fault; cleanup complete, recovery requested");
+  }
   applyCpuPowerProfile(false);
   updateStatusLed(true);
   vTaskDelete(nullptr);
@@ -3215,14 +3283,21 @@ static void worker(void*) {
       case 3: error=selectFile(request.path,total); break;
       case 4:
         error=readSelected(request.path,request.offset,total,bytes,size);
-        if (error==IO_ERROR) odysseySdMarkVfsFailure();
+        if (error==IO_ERROR) {
+          odysseySdMarkVfsFailure();
+          // Cleanup only. Do not auto-remount a connected transfer behind the
+          // PWA; just ensure this failed read cannot strand the card protocol.
+          (void)odysseySdQuiesceFaultedSession(750u);
+        }
         break;
       case 7:
         error=catalogue(total);
-        // Never auto-unmount/remount a mounted card because a catalogue read
-        // failed. Preserve the observed state for diagnosis; explicit op 14 is
-        // the only connected remount path.
-        if (error==IO_ERROR) odysseySdMarkVfsFailure();
+        if (error==IO_ERROR) {
+          odysseySdMarkVfsFailure();
+          // Same rule for catalogue EIO: terminate the mounted card session,
+          // leaving explicit Retry SD as the connected remount action.
+          (void)odysseySdQuiesceFaultedSession(750u);
+        }
         break;
       case 8: total=catalogueBuffer.length();if(!total)error=FILE_UNAVAILABLE;break;
       case 14:

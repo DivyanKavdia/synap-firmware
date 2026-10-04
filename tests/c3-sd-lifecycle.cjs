@@ -76,12 +76,13 @@ test('C3 SD readiness validates directory and writable media before publishing r
   assert(sd.indexOf('DIR* verified=opendir')<sd.indexOf('odysseySdBootState=1;\n  odysseySdProbeStage=6;'));
   assert.match(sd,/ODYSSEY_SD_INIT_FREQ_HZ=400000u/);
 });
-test('C3 catalogue failure is observational and never auto-remounts',()=>{
+test('C3 catalogue failure quiesces the mounted session without auto-remounting',()=>{
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
   assert.match(transfer,/case 7:[\s\S]*?error=catalogue\(total\)/);
   const catalogueCase=transfer.split('case 7:')[1].split('case 8:')[0];
   assert.doesNotMatch(catalogueCase,/odysseyRecoverSdCard\(/);
   assert.match(catalogueCase,/odysseySdMarkVfsFailure\(\)/);
+  assert.match(catalogueCase,/odysseySdQuiesceFaultedSession\(750u\)/);
   assert.match(transfer,/case 14:[\s\S]*odysseyRecoverSdCard\("op14"\)/);
   assert.match(transfer,/sdProbe/);
 });
@@ -150,9 +151,12 @@ test('C3 quiesces SD before OTA reboot, app restart and deep sleep',()=>{
   // down the host and sends the card nothing, which is how a reset mid-CMD18
   // left the next boot facing a bus stuck at 0x00.
   assert.match(transition,/odysseySdQuiesceLocked\(ODYSSEY_SD_QUIESCE_BUDGET_MS\)/);
-  // Failed initialization must not inject another raw recovery sequence on
-  // every reboot; only a successfully mounted session is quiesced.
-  assert.match(transition,/if \(!wasReady\)[\s\S]*without quiesce/);
+  // Runtime readiness may fall after EIO; mounted-session ownership survives.
+  assert.match(detect,/odysseySdMountedSession\{false\}/);
+  assert.match(detect,/odysseySdMountedSession=true;[\s\S]*odysseySdValidateVfsLocked/);
+  assert.match(transition,/odysseySdMountedSession\.exchange\(false\)/);
+  assert.match(transition,/if \(!hadMountedSession\)[\s\S]*without quiesce/);
+  assert.doesNotMatch(transition,/const bool wasReady=odysseySdReady\(\)/);
   // Full re-detection must not run on the way out of the process.
   assert.doesNotMatch(transition,/odysseySdBitBangRecoverLocked|odysseySdMountLocked/);
   const quiesce=detect.split('static uint8_t odysseySdQuiesceLocked')[1].split('\n}')[0];
@@ -165,4 +169,19 @@ test('C3 quiesces SD before OTA reboot, app restart and deep sleep',()=>{
   assert.match(ota,/otaSession\.state==Synap::COMMITTED[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*ESP\.restart\(\)/);
   assert.match(ble,/CMD_RESTART:[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*ESP\.restart\(\)/);
   assert.match(power,/entering deep sleep request=[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*esp_deep_sleep_start\(\)/);
+});
+
+test('C3 offline storage faults are marked, cleaned up after guard release and rearmed once',()=>{
+  const recording=read('firmware/shared/odyssey-sd-recording.cpp');
+  assert.match(recording,/static bool odysseyRecordTake\(\)/);
+  assert.match(recording,/fwrite\(header,1,sizeof\(header\),file\).*fflush\(file\)/s);
+  assert.match(recording,/written!=sizeof\(pcm\)[\s\S]*odysseySdMarkVfsFailure\(\)/);
+  assert.match(recording,/odysseyCheckpointWav\(file,header,bytes\)[\s\S]*odysseySdMarkVfsFailure\(\)/);
+  assert.match(recording,/fclose\(file\)!=0[\s\S]*odysseySdMarkVfsFailure\(\)/);
+  assert.match(recording,/file bytes=%ld/);
+  const task=recording.split('static void odysseyRecordTask')[1].split('bool odysseyPrepareForConnectedStreaming')[0];
+  assert.match(task,/const bool storageFault=odysseyRecordTake\(\)/);
+  assert(task.indexOf('odysseyRecording=false;')<task.indexOf('odysseySdQuiesceFaultedSession(750u)'));
+  assert.match(task,/odysseySdQuiesceFaultedSession\(750u\)/);
+  assert.match(task,/odysseySdRequestRecovery\(\)/);
 });

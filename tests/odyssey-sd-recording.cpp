@@ -33,8 +33,10 @@ uint32_t esp_random(){return ++randomCounter;}
 bool otaBusy(){return ota;}
 // Native harness records the deferred request; the production transfer worker
 // is responsible for remounting away from the touch/control task.
-int recoveryRequests=0;
+int recoveryRequests=0,vfsFailures=0,quiesceFaults=0;
 void odysseySdRequestRecovery(){++recoveryRequests;}
+void odysseySdMarkVfsFailure(){++vfsFailures;odysseySdBootState=2;}
+bool odysseySdQuiesceFaultedSession(uint32_t){++quiesceFaults;return true;}
 bool batteryCritical(){return critical;}
 void applyCpuPowerProfile(bool active){if(active)++powerActive;else ++powerIdle;}
 void updateStatusLed(bool=false){}
@@ -72,7 +74,7 @@ void reset(){
  odysseyRecording=false;odysseyStopRequested=false;deviceConnected=false;streamingEnabled=false;
  odysseyRecordingStartedAt=0;odysseyRecordFaultAt=0;
  sleepPending=critical=ota=reconnect=finalizeOnDelay=false;micOk=cardOk=allocOk=pathOk=true;odysseySdBootState=1;
- clockMs=randomCounter=0;reads=micStarts=micStops=powerActive=powerIdle=0;forcedEmptyReads=0;pendingTask=nullptr;lastPath.clear();
+ clockMs=randomCounter=0;reads=micStarts=micStops=powerActive=powerIdle=0;forcedEmptyReads=0;vfsFailures=quiesceFaults=recoveryRequests=0;pendingTask=nullptr;lastPath.clear();
  {const int rc=system("rm -rf /tmp/synap-odyssey-test");assert(rc==0);}
  assert(mkdir("/tmp/synap-odyssey-test",0755)==0);
  assert(mkdir("/tmp/synap-odyssey-test/synap",0755)==0);
