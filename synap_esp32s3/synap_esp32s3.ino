@@ -42,7 +42,7 @@ constexpr uint32_t IDLE_CPU_MHZ = 80, ACTIVE_CPU_MHZ = 240;
 #include <esp_heap_caps.h>
 #include <freertos/semphr.h>
 #include <esp_sleep.h>
-#include <Preferences.h>
+#include <nvs.h>
 #if CONFIG_IDF_TARGET_ESP32S3
 #include <driver/rtc_io.h>
 #endif
@@ -218,19 +218,21 @@ constexpr uint8_t SLEEP_STAGE_WAKE_CONFIRMED = 8;
 constexpr uint8_t SLEEP_STAGE_ABORTED = 9;
 
 bool readDurableSleepLock() {
-  Preferences prefs;
-  if (!prefs.begin(SYNAP_POWER_NAMESPACE,true)) return false;
-  const bool locked=prefs.getBool(SYNAP_SLEEP_LOCK_KEY,false);
-  prefs.end();
-  return locked;
+  nvs_handle_t handle=0;
+  if (nvs_open(SYNAP_POWER_NAMESPACE,NVS_READONLY,&handle)!=ESP_OK) return false;
+  uint8_t value=0;
+  const esp_err_t err=nvs_get_u8(handle,SYNAP_SLEEP_LOCK_KEY,&value);
+  nvs_close(handle);
+  return err==ESP_OK && value!=0;
 }
 
 bool writeDurableSleepLock(bool locked) {
-  Preferences prefs;
-  if (!prefs.begin(SYNAP_POWER_NAMESPACE,false)) return false;
-  const bool ok=prefs.putBool(SYNAP_SLEEP_LOCK_KEY,locked)==1u;
-  prefs.end();
-  return ok;
+  nvs_handle_t handle=0;
+  if (nvs_open(SYNAP_POWER_NAMESPACE,NVS_READWRITE,&handle)!=ESP_OK) return false;
+  esp_err_t err=nvs_set_u8(handle,SYNAP_SLEEP_LOCK_KEY,locked?1u:0u);
+  if (err==ESP_OK) err=nvs_commit(handle);
+  nvs_close(handle);
+  return err==ESP_OK;
 }
 esp_reset_reason_t bootResetReason = ESP_RST_UNKNOWN;
 uint32_t touchPressedAt = 0;
@@ -3035,6 +3037,7 @@ void odysseyToggleRecording() {
 // Files are deleted only after the destination has durably accepted and verified them.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 #include <esp_wifi.h>
+#include <nvs.h>
 #include <esp_event.h>
 #include <esp_netif.h>
 #include <esp_tls.h>
@@ -3144,31 +3147,40 @@ static void wifiSetStatus(uint8_t phase,const char* message,int httpStatus=0,int
 }
 
 static bool wifiLoadProfile(char* ssid,size_t ssidCap,char* password,size_t passwordCap) {
-  Preferences prefs;
-  if (!prefs.begin("synapwifi",true)) return false;
-  const String savedSsid=prefs.getString("ssid","");
-  const String savedPassword=prefs.getString("pass","");
-  prefs.end();
-  if (!savedSsid.length() || savedSsid.length()>32 || savedPassword.length()>63) return false;
-  snprintf(ssid,ssidCap,"%s",savedSsid.c_str());
-  snprintf(password,passwordCap,"%s",savedPassword.c_str());
-  return true;
+  if (!ssid || ssidCap<2 || !password || passwordCap<1) return false;
+  nvs_handle_t handle=0;
+  if (nvs_open("synapwifi",NVS_READONLY,&handle)!=ESP_OK) return false;
+  size_t ssidLength=ssidCap,passwordLength=passwordCap;
+  const esp_err_t ssidErr=nvs_get_str(handle,"ssid",ssid,&ssidLength);
+  esp_err_t passwordErr=nvs_get_str(handle,"pass",password,&passwordLength);
+  if (passwordErr==ESP_ERR_NVS_NOT_FOUND) { password[0]=0;passwordErr=ESP_OK; }
+  nvs_close(handle);
+  return ssidErr==ESP_OK && passwordErr==ESP_OK && ssid[0] &&
+    strlen(ssid)<=32 && strlen(password)<=63;
 }
 
 static bool wifiSaveProfile(const char* ssid,const char* password) {
   if (!ssid || !ssid[0] || strlen(ssid)>32 || !password || strlen(password)>63) return false;
-  Preferences prefs;
-  if (!prefs.begin("synapwifi",false)) return false;
-  const bool ok=prefs.putString("ssid",ssid)>0 &&
-    (password[0] ? prefs.putString("pass",password)>0 : (prefs.remove("pass"),true));
-  prefs.end();
+  nvs_handle_t handle=0;
+  if (nvs_open("synapwifi",NVS_READWRITE,&handle)!=ESP_OK) return false;
+  esp_err_t err=nvs_set_str(handle,"ssid",ssid);
+  if (err==ESP_OK) {
+    err=password[0] ? nvs_set_str(handle,"pass",password) : nvs_erase_key(handle,"pass");
+    if (!password[0] && err==ESP_ERR_NVS_NOT_FOUND) err=ESP_OK;
+  }
+  if (err==ESP_OK) err=nvs_commit(handle);
+  nvs_close(handle);
+  const bool ok=err==ESP_OK;
   wifiProfileConfigured=ok;
   return ok;
 }
 
 static void wifiForgetProfile() {
-  Preferences prefs;
-  if (prefs.begin("synapwifi",false)) { prefs.clear();prefs.end(); }
+  nvs_handle_t handle=0;
+  if (nvs_open("synapwifi",NVS_READWRITE,&handle)==ESP_OK) {
+    if (nvs_erase_all(handle)==ESP_OK) (void)nvs_commit(handle);
+    nvs_close(handle);
+  }
   wifiProfileConfigured=false;
 }
 
