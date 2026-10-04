@@ -16,6 +16,7 @@ constexpr int pdPASS=1;
 std::atomic<bool> odysseyRecording{false},odysseyStopRequested{false},deviceConnected{false},streamingEnabled{false};
 std::atomic<uint32_t> odysseyRecordingStartedAt{0},odysseyRecordFaultAt{0};
 bool sleepPending=false,critical=false,ota=false,micOk=true,cardOk=true,allocOk=true,reconnect=false,pathOk=true,finalizeOnDelay=false;
+int stopAfterReads=4;
 uint8_t odysseySdBootState=1;
 uint32_t clockMs=0,randomCounter=0;
 int reads=0,micStarts=0,micStops=0,powerActive=0,powerIdle=0;
@@ -46,7 +47,7 @@ struct Mic {
  size_t readBytes(char* out,size_t n){
   ++reads;clockMs+=1000;
   if(reconnect)deviceConnected=true;
-  if(reads>4){odysseyStopRequested=true;return 0;}
+  if(reads>stopAfterReads){odysseyStopRequested=true;return 0;}
   n=std::min(n,size_t(1600));
   for(size_t i=0;i<n;i+=4){uint32_t v=(i%8)?0x80000000u:0x7fff0000u;memcpy(out+i,&v,4);}
   return n;
@@ -72,7 +73,7 @@ void reset(){
  odysseyRecording=false;odysseyStopRequested=false;deviceConnected=false;streamingEnabled=false;
  odysseyRecordingStartedAt=0;odysseyRecordFaultAt=0;
  sleepPending=critical=ota=reconnect=finalizeOnDelay=false;micOk=cardOk=allocOk=pathOk=true;odysseySdBootState=1;
- clockMs=randomCounter=0;reads=micStarts=micStops=powerActive=powerIdle=vfsFailures=0;pendingTask=nullptr;lastPath.clear();
+ clockMs=randomCounter=0;reads=micStarts=micStops=powerActive=powerIdle=vfsFailures=0;stopAfterReads=4;pendingTask=nullptr;lastPath.clear();
  {const int rc=system("rm -rf /tmp/synap-odyssey-test");assert(rc==0);}
  assert(mkdir("/tmp/synap-odyssey-test",0755)==0);
  assert(mkdir("/tmp/synap-odyssey-test/synap",0755)==0);
@@ -100,6 +101,14 @@ int main(){
  assert(get32(data,24)==16000&&get32(data,28)==32000);
  assert(data[44]==0xff&&data[45]==0x7f&&data[46]==0&&data[47]==0x80);
  assert(lastPath.find("/tmp/synap-odyssey-test/synap/odyssey_audio_")==0);
+
+ // Exercise routine sector-aware draining and multiple 15-second checkpoints,
+ // not only the short final-flush path.
+ reset();stopAfterReads=40;odysseyToggleRecording();run();data=load();
+ assert(data.size()==44+32000&&get32(data,40)==32000&&get32(data,4)==32036);
+ assert(vfsFailures==0);
+ assert(odysseySdRecordFailureStage()==0);
+ assert(odysseySdRecordLastBytes()==32000);
 
  reset();reconnect=true;odysseyToggleRecording();run();data=load();
  assert(deviceConnected&&get32(data,40)==3200);
