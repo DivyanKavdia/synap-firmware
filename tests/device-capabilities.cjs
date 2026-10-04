@@ -25,7 +25,7 @@ bool batteryAvailable=false;
 struct Esp { unsigned getFlashChipSize(){return ${target.flashBytes};} unsigned getPsramSize(){return ${target.psramBytes};} } ESP;
 namespace ChakshuMedia {struct Snapshot {uint16_t ready=0,sensor=0;};Snapshot current;void copy(Snapshot& s){s=current;}}
 namespace ChakshuTransfer {bool requests=true;}
-namespace OdysseyTransfer {bool available(){return true;} bool streamAvailable(){return true;}}
+namespace OdysseyTransfer {bool available(){return true;} bool streamAvailable(){return true;} bool wifiAvailable(){return true;}}
 uint8_t sdState=0,sdProbe=0;\nuint8_t odysseySdDetectionState(){return sdState;}\nuint8_t odysseySdProbeState(){return sdProbe;}
 ${encode}
 unsigned word(const uint8_t* p){return p[0]|unsigned(p[1])<<8;}
@@ -58,7 +58,7 @@ int main(){
   assert(word(p+4)&SYNAP_CAP_SDAUDIO);
   assert(bool(word(p+6)&SYNAP_CAP_SD)==bool(sdState==1));
   assert(bool(word(p+6)&SYNAP_CAP_SDAUDIO)==bool((hardware&1) && sdState==1));
-  assert(p[14]==1 && p[15]==0 && p[16]==1);
+  assert(p[14]==1 && p[15]==0 && p[16]==3);
 #else
   assert(!(word(p+4)&SYNAP_CAP_SD));
   assert(p[14]==0 && p[15]==0 && p[16]==0);
