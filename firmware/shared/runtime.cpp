@@ -210,6 +210,7 @@ std::atomic<bool> batteryAvailable{false};
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 std::atomic<bool> odysseyRecording{false}, odysseyStopRequested{false};
 std::atomic<uint32_t> odysseyRecordingStartedAt{0}, odysseyRecordFaultAt{0};
+std::atomic<uint32_t> odysseySdSleepGuardUntil{0};
 void odysseyToggleRecording();
 bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs);
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs);
