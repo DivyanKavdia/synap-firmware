@@ -198,7 +198,7 @@ test('C3 media v2 reuses the proven eight-credit notification window with v1 fal
   assert.match(transfer,/endMediaWindow\(request,error,total,offset\)/);
   assert.match(transfer,/case 4:/,'media-v1 read must remain as fallback');
   assert.match(caps,/p\[14\]=1/);
-  assert.match(caps,/p\[16\]=OdysseyTransfer::streamAvailable\(\)\?1:0/);
+  assert.match(caps,/p\[16\]=\(OdysseyTransfer::streamAvailable\(\)\?1:0\)\|\(OdysseyTransfer::wifiAvailable\(\)\?2:0\)/);
 });
 
 test('C3 Wi-Fi bulk sync is additive, credential-scoped and preserves BLE fallbacks',()=>{
