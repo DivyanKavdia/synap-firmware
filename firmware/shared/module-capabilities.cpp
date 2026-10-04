@@ -35,7 +35,7 @@ void encodeModuleCapabilities(uint8_t* p) {
 #endif
 #if CONFIG_IDF_TARGET_ESP32C3
   if (OdysseyTransfer::available()) {
-    p[14]=OdysseyTransfer::streamAvailable()?2:1;
+    p[14]=1;
     p[16]=OdysseyTransfer::streamAvailable()?1:0;
     if (odysseySdDetectionState()==1) {
       ready|=SYNAP_CAP_SD;
