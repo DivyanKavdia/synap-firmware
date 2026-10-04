@@ -156,7 +156,7 @@ void enterRemoteStandby() {
 
 void enterDeepSleep(const char* reason) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  if (odysseyRecording.load()) return;
+  if (odysseyRecording.load() || OdysseyTransfer::wifiBusy()) return;
 #endif
   if (otaBusy() || streamingEnabled.load() || sleepPending) return;
 #if SYNAP_CHAKSHU
