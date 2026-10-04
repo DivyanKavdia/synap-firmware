@@ -155,9 +155,10 @@ test('C3 quiesces SD before OTA reboot, app restart and deep sleep',()=>{
   // down the host and sends the card nothing, which is how a reset mid-CMD18
   // left the next boot facing a bus stuck at 0x00.
   assert.match(transition,/odysseySdQuiesceLocked\(ODYSSEY_SD_QUIESCE_BUDGET_MS\)/);
-  // Failed initialization must not inject another raw recovery sequence on
-  // every reboot; only a successfully mounted session is quiesced.
-  assert.match(transition,/if \(!wasReady\)[\s\S]*without quiesce/);
+  // Only sessions that never acquired the Arduino SD host skip quiesce.
+  // Runtime VFS/write failures can be logically unready while the card is
+  // still mounted and must still receive the bounded stop/drain sequence.
+  assert.match(transition,/if \(!hostWasMounted\)[\s\S]*without quiesce/);
   // Full re-detection must not run on the way out of the process.
   assert.doesNotMatch(transition,/odysseySdBitBangRecoverLocked|odysseySdMountLocked/);
   const quiesce=detect.split('static uint8_t odysseySdQuiesceLocked')[1].split('\n}')[0];
@@ -188,6 +189,6 @@ test('C3 offline failure telemetry identifies write stage and persisted bytes',(
   assert.match(recorder,/failureStage=5/);
   assert.match(recorder,/failureStage=6/);
   assert.match(recorder,/failureStage=7/);
-  assert.match(transfer,/\"recordStage\":%u/);
-  assert.match(transfer,/\"recordBytes\":%lu/);
+  assert.match(transfer,/\\\"recordStage\\\":%u/);
+  assert.match(transfer,/\\\"recordBytes\\\":%lu/);
 });
