@@ -56,7 +56,10 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 #if CONFIG_IDF_TARGET_ESP32C3
 static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
-static constexpr uint32_t ODYSSEY_SD_INIT_FREQ_HZ=400000u;
+// Arduino-ESP32 always performs the SD protocol initialization itself at 400 kHz.
+// This value is the post-initialization data clock used by FAT/VFS. 4 MHz gives
+// continuous 16 kHz PCM writes ample headroom without pushing PCB/module wiring.
+static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=4000000u;
 static constexpr uint32_t ODYSSEY_SD_STARTUP_SETTLE_MS=3000u;
 // Preserve the known-good build-1445 lifecycle: one mount attempt per
 // explicit action. Repeating SD.end()/SPI.end()/SD.begin() autonomously on a
@@ -427,11 +430,11 @@ static uint8_t odysseySdQuiesceLocked(uint32_t budgetMs) {
   return state;
 }
 
-static bool odysseySdBeginLocked() {
+static bool odysseySdBeginLocked(bool formatIfEmpty=false) {
   ++odysseySdBeginAttempts;
   odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
-  const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,
-    ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false);
+  const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,
+    ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,formatIfEmpty);
   if (mounted) markOdysseySdBatteryDividerPresent();
   else odysseySdReleaseLocked();
   return mounted;
@@ -508,6 +511,7 @@ static uint8_t odysseySdMountReasonCode(const char* reason) {
   if (!strcmp(reason,"op14")) return 2;
   if (!strcmp(reason,"touch")) return 3;
   if (!strcmp(reason,"rearm")) return 5;
+  if (!strcmp(reason,"format")) return 6;
   return 4;
 }
 
@@ -525,7 +529,7 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   pinMode(ODYSSEY_SD_CS,OUTPUT);
   Serial.printf("[SD] %s attempt %u Arduino SPI init at %lu Hz, pins CS=%d SCK=%d MOSI=%d MISO=%d\n",
-    reason,unsigned(attempt),static_cast<unsigned long>(ODYSSEY_SD_INIT_FREQ_HZ),
+    reason,unsigned(attempt),static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ),
     ODYSSEY_SD_CS,ODYSSEY_SD_SCK,ODYSSEY_SD_MOSI,ODYSSEY_SD_MISO);
 
   bool mounted=odysseySdBeginLocked();
@@ -567,7 +571,7 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   const char* label=type==CARD_MMC?"MMC":type==CARD_SD?"SDSC":type==CARD_SDHC?"SDHC/SDXC":"unknown";
   Serial.printf("[SD] ready via proven Arduino SPI path: %s, %llu MiB, %lu Hz\n",
     label,static_cast<unsigned long long>(SD.cardSize()/(1024ULL*1024ULL)),
-    static_cast<unsigned long>(ODYSSEY_SD_INIT_FREQ_HZ));
+    static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ));
   return true;
 }
 
@@ -610,6 +614,52 @@ bool odysseyRecoverSdCard(const char* reason) {
   odysseySdBootState=0;odysseySdProbeStage=0;
   odysseySdReleaseLocked();
   return odysseySdMountLocked(reason?reason:"op14",ODYSSEY_SD_RECOVERY_ATTEMPTS);
+}
+
+bool odysseyFormatSdCard() {
+  OdysseySdGuard guard(pdMS_TO_TICKS(15000));
+  if (!guard) return false;
+
+  // Explicitly invalidate the current volume before asking Arduino FatFs to
+  // create a fresh filesystem. formatIfEmpty alone would leave a mountable but
+  // damaged volume untouched.
+  const bool cardWasMounted=SD.cardType()!=CARD_NONE;
+  if (cardWasMounted) {
+    uint8_t blankSector[512]{};
+    if (!SD.writeRAW(blankSector,0)) {
+      odysseySdBootState=2;odysseySdProbeStage=4;odysseySdLastMountError=ESP_FAIL;
+      Serial.println("[SD] format refused: could not invalidate sector 0");
+      return false;
+    }
+  }
+
+  odysseySdBootState=0;odysseySdProbeStage=0;
+  odysseySdLastMountReason=odysseySdMountReasonCode("format");
+  ++odysseySdMountAttempts;
+  odysseySdReleaseLocked();
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  pinMode(ODYSSEY_SD_CS,OUTPUT);
+
+  if (!odysseySdBeginLocked(true)) {
+    odysseySdBootState=2;odysseySdProbeStage=3;odysseySdLastMountError=ESP_FAIL;
+    Serial.println("[SD] format failed while creating/mounting FAT");
+    return false;
+  }
+  if (SD.cardType()==CARD_NONE) {
+    odysseySdBootState=3;odysseySdProbeStage=0;odysseySdLastMountError=ESP_ERR_NOT_FOUND;
+    odysseySdReleaseLocked();
+    return false;
+  }
+  if (!odysseySdValidateVfsLocked("format",1)) {
+    odysseySdReleaseLocked();
+    return false;
+  }
+
+  odysseySdLastMountError=ESP_OK;
+  odysseySdBootState=1;odysseySdProbeStage=6;
+  Serial.printf("[SD] format complete; FAT/VFS ready at %lu Hz\n",
+    static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ));
+  return true;
 }
 
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
