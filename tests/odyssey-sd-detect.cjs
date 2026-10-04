@@ -14,13 +14,13 @@ test('C3 reproduces build-1445 first mount and isolates SPI with GPIO bitbang',(
   const target=getTarget('esp32c3-supermini-4m');
   assert.deepEqual(target.hardware.sdDetection,{cs:0,sck:10,mosi:21,miso:20});
   assert.match(source,/static SPIClass odysseySdSpi\(FSPI\)/);
-  assert.match(source,/ODYSSEY_SD_INIT_FREQ_HZ=400000u/);
+  assert.match(source,/ODYSSEY_SD_DATA_FREQ_HZ=4000000u/);
   assert.match(source,/ODYSSEY_SD_STARTUP_SETTLE_MS=3000u/);
   assert.match(source,/now<ODYSSEY_SD_STARTUP_SETTLE_MS/);
   assert.match(source,/startup settle %lu ms before first transaction/);
   assert.match(source,/ODYSSEY_SD_MAX_OPEN_FILES=1/);
   assert.doesNotMatch(source,/ODYSSEY_SD_RESCUE_FREQ_HZ/);
-  assert.match(source,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,/);
+  assert.match(source,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
   assert.match(source,/ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false/);
   assert.match(source,/odysseySdBitBangTransfer/);
   assert.match(source,/odysseySdBitBangCommand\(0u,0u,0x95u\)/);
@@ -87,6 +87,9 @@ test('C3 hard init failures expose direct GPIO probe and never format media',()=
   assert.match(transfer,/bbCmd8/);
   assert.match(transfer,/bbR7/);
   assert.doesNotMatch(source,/format_if_mount_failed=true/);
+  assert.match(source,/bool odysseyFormatSdCard\(\)/);
+  assert.match(source,/SD\.writeRAW\(blankSector,0\)/);
+  assert.match(source,/odysseySdBeginLocked\(true\)/);
 });
 
 test('production build preserves the stock Arduino 3.3.5 SD initializer used by build 1445',()=>{
