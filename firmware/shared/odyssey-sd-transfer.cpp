@@ -341,11 +341,6 @@ static uint8_t wifiStageChunk(uint32_t offset,const char* chunk,uint32_t& total)
   return OK;
 }
 
-static bool secureEndpoint(const char* endpoint) {
-  if (!endpoint || strncmp(endpoint,"https://",8)!=0 || strlen(endpoint)>180) return false;
-  return !strchr(endpoint,'?') && !strchr(endpoint,'#') && !strchr(endpoint,'@');
-}
-
 static bool jsonUInt(const char* json,const char* key,uint32_t& value) {
   if (!json || !key) return false;
   char pattern[48];snprintf(pattern,sizeof(pattern),"\"%s\":",key);
