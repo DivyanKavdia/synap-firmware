@@ -74,7 +74,8 @@ test('C3 SD readiness validates directory and writable media before publishing r
   assert.match(sd,/FILE\* probe=fopen\(probePath,"wb"\)/);
   assert.match(sd,/!writeOk \|\| !closeOk \|\| !removeOk/);
   assert(sd.indexOf('DIR* verified=opendir')<sd.indexOf('odysseySdBootState=1;\n  odysseySdProbeStage=6;'));
-  assert.match(sd,/ODYSSEY_SD_INIT_FREQ_HZ=400000u/);
+  assert.match(sd,/ODYSSEY_SD_DATA_FREQ_HZ=4000000u/);
+  assert.match(sd,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
 });
 test('C3 catalogue failure is observational and never auto-remounts',()=>{
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
@@ -91,10 +92,14 @@ test('C3 PWA connection is acknowledged by three visible green flashes',()=>{
   assert.match(led,/elapsed<1500u && elapsed%500u<180u\) g=LED_DIM\+5/);
 });
 
-test('C3 failed mount reports compatibility diagnostics without formatting or deleting WAVs',()=>{
+test('C3 failed mount never formats implicitly and still reports compatibility diagnostics',()=>{
   const detect=read('firmware/shared/odyssey-sd-detect.cpp');
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
-  assert.match(detect,/ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false/);
+  const normalMount=detect.split('static bool odysseySdMountOnceLocked')[1].split('static bool odysseySdMountLocked')[0];
+  const explicitFormat=detect.split('bool odysseyFormatSdCard()')[1].split('bool odysseyPrepareSdForPowerTransition')[0];
+  assert.match(normalMount,/odysseySdBeginLocked\(\)/);
+  assert.doesNotMatch(normalMount,/odysseySdBeginLocked\(true\)/);
+  assert.match(explicitFormat,/odysseySdBeginLocked\(true\)/);
   assert.match(detect,/odysseySdLastMountError=ESP_FAIL/);
   assert.match(detect,/odysseySdBootState=2;odysseySdProbeStage=2/);
   assert.match(transfer,/espErr/);
