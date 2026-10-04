@@ -217,6 +217,9 @@ test('C3 Wi-Fi bulk sync is additive, credential-scoped and preserves BLE fallba
   assert.match(transfer,/\/v1\/device-uploads\/%s\/segments\/%lu/);
   assert.match(transfer,/wifiStatusRequest\(job,next,finalized,httpStatus\)/);
   assert.match(transfer,/if \(unlink\(full\)!=0\)/,'source deletion must happen only after cloud verification');
+  const finalized=transfer.split('if (finalized) {')[1].split('wifiUploadedBytes=')[0];
+  assert(finalized.indexOf('fclose(file)')<finalized.indexOf('unlink(full)'),
+    'already-finalized recovery must close the WAV before deleting its SD path');
   assert.match(transfer,/case 12: streamWindow\(request\); continue;/,'fast BLE fallback remains');
   assert.match(transfer,/case 4:/,'legacy BLE fallback remains');
   assert.match(caps,/OdysseyTransfer::wifiAvailable\(\)\?2:0/);
