@@ -58,29 +58,19 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(c3,/physical touch requested software recovery/);
   assert.match(c3,/!odysseySdReady\(\)/);
   assert.match(c3,/ready\|=SYNAP_CAP_SDAUDIO/);
-  assert.match(c3,/static SPIClass odysseySdSpi\(FSPI\)/);
-  // Preserve the known-good build-1445 lifecycle: one attempt per explicit
-  // action. Automatic teardown/re-init loops are forbidden.
-  assert.match(c3,/ODYSSEY_SD_BOOT_ATTEMPTS=1/);
-  assert.match(c3,/ODYSSEY_SD_RECOVERY_ATTEMPTS=1/);
-  assert.doesNotMatch(c3,/ODYSSEY_SD_ATTEMPT_SETTLE_MS|odysseySdConsumeAutoRearm|scheduled re-arm/);
-  // The host must stop the card before it stops existing, or the next boot
-  // inherits a bus that answers 0x00 to every command.
-  assert.match(c3,/static uint8_t odysseySdQuiesceLocked\(uint32_t budgetMs\)/);
-  assert.match(c3,/odysseySdQuiesceLocked\(ODYSSEY_SD_QUIESCE_BUDGET_MS\)/);
-  assert.doesNotMatch(c3,/Do not inject recovery commands during reset/);
-  // CS is driven high before it is made an output, as build 1445 did. Assert it
-  // inside the mount path specifically: odysseySdReleaseLocked already had the
-  // right order, so an unscoped match would pass without the mount being fixed.
-  const mountOnce=c3.split('static bool odysseySdMountOnceLocked')[1].split('\n}')[0];
-  assert.match(mountOnce,/digitalWrite\(ODYSSEY_SD_CS,HIGH\);\s*\n\s*pinMode\(ODYSSEY_SD_CS,OUTPUT\);/);
-  assert.doesNotMatch(mountOnce,/pinMode\(ODYSSEY_SD_CS,OUTPUT\);\s*\n\s*digitalWrite\(ODYSSEY_SD_CS,HIGH\);/);
-  // No autonomous remount after a failed boot; recovery is explicit.
-  assert.doesNotMatch(c3,/odysseySdConsumeAutoRearm|scheduled re-arm after failed boot mount/);
-  assert.match(c3,/static void odysseySdSampleRawLocked\(\)/);
-  assert.match(c3,/ODYSSEY_SD_DATA_FREQ_HZ=4000000u/);
-  assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
-  assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|spi_bus_initialize/);
+  const sdBackend=c3.split('// Odyssey S3 remains detection-only')[0];
+  assert.match(sdBackend,/SDSPI_HOST_DEFAULT\(\)/);
+  assert.match(sdBackend,/ODYSSEY_SD_MAX_FREQ_KHZ=4000u/);
+  assert.match(sdBackend,/spi_bus_initialize\(SPI2_HOST,&bus,SDSPI_DEFAULT_DMA\)/);
+  assert.match(sdBackend,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT/);
+  assert.match(sdBackend,/esp_vfs_fat_sdcard_unmount\(ODYSSEY_SD_MOUNT_POINT,odysseySdCard\)/);
+  assert.match(sdBackend,/spi_bus_free\(SPI2_HOST\)/);
+  assert.doesNotMatch(sdBackend,/SPIClass|SD\.begin|SD\.end|BitBang|digitalRead\(ODYSSEY_SD_MISO\)/);
+  assert.match(sdBackend,/odysseySdMountLocked\("boot",1\)/);
+  assert.match(sdBackend,/odysseySdMountLocked\(reason\?reason:"op14",1\)/);
+  assert.doesNotMatch(sdBackend,/odysseySdConsumeAutoRearm|scheduled re-arm/);
+  assert.match(sdBackend,/config\.format_if_mount_failed=formatIfMountFailed/);
+  assert.match(sdBackend,/odysseySdBeginLocked\(true\)/);
   assert.match(c3,/Normal PWA reads are observational only\. Only operation 14 may remount/);
   const transferInit=c3.indexOf('OdysseyTransfer::initialize();');
   const sdBoot=c3.indexOf('odysseyInitializeSdCardBeforeBle();',transferInit);
@@ -107,18 +97,18 @@ test('release workflow compiles the shared complete production pipeline',()=>{
   assert.match(workflow,/arduino-cli core install esp32:esp32@3\.3\.5/);
   assert.doesNotMatch(workflow,/patch-arduino-sd\.cjs|SYNAP_ARDUINO_SD_SRC/);
 });
-test('C3 exact Arduino first mount precedes BLE while GPIO fallback remains post-failure only',()=>{
+test('C3 IDF SDSPI mount precedes BLE and retains the guarded VFS storage API',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   const worker=c3.indexOf('OdysseyTransfer::initialize();');
   const sd=c3.indexOf('odysseyInitializeSdCardBeforeBle();',worker);
   const ble=c3.indexOf('initializeBLE();',sd);
   assert(worker>0 && sd>worker && ble>sd,'C3 must reproduce 1445 worker -> mount -> BLE ordering');
-  assert(c3.indexOf('bool mounted=odysseySdBeginLocked();')<c3.indexOf('odysseySdBitBangRecoverLocked(reason)'));
-  assert.match(c3,/static SPIClass odysseySdSpi\(FSPI\)/);
-  assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
-  assert.match(c3,/SD\.end\(\)/);
-  assert.match(c3,/odysseySdSpi\.end\(\)/);
-  assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|spi_bus_initialize|spi_bus_free/);
+  assert.match(c3,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT/);
+  assert.match(c3,/spi_bus_initialize\(SPI2_HOST,&bus,SDSPI_DEFAULT_DMA\)/);
+  assert.match(c3,/esp_vfs_fat_sdcard_unmount\(ODYSSEY_SD_MOUNT_POINT,odysseySdCard\)/);
+  assert.match(c3,/spi_bus_free\(SPI2_HOST\)/);
+  const c3Backend=c3.split('// Odyssey S3 remains detection-only')[0];
+  assert.doesNotMatch(c3Backend,/SPIClass|SD\.begin|SD\.end|BitBang|digitalRead\(ODYSSEY_SD_MISO\)/);
   assert.match(c3,/OdysseySdGuard/);
   assert.match(c3,/fopen\(fullPath,"wb\+"\)/);
   assert.match(c3,/opendir\(directoryPath\)/);
