@@ -1,5 +1,5 @@
 'use strict';
-const {test}=require('node:test'),fs=require('node:fs');
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs');
 const {nativeTest}=require('./support/native.cjs');
 test('C3 local WAV preserves PCM, destination and final header across stop, reconnect and failures',()=>{
  const source=fs.readFileSync('firmware/shared/odyssey-sd-recording.cpp','utf8');
