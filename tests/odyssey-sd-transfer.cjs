@@ -8,11 +8,9 @@ const catalog=require('../devices/catalog.json');
 const c3=catalog.devices.find(device=>device.id==='esp32c3-supermini-4m');
 
 assert(c3.features.includes('sd'),'C3 must advertise SD support');
-assert.equal(c3.protocols?.media,1,'catalogue keeps media-v1 as the compatibility floor');
+assert.equal(c3.protocols?.media,1,'C3 must advertise media-v1');
 assert.match(runtime,/namespace OdysseyTransfer/);
 assert.match(caps,/p\[14\]=1/);
-assert.match(caps,/OdysseyTransfer::streamAvailable\(\)\?1:0/);
-assert.match(caps,/OdysseyTransfer::wifiAvailable\(\)\?2:0/);
 assert.match(caps,/ready\|=SYNAP_CAP_SD/);
 assert.match(source,/odysseyRecording\.load\(\) \|\| streamingEnabled\.load\(\) \|\| otaBusy\(\)/);
 assert.match(source,/case 7:\s*error=catalogue\(total\)/);

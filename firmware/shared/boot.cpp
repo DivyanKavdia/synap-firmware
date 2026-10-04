@@ -25,7 +25,7 @@ void initializeBLE() {
   controlCharacteristic->addDescriptor(new BLE2902());
   eventCharacteristic->addDescriptor(new BLE2902());
 #endif
-  // NimBLE creates CCCDs itself. Descriptor notification state is NOT a
+  // NimBLE creates CCCDs itself. BLE2902::getNotifications() is NOT a
   // subscription test under NimBLE; do not use it to gate START.
   auto* deviceIdentity = service->createCharacteristic(DEVICE_ID_UUID, BLECharacteristic::PROPERTY_READ);
   deviceIdentity->setValue(synapDeviceId);

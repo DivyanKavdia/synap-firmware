@@ -37,8 +37,6 @@ test('C3 retains current guarded POSIX recording and verified sync runtime',()=>
   assert.match(source,/SD\.end\(\)/);
   assert.match(source,/odysseySdSpi\.end\(\)/);
   assert.match(source,/odysseySdValidateVfsLocked/);
-  assert.match(source,/odysseySdMountedSession\{false\}/);
-  assert.match(source,/odysseySdQuiesceFaultedSession/);
   assert.match(source,/opendir\(ODYSSEY_SD_RECORDING_DIR\)/);
   assert.match(source,/\.synap-media-probe\.tmp/);
   assert.match(recording,/fopen\(fullPath,"wb\+"\)/);

@@ -37,7 +37,6 @@ uint32_t millis(){return clockMs;}
 int digitalRead(int pin){assert(pin==TOUCH_INPUT_PIN);return timedInput ? uint32_t(clockMs-wakeStart)<releaseAfter : input;}
 void delay(uint32_t ms){clockMs+=ms;}
 bool otaBusy(){return busy;}
-namespace OdysseyTransfer { bool wifiBusy(){return false;} }
 bool readDurableSleepLock(){return durableLock;}
 bool writeDurableSleepLock(bool value){
   if(!clearSucceeds)return false;

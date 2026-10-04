@@ -134,7 +134,7 @@ bool exitRemoteStandby() {
 
 void enterRemoteStandby() {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  if (odysseyRecording.load() || OdysseyTransfer::wifiBusy()) return;
+  if (odysseyRecording.load()) return;
 #endif
   if (sleepPending) return;
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
@@ -156,7 +156,7 @@ void enterRemoteStandby() {
 
 void enterDeepSleep(const char* reason) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  if (odysseyRecording.load() || OdysseyTransfer::wifiBusy()) return;
+  if (odysseyRecording.load()) return;
 #endif
   if (otaBusy() || streamingEnabled.load() || sleepPending) return;
 #if SYNAP_CHAKSHU
@@ -298,7 +298,7 @@ void pollTouchControl() {
 
   if (deepSleepAfterStop && !streaming && !raw && !otaBusy()
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-      && !odysseyRecording.load() && !OdysseyTransfer::wifiBusy()
+      && !odysseyRecording.load()
 #endif
   ) {
     deepSleepAfterStop=false;

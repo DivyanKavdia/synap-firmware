@@ -3,11 +3,11 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const root=path.resolve(__dirname,'..'),read=p=>fs.readFileSync(path.join(root,p),'utf8');
 test('C3 SD mutex is released before a recording task deletes itself',()=>{
   const source=read('firmware/shared/odyssey-sd-recording.cpp');
-  const take=source.split('static bool odysseyRecordTake() {')[1].split('static void odysseyRecordTask(void*) {')[0];
+  const take=source.split('static void odysseyRecordTake() {')[1].split('static void odysseyRecordTask(void*) {')[0];
   const task=source.split('static void odysseyRecordTask(void*) {')[1].split('bool odysseyPrepareForConnectedStreaming')[0];
   assert.match(take,/OdysseySdGuard storage;/);
   assert.doesNotMatch(take,/vTaskDelete/);
-  assert.match(task,/const bool storageFault=odysseyRecordTake\(\);[\s\S]*odysseyRecording=false;[\s\S]*vTaskDelete\(nullptr\)/);
+  assert.match(task,/odysseyRecordTake\(\);[\s\S]*odysseyRecording=false;[\s\S]*vTaskDelete\(nullptr\)/);
 });
 test('C3 reconnect never stops SD capture; START performs explicit handoff',()=>{
   const ble=read('firmware/shared/ble-control.cpp');
@@ -64,7 +64,7 @@ test('C3 offline recording has visible purple heartbeat and failed-start feedbac
   assert.match(led,/uint32_t\(now-odysseyRecordFaultAt\.load\(\)\)<6000u/);
   assert.match(led,/phase<140u \|\| \(phase>=260u && phase<400u\)/);
   assert.match(recorder,/odysseyRecordingStartedAt=millis\(\);[\s\S]*?odysseyRecording=true/);
-  assert.match(recorder,/if \(failed \|\| bytes==0 \|\| finalSize<=long\(sizeof\(header\)\)\) odysseyRecordFaultAt=millis\(\)/);
+  assert.match(recorder,/if \(failed \|\| bytes==0\) odysseyRecordFaultAt=millis\(\)/);
   assert.match(recorder,/odysseySdRequestRecovery\(\);\s*odysseyRecordFaultAt=millis\(\)/);
 });
 
@@ -76,13 +76,12 @@ test('C3 SD readiness validates directory and writable media before publishing r
   assert(sd.indexOf('DIR* verified=opendir')<sd.indexOf('odysseySdBootState=1;\n  odysseySdProbeStage=6;'));
   assert.match(sd,/ODYSSEY_SD_INIT_FREQ_HZ=400000u/);
 });
-test('C3 catalogue failure quiesces the mounted session without auto-remounting',()=>{
+test('C3 catalogue failure is observational and never auto-remounts',()=>{
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
   assert.match(transfer,/case 7:[\s\S]*?error=catalogue\(total\)/);
   const catalogueCase=transfer.split('case 7:')[1].split('case 8:')[0];
   assert.doesNotMatch(catalogueCase,/odysseyRecoverSdCard\(/);
   assert.match(catalogueCase,/odysseySdMarkVfsFailure\(\)/);
-  assert.match(catalogueCase,/odysseySdQuiesceFaultedSession\(750u\)/);
   assert.match(transfer,/case 14:[\s\S]*odysseyRecoverSdCard\("op14"\)/);
   assert.match(transfer,/sdProbe/);
 });
@@ -151,12 +150,9 @@ test('C3 quiesces SD before OTA reboot, app restart and deep sleep',()=>{
   // down the host and sends the card nothing, which is how a reset mid-CMD18
   // left the next boot facing a bus stuck at 0x00.
   assert.match(transition,/odysseySdQuiesceLocked\(ODYSSEY_SD_QUIESCE_BUDGET_MS\)/);
-  // Runtime readiness may fall after EIO; mounted-session ownership survives.
-  assert.match(detect,/odysseySdMountedSession\{false\}/);
-  assert.match(detect,/odysseySdMountedSession=true;[\s\S]*odysseySdValidateVfsLocked/);
-  assert.match(transition,/odysseySdMountedSession\.exchange\(false\)/);
-  assert.match(transition,/if \(!hadMountedSession\)[\s\S]*without quiesce/);
-  assert.doesNotMatch(transition,/const bool wasReady=odysseySdReady\(\)/);
+  // Failed initialization must not inject another raw recovery sequence on
+  // every reboot; only a successfully mounted session is quiesced.
+  assert.match(transition,/if \(!wasReady\)[\s\S]*without quiesce/);
   // Full re-detection must not run on the way out of the process.
   assert.doesNotMatch(transition,/odysseySdBitBangRecoverLocked|odysseySdMountLocked/);
   const quiesce=detect.split('static uint8_t odysseySdQuiesceLocked')[1].split('\n}')[0];
@@ -169,69 +165,4 @@ test('C3 quiesces SD before OTA reboot, app restart and deep sleep',()=>{
   assert.match(ota,/otaSession\.state==Synap::COMMITTED[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*ESP\.restart\(\)/);
   assert.match(ble,/CMD_RESTART:[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*ESP\.restart\(\)/);
   assert.match(power,/entering deep sleep request=[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*esp_deep_sleep_start\(\)/);
-});
-
-test('C3 offline storage faults are marked, cleaned up after guard release and rearmed once',()=>{
-  const recording=read('firmware/shared/odyssey-sd-recording.cpp');
-  assert.match(recording,/static bool odysseyRecordTake\(\)/);
-  assert.match(recording,/fwrite\(header,1,sizeof\(header\),file\).*fflush\(file\)/s);
-  assert.match(recording,/written!=sizeof\(pcm\)[\s\S]*odysseySdMarkVfsFailure\(\)/);
-  assert.match(recording,/odysseyCheckpointWav\(file,header,bytes\)[\s\S]*odysseySdMarkVfsFailure\(\)/);
-  assert.match(recording,/fclose\(file\)!=0[\s\S]*odysseySdMarkVfsFailure\(\)/);
-  assert.match(recording,/file bytes=%ld/);
-  const task=recording.split('static void odysseyRecordTask')[1].split('bool odysseyPrepareForConnectedStreaming')[0];
-  assert.match(task,/const bool storageFault=odysseyRecordTake\(\)/);
-  assert(task.indexOf('odysseyRecording=false;')<task.indexOf('odysseySdQuiesceFaultedSession(750u)'));
-  assert.match(task,/odysseySdQuiesceFaultedSession\(750u\)/);
-  assert.match(task,/odysseySdRequestRecovery\(\)/);
-});
-
-test('C3 media v2 reuses the proven eight-credit notification window with v1 fallback',()=>{
-  const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
-  const caps=read('firmware/shared/module-capabilities.cpp');
-  assert.match(transfer,/4fa1235a-0000-1000-8000-00805f9b34fb/);
-  assert.match(transfer,/case 12: streamWindow\(request\); continue;/);
-  assert.match(transfer,/request\.operation==16[\s\S]*\+\+cancelWindow/);
-  assert.match(transfer,/count<8/);
-  assert.match(transfer,/fopen\(full,"rb"\)[\s\S]*for \(uint8_t count=0;!error && count<8/);
-  assert.match(transfer,/sendMediaPacket\(request,1,OK,total,offset,bytes,size\)/);
-  assert.match(transfer,/endMediaWindow\(request,error,total,offset\)/);
-  assert.match(transfer,/case 4:/,'media-v1 read must remain as fallback');
-  assert.match(caps,/p\[14\]=1/);
-  assert.match(caps,/p\[16\]=\(OdysseyTransfer::streamAvailable\(\)\?1:0\)\|\(OdysseyTransfer::wifiAvailable\(\)\?2:0\)/);
-});
-
-test('C3 Wi-Fi bulk sync is additive, credential-scoped and preserves BLE fallbacks',()=>{
-  const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
-  const caps=read('firmware/shared/module-capabilities.cpp');
-  assert.match(transfer,/#include <esp_wifi\.h>/);
-  assert.match(transfer,/esp_wifi_connect\(\)/);
-  assert.match(transfer,/IP_EVENT_STA_GOT_IP/);
-  assert.doesNotMatch(transfer,/#include <WiFi\.h>|WiFi\./,'C3 bulk sync should not link the Arduino Wi-Fi wrapper');
-  assert.doesNotMatch(transfer,/Preferences\b|Preferences\.h/,'C3 Wi-Fi profile should use native NVS');
-  assert.match(transfer,/nvs_open\("synapwifi",NVS_READONLY/);
-  assert.match(transfer,/nvs_set_str\(handle,"ssid",ssid\)/);
-  assert.match(transfer,/#include <esp_tls\.h>/);
-  assert.match(transfer,/cfg\.cacert_buf=reinterpret_cast<const unsigned char\*>\(SYNAP_GTS_ROOTS\)/,
-    'HTTPS must verify the Google Trust Services root chain');
-  assert.match(transfer,/cfg\.common_name=target\.host/,'HTTPS must verify the requested backend hostname');
-  assert.match(transfer,/esp_tls_conn_new_sync/);
-  assert.match(transfer,/GTSIFJvb3QgUjE|R1RTIFJvb3QgUjE/,'pinned trust store must include GTS Root R1');
-  assert.doesNotMatch(transfer,/setInsecure|skip_cert_common_name_check\s*=\s*true|skip_common_name\s*=\s*true/);
-  assert.match(transfer,/WIFI_SEGMENT_MS=120000/);
-  assert.match(transfer,/case 23: error=wifiStageChunk/);
-  assert.match(transfer,/case 24: error=wifiCommit/);
-  assert.match(transfer,/case 25: error=wifiStatusReply/);
-  assert.match(transfer,/case 26:/);
-  assert.match(transfer,/Authorization/);
-  assert.match(transfer,/SynapDevice %s/);
-  assert.match(transfer,/\/v1\/device-uploads\/%s\/segments\/%lu/);
-  assert.match(transfer,/wifiStatusRequest\(job,next,finalized,httpStatus\)/);
-  assert.match(transfer,/if \(unlink\(full\)!=0\)/,'source deletion must happen only after cloud verification');
-  const finalized=transfer.split('if (finalized) {')[1].split('wifiUploadedBytes=')[0];
-  assert(finalized.indexOf('fclose(file)')<finalized.indexOf('unlink(full)'),
-    'already-finalized recovery must close the WAV before deleting its SD path');
-  assert.match(transfer,/case 12: streamWindow\(request\); continue;/,'fast BLE fallback remains');
-  assert.match(transfer,/case 4:/,'legacy BLE fallback remains');
-  assert.match(caps,/OdysseyTransfer::wifiAvailable\(\)\?2:0/);
 });

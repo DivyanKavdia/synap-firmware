@@ -8,9 +8,7 @@ function materializeBle(source) {
   // C3 SD transfer is compile-time dead on Chakshu. Remove it before the
   // NimBLE adapter validates live Bluetooth APIs, otherwise Bluedroid-only
   // calls inside the C3 block are falsely reported as Chakshu API leaks.
-  const c3Header='// Odyssey C3 SD media: verified BLE transfer plus direct Wi-Fi cloud upload.';
-  const c3HeaderAt=out.indexOf(c3Header);
-  const c3Start=c3HeaderAt<0 ? -1 : out.indexOf('#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU\n',c3HeaderAt);
+  const c3Start=out.indexOf('#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU\nnamespace OdysseyTransfer {');
   const c3EndMarker='} // namespace OdysseyTransfer\n#endif\n';
   if(c3Start<0)throw Error('Missing Odyssey C3 transfer block');
   const c3End=out.indexOf(c3EndMarker,c3Start);

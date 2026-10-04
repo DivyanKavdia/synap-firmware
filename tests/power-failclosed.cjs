@@ -9,8 +9,7 @@ function productionS3(){return fs.readFileSync(path.join(root,'synap_esp32s3/syn
 
 test('S3 deep sleep is fail-closed before BLE teardown',()=>{
   const s3=productionS3();
-  assert.match(s3,/#include <nvs\.h>/);
-  assert.match(s3,/nvs_set_u8\(handle,SYNAP_SLEEP_LOCK_KEY,locked\?1u:0u\)/);
+  assert.match(s3,/#include <Preferences\.h>/);
   assert.match(s3,/SYNAP_SLEEP_LOCK_KEY\[\] = "sleep-lock"/);
   assert.match(s3,/writeDurableSleepLock\(true\)/);
   assert.match(s3,/synapDeepSleepMarker=SYNAP_DEEP_SLEEP_MARKER/);

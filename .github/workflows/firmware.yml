@@ -65,22 +65,7 @@ jobs:
           test "$build" -le 65535
           mkdir -p compiled-chakshu bundle/xiao-esp32s3-sense-8m compiled-s3 compiled-c3 bundle/esp32s3-fh4r2-qspi-4m bundle/esp32c3-supermini-4m bundle/source-sync
           arduino-cli compile --fqbn 'esp32:esp32:esp32s3:FlashSize=4M,PartitionScheme=default,PSRAM=enabled,USBMode=hwcdc,CDCOnBoot=cdc' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build -DUSE_REAL_I2S_MIC=1" --output-dir compiled-s3 prepared/synap_esp32s3
-          c3_status=0
-          arduino-cli compile --fqbn 'esp32:esp32:esp32c3:FlashSize=4M,PartitionScheme=default,CDCOnBoot=cdc' --build-property "compiler.optimization_flags=-Oz -flto -ffunction-sections -fdata-sections" --build-property "compiler.c.extra_flags=-flto -fno-unwind-tables -fno-asynchronous-unwind-tables -DMYNEWT_VAL_BLE_ROLE_CENTRAL=0 -DMYNEWT_VAL_BLE_ROLE_OBSERVER=0 -DMYNEWT_VAL_BLE_MAX_CONNECTIONS=1" --build-property "compiler.cpp.extra_flags=-flto -fno-rtti -fno-exceptions -fno-threadsafe-statics -fno-use-cxa-atexit -fno-unwind-tables -fno-asynchronous-unwind-tables -DMYNEWT_VAL_BLE_ROLE_CENTRAL=0 -DMYNEWT_VAL_BLE_ROLE_OBSERVER=0 -DMYNEWT_VAL_BLE_MAX_CONNECTIONS=1 -DSYNAP_BUILD=$build -DUSE_REAL_I2S_MIC=1" --build-property "compiler.c.elf.extra_flags=-flto -Wl,--gc-sections" --output-dir compiled-c3 prepared/synap_esp32c3 || c3_status=$?
-          if [ "$c3_status" -ne 0 ]; then
-            c3_elf="$(find compiled-c3 -maxdepth 1 -type f -name '*.elf' -print -quit)"
-            rv_nm="$(find "$HOME/.arduino15/packages/esp32/tools" -type f -name 'riscv32-esp-elf-nm' -print -quit)"
-            rv_size="$(find "$HOME/.arduino15/packages/esp32/tools" -type f -name 'riscv32-esp-elf-size' -print -quit)"
-            if [ -n "$c3_elf" ] && [ -x "$rv_size" ]; then
-              echo '--- C3 ELF section sizes ---'
-              "$rv_size" -A "$c3_elf" || true
-            fi
-            if [ -n "$c3_elf" ] && [ -x "$rv_nm" ]; then
-              echo '--- C3 largest linked symbols ---'
-              "$rv_nm" --print-size --size-sort --radix=d --demangle "$c3_elf" | tail -n 180 || true
-            fi
-            exit "$c3_status"
-          fi
+          arduino-cli compile --fqbn 'esp32:esp32:esp32c3:FlashSize=4M,PartitionScheme=default,CDCOnBoot=cdc' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build -DUSE_REAL_I2S_MIC=1" --output-dir compiled-c3 prepared/synap_esp32c3
           arduino-cli compile --fqbn 'esp32:esp32:esp32s3:FlashSize=8M,PartitionScheme=default_8MB,PSRAM=opi,USBMode=hwcdc,CDCOnBoot=cdc' --build-property "compiler.optimization_flags=-Oz -ffunction-sections -fdata-sections" --build-property "compiler.c.extra_flags=-fno-unwind-tables -fno-asynchronous-unwind-tables" --build-property "compiler.cpp.extra_flags=-fno-unwind-tables -fno-asynchronous-unwind-tables -DSYNAP_BUILD=$build -DUSE_REAL_I2S_MIC=1" --build-property "compiler.c.elf.extra_flags=-Wl,--gc-sections" --output-dir compiled-chakshu prepared/synap_chakshu
           test "$(stat -c%s compiled-chakshu/synap_chakshu.ino.bin)" -le 3342336
           node tools/release.cjs compiled-chakshu/synap_chakshu.ino.bin "$build" "$GITHUB_SHA" bundle/xiao-esp32s3-sense-8m "$SYNAP_RELEASE_BRANCH" prepared/synap_chakshu/synap_chakshu.ino xiao-esp32s3-sense-8m
