@@ -32,7 +32,7 @@ test('C3 reproduces build-1445 first mount and isolates SPI with GPIO bitbang',(
   assert.match(source,/digitalRead\(ODYSSEY_SD_MISO\)/);
   assert(source.indexOf('bool mounted=odysseySdBeginLocked();')<source.indexOf('odysseySdBitBangRecoverLocked(reason)'));
   assert.doesNotMatch(source,/odysseySdHoldBusIdleEarly|odysseySdRearmProtocolLocked|odysseySdStopWriteLocked/);
-  assert.match(source,/if \(mounted\) markOdysseySdBatteryDividerPresent\(\)/);
+  assert.match(source,/if \(mounted\) \{[\s\S]*odysseySdHostMounted=true;[\s\S]*markOdysseySdBatteryDividerPresent\(\)/);
   assert.match(boot,/OdysseyTransfer::initialize\(\);[\s\S]*odysseyInitializeSdCardBeforeBle\(\);/);
   assert.doesNotMatch(boot,/odysseySdHoldBusIdleEarly/);
   assert.match(boot,/odysseyInitializeSdCardBeforeBle\(\);[\s\S]*if \(odysseySdBatteryDividerPresent\(\)\) sampleBattery\(true\);/);
