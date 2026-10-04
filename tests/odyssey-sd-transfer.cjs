@@ -23,10 +23,13 @@ assert.match(source,/TRANSFER_STACK_BYTES=8192/,'C3 SD transfer needs an 8 KiB w
 assert.match(source,/xTaskCreate\(worker,"odyssey-sd",TRANSFER_STACK_BYTES/);
 assert.match(source,/case 17: error=removeFile\(request\.path\)/);
 assert.match(source,/case 18:/);
+assert.match(source,/case 19:/);
+assert.match(source,/odysseyFormatSdCard\(\)/);
+assert.match(caps,/p\[16\]\|=4/);
 assert.match(source,/\/synap\//);
 assert.match(source,/opendir\(directoryPath\)/);
 assert.match(source,/fopen\(full,"rb"\)/);
 assert.match(source,/unlink\(full\)/);
 assert.match(source,/OdysseySdGuard guard/);
 assert.doesNotMatch(source,/\bSD\.|\bFile\b|format_if_empty/);
-console.log('PASS: Odyssey C3 exposes VFS-backed SD catalogue, verified-delete endpoint and non-formatting clear action.');
+console.log('PASS: Odyssey C3 exposes VFS-backed SD catalogue, verified-delete, non-formatting clear, and explicit format actions.');
