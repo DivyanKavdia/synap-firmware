@@ -171,3 +171,23 @@ test('C3 quiesces SD before OTA reboot, app restart and deep sleep',()=>{
   assert.match(ble,/CMD_RESTART:[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*ESP\.restart\(\)/);
   assert.match(power,/entering deep sleep request=[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*esp_deep_sleep_start\(\)/);
 });
+
+test('C3 runtime VFS failure is still quiesced before sleep or restart',()=>{
+  const detect=read('firmware/shared/odyssey-sd-detect.cpp');
+  assert.match(detect,/std::atomic<bool> odysseySdHostMounted\{false\}/);
+  assert.match(detect,/if \(mounted\) \{[\s\S]*odysseySdHostMounted=true/);
+  assert.match(detect,/const bool hostWasMounted=odysseySdHostMounted\.load\(\)/);
+  assert.match(detect,/if \(!hostWasMounted\)[\s\S]*without quiesce/);
+  assert.match(detect,/host=1 quiesced=/);
+  assert.doesNotMatch(detect,/if \(!wasReady\) \{[\s\S]*without quiesce/);
+});
+test('C3 offline failure telemetry identifies write stage and persisted bytes',()=>{
+  const recorder=read('firmware/shared/odyssey-sd-recording.cpp');
+  const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
+  assert.match(recorder,/odysseyRecordFailureStage/);
+  assert.match(recorder,/failureStage=5/);
+  assert.match(recorder,/failureStage=6/);
+  assert.match(recorder,/failureStage=7/);
+  assert.match(transfer,/\"recordStage\":%u/);
+  assert.match(transfer,/\"recordBytes\":%lu/);
+});
