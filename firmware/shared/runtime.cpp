@@ -6,7 +6,7 @@
 #include <esp_heap_caps.h>
 #include <freertos/semphr.h>
 #include <esp_sleep.h>
-#include <Preferences.h>
+#include <nvs.h>
 #if CONFIG_IDF_TARGET_ESP32S3
 #include <driver/rtc_io.h>
 #endif
@@ -182,19 +182,21 @@ constexpr uint8_t SLEEP_STAGE_WAKE_CONFIRMED = 8;
 constexpr uint8_t SLEEP_STAGE_ABORTED = 9;
 
 bool readDurableSleepLock() {
-  Preferences prefs;
-  if (!prefs.begin(SYNAP_POWER_NAMESPACE,true)) return false;
-  const bool locked=prefs.getBool(SYNAP_SLEEP_LOCK_KEY,false);
-  prefs.end();
-  return locked;
+  nvs_handle_t handle=0;
+  if (nvs_open(SYNAP_POWER_NAMESPACE,NVS_READONLY,&handle)!=ESP_OK) return false;
+  uint8_t value=0;
+  const esp_err_t err=nvs_get_u8(handle,SYNAP_SLEEP_LOCK_KEY,&value);
+  nvs_close(handle);
+  return err==ESP_OK && value!=0;
 }
 
 bool writeDurableSleepLock(bool locked) {
-  Preferences prefs;
-  if (!prefs.begin(SYNAP_POWER_NAMESPACE,false)) return false;
-  const bool ok=prefs.putBool(SYNAP_SLEEP_LOCK_KEY,locked)==1u;
-  prefs.end();
-  return ok;
+  nvs_handle_t handle=0;
+  if (nvs_open(SYNAP_POWER_NAMESPACE,NVS_READWRITE,&handle)!=ESP_OK) return false;
+  esp_err_t err=nvs_set_u8(handle,SYNAP_SLEEP_LOCK_KEY,locked?1u:0u);
+  if (err==ESP_OK) err=nvs_commit(handle);
+  nvs_close(handle);
+  return err==ESP_OK;
 }
 esp_reset_reason_t bootResetReason = ESP_RST_UNKNOWN;
 uint32_t touchPressedAt = 0;
