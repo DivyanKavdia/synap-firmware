@@ -658,6 +658,8 @@ void encodeModuleCapabilities(uint8_t* p) {
 #if CONFIG_IDF_TARGET_ESP32C3
   if (OdysseyTransfer::available()) {
     p[14]=1;
+    // C3 media feature bit 2 advertises explicit destructive FAT formatting.
+    p[16]|=4;
     if (odysseySdDetectionState()==1) {
       ready|=SYNAP_CAP_SD;
       if (ready&SYNAP_CAP_AUDIO) ready|=SYNAP_CAP_SDAUDIO;
@@ -2188,7 +2190,10 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 #if CONFIG_IDF_TARGET_ESP32C3
 static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
-static constexpr uint32_t ODYSSEY_SD_INIT_FREQ_HZ=400000u;
+// Arduino-ESP32 always performs the SD protocol initialization itself at 400 kHz.
+// This value is the post-initialization data clock used by FAT/VFS. 4 MHz gives
+// continuous 16 kHz PCM writes ample headroom without pushing PCB/module wiring.
+static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=4000000u;
 static constexpr uint32_t ODYSSEY_SD_STARTUP_SETTLE_MS=3000u;
 // Preserve the known-good build-1445 lifecycle: one mount attempt per
 // explicit action. Repeating SD.end()/SPI.end()/SD.begin() autonomously on a
@@ -2559,11 +2564,11 @@ static uint8_t odysseySdQuiesceLocked(uint32_t budgetMs) {
   return state;
 }
 
-static bool odysseySdBeginLocked() {
+static bool odysseySdBeginLocked(bool formatIfEmpty=false) {
   ++odysseySdBeginAttempts;
   odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
-  const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,
-    ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false);
+  const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,
+    ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,formatIfEmpty);
   if (mounted) markOdysseySdBatteryDividerPresent();
   else odysseySdReleaseLocked();
   return mounted;
@@ -2640,6 +2645,7 @@ static uint8_t odysseySdMountReasonCode(const char* reason) {
   if (!strcmp(reason,"op14")) return 2;
   if (!strcmp(reason,"touch")) return 3;
   if (!strcmp(reason,"rearm")) return 5;
+  if (!strcmp(reason,"format")) return 6;
   return 4;
 }
 
@@ -2657,7 +2663,7 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   pinMode(ODYSSEY_SD_CS,OUTPUT);
   Serial.printf("[SD] %s attempt %u Arduino SPI init at %lu Hz, pins CS=%d SCK=%d MOSI=%d MISO=%d\n",
-    reason,unsigned(attempt),static_cast<unsigned long>(ODYSSEY_SD_INIT_FREQ_HZ),
+    reason,unsigned(attempt),static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ),
     ODYSSEY_SD_CS,ODYSSEY_SD_SCK,ODYSSEY_SD_MOSI,ODYSSEY_SD_MISO);
 
   bool mounted=odysseySdBeginLocked();
@@ -2699,7 +2705,7 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   const char* label=type==CARD_MMC?"MMC":type==CARD_SD?"SDSC":type==CARD_SDHC?"SDHC/SDXC":"unknown";
   Serial.printf("[SD] ready via proven Arduino SPI path: %s, %llu MiB, %lu Hz\n",
     label,static_cast<unsigned long long>(SD.cardSize()/(1024ULL*1024ULL)),
-    static_cast<unsigned long>(ODYSSEY_SD_INIT_FREQ_HZ));
+    static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ));
   return true;
 }
 
@@ -2742,6 +2748,52 @@ bool odysseyRecoverSdCard(const char* reason) {
   odysseySdBootState=0;odysseySdProbeStage=0;
   odysseySdReleaseLocked();
   return odysseySdMountLocked(reason?reason:"op14",ODYSSEY_SD_RECOVERY_ATTEMPTS);
+}
+
+bool odysseyFormatSdCard() {
+  OdysseySdGuard guard(pdMS_TO_TICKS(15000));
+  if (!guard) return false;
+
+  // Explicitly invalidate the current volume before asking Arduino FatFs to
+  // create a fresh filesystem. formatIfEmpty alone would leave a mountable but
+  // damaged volume untouched.
+  const bool cardWasMounted=SD.cardType()!=CARD_NONE;
+  if (cardWasMounted) {
+    uint8_t blankSector[512]{};
+    if (!SD.writeRAW(blankSector,0)) {
+      odysseySdBootState=2;odysseySdProbeStage=4;odysseySdLastMountError=ESP_FAIL;
+      Serial.println("[SD] format refused: could not invalidate sector 0");
+      return false;
+    }
+  }
+
+  odysseySdBootState=0;odysseySdProbeStage=0;
+  odysseySdLastMountReason=odysseySdMountReasonCode("format");
+  ++odysseySdMountAttempts;
+  odysseySdReleaseLocked();
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  pinMode(ODYSSEY_SD_CS,OUTPUT);
+
+  if (!odysseySdBeginLocked(true)) {
+    odysseySdBootState=2;odysseySdProbeStage=3;odysseySdLastMountError=ESP_FAIL;
+    Serial.println("[SD] format failed while creating/mounting FAT");
+    return false;
+  }
+  if (SD.cardType()==CARD_NONE) {
+    odysseySdBootState=3;odysseySdProbeStage=0;odysseySdLastMountError=ESP_ERR_NOT_FOUND;
+    odysseySdReleaseLocked();
+    return false;
+  }
+  if (!odysseySdValidateVfsLocked("format",1)) {
+    odysseySdReleaseLocked();
+    return false;
+  }
+
+  odysseySdLastMountError=ESP_OK;
+  odysseySdBootState=1;odysseySdProbeStage=6;
+  Serial.printf("[SD] format complete; FAT/VFS ready at %lu Hz\n",
+    static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ));
+  return true;
 }
 
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
@@ -2814,7 +2866,7 @@ static bool odysseyCheckpointWav(FILE* file,uint8_t* header,uint32_t bytes) {
   return fflush(file)==0;
 }
 static void odysseyRecordTake() {
-  bool failed=false;
+  bool failed=false,storageFailed=false;
   uint32_t bytes=0;
   char logicalPath[64]{};
   char fullPath[96]{};
@@ -2824,24 +2876,24 @@ static void odysseyRecordTake() {
   // Hold the single storage mutex for the whole take. A recovery/remount can
   // never tear down the VFS beneath an open recording.
   OdysseySdGuard storage;
-  if (!storage || !odysseySdReady()) failed=true;
+  if (!storage || !odysseySdReady()) { failed=true;storageFailed=true; }
 
   if (!failed) {
     struct stat existing{};
     for (uint8_t attempt=0;attempt<16;++attempt) {
       snprintf(logicalPath,sizeof(logicalPath),"/synap/odyssey_audio_%08lx_%08lx.wav",
         static_cast<unsigned long>(esp_random()),static_cast<unsigned long>(esp_random()));
-      if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) { failed=true; break; }
+      if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) { failed=true;storageFailed=true; break; }
       if (stat(fullPath,&existing)!=0 && errno==ENOENT) {
         file=fopen(fullPath,"wb+");
         if (file) break;
       }
     }
-    if (!file) failed=true;
+    if (!file) { failed=true;storageFailed=true; }
   }
 
   odysseyWavHeader(header,0);
-  if (!failed && fwrite(header,1,sizeof(header),file)!=sizeof(header)) failed=true;
+  if (!failed && fwrite(header,1,sizeof(header),file)!=sizeof(header)) { failed=true;storageFailed=true; }
 
 #if USE_REAL_I2S_MIC
   if (!failed && !odysseyStopRequested.load()) {
@@ -2866,11 +2918,11 @@ static void odysseyRecordTake() {
       if (bytes>0xffffff00u-sizeof(pcm)) break; // RIFF length is 32-bit.
       const size_t written=fwrite(pcm,1,sizeof(pcm),file);
       bytes+=uint32_t(written & ~size_t(1));
-      if (written!=sizeof(pcm)) { failed=true; break; }
+      if (written!=sizeof(pcm)) { failed=true;storageFailed=true; break; }
 
       // Keep a recoverable WAV header on media even if power is lost mid-take.
       if (uint32_t(millis()-checkpointAt)>=2000u) {
-        if (!odysseyCheckpointWav(file,header,bytes)) { failed=true; break; }
+        if (!odysseyCheckpointWav(file,header,bytes)) { failed=true;storageFailed=true; break; }
         checkpointAt=millis();
       }
     }
@@ -2881,14 +2933,17 @@ static void odysseyRecordTake() {
 #endif
 
   if (file) {
-    if (!odysseyCheckpointWav(file,header,bytes)) failed=true;
-    if (fclose(file)!=0) failed=true;
+    if (!odysseyCheckpointWav(file,header,bytes)) { failed=true;storageFailed=true; }
+    if (fclose(file)!=0) { failed=true;storageFailed=true; }
     file=nullptr;
   }
 
   Serial.printf("[SD] local audio %s: %s, %lu PCM bytes%s\n",
     failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),
     failed?" (mount retained for explicit recovery)":"");
+  // Surface media I/O failure immediately instead of advertising SD-ready until
+  // the next catalogue happens to discover the broken VFS.
+  if (storageFailed) odysseySdMarkVfsFailure();
   // A mounted SD card can still fail to open a WAV or start the microphone.
   if (failed || bytes==0) odysseyRecordFaultAt=millis();
 }
@@ -2950,10 +3005,12 @@ void odysseyToggleRecording() {
   Serial.println("[TOUCH] double tap -> SD audio START");
 }
 #endif
-// Odyssey C3 SD media-v1: catalogue/read/delete for locally recorded WAV files.
+// Odyssey C3 SD media-v1: catalogue/read/delete/format for locally recorded WAV files.
 // C3 storage is mounted through the stock Arduino SD SPI path and accessed through FAT/VFS.
 // Files are deleted only after the PWA has imported and verified them.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+bool odysseyFormatSdCard();
+
 namespace OdysseyTransfer {
 struct Request {
   uint32_t connection=0,id=0,offset=0;
@@ -3226,6 +3283,10 @@ static void worker(void*) {
       case 18:
         selectedPath[0]=0;catalogueBuffer="";
         if(!storageReady())error=NO_SD;else total=clearRecordings();
+        break;
+      case 19:
+        selectedPath[0]=0;catalogueBuffer="";
+        error=odysseyFormatSdCard()?OK:IO_ERROR;
         break;
       default:error=BAD_COMMAND;break;
     }
