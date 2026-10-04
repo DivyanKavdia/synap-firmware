@@ -3,10 +3,7 @@
 // Files are deleted only after the destination has durably accepted and verified them.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 #include <WiFi.h>
-#include <esp_http_client.h>
-#if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
-#include <esp_crt_bundle.h>
-#endif
+#include <NetworkClientSecure.h>
 namespace OdysseyTransfer {
 struct Request {
   uint32_t connection=0,id=0,offset=0,windowEpoch=0;
@@ -151,310 +148,235 @@ static bool jsonBool(const char* json,const char* key,bool& value) {
   return false;
 }
 
-static esp_http_client_handle_t wifiHttp(const char* url,esp_http_client_method_t method,const char* token) {
-#if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
-  esp_http_client_config_t cfg={};
-  cfg.url=url;cfg.timeout_ms=30000;cfg.keep_alive_enable=true;cfg.crt_bundle_attach=esp_crt_bundle_attach;
-  auto client=esp_http_client_init(&cfg);
-  if (!client) return nullptr;
-  esp_http_client_set_method(client,method);
-  char authorization[960];
-  const int n=snprintf(authorization,sizeof(authorization),"SynapDevice %s",token?token:"");
-  if (n<=0 || size_t(n)>=sizeof(authorization)) { esp_http_client_cleanup(client);return nullptr; }
-  esp_http_client_set_header(client,"Authorization",authorization);
-  esp_http_client_set_header(client,"User-Agent","Synap-Odyssey-C3/1");
-  return client;
-#else
-  (void)url;(void)method;(void)token;
-  return nullptr;
-#endif
+static const char SYNAP_GTS_ROOTS[] =
+"-----BEGIN CERTIFICATE-----\n"
+"MIIFVzCCAz+gAwIBAgINAgPlk28xsBNJiGuiFzANBgkqhkiG9w0BAQwFADBHMQsw\n"
+"CQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEU\n"
+"MBIGA1UEAxMLR1RTIFJvb3QgUjEwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAw\n"
+"MDAwWjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZp\n"
+"Y2VzIExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjEwggIiMA0GCSqGSIb3DQEBAQUA\n"
+"A4ICDwAwggIKAoICAQC2EQKLHuOhd5s73L+UPreVp0A8of2C+X0yBoJx9vaMf/vo\n"
+"27xqLpeXo4xL+Sv2sfnOhB2x+cWX3u+58qPpvBKJXqeqUqv4IyfLpLGcY9vXmX7w\n"
+"Cl7raKb0xlpHDU0QM+NOsROjyBhsS+z8CZDfnWQpJSMHobTSPS5g4M/SCYe7zUjw\n"
+"TcLCeoiKu7rPWRnWr4+wB7CeMfGCwcDfLqZtbBkOtdh+JhpFAz2weaSUKK0Pfybl\n"
+"qAj+lug8aJRT7oM6iCsVlgmy4HqMLnXWnOunVmSPlk9orj2XwoSPwLxAwAtcvfaH\n"
+"szVsrBhQf4TgTM2S0yDpM7xSma8ytSmzJSq0SPly4cpk9+aCEI3oncKKiPo4Zor8\n"
+"Y/kB+Xj9e1x3+naH+uzfsQ55lVe0vSbv1gHR6xYKu44LtcXFilWr06zqkUspzBmk\n"
+"MiVOKvFlRNACzqrOSbTqn3yDsEB750Orp2yjj32JgfpMpf/VjsPOS+C12LOORc92\n"
+"wO1AK/1TD7Cn1TsNsYqiA94xrcx36m97PtbfkSIS5r762DL8EGMUUXLeXdYWk70p\n"
+"aDPvOmbsB4om3xPXV2V4J95eSRQAogB/mqghtqmxlbCluQ0WEdrHbEg8QOB+DVrN\n"
+"VjzRlwW5y0vtOUucxD/SVRNuJLDWcfr0wbrM7Rv1/oFB2ACYPTrIrnqYNxgFlQID\n"
+"AQABo0IwQDAOBgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4E\n"
+"FgQU5K8rJnEaK0gnhS9SZizv8IkTcT4wDQYJKoZIhvcNAQEMBQADggIBAJ+qQibb\n"
+"C5u+/x6Wki4+omVKapi6Ist9wTrYggoGxval3sBOh2Z5ofmmWJyq+bXmYOfg6LEe\n"
+"QkEzCzc9zolwFcq1JKjPa7XSQCGYzyI0zzvFIoTgxQ6KfF2I5DUkzps+GlQebtuy\n"
+"h6f88/qBVRRiClmpIgUxPoLW7ttXNLwzldMXG+gnoot7TiYaelpkttGsN/H9oPM4\n"
+"7HLwEXWdyzRSjeZ2axfG34arJ45JK3VmgRAhpuo+9K4l/3wV3s6MJT/KYnAK9y8J\n"
+"ZgfIPxz88NtFMN9iiMG1D53Dn0reWVlHxYciNuaCp+0KueIHoI17eko8cdLiA6Ef\n"
+"MgfdG+RCzgwARWGAtQsgWSl4vflVy2PFPEz0tv/bal8xa5meLMFrUKTX5hgUvYU/\n"
+"Z6tGn6D/Qqc6f1zLXbBwHSs09dR2CQzreExZBfMzQsNhFRAbd03OIozUhfJFfbdT\n"
+"6u9AWpQKXCBfTkBdYiJ23//OYb2MI3jSNwLgjt7RETeJ9r/tSQdirpLsQBqvFAnZ\n"
+"0E6yove+7u7Y/9waLd64NnHi/Hm3lCXRSHNboTXns5lndcEZOitHTtNCjv0xyBZm\n"
+"2tIMPNuzjsmhDYAPexZ3FL//2wmUspO8IFgV6dtxQ/PeEMMA3KgqlbbC1j+Qa3bb\n"
+"bP6MvPJwNQzcmRk13NfIRmPVNnGuV/u3gm3c\n"
+"-----END CERTIFICATE-----\n"
+"-----BEGIN CERTIFICATE-----\n"
+"MIIFVzCCAz+gAwIBAgINAgPlrsWNBCUaqxElqjANBgkqhkiG9w0BAQwFADBHMQsw\n"
+"CQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEU\n"
+"MBIGA1UEAxMLR1RTIFJvb3QgUjIwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAw\n"
+"MDAwWjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZp\n"
+"Y2VzIExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjIwggIiMA0GCSqGSIb3DQEBAQUA\n"
+"A4ICDwAwggIKAoICAQDO3v2m++zsFDQ8BwZabFn3GTXd98GdVarTzTukk3LvCvpt\n"
+"nfbwhYBboUhSnznFt+4orO/LdmgUud+tAWyZH8QiHZ/+cnfgLFuv5AS/T3KgGjSY\n"
+"6Dlo7JUle3ah5mm5hRm9iYz+re026nO8/4Piy33B0s5Ks40FnotJk9/BW9BuXvAu\n"
+"MC6C/Pq8tBcKSOWIm8Wba96wyrQD8Nr0kLhlZPdcTK3ofmZemde4wj7I0BOdre7k\n"
+"RXuJVfeKH2JShBKzwkCX44ofR5GmdFrS+LFjKBC4swm4VndAoiaYecb+3yXuPuWg\n"
+"f9RhD1FLPD+M2uFwdNjCaKH5wQzpoeJ/u1U8dgbuak7MkogwTZq9TwtImoS1mKPV\n"
+"+3PBV2HdKFZ1E66HjucMUQkQdYhMvI35ezzUIkgfKtzra7tEscszcTJGr61K8Yzo\n"
+"dDqs5xoic4DSMPclQsciOzsSrZYuxsN2B6ogtzVJV+mSSeh2FnIxZyuWfoqjx5RW\n"
+"Ir9qS34BIbIjMt/kmkRtWVtd9QCgHJvGeJeNkP+byKq0rxFROV7Z+2et1VsRnTKa\n"
+"G73VululycslaVNVJ1zgyjbLiGH7HrfQy+4W+9OmTN6SpdTi3/UGVN4unUu0kzCq\n"
+"gc7dGtxRcw1PcOnlthYhGXmy5okLdWTK1au8CcEYof/UVKGFPP0UJAOyh9OktwID\n"
+"AQABo0IwQDAOBgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4E\n"
+"FgQUu//KjiOfT5nK2+JopqUVJxce2Q4wDQYJKoZIhvcNAQEMBQADggIBAB/Kzt3H\n"
+"vqGf2SdMC9wXmBFqiN495nFWcrKeGk6c1SuYJF2ba3uwM4IJvd8lRuqYnrYb/oM8\n"
+"0mJhwQTtzuDFycgTE1XnqGOtjHsB/ncw4c5omwX4Eu55MaBBRTUoCnGkJE+M3DyC\n"
+"B19m3H0Q/gxhswWV7uGugQ+o+MePTagjAiZrHYNSVc61LwDKgEDg4XSsYPWHgJ2u\n"
+"NmSRXbBoGOqKYcl3qJfEycel/FVL8/B/uWU9J2jQzGv6U53hkRrJXRqWbTKH7QMg\n"
+"yALOWr7Z6v2yTcQvG99fevX4i8buMTolUVVnjWQye+mew4K6Ki3pHrTgSAai/Gev\n"
+"HyICc/sgCq+dVEuhzf9gR7A/Xe8bVr2XIZYtCtFenTgCR2y59PYjJbigapordwj6\n"
+"xLEokCZYCDzifqrXPW+6MYgKBesntaFJ7qBFVHvmJ2WZICGoo7z7GJa7Um8M7YNR\n"
+"TOlZ4iBgxcJlkoKM8xAfDoqXvneCbT+PHV28SSe9zE8P4c52hgQjxcCMElv924Sg\n"
+"JPFI/2R80L5cFtHvma3AH/vLrrw4IgYmZNralw4/KBVEqE8AyvCazM90arQ+POuV\n"
+"7LXTWtiBmelDGDfrs7vRWGJB82bSj6p4lVQgw1oudCvV0b4YacCs1aTPObpRhANl\n"
+"6WLAYv7YTVWW4tAR+kg0Eeye7QUd5MjWHYbL\n"
+"-----END CERTIFICATE-----\n"
+"-----BEGIN CERTIFICATE-----\n"
+"MIICCTCCAY6gAwIBAgINAgPluILrIPglJ209ZjAKBggqhkjOPQQDAzBHMQswCQYD\n"
+"VQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEUMBIG\n"
+"A1UEAxMLR1RTIFJvb3QgUjMwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAwMDAw\n"
+"WjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2Vz\n"
+"IExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjMwdjAQBgcqhkjOPQIBBgUrgQQAIgNi\n"
+"AAQfTzOHMymKoYTey8chWEGJ6ladK0uFxh1MJ7x/JlFyb+Kf1qPKzEUURout736G\n"
+"jOyxfi//qXGdGIRFBEFVbivqJn+7kAHjSxm65FSWRQmx1WyRRK2EE46ajA2ADDL2\n"
+"4CejQjBAMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQW\n"
+"BBTB8Sa6oC2uhYHP0/EqEr24Cmf9vDAKBggqhkjOPQQDAwNpADBmAjEA9uEglRR7\n"
+"VKOQFhG/hMjqb2sXnh5GmCCbn9MN2azTL818+FsuVbu/3ZL3pAzcMeGiAjEA/Jdm\n"
+"ZuVDFhOD3cffL74UOO0BzrEXGhF16b0DjyZ+hOXJYKaV11RZt+cRLInUue4X\n"
+"-----END CERTIFICATE-----\n"
+"-----BEGIN CERTIFICATE-----\n"
+"MIICCTCCAY6gAwIBAgINAgPlwGjvYxqccpBQUjAKBggqhkjOPQQDAzBHMQswCQYD\n"
+"VQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEUMBIG\n"
+"A1UEAxMLR1RTIFJvb3QgUjQwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAwMDAw\n"
+"WjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2Vz\n"
+"IExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjQwdjAQBgcqhkjOPQIBBgUrgQQAIgNi\n"
+"AATzdHOnaItgrkO4NcWBMHtLSZ37wWHO5t5GvWvVYRg1rkDdc/eJkTBa6zzuhXyi\n"
+"QHY7qca4R9gq55KRanPpsXI5nymfopjTX15YhmUPoYRlBtHci8nHc8iMai/lxKvR\n"
+"HYqjQjBAMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQW\n"
+"BBSATNbrdP9JNqPV2Py1PsVq8JQdjDAKBggqhkjOPQQDAwNpADBmAjEA6ED/g94D\n"
+"9J+uHXqnLrmvT/aDHQ4thQEd0dlq7A/Cr8deVl5c1RxYIigL9zC2L7F8AjEA8GE8\n"
+"p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD\n"
+"-----END CERTIFICATE-----\n";
+
+struct HttpsTarget { char host[128]{};char base[64]{}; };
+
+static bool parseHttpsEndpoint(const char* endpoint,HttpsTarget& target) {
+  if (!endpoint || strncmp(endpoint,"https://",8)!=0) return false;
+  const char* host=endpoint+8;
+  const char* slash=strchr(host,'/');
+  const size_t hostLength=slash?size_t(slash-host):strlen(host);
+  if (!hostLength || hostLength>=sizeof(target.host)) return false;
+  for (size_t i=0;i<hostLength;++i) {
+    const char c=host[i];
+    if (!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='.'||c=='-')) return false;
+  }
+  memcpy(target.host,host,hostLength);target.host[hostLength]=0;
+  if (slash) {
+    const size_t baseLength=strlen(slash);
+    if (baseLength>=sizeof(target.base) || strchr(slash,'?') || strchr(slash,'#')) return false;
+    snprintf(target.base,sizeof(target.base),"%s",slash);
+    while (strlen(target.base)>1 && target.base[strlen(target.base)-1]=='/') target.base[strlen(target.base)-1]=0;
+  }
+  return true;
 }
 
-static bool httpWriteAll(esp_http_client_handle_t client,const uint8_t* bytes,size_t size) {
+static bool secureEndpoint(const char* endpoint) {
+  HttpsTarget target;
+  return parseHttpsEndpoint(endpoint,target);
+}
+
+static bool netWriteAll(NetworkClientSecure& client,const uint8_t* bytes,size_t size) {
   size_t written=0;
   while (written<size) {
-    const int n=esp_http_client_write(client,reinterpret_cast<const char*>(bytes+written),int(size-written));
-    if (n<=0) return false;
-    written+=size_t(n);
+    const size_t n=client.write(bytes+written,size-written);
+    if (!n) return false;
+    written+=n;
   }
   return true;
 }
 
-static int httpFinish(esp_http_client_handle_t client,char* response,size_t capacity) {
-  if (!client) return -1;
-  if (esp_http_client_fetch_headers(client)<0) { esp_http_client_close(client);esp_http_client_cleanup(client);return -1; }
-  const int status=esp_http_client_get_status_code(client);
+static bool netLine(NetworkClientSecure& client,char* line,size_t capacity,uint32_t timeoutMs=30000) {
+  if (!line || capacity<2) return false;
+  size_t n=0;const uint32_t started=millis();
+  while (uint32_t(millis()-started)<timeoutMs) {
+    const int value=client.read();
+    if (value<0) {
+      if (!client.connected() && !client.available()) return false;
+      vTaskDelay(pdMS_TO_TICKS(1));continue;
+    }
+    if (value=='\n') { line[n]=0;return true; }
+    if (value!='\r' && n+1<capacity) line[n++]=char(value);
+  }
+  line[n]=0;return false;
+}
+
+static int netResponse(NetworkClientSecure& client,char* response,size_t capacity) {
+  char line[192]{};
+  if (!netLine(client,line,sizeof(line)) || strncmp(line,"HTTP/1.",7)!=0) { client.stop();return -1; }
+  const char* code=strchr(line,' ');
+  if (!code) { client.stop();return -1; }
+  const int status=atoi(code+1);
+  do {
+    if (!netLine(client,line,sizeof(line))) { client.stop();return -1; }
+  } while (line[0]);
   if (response && capacity) {
-    const int n=esp_http_client_read_response(client,response,int(capacity-1));
-    response[n>0?size_t(n):0]=0;
+    size_t n=0;uint32_t last=millis();
+    while ((client.connected() || client.available()) && uint32_t(millis()-last)<30000u) {
+      const int value=client.read();
+      if (value<0) { vTaskDelay(pdMS_TO_TICKS(1));continue; }
+      if (n+1<capacity) response[n++]=char(value);
+      last=millis();
+    }
+    response[n]=0;
   }
-  esp_http_client_close(client);esp_http_client_cleanup(client);
-  return status;
+  client.stop();return status;
 }
 
-static int httpJson(const char* url,esp_http_client_method_t method,const char* token,
-                    const char* body,char* response,size_t capacity) {
-  auto client=wifiHttp(url,method,token);if(!client)return -1;
+static bool openHttps(const char* endpoint,HttpsTarget& target,NetworkClientSecure& client) {
+  if (!parseHttpsEndpoint(endpoint,target)) return false;
+  client.setCACert(SYNAP_GTS_ROOTS);
+  client.setHandshakeTimeout(15);
+  client.setTimeout(30000);
+  return client.connect(target.host,443,30000)>0;
+}
+
+static int httpJson(const char* endpoint,const char* method,const char* token,
+                    const char* path,const char* body,char* response,size_t capacity) {
+  HttpsTarget target;NetworkClientSecure client;
+  if (!openHttps(endpoint,target,client)) return -1;
+  char fullPath[384],header[1536];
+  const int p=snprintf(fullPath,sizeof(fullPath),"%s%s",target.base,path);
   const size_t bytes=body?strlen(body):0;
-  if (body) esp_http_client_set_header(client,"Content-Type","application/json");
-  if (esp_http_client_open(client,int(bytes))!=ESP_OK) { esp_http_client_cleanup(client);return -1; }
-  if (bytes && !httpWriteAll(client,reinterpret_cast<const uint8_t*>(body),bytes)) {
-    esp_http_client_close(client);esp_http_client_cleanup(client);return -1;
+  const int h=snprintf(header,sizeof(header),
+    "%s %s HTTP/1.1\r\nHost: %s\r\nAuthorization: SynapDevice %s\r\n"
+    "User-Agent: Synap-Odyssey-C3/1\r\nContent-Type: application/json\r\n"
+    "Content-Length: %u\r\nConnection: close\r\n\r\n",
+    method,fullPath,target.host,token?token:"",unsigned(bytes));
+  if (p<=0 || size_t(p)>=sizeof(fullPath) || h<=0 || size_t(h)>=sizeof(header) ||
+      !netWriteAll(client,reinterpret_cast<const uint8_t*>(header),size_t(h)) ||
+      (bytes && !netWriteAll(client,reinterpret_cast<const uint8_t*>(body),bytes))) {
+    client.stop();return -1;
   }
-  return httpFinish(client,response,capacity);
+  return netResponse(client,response,capacity);
 }
-
-
-static bool safeWavPath(const char* path) {
-  if (!path || strncmp(path,"/synap/",7)!=0) return false;
-  const size_t n=strlen(path);
-  if (n<12 || n>63 ||
-      (strcmp(path+n-4,".wav")!=0 && strcmp(path+n-4,".WAV")!=0)) return false;
-  for (size_t i=7;i<n-4;++i) {
-    const char c=path[i];
-    if (!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='-'||c=='.')) return false;
-  }
-  return true;
-}
-static bool storageReady() {
-  // Normal PWA reads are observational only. Only operation 14 may remount.
-  return odysseySdReady();
-}
-static bool fullPath(const char* logical,char* full,size_t capacity) {
-  return safeWavPath(logical) && odysseySdPath(logical,full,capacity);
-}
-
-static void reply(const Request& request,uint8_t error,uint32_t total=0,uint32_t offset=0,
-                  const uint8_t* bytes=nullptr,size_t size=0) {
-  uint8_t value[496]{};
-  value[0]=0xCB;value[1]=1;value[2]=error?2:1;value[3]=error;
-  put32le(value+4,request.id);put32le(value+8,total);put32le(value+12,offset);
-  size=std::min(size,size_t(480));
-  if (size && bytes) memcpy(value+16,bytes,size);
-  portENTER_CRITICAL(&responseMux);
-  if (request.connection==connectionGeneration.load()) {
-    memcpy(response,value,16+size);
-    responseSize=16+size;
-    responseConnection=request.connection;
-  }
-  portEXIT_CRITICAL(&responseMux);
-}
-
-static uint8_t selectFile(const char* path,uint32_t& total) {
-  selectedPath[0]=0;
-  if (!safeWavPath(path)) return BAD_COMMAND;
-  OdysseySdGuard guard;
-  if (!guard || !storageReady()) return NO_SD;
-  char full[96];
-  if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
-  struct stat st{};
-  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0) return FILE_UNAVAILABLE;
-  if (uint64_t(st.st_size)>UINT32_MAX) return FILE_UNAVAILABLE;
-  total=uint32_t(st.st_size);
-  snprintf(selectedPath,sizeof(selectedPath),"%s",path);
-  return OK;
-}
-
-static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& total,uint8_t* bytes,size_t& size) {
-  // New clients make every chunk self-describing. This prevents catalogue
-  // refreshes or another client from replacing the selected file mid-transfer.
-  if (requestedPath && requestedPath[0]) {
-    if (!strcmp(requestedPath,"@catalogue")) {
-      total=catalogueBuffer.length();
-      if (!total || offset>=total) return FILE_UNAVAILABLE;
-      size=std::min(size_t(480),size_t(total-offset));
-      memcpy(bytes,catalogueBuffer.c_str()+offset,size);
-      return OK;
-    }
-    if (!safeWavPath(requestedPath)) return BAD_COMMAND;
-    if (offset==0) Serial.printf("[SD] transfer begin path=%s\n",requestedPath);
-    OdysseySdGuard guard;
-    if (!guard || !storageReady()) return NO_SD;
-    char full[96];
-    if (!fullPath(requestedPath,full,sizeof(full))) return BAD_COMMAND;
-    struct stat st{};
-    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
-      return FILE_UNAVAILABLE;
-    total=uint32_t(st.st_size);
-    if (offset>=total) return FILE_UNAVAILABLE;
-    size=std::min(size_t(480),size_t(total-offset));
-    FILE* file=fopen(full,"rb");
-    if (!file) return FILE_UNAVAILABLE;
-    const bool ok=fseek(file,long(offset),SEEK_SET)==0 && fread(bytes,1,size,file)==size;
-    fclose(file);
-    return ok?OK:IO_ERROR;
-  }
-
-  // Legacy clients still use the selected-file/catalogue state.
-  if (!selectedPath[0]) {
-    total=catalogueBuffer.length();
-    if (!total || offset>=total) return FILE_UNAVAILABLE;
-    size=std::min(size_t(480),size_t(total-offset));
-    memcpy(bytes,catalogueBuffer.c_str()+offset,size);
-    return OK;
-  }
-
-  OdysseySdGuard guard;
-  if (!guard || !storageReady()) return NO_SD;
-  char full[96];
-  if (!fullPath(selectedPath,full,sizeof(full))) return BAD_COMMAND;
-  struct stat st{};
-  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
-    return FILE_UNAVAILABLE;
-  total=uint32_t(st.st_size);
-  if (offset>=total) return FILE_UNAVAILABLE;
-  size=std::min(size_t(480),size_t(total-offset));
-
-  FILE* file=fopen(full,"rb");
-  if (!file) return FILE_UNAVAILABLE;
-  const bool ok=fseek(file,long(offset),SEEK_SET)==0 && fread(bytes,1,size,file)==size;
-  fclose(file);
-  return ok?OK:IO_ERROR;
-}
-
-
-class StreamCallbacks : public BLECharacteristicCallbacks {
-  void onStatus(BLECharacteristic*,Status status,uint32_t) override {
-    if (status!=SUCCESS_NOTIFY) ++streamNotifyRejected;
-  }
-};
-
-static bool sendMediaPacket(const Request& request,uint8_t kind,uint8_t error,uint32_t total,
-                            uint32_t offset,const uint8_t* bytes,size_t size) {
-  if (!streamCharacteristic || !deviceConnected.load() ||
-      request.connection!=connectionGeneration.load()) return false;
-  const uint16_t capacity=attValueCapacity.load();
-  if (capacity<16 || size>480 || 16u+size>capacity) return false;
-  static uint8_t packet[496];
-  packet[0]=0xCC;packet[1]=1;packet[2]=kind;packet[3]=error;
-  put32le(packet+4,request.id);put32le(packet+8,total);put32le(packet+12,offset);
-  if (size && bytes) memcpy(packet+16,bytes,size);
-  streamCharacteristic->setValue(packet,16+size);
-  for (uint8_t attempt=0;attempt<4;++attempt) {
-    if (request.connection!=connectionGeneration.load() || !deviceConnected.load() ||
-        request.windowEpoch!=cancelWindow.load()) return false;
-    if (attempt) vTaskDelay(pdMS_TO_TICKS(8u*attempt));
-    const uint32_t rejectedBefore=streamNotifyRejected.load();
-    streamCharacteristic->notify();
-    if (streamNotifyRejected.load()==rejectedBefore) return true;
-  }
-  return false;
-}
-
-static void endMediaWindow(const Request& request,uint8_t error,uint32_t total,uint32_t offset) {
-  for (uint8_t attempt=0;attempt<6 && request.windowEpoch==cancelWindow.load();++attempt) {
-    if (sendMediaPacket(request,2,error,total,offset,nullptr,0)) return;
-    vTaskDelay(pdMS_TO_TICKS(12));
-  }
-}
-
-static void streamWindow(const Request& request) {
-  // Credit-window protocol shared with Chakshu: no more than eight data
-  // notifications are outstanding for a single command. The app requests the
-  // next byte offset after the end marker, so reconnect/resume is naturally
-  // path/offset based.
-  const uint16_t att=attValueCapacity.load();
-  const size_t capacity=att>16 ? std::min(size_t(480),size_t(att-16)) : 0;
-  if (capacity<32) {
-    // Let the app observe an empty window three times and fall back to media-v1.
-    endMediaWindow(request,OK,0,request.offset);
-    return;
-  }
-
-  uint32_t offset=request.offset,total=0;
-  uint8_t error=OK;
-  bool storageFault=false;
-  if (!selectedPath[0]) {
-    total=catalogueBuffer.length();
-    if (!total || offset>=total) error=FILE_UNAVAILABLE;
-    for (uint8_t count=0;!error && count<8 && offset<total;++count) {
-      if (request.windowEpoch!=cancelWindow.load() ||
-          request.connection!=connectionGeneration.load() || !deviceConnected.load()) return;
-      const size_t size=std::min(capacity,size_t(total-offset));
-      if (!sendMediaPacket(request,1,OK,total,offset,
-          reinterpret_cast<const uint8_t*>(catalogueBuffer.c_str()+offset),size)) break;
-      offset+=size;
-      vTaskDelay(pdMS_TO_TICKS(6));
-    }
-  } else {
-    {
-      OdysseySdGuard guard(pdMS_TO_TICKS(2000));
-      if (!guard || !storageReady()) error=NO_SD;
-      char full[96]{};
-      struct stat st{};
-      FILE* file=nullptr;
-      if (!error && !fullPath(selectedPath,full,sizeof(full))) error=BAD_COMMAND;
-      if (!error && (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 ||
-          uint64_t(st.st_size)>UINT32_MAX)) error=FILE_UNAVAILABLE;
-      if (!error) {
-        total=uint32_t(st.st_size);
-        if (offset>=total) error=FILE_UNAVAILABLE;
-      }
-      if (!error) {
-        file=fopen(full,"rb");
-        if (!file) error=FILE_UNAVAILABLE;
-      }
-      if (!error && fseek(file,long(offset),SEEK_SET)!=0) {
-        error=IO_ERROR;storageFault=true;
-      }
-      uint8_t bytes[480];
-      for (uint8_t count=0;!error && count<8 && offset<total;++count) {
-        if (request.windowEpoch!=cancelWindow.load() ||
-            request.connection!=connectionGeneration.load() || !deviceConnected.load()) {
-          if (file) fclose(file);
-          return;
-        }
-        const size_t size=std::min(capacity,size_t(total-offset));
-        if (fread(bytes,1,size,file)!=size) {
-          error=IO_ERROR;storageFault=true;break;
-        }
-        if (!sendMediaPacket(request,1,OK,total,offset,bytes,size)) break;
-        offset+=size;
-        vTaskDelay(pdMS_TO_TICKS(6));
-      }
-      if (file && fclose(file)!=0) { error=IO_ERROR;storageFault=true; }
-      if (storageFault) odysseySdMarkVfsFailure();
-    }
-    // Never quiesce while the storage guard is held.
-    if (storageFault) (void)odysseySdQuiesceFaultedSession(750u);
-  }
-  endMediaWindow(request,error,total,offset);
-}
-
 
 static int uploadWavSegment(FILE* file,const WifiJob& job,uint32_t index,uint32_t pcmOffset,
                             uint32_t pcmBytes,uint32_t startMs,uint32_t endMs) {
-  char url[320],indexText[16],startText[24],endText[24];
-  snprintf(url,sizeof(url),"%s/v1/device-uploads/%s/segments/%lu",job.endpoint,job.recordingId,
-    static_cast<unsigned long>(index));
-  auto client=wifiHttp(url,HTTP_METHOD_PUT,job.token);if(!client)return -1;
-  esp_http_client_set_header(client,"Content-Type","audio/wav");
-  snprintf(indexText,sizeof(indexText),"%lu",static_cast<unsigned long>(index));
-  snprintf(startText,sizeof(startText),"%lu",static_cast<unsigned long>(startMs));
-  snprintf(endText,sizeof(endText),"%lu",static_cast<unsigned long>(endMs));
-  esp_http_client_set_header(client,"X-Synap-Start-Ms",startText);
-  esp_http_client_set_header(client,"X-Synap-End-Ms",endText);
+  HttpsTarget target;NetworkClientSecure client;
+  if (!openHttps(job.endpoint,target,client)) return -1;
+  char path[384],header[1536];
+  const int p=snprintf(path,sizeof(path),"%s/v1/device-uploads/%s/segments/%lu",
+    target.base,job.recordingId,static_cast<unsigned long>(index));
   const uint32_t bodyBytes=44u+pcmBytes;
-  if (esp_http_client_open(client,int(bodyBytes))!=ESP_OK) { esp_http_client_cleanup(client);return -1; }
-  uint8_t header[44];::odysseyWavHeader(header,pcmBytes);
-  bool ok=httpWriteAll(client,header,sizeof(header));
+  const int h=snprintf(header,sizeof(header),
+    "PUT %s HTTP/1.1\r\nHost: %s\r\nAuthorization: SynapDevice %s\r\n"
+    "User-Agent: Synap-Odyssey-C3/1\r\nContent-Type: audio/wav\r\n"
+    "Content-Length: %lu\r\nX-Synap-Start-Ms: %lu\r\nX-Synap-End-Ms: %lu\r\n"
+    "Connection: close\r\n\r\n",
+    path,target.host,job.token,static_cast<unsigned long>(bodyBytes),
+    static_cast<unsigned long>(startMs),static_cast<unsigned long>(endMs));
+  if (p<=0 || size_t(p)>=sizeof(path) || h<=0 || size_t(h)>=sizeof(header) ||
+      !netWriteAll(client,reinterpret_cast<const uint8_t*>(header),size_t(h))) {
+    client.stop();return -1;
+  }
+  uint8_t wav[44];::odysseyWavHeader(wav,pcmBytes);
+  bool ok=netWriteAll(client,wav,sizeof(wav));
   if (ok && fseek(file,long(44u+pcmOffset),SEEK_SET)!=0) ok=false;
-  uint8_t buffer[4096];
+  uint8_t buffer[2048];
   uint32_t remaining=pcmBytes;
   while (ok && remaining) {
     const size_t chunk=std::min(size_t(remaining),sizeof(buffer));
-    if (fread(buffer,1,chunk,file)!=chunk || !httpWriteAll(client,buffer,chunk)) { ok=false;break; }
+    if (fread(buffer,1,chunk,file)!=chunk || !netWriteAll(client,buffer,chunk)) { ok=false;break; }
     remaining-=uint32_t(chunk);
   }
-  if (!ok) { esp_http_client_close(client);esp_http_client_cleanup(client);return -1; }
-  char response[256]{};
-  return httpFinish(client,response,sizeof(response));
+  if (!ok) { client.stop();return -1; }
+  return netResponse(client,nullptr,0);
 }
 
 static bool wifiStatusRequest(const WifiJob& job,uint32_t& nextSegment,bool& finalized,int& status) {
-  char url[320],response[320]{};
-  snprintf(url,sizeof(url),"%s/v1/device-uploads/%s/status",job.endpoint,job.recordingId);
-  status=httpJson(url,HTTP_METHOD_GET,job.token,nullptr,response,sizeof(response));
+  char path[128],response[320]{};
+  snprintf(path,sizeof(path),"/v1/device-uploads/%s/status",job.recordingId);
+  status=httpJson(job.endpoint,"GET",job.token,path,nullptr,response,sizeof(response));
   if (status<200 || status>=300) return false;
   return jsonUInt(response,"next_segment",nextSegment) && jsonBool(response,"finalized",finalized);
 }
@@ -535,11 +457,11 @@ static void wifiUploadTask(void*) {
     fclose(file);
 
     wifiSetStatus(4,"Finalizing cloud recording");
-    char url[320],body[128],response[256]{};
-    snprintf(url,sizeof(url),"%s/v1/device-uploads/%s/finalize",job.endpoint,job.recordingId);
+    char finalizePath[128],body[128],response[256]{};
+    snprintf(finalizePath,sizeof(finalizePath),"/v1/device-uploads/%s/finalize",job.recordingId);
     snprintf(body,sizeof(body),"{\"duration_ms\":%lu,\"segment_count\":%lu}",
       static_cast<unsigned long>(durationMs),static_cast<unsigned long>(segmentCount));
-    httpStatus=httpJson(url,HTTP_METHOD_POST,job.token,body,response,sizeof(response));
+    httpStatus=httpJson(job.endpoint,"POST",job.token,finalizePath,body,response,sizeof(response));
     if (httpStatus<200 || httpStatus>=300) { wifiSetStatus(6,"Cloud finalize failed",httpStatus,11);goto disconnect; }
     next=0;finalized=false;
     if (!wifiStatusRequest(job,next,finalized,httpStatus) || !finalized || next<segmentCount) {
@@ -840,13 +762,7 @@ class DataCallbacks : public BLECharacteristicCallbacks {
 
 bool available(){return requests!=nullptr;}
 bool streamAvailable(){return requests!=nullptr && streamCharacteristic!=nullptr;}
-bool wifiAvailable(){
-#if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
-  return requests!=nullptr;
-#else
-  return false;
-#endif
-}
+bool wifiAvailable(){return requests!=nullptr;}
 bool wifiBusy(){return wifiUploadActive.load();}
 
 void initialize() {
