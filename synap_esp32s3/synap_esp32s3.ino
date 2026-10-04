@@ -246,6 +246,7 @@ std::atomic<bool> batteryAvailable{false};
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 std::atomic<bool> odysseyRecording{false}, odysseyStopRequested{false};
 std::atomic<uint32_t> odysseyRecordingStartedAt{0}, odysseyRecordFaultAt{0};
+std::atomic<uint32_t> odysseySdSleepGuardUntil{0};
 void odysseyToggleRecording();
 bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs);
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs);
@@ -1097,6 +1098,11 @@ void enterRemoteStandby() {
 void enterDeepSleep(const char* reason) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   if (odysseyRecording.load()) return;
+  const uint32_t sdGuardUntil=odysseySdSleepGuardUntil.load();
+  if (sdGuardUntil && static_cast<int32_t>(millis()-sdGuardUntil)<0) {
+    Serial.println("[POWER] deep sleep deferred: C3 SD post-record settle");
+    return;
+  }
 #endif
   if (otaBusy() || streamingEnabled.load() || sleepPending) return;
 #if SYNAP_CHAKSHU
@@ -1199,6 +1205,8 @@ void powerTick() {
     if (batteryCritical()) odysseyStopRequested=true;
     return;
   }
+  const uint32_t sdGuardUntil=odysseySdSleepGuardUntil.load();
+  if (sdGuardUntil && static_cast<int32_t>(millis()-sdGuardUntil)<0) return;
 #endif
   if (batteryCritical() && !streamingEnabled.load() && !otaBusy()) {
     enterDeepSleep("critical-battery");
@@ -3057,6 +3065,13 @@ static void odysseyRecordTake() {
 // function first so SD and microphone guards release their mutexes.
 static void odysseyRecordTask(void*) {
   odysseyRecordTake();
+  // Even after fflush/fclose returns, give the SD card time to finish any
+  // internal flash programming before power management is allowed to tear
+  // down the SPI host. This also resets the disconnected idle window after
+  // every offline take instead of inheriting a stale BLE disconnect timestamp.
+  const uint32_t finalizedAt=millis();
+  odysseySdSleepGuardUntil=finalizedAt+5000u;
+  disconnectedAt=finalizedAt;
   odysseyRecording=false;
   odysseyStopRequested=false;
   applyCpuPowerProfile(false);
