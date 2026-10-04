@@ -157,6 +157,11 @@ void enterRemoteStandby() {
 void enterDeepSleep(const char* reason) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   if (odysseyRecording.load()) return;
+  const uint32_t sdGuardUntil=odysseySdSleepGuardUntil.load();
+  if (sdGuardUntil && static_cast<int32_t>(millis()-sdGuardUntil)<0) {
+    Serial.println("[POWER] deep sleep deferred: C3 SD post-record settle");
+    return;
+  }
 #endif
   if (otaBusy() || streamingEnabled.load() || sleepPending) return;
 #if SYNAP_CHAKSHU
@@ -259,6 +264,8 @@ void powerTick() {
     if (batteryCritical()) odysseyStopRequested=true;
     return;
   }
+  const uint32_t sdGuardUntil=odysseySdSleepGuardUntil.load();
+  if (sdGuardUntil && static_cast<int32_t>(millis()-sdGuardUntil)<0) return;
 #endif
   if (batteryCritical() && !streamingEnabled.load() && !otaBusy()) {
     enterDeepSleep("critical-battery");
