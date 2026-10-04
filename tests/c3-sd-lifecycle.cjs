@@ -205,10 +205,13 @@ test('C3 Wi-Fi bulk sync is additive, credential-scoped and preserves BLE fallba
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
   const caps=read('firmware/shared/module-capabilities.cpp');
   assert.match(transfer,/#include <WiFi\.h>/);
-  assert.match(transfer,/#include <NetworkClientSecure\.h>/);
-  assert.match(transfer,/client\.setCACert\(SYNAP_GTS_ROOTS\)/,'HTTPS must verify the Google Trust Services root chain');
+  assert.match(transfer,/#include <esp_tls\.h>/);
+  assert.match(transfer,/cfg\.cacert_buf=reinterpret_cast<const unsigned char\*>\(SYNAP_GTS_ROOTS\)/,
+    'HTTPS must verify the Google Trust Services root chain');
+  assert.match(transfer,/cfg\.common_name=target\.host/,'HTTPS must verify the requested backend hostname');
+  assert.match(transfer,/esp_tls_conn_new_sync/);
   assert.match(transfer,/GTSIFJvb3QgUjE|R1RTIFJvb3QgUjE/,'pinned trust store must include GTS Root R1');
-  assert.doesNotMatch(transfer,/setInsecure|skip_cert_common_name_check\s*=\s*true/);
+  assert.doesNotMatch(transfer,/setInsecure|skip_cert_common_name_check\s*=\s*true|skip_common_name\s*=\s*true/);
   assert.match(transfer,/WIFI_SEGMENT_MS=120000/);
   assert.match(transfer,/case 23: error=wifiStageChunk/);
   assert.match(transfer,/case 24: error=wifiCommit/);
