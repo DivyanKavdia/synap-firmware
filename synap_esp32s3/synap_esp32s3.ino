@@ -3005,12 +3005,11 @@ void odysseyToggleRecording() {
   Serial.println("[TOUCH] double tap -> SD audio START");
 }
 #endif
-// Odyssey C3 SD media-v1: catalogue/read/delete/format for locally recorded WAV files.
+// Odyssey C3 SD media-v1: catalogue/read/delete for locally recorded WAV files.
 // C3 storage is mounted through the stock Arduino SD SPI path and accessed through FAT/VFS.
 // Files are deleted only after the PWA has imported and verified them.
-#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 bool odysseyFormatSdCard();
-
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 namespace OdysseyTransfer {
 struct Request {
   uint32_t connection=0,id=0,offset=0;
