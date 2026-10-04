@@ -9,6 +9,9 @@ static void odysseyWavHeader(uint8_t* h,uint32_t bytes) {
   put32le(h+28,SAMPLE_RATE*2);h[32]=2;h[34]=16;
   memcpy(h+36,"data",4);put32le(h+40,bytes);
 }
+static constexpr size_t ODYSSEY_SD_WRITE_BUFFER_BYTES=12800u; // 8 PCM frames / 25 SD sectors
+static constexpr uint32_t ODYSSEY_WAV_CHECKPOINT_MS=15000u;
+
 static bool odysseyCheckpointWav(FILE* file,uint8_t* header,uint32_t bytes) {
   odysseyWavHeader(header,bytes);
   if (fseek(file,0,SEEK_SET)!=0) return false;
@@ -16,6 +19,16 @@ static bool odysseyCheckpointWav(FILE* file,uint8_t* header,uint32_t bytes) {
   if (fseek(file,long(44u+bytes),SEEK_SET)!=0) return false;
   return fflush(file)==0;
 }
+
+static bool odysseyFlushPcmBuffer(FILE* file,uint8_t* buffer,size_t& buffered,uint32_t& bytes) {
+  if (!buffered) return true;
+  const size_t pending=buffered;
+  const size_t written=fwrite(buffer,1,pending,file);
+  bytes+=uint32_t(written & ~size_t(1));
+  buffered=0;
+  return written==pending;
+}
+
 static void odysseyRecordTake() {
   bool failed=false,storageFailed=false;
   uint32_t bytes=0;
@@ -23,6 +36,8 @@ static void odysseyRecordTake() {
   char fullPath[96]{};
   uint8_t header[44];
   FILE* file=nullptr;
+  uint8_t* writeBuffer=nullptr;
+  size_t bufferedBytes=0;
 
   // Hold the single storage mutex for the whole take. A recovery/remount can
   // never tear down the VFS beneath an open recording.
@@ -41,6 +56,14 @@ static void odysseyRecordTake() {
       }
     }
     if (!file) { failed=true;storageFailed=true; }
+  }
+
+  // Keep the buffer off the FreeRTOS task stack. 12.8 KB is an exact multiple
+  // of both the 1600-byte PCM frame and the 512-byte SD sector, so routine card
+  // writes are large and sector-aligned instead of one write per audio frame.
+  if (!failed) {
+    writeBuffer=static_cast<uint8_t*>(malloc(ODYSSEY_SD_WRITE_BUFFER_BYTES));
+    if (!writeBuffer) failed=true;
   }
 
   odysseyWavHeader(header,0);
@@ -66,14 +89,29 @@ static void odysseyRecordTake() {
       }
       if (failed || odysseyStopRequested.load()) break;
       for (uint16_t i=0;i<SAMPLES_PER_FRAME;++i) pcm[i]=static_cast<int16_t>(raw[i]>>16);
-      if (bytes>0xffffff00u-sizeof(pcm)) break; // RIFF length is 32-bit.
-      const size_t written=fwrite(pcm,1,sizeof(pcm),file);
-      bytes+=uint32_t(written & ~size_t(1));
-      if (written!=sizeof(pcm)) { failed=true;storageFailed=true; break; }
+      if (uint64_t(bytes)+uint64_t(bufferedBytes)+sizeof(pcm)>0xffffff00ull) break;
 
-      // Keep a recoverable WAV header on media even if power is lost mid-take.
-      if (uint32_t(millis()-checkpointAt)>=2000u) {
-        if (!odysseyCheckpointWav(file,header,bytes)) { failed=true;storageFailed=true; break; }
+      if (bufferedBytes+sizeof(pcm)>ODYSSEY_SD_WRITE_BUFFER_BYTES) {
+        if (!odysseyFlushPcmBuffer(file,writeBuffer,bufferedBytes,bytes)) {
+          failed=true;storageFailed=true;break;
+        }
+      }
+      memcpy(writeBuffer+bufferedBytes,pcm,sizeof(pcm));
+      bufferedBytes+=sizeof(pcm);
+
+      if (bufferedBytes==ODYSSEY_SD_WRITE_BUFFER_BYTES) {
+        if (!odysseyFlushPcmBuffer(file,writeBuffer,bufferedBytes,bytes)) {
+          failed=true;storageFailed=true;break;
+        }
+      }
+
+      // A 15-second checkpoint retains crash recoverability while avoiding the
+      // old 2-second seek/header/flush cycle that repeatedly forced FAT writes.
+      if (uint32_t(millis()-checkpointAt)>=ODYSSEY_WAV_CHECKPOINT_MS) {
+        if (!odysseyFlushPcmBuffer(file,writeBuffer,bufferedBytes,bytes) ||
+            !odysseyCheckpointWav(file,header,bytes)) {
+          failed=true;storageFailed=true;break;
+        }
         checkpointAt=millis();
       }
     }
@@ -84,18 +122,28 @@ static void odysseyRecordTake() {
 #endif
 
   if (file) {
+    if (!odysseyFlushPcmBuffer(file,writeBuffer,bufferedBytes,bytes)) {
+      failed=true;storageFailed=true;
+    }
     if (!odysseyCheckpointWav(file,header,bytes)) { failed=true;storageFailed=true; }
     if (fclose(file)!=0) { failed=true;storageFailed=true; }
     file=nullptr;
   }
+  if (writeBuffer) {
+    free(writeBuffer);
+    writeBuffer=nullptr;
+  }
 
-  Serial.printf("[SD] local audio %s: %s, %lu PCM bytes%s\n",
+  Serial.printf("[SD] local audio %s: %s, %lu PCM bytes, buffered=%u checkpoint=%lus%s\n",
     failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),
+    unsigned(ODYSSEY_SD_WRITE_BUFFER_BYTES),
+    static_cast<unsigned long>(ODYSSEY_WAV_CHECKPOINT_MS/1000u),
     failed?" (mount retained for explicit recovery)":"");
   // Surface media I/O failure immediately instead of advertising SD-ready until
   // the next catalogue happens to discover the broken VFS.
   if (storageFailed) odysseySdMarkVfsFailure();
-  // A mounted SD card can still fail to open a WAV or start the microphone.
+  // A mounted SD card can still fail to allocate RAM, open/start the microphone,
+  // or return zero audio without proving that the filesystem itself failed.
   if (failed || bytes==0) odysseyRecordFaultAt=millis();
 }
 // FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
