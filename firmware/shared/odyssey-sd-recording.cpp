@@ -196,6 +196,13 @@ static void odysseyRecordTake() {
 // function first so SD and microphone guards release their mutexes.
 static void odysseyRecordTask(void*) {
   odysseyRecordTake();
+  // Even after fflush/fclose returns, give the SD card time to finish any
+  // internal flash programming before power management is allowed to tear
+  // down the SPI host. This also resets the disconnected idle window after
+  // every offline take instead of inheriting a stale BLE disconnect timestamp.
+  const uint32_t finalizedAt=millis();
+  odysseySdSleepGuardUntil=finalizedAt+5000u;
+  disconnectedAt=finalizedAt;
   odysseyRecording=false;
   odysseyStopRequested=false;
   applyCpuPowerProfile(false);
