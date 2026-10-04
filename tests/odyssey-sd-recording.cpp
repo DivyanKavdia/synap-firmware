@@ -31,6 +31,7 @@ void delay(unsigned ms){
 }
 uint32_t esp_random(){return ++randomCounter;}
 bool otaBusy(){return ota;}
+namespace OdysseyTransfer { bool wifiBusy(){return false;} }
 // Native harness records the deferred request; the production transfer worker
 // is responsible for remounting away from the touch/control task.
 int recoveryRequests=0,vfsFailures=0,quiesceFaults=0;
