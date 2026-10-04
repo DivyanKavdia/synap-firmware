@@ -15,6 +15,8 @@ test('C3 reproduces build-1445 first mount and isolates SPI with GPIO bitbang',(
   assert.deepEqual(target.hardware.sdDetection,{cs:0,sck:10,mosi:21,miso:20});
   assert.match(source,/static SPIClass odysseySdSpi\(FSPI\)/);
   assert.match(source,/ODYSSEY_SD_INIT_FREQ_HZ=400000u/);
+  assert.match(source,/ODYSSEY_SD_STARTUP_SETTLE_MS=3000u/);
+  assert.match(source,/odysseyWaitForSdStartupSettle\(\);[\s\S]*OdysseySdGuard guard/);
   assert.match(source,/ODYSSEY_SD_MAX_OPEN_FILES=1/);
   assert.doesNotMatch(source,/ODYSSEY_SD_RESCUE_FREQ_HZ|ODYSSEY_SD_STARTUP_SETTLE_MS/);
   assert.match(source,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,/);
