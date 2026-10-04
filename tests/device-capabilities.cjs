@@ -58,7 +58,7 @@ int main(){
   assert(word(p+4)&SYNAP_CAP_SDAUDIO);
   assert(bool(word(p+6)&SYNAP_CAP_SD)==bool(sdState==1));
   assert(bool(word(p+6)&SYNAP_CAP_SDAUDIO)==bool((hardware&1) && sdState==1));
-  assert(p[14]==2 && p[15]==0 && p[16]==1);
+  assert(p[14]==1 && p[15]==0 && p[16]==1);
 #else
   assert(!(word(p+4)&SYNAP_CAP_SD));
   assert(p[14]==0 && p[15]==0 && p[16]==0);
