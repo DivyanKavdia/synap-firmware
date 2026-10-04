@@ -56,10 +56,26 @@ static void odysseyRecordTake() {
     while (!failed && !odysseyStopRequested.load()) {
       size_t received=0;
       uint8_t emptyReads=0;
+      bool microphoneRecoveryUsed=false;
       while (received<sizeof(raw) && !odysseyStopRequested.load()) {
         const size_t count=microphoneI2S.readBytes(reinterpret_cast<char*>(raw)+received,sizeof(raw)-received);
         if (!count) {
-          if (++emptyReads>=3) { failed=true; break; }
+          if (++emptyReads>=3) {
+            // Match the connected recorder's bounded recovery. Some C3 I2S
+            // starts succeed before samples are immediately available; one
+            // driver restart prevents that transient from becoming a failed
+            // offline take and a red fault indication.
+            if (!microphoneRecoveryUsed && !odysseyStopRequested.load()) {
+              microphoneRecoveryUsed=true;
+              Serial.println("[MIC] offline SD empty I2S reads; restarting capture driver");
+              stopMicrophone();
+              delay(35);
+              if (odysseyStopRequested.load()) break;
+              if (startMicrophone()) { received=0; emptyReads=0; continue; }
+            }
+            if (!odysseyStopRequested.load()) failed=true;
+            break;
+          }
         } else {
           received+=count;emptyReads=0;
         }

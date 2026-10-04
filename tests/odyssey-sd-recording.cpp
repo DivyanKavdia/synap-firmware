@@ -16,6 +16,7 @@ constexpr int pdPASS=1;
 std::atomic<bool> odysseyRecording{false},odysseyStopRequested{false},deviceConnected{false},streamingEnabled{false};
 std::atomic<uint32_t> odysseyRecordingStartedAt{0},odysseyRecordFaultAt{0};
 bool sleepPending=false,critical=false,ota=false,micOk=true,cardOk=true,allocOk=true,reconnect=false,pathOk=true,finalizeOnDelay=false;
+int forcedEmptyReads=0;
 uint8_t odysseySdBootState=1;
 uint32_t clockMs=0,randomCounter=0;
 int reads=0,micStarts=0,micStops=0,powerActive=0,powerIdle=0;
@@ -42,6 +43,7 @@ bool startMicrophone(){++micStarts;return micOk;}
 void stopMicrophone(){++micStops;}
 struct Mic {
  size_t readBytes(char* out,size_t n){
+  if(forcedEmptyReads>0){--forcedEmptyReads;clockMs+=80;return 0;}
   ++reads;clockMs+=1000;
   if(reconnect)deviceConnected=true;
   if(reads>4){odysseyStopRequested=true;return 0;}
@@ -70,7 +72,7 @@ void reset(){
  odysseyRecording=false;odysseyStopRequested=false;deviceConnected=false;streamingEnabled=false;
  odysseyRecordingStartedAt=0;odysseyRecordFaultAt=0;
  sleepPending=critical=ota=reconnect=finalizeOnDelay=false;micOk=cardOk=allocOk=pathOk=true;odysseySdBootState=1;
- clockMs=randomCounter=0;reads=micStarts=micStops=powerActive=powerIdle=0;pendingTask=nullptr;lastPath.clear();
+ clockMs=randomCounter=0;reads=micStarts=micStops=powerActive=powerIdle=0;forcedEmptyReads=0;pendingTask=nullptr;lastPath.clear();
  {const int rc=system("rm -rf /tmp/synap-odyssey-test");assert(rc==0);}
  assert(mkdir("/tmp/synap-odyssey-test",0755)==0);
  assert(mkdir("/tmp/synap-odyssey-test/synap",0755)==0);
@@ -101,6 +103,11 @@ int main(){
 
  reset();reconnect=true;odysseyToggleRecording();run();data=load();
  assert(deviceConnected&&get32(data,40)==3200);
+
+ reset();forcedEmptyReads=3;odysseyToggleRecording();run();data=load();
+ assert(get32(data,40)==3200);
+ assert(micStarts==2&&micStops==2);
+ assert(odysseyRecordFaultAt.load()==0);
 
  reset();odysseyToggleRecording();odysseyToggleRecording();assert(odysseyStopRequested);run();data=load();
  assert(!micStarts&&get32(data,40)==0);
