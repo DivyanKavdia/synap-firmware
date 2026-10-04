@@ -181,7 +181,8 @@ void odysseyToggleRecording() {
     Serial.println("[TOUCH] double tap -> SD audio STOP");
     return;
   }
-  if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) return;
+  if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending ||
+      OdysseyTransfer::wifiBusy() || batteryCritical()) return;
   if (!odysseySdReady()) {
     odysseySdRequestRecovery();
     odysseyRecordFaultAt=millis();
