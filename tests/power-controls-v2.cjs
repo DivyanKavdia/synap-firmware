@@ -31,6 +31,8 @@ test('awake hold sleeps while the second tap immediately controls recording',()=
   assert.match(s3,/long press -> DEEP SLEEP/);
   assert.match(s3,/enterDeepSleep\("touch-hold"\)/);
   assert.match(s3,/enterDeepSleep\("touch-hold-after-stop"\)/);
+  assert.match(s3,/deep sleep deferred: C3 SD post-record settle/);
+  assert.match(s3,/odysseySdSleepGuardUntil\.load\(\)/);
   assert.match(s3,/double tap -> START/);
   assert.match(s3,/double tap -> STOP \+ POWER SAVER/);
   assert.match(s3,/held>=TOUCH_SLEEP_HOLD_MS/);
