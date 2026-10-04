@@ -19,11 +19,18 @@ test('Chakshu alone uses native callbacks, owned commands and synchronous audio 
   assert.match(source,/4fa12356-0000-1000-8000-00805f9b34fb/);
   assert.match(source,/4fa12357-0000-1000-8000-00805f9b34fb/);
   assert(boot.indexOf('xTaskCreatePinnedToCore(acquisitionTask')<boot.indexOf('initializeBLE();'));
-  for(const target of ['esp32s3-fh4r2-qspi-4m','esp32c3-supermini-4m']) {
-    const other=materialize(assemble(),target);
-    assert.match(other,/#include <BLEDevice.h>/);
-    assert.doesNotMatch(other,/NimBLEDevice.h|sendChakshuAudio|ChakshuVoice|ChakshuModel|esp_afe|esp_mn|srmodels|4fa1235[67]-/);
-  }
+  const s3=materialize(assemble(),'esp32s3-fh4r2-qspi-4m');
+  assert.match(s3,/#include <BLEDevice.h>/);
+  assert.doesNotMatch(s3,/NimBLEDevice.h|sendChakshuAudio|ChakshuVoice|ChakshuModel|esp_afe|esp_mn|srmodels|4fa1235[67]-/);
+  const c3=materialize(assemble(),'esp32c3-supermini-4m');
+  assert.match(c3,/#include <NimBLEDevice.h>/);
+  assert.doesNotMatch(c3,/#include <BLEDevice.h>|sendChakshuAudio|ChakshuVoice|ChakshuModel|esp_afe|esp_mn|srmodels|4fa1235[67]-/);
+  assert.match(c3,/C3ControlCharacteristic/);
+  assert.match(c3,/sendC3Audio/);
+  assert.match(c3,/sendC3Media/);
+  assert.match(c3,/"@catalogue"/);
+  assert.match(c3,/case 12: streamWindow\(request\); continue;/);
+  assert.doesNotMatch(c3,/getData\(|getLength\(|SUCCESS_NOTIFY|onStatus\(/);
 });
 
 test('Chakshu audio checks subscription, owns mbufs, and reports allocation/congestion failures',()=>{
