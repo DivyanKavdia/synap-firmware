@@ -200,3 +200,24 @@ test('C3 media v2 reuses the proven eight-credit notification window with v1 fal
   assert.match(caps,/p\[14\]=1/);
   assert.match(caps,/p\[16\]=OdysseyTransfer::streamAvailable\(\)\?1:0/);
 });
+
+test('C3 Wi-Fi bulk sync is additive, credential-scoped and preserves BLE fallbacks',()=>{
+  const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
+  const caps=read('firmware/shared/module-capabilities.cpp');
+  assert.match(transfer,/#include <WiFi\.h>/);
+  assert.match(transfer,/crt_bundle_attach=esp_crt_bundle_attach/,'HTTPS must verify server certificates');
+  assert.doesNotMatch(transfer,/setInsecure|skip_cert_common_name_check\s*=\s*true/);
+  assert.match(transfer,/WIFI_SEGMENT_MS=120000/);
+  assert.match(transfer,/case 23: error=wifiStageChunk/);
+  assert.match(transfer,/case 24: error=wifiCommit/);
+  assert.match(transfer,/case 25: error=wifiStatusReply/);
+  assert.match(transfer,/case 26:/);
+  assert.match(transfer,/Authorization/);
+  assert.match(transfer,/SynapDevice %s/);
+  assert.match(transfer,/\/v1\/device-uploads\/%s\/segments\/%lu/);
+  assert.match(transfer,/wifiStatusRequest\(job,next,finalized,httpStatus\)/);
+  assert.match(transfer,/if \(unlink\(full\)!=0\)/,'source deletion must happen only after cloud verification');
+  assert.match(transfer,/case 12: streamWindow\(request\); continue;/,'fast BLE fallback remains');
+  assert.match(transfer,/case 4:/,'legacy BLE fallback remains');
+  assert.match(caps,/OdysseyTransfer::wifiAvailable\(\)\?2:0/);
+});
