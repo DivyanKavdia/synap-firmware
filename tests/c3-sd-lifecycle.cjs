@@ -3,11 +3,11 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const root=path.resolve(__dirname,'..'),read=p=>fs.readFileSync(path.join(root,p),'utf8');
 test('C3 SD mutex is released before a recording task deletes itself',()=>{
   const source=read('firmware/shared/odyssey-sd-recording.cpp');
-  const take=source.split('static void odysseyRecordTake() {')[1].split('static void odysseyRecordTask(void*) {')[0];
+  const take=source.split('static bool odysseyRecordTake() {')[1].split('static void odysseyRecordTask(void*) {')[0];
   const task=source.split('static void odysseyRecordTask(void*) {')[1].split('bool odysseyPrepareForConnectedStreaming')[0];
   assert.match(take,/OdysseySdGuard storage;/);
   assert.doesNotMatch(take,/vTaskDelete/);
-  assert.match(task,/odysseyRecordTake\(\);[\s\S]*odysseyRecording=false;[\s\S]*vTaskDelete\(nullptr\)/);
+  assert.match(task,/const bool storageFault=odysseyRecordTake\(\);[\s\S]*odysseyRecording=false;[\s\S]*vTaskDelete\(nullptr\)/);
 });
 test('C3 reconnect never stops SD capture; START performs explicit handoff',()=>{
   const ble=read('firmware/shared/ble-control.cpp');
@@ -64,7 +64,7 @@ test('C3 offline recording has visible purple heartbeat and failed-start feedbac
   assert.match(led,/uint32_t\(now-odysseyRecordFaultAt\.load\(\)\)<6000u/);
   assert.match(led,/phase<140u \|\| \(phase>=260u && phase<400u\)/);
   assert.match(recorder,/odysseyRecordingStartedAt=millis\(\);[\s\S]*?odysseyRecording=true/);
-  assert.match(recorder,/if \(failed \|\| bytes==0\) odysseyRecordFaultAt=millis\(\)/);
+  assert.match(recorder,/if \(failed \|\| bytes==0 \|\| finalSize<=long\(sizeof\(header\)\)\) odysseyRecordFaultAt=millis\(\)/);
   assert.match(recorder,/odysseySdRequestRecovery\(\);\s*odysseyRecordFaultAt=millis\(\)/);
 });
 
