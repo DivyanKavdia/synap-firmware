@@ -21,7 +21,11 @@ test('C3 reproduces build-1445 first mount and isolates SPI with GPIO bitbang',(
   assert.match(source,/ODYSSEY_SD_MAX_OPEN_FILES=1/);
   assert.doesNotMatch(source,/ODYSSEY_SD_RESCUE_FREQ_HZ/);
   assert.match(source,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
-  assert.match(source,/ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false/);
+  const normalMount=source.split('static bool odysseySdMountOnceLocked')[1].split('static bool odysseySdMountLocked')[0];
+  const explicitFormat=source.split('bool odysseyFormatSdCard()')[1].split('bool odysseyPrepareSdForPowerTransition')[0];
+  assert.match(normalMount,/odysseySdBeginLocked\(\)/);
+  assert.doesNotMatch(normalMount,/odysseySdBeginLocked\(true\)/);
+  assert.match(explicitFormat,/odysseySdBeginLocked\(true\)/);
   assert.match(source,/odysseySdBitBangTransfer/);
   assert.match(source,/odysseySdBitBangCommand\(0u,0u,0x95u\)/);
   assert.match(source,/odysseySdBitBangCommand\(8u,0x1AAu,0x87u/);
