@@ -3034,7 +3034,9 @@ void odysseyToggleRecording() {
 // C3 storage is mounted through the stock Arduino SD SPI path and accessed through FAT/VFS.
 // Files are deleted only after the destination has durably accepted and verified them.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-#include <WiFi.h>
+#include <esp_wifi.h>
+#include <esp_event.h>
+#include <esp_netif.h>
 #include <esp_tls.h>
 #include <esp_tls_errors.h>
 namespace OdysseyTransfer {
@@ -3066,6 +3068,61 @@ static uint8_t wifiPhase=0; // 0 idle,1 connecting,2 resuming,3 uploading,4 fina
 static uint32_t wifiSegment=0,wifiSegmentCount=0,wifiUploadedBytes=0,wifiTotalBytes=0;
 static int wifiHttpStatus=0,wifiErrorCode=0;
 static char wifiRecordingId[40]{},wifiStatusMessage[72]{};
+static std::atomic<bool> nativeWifiGotIp{false},nativeWifiDisconnected{false};
+static esp_netif_t* nativeWifiNetif=nullptr;
+static bool nativeWifiInitialized=false;
+
+static void nativeWifiEvent(void*,esp_event_base_t base,int32_t id,void*) {
+  if (base==IP_EVENT && id==IP_EVENT_STA_GOT_IP) {
+    nativeWifiGotIp=true;nativeWifiDisconnected=false;
+  } else if (base==WIFI_EVENT && id==WIFI_EVENT_STA_DISCONNECTED) {
+    nativeWifiGotIp=false;nativeWifiDisconnected=true;
+  }
+}
+
+static bool nativeWifiInitialize() {
+  if (nativeWifiInitialized) return true;
+  const esp_err_t netifInit=esp_netif_init();
+  if (netifInit!=ESP_OK && netifInit!=ESP_ERR_INVALID_STATE) return false;
+  const esp_err_t loopInit=esp_event_loop_create_default();
+  if (loopInit!=ESP_OK && loopInit!=ESP_ERR_INVALID_STATE) return false;
+  nativeWifiNetif=esp_netif_create_default_wifi_sta();
+  if (!nativeWifiNetif) return false;
+  wifi_init_config_t cfg=WIFI_INIT_CONFIG_DEFAULT();
+  if (esp_wifi_init(&cfg)!=ESP_OK) return false;
+  if (esp_event_handler_register(WIFI_EVENT,WIFI_EVENT_STA_DISCONNECTED,&nativeWifiEvent,nullptr)!=ESP_OK ||
+      esp_event_handler_register(IP_EVENT,IP_EVENT_STA_GOT_IP,&nativeWifiEvent,nullptr)!=ESP_OK) return false;
+  nativeWifiInitialized=true;
+  return true;
+}
+
+static bool nativeWifiConnect(const char* ssid,const char* password,uint32_t timeoutMs) {
+  if (!ssid || !ssid[0] || !nativeWifiInitialize()) return false;
+  wifi_config_t cfg={};
+  snprintf(reinterpret_cast<char*>(cfg.sta.ssid),sizeof(cfg.sta.ssid),"%s",ssid);
+  snprintf(reinterpret_cast<char*>(cfg.sta.password),sizeof(cfg.sta.password),"%s",password?password:"");
+  cfg.sta.pmf_cfg.capable=true;cfg.sta.pmf_cfg.required=false;
+  if (esp_wifi_set_mode(WIFI_MODE_STA)!=ESP_OK ||
+      esp_wifi_set_config(WIFI_IF_STA,&cfg)!=ESP_OK) return false;
+  const esp_err_t start=esp_wifi_start();
+  if (start!=ESP_OK && start!=ESP_ERR_WIFI_CONN) return false;
+  (void)esp_wifi_set_ps(WIFI_PS_NONE);
+  nativeWifiGotIp=false;nativeWifiDisconnected=false;
+  if (esp_wifi_connect()!=ESP_OK) return false;
+  const uint32_t started=millis();
+  while (!nativeWifiGotIp.load() && uint32_t(millis()-started)<timeoutMs) {
+    if (nativeWifiDisconnected.exchange(false)) (void)esp_wifi_connect();
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+  return nativeWifiGotIp.load();
+}
+
+static void nativeWifiStop() {
+  nativeWifiGotIp=false;nativeWifiDisconnected=false;
+  if (!nativeWifiInitialized) return;
+  (void)esp_wifi_disconnect();
+  (void)esp_wifi_stop();
+}
 
 struct WifiJob {
   char endpoint[192]{};
@@ -3668,12 +3725,9 @@ static void wifiUploadTask(void*) {
   if (!wifiLoadProfile(ssid,sizeof(ssid),password,sizeof(password))) {
     wifiSetStatus(6,"Wi-Fi is not configured",0,1);goto finish;
   }
-  WiFi.mode(WIFI_STA);WiFi.setSleep(false);WiFi.begin(ssid,password);
-  {
-    const uint32_t started=millis();
-    while (WiFi.status()!=WL_CONNECTED && uint32_t(millis()-started)<25000u) vTaskDelay(pdMS_TO_TICKS(200));
+  if (!nativeWifiConnect(ssid,password,25000u)) {
+    wifiSetStatus(6,"Could not join Wi-Fi",0,2);goto finish;
   }
-  if (WiFi.status()!=WL_CONNECTED) { wifiSetStatus(6,"Could not join Wi-Fi",0,2);goto finish; }
 
   wifiSetStatus(2,"Checking upload resume point");
   {
@@ -3743,7 +3797,7 @@ static void wifiUploadTask(void*) {
   }
 
 disconnect:
-  WiFi.disconnect(true,false);WiFi.mode(WIFI_OFF);
+  nativeWifiStop();
 finish:
   if (!success && storageFault) {
     odysseySdMarkVfsFailure();
