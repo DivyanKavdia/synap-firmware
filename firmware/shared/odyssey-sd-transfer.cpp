@@ -845,6 +845,7 @@ bool wifiAvailable(){
   return false;
 #endif
 }
+bool wifiBusy(){return wifiUploadActive.load();}
 
 void initialize() {
   char ssid[33]{},password[64]{};
