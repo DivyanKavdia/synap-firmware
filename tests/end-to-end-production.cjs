@@ -78,8 +78,8 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   // No autonomous remount after a failed boot; recovery is explicit.
   assert.doesNotMatch(c3,/odysseySdConsumeAutoRearm|scheduled re-arm after failed boot mount/);
   assert.match(c3,/static void odysseySdSampleRawLocked\(\)/);
-  assert.match(c3,/ODYSSEY_SD_INIT_FREQ_HZ=400000u/);
-  assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,/);
+  assert.match(c3,/ODYSSEY_SD_DATA_FREQ_HZ=4000000u/);
+  assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
   assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|spi_bus_initialize/);
   assert.match(c3,/Normal PWA reads are observational only\. Only operation 14 may remount/);
   const transferInit=c3.indexOf('OdysseyTransfer::initialize();');
@@ -115,7 +115,7 @@ test('C3 exact Arduino first mount precedes BLE while GPIO fallback remains post
   assert(worker>0 && sd>worker && ble>sd,'C3 must reproduce 1445 worker -> mount -> BLE ordering');
   assert(c3.indexOf('bool mounted=odysseySdBeginLocked();')<c3.indexOf('odysseySdBitBangRecoverLocked(reason)'));
   assert.match(c3,/static SPIClass odysseySdSpi\(FSPI\)/);
-  assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,/);
+  assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
   assert.match(c3,/SD\.end\(\)/);
   assert.match(c3,/odysseySdSpi\.end\(\)/);
   assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|spi_bus_initialize|spi_bus_free/);
