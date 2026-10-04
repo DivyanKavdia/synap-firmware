@@ -2189,6 +2189,7 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
 static constexpr uint32_t ODYSSEY_SD_INIT_FREQ_HZ=400000u;
+static constexpr uint32_t ODYSSEY_SD_STARTUP_SETTLE_MS=3000u;
 // Preserve the known-good build-1445 lifecycle: one mount attempt per
 // explicit action. Repeating SD.end()/SPI.end()/SD.begin() autonomously on a
 // continuously powered card is itself a state mutation and obscures the first
@@ -2718,8 +2719,16 @@ void odysseyDetectSdCard() {
   odysseySdMountLocked("probe",1);
 }
 bool odysseyInitializeSdCardBeforeBle() {
-  // Regression diagnostic: reproduce build 1445 timing and first transaction.
-  // No startup delay and no raw command is issued before the first SD.begin().
+  // The external SD adapter and card share the battery rail. Give them a fixed
+  // boot-only settle window before the first CS/clock transition; recovery and
+  // explicit remount behavior stay unchanged.
+  const uint32_t now=millis();
+  if (now<ODYSSEY_SD_STARTUP_SETTLE_MS) {
+    const uint32_t waitMs=ODYSSEY_SD_STARTUP_SETTLE_MS-now;
+    Serial.printf("[SD] startup settle %lu ms before first transaction\n",
+      static_cast<unsigned long>(waitMs));
+    delay(waitMs);
+  }
   OdysseySdGuard guard;
   if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return false; }
   const bool ready=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
