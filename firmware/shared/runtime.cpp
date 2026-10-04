@@ -218,6 +218,7 @@ void initialize();
 void ble(BLEService* service);
 bool available();
 bool streamAvailable();
+bool wifiAvailable();
 }
 #endif
 
