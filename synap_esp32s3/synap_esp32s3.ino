@@ -3546,8 +3546,10 @@ static void wifiUploadTask(void*) {
       fclose(file);wifiSetStatus(6,"Could not resume cloud upload",httpStatus,8);goto disconnect;
     }
     if (finalized) {
+      if (fclose(file)!=0) { wifiSetStatus(6,"Cloud has recording but SD close failed",httpStatus,9);goto disconnect; }
+      file=nullptr;
       if (unlink(full)!=0) { wifiSetStatus(6,"Cloud has recording but SD cleanup failed",httpStatus,9);goto disconnect; }
-      fclose(file);success=true;wifiSetStatus(5,"Wi-Fi sync complete",httpStatus,0);goto disconnect;
+      success=true;wifiSetStatus(5,"Wi-Fi sync complete",httpStatus,0);goto disconnect;
     }
     wifiUploadedBytes=std::min(dataBytes,next*WIFI_SEGMENT_PCM_BYTES);
     for (uint32_t index=next;index<segmentCount;++index) {
