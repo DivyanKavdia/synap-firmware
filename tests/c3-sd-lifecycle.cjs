@@ -184,3 +184,12 @@ test('C3 recovery performs one checked teardown and successful takes clear stale
   assert.match(recorder,/else if \(totalBytes\) odysseySaveRecordFailure\(0,0,0\)/);
   assert.match(recorder,/errno=firstErrno\?firstErrno:EIO;odysseySdMarkVfsFailure\(\)/);
 });
+
+test('C3 sync-source deletion is idempotent and keeps the journal until the WAV is gone',()=>{
+  const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
+  const remove=transfer.split('static uint8_t removeFileLocked(const char* path) {')[1].split('static uint8_t removeFile(const char* path) {')[0];
+  assert(remove.indexOf('unlink(full)')<remove.indexOf('odysseyRemoveJournal(full)'));
+  assert.match(remove,/statResult!=0 && errno!=ENOENT/);
+  assert.match(remove,/Verify both source objects are gone before acknowledging deletion/);
+  assert.match(remove,/odysseyJournalPresence\(full\)/);
+});
