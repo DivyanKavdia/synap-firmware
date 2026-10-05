@@ -53,6 +53,17 @@ Error JSON falls back to a compact complete object if counters exceed the BLE
 payload budget. Firmware linkage requires the patched driver; CI cannot silently
 omit it again.
 
+## First-checkpoint recovery correction
+
+A separate, reproduced recorder bug affected optional contiguous-allocation
+fallback. That path left an empty file; writing only the first inline journal
+slot extended it to `journal_offset + 512`, but discovery required
+`journal_offset + 1024`. A reset before checkpoint two therefore missed the
+valid first checkpoint and could truncate the recording using its zero-length
+initial WAV header. Initial commit now materializes/clears the second slot
+before committing the first. A regression starts with a non-preallocated WAV,
+commits one checkpoint, closes it as on reset, and verifies exact recovered PCM.
+
 ## Validation and device acceptance
 
 Native tests execute the actual pinned old and patched initializer bodies against

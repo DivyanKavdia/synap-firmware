@@ -216,6 +216,14 @@ static inline bool odysseyJournalCommit(int wavFd,int journal,const char* path,
   const int target=inlineJournal?wavFd:journal;
   if (target<0) { errno=EBADF;return false; }
   const off_t base=inlineJournal?ODYSSEY_INLINE_JOURNAL_OFFSET:0;
+  if (inlineJournal && sequence==0) {
+    // Allocation fallback can leave an empty, non-preallocated file. Materialize
+    // the second slot before committing the first so reset recovery recognizes
+    // the full inline journal immediately, even before checkpoint two.
+    // Also invalidate any old bytes in the newly allocated second sector.
+    uint8_t empty[512]{};
+    if (!odysseyPwriteAll(target,empty,sizeof(empty),base+512)) return false;
+  }
   if (!odysseyPwriteAll(target,record,sizeof(record),
         base+off_t((next-1u)&1u)*512) || fsync(target)!=0)
     return false;

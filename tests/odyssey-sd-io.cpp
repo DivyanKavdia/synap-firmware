@@ -78,6 +78,16 @@ int main() {
   assert(close(fd)==0);
   assert(odysseyRecoverWav(path));verify(8192);
 
+  // Allocation fallback leaves only the actual PCM length, not a full reserved
+  // extent. The first inline checkpoint must still create BOTH journal slots;
+  // reset before checkpoint two must recover the first committed audio.
+  fd=createWav(true);seq=0;
+  assert(ftruncate(fd,44+8192)==0);
+  assert(odysseyJournalCommit(fd,ODYSSEY_INLINE_JOURNAL,path,8192,seq));
+  assert(close(fd)==0);
+  assert(odysseyJournalPresence(path)==1);
+  assert(odysseyRecoverWav(path));verify(8192);
+
   // Legacy sidecar journals remain recoverable after OTA.
   fd=createWav();journal=odysseyCreateJournal(path);assert(journal>=0);seq=0;
   assert(odysseyJournalCommit(fd,journal,path,8192,seq));
