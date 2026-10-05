@@ -68,7 +68,7 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(sdBackend,/esp_vfs_fat_unregister_path\(ODYSSEY_SD_MOUNT_POINT\)/);
   assert.match(sdBackend,/odysseySdSpi\.end\(\)/);
   assert.doesNotMatch(sdBackend,/SDSPI_HOST_DEFAULT|esp_vfs_fat_sdspi_mount|spi_bus_initialize/);
-  assert.match(sdBackend,/odysseySdMountLocked\("boot",1\)/);
+  assert.match(sdBackend,/odysseySdMountLocked\("boot",3\)/);
   assert.match(sdBackend,/odysseySdMountLocked\(why,attempts\)/);
   assert.doesNotMatch(sdBackend,/odysseySdConsumeAutoRearm|scheduled re-arm/);
   assert.match(sdBackend,/SD\.writeRAW\(blankSector,0\)/);

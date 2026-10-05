@@ -402,7 +402,17 @@ static bool odysseySdMountLocked(const char* reason,uint8_t attempts) {
   if (odysseySdReady()) return true;
   for (uint8_t attempt=1;attempt<=attempts;++attempt) {
     if (odysseySdMountOnceLocked(reason,attempt)) return true;
-    if (attempt<attempts) delay(250u);
+    if (attempt<attempts) {
+      // Some cards/modules stay busy across ESP software reset/deep sleep even
+      // though the bus is already deselected. Every retry starts from a full
+      // SD.end()/SPI.end() teardown; progressively longer idle time lets the
+      // card finish internal work before Arduino sends its fresh CMD0 sequence.
+      const uint32_t retryDelayMs=250u*uint32_t(attempt)*uint32_t(attempt);
+      Serial.printf("[SD] %s retry %u/%u after %lu ms idle\n",
+        reason,unsigned(attempt+1u),unsigned(attempts),
+        static_cast<unsigned long>(retryDelayMs));
+      delay(retryDelayMs);
+    }
   }
   Serial.printf("[SD] %s failed after %u attempt(s), state=%u stage=%u err=%ld\n",
     reason,unsigned(attempts),unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()),
@@ -425,7 +435,10 @@ bool odysseyInitializeSdCardBeforeBle() {
   }
   OdysseySdGuard guard;
   if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return false; }
-  const bool ready=odysseySdMountLocked("boot",1);
+  // Boot is allowed three bounded attempts before BLE starts. This is still
+  // fail-closed: a card is published ready only after mount + geometry +
+  // durable VFS write/readback validation succeeds.
+  const bool ready=odysseySdMountLocked("boot",3);
   Serial.printf("[SD] boot initialization complete state=%u stage=%u before BLE\n",
     unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()));
   return ready;
