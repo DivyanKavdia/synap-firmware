@@ -2393,7 +2393,7 @@ static bool odysseyCleanRecordTake() {
   }
 
   file.close();
-  if (!pcmBytes) {
+  if (!ok || !pcmBytes) {
     (void)SD.remove(path);
     ok=false;
   }
