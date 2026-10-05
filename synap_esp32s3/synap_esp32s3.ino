@@ -2560,6 +2560,10 @@ static std::atomic<int32_t> odysseySdLastIoErrno{0};
 static std::atomic<int32_t> odysseySdLastReleaseError{ESP_OK};
 static std::atomic<uint64_t> odysseySdLastFreeBytes{0};
 static std::atomic<uint64_t> odysseySdLastGoodFreeBytes{0};
+static std::atomic<uint16_t> odysseySdRecoveryRawZero{0},odysseySdRecoveryRawFF{0};
+static std::atomic<int16_t> odysseySdRecoveryCmd0{-2},odysseySdRecoveryCmd8{-2};
+static std::atomic<uint8_t> odysseySdRecoveryReadIdle{0},odysseySdRecoveryWriteStop{0};
+static std::atomic<uint32_t> odysseySdRecoveryDrainBytes{0};
 int32_t odysseySdLastError() { return odysseySdLastMountError.load(); }
 int32_t odysseySdLastIoError() { return odysseySdLastIoErrno.load(); }
 int32_t odysseySdLastReleaseErrorCode() { return odysseySdLastReleaseError.load(); }
@@ -2569,6 +2573,13 @@ uint32_t odysseySdBeginAttemptCount() { return odysseySdBeginAttempts.load(); }
 uint32_t odysseySdReleaseAttemptCount() { return odysseySdReleaseAttempts.load(); }
 uint8_t odysseySdLastMountReasonCode() { return odysseySdLastMountReason.load(); }
 uint64_t odysseySdLastFreeByteCount() { return odysseySdLastFreeBytes.load(); }
+int16_t odysseySdRecoveryCmd0Response() { return odysseySdRecoveryCmd0.load(); }
+int16_t odysseySdRecoveryCmd8Response() { return odysseySdRecoveryCmd8.load(); }
+uint8_t odysseySdRecoveryReadIdleState() { return odysseySdRecoveryReadIdle.load(); }
+uint8_t odysseySdRecoveryWriteStopState() { return odysseySdRecoveryWriteStop.load(); }
+uint32_t odysseySdRecoveryDrainByteCount() { return odysseySdRecoveryDrainBytes.load(); }
+uint16_t odysseySdRecoveryRawZeroCount() { return odysseySdRecoveryRawZero.load(); }
+uint16_t odysseySdRecoveryRawFFCount() { return odysseySdRecoveryRawFF.load(); }
 
 uint64_t odysseySdFreeBytesLocked() {
   if (!odysseySdHostMounted.load()) { odysseySdLastFreeBytes=0;return 0; }
@@ -2732,6 +2743,190 @@ static bool odysseySdReleaseLocked() {
   return teardownOk;
 }
 
+
+static uint8_t odysseySdBitBangTransfer(uint8_t out) {
+  uint8_t in=0;
+  for (uint8_t bit=0;bit<8;++bit) {
+    digitalWrite(ODYSSEY_SD_MOSI,(out&0x80u)?HIGH:LOW);
+    delayMicroseconds(4);
+    digitalWrite(ODYSSEY_SD_SCK,HIGH);
+    delayMicroseconds(4);
+    in=uint8_t((in<<1)|(digitalRead(ODYSSEY_SD_MISO)==HIGH?1u:0u));
+    digitalWrite(ODYSSEY_SD_SCK,LOW);
+    delayMicroseconds(4);
+    out<<=1;
+  }
+  return in;
+}
+
+static bool odysseySdBitBangWaitReady(uint32_t timeoutMs,uint8_t& lastByte) {
+  const uint32_t started=millis();
+  do {
+    lastByte=odysseySdBitBangTransfer(0xFF);
+    if (lastByte==0xFF) return true;
+  } while (uint32_t(millis()-started)<timeoutMs);
+  return false;
+}
+
+static uint8_t odysseySdBitBangCommand(uint8_t command,uint32_t argument,uint8_t crc,
+    uint8_t* tail=nullptr,size_t tailSize=0,bool skipStuffByte=false) {
+  digitalWrite(ODYSSEY_SD_CS,LOW);
+  odysseySdBitBangTransfer(uint8_t(0x40u|command));
+  odysseySdBitBangTransfer(uint8_t(argument>>24));
+  odysseySdBitBangTransfer(uint8_t(argument>>16));
+  odysseySdBitBangTransfer(uint8_t(argument>>8));
+  odysseySdBitBangTransfer(uint8_t(argument));
+  odysseySdBitBangTransfer(crc);
+  if (skipStuffByte) (void)odysseySdBitBangTransfer(0xFF);
+  uint8_t response=0xFF;
+  for (uint8_t i=0;i<32;++i) {
+    response=odysseySdBitBangTransfer(0xFF);
+    if ((response&0x80u)==0) break;
+  }
+  if ((response&0x80u)==0 && tail)
+    for (size_t i=0;i<tailSize;++i) tail[i]=odysseySdBitBangTransfer(0xFF);
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  (void)odysseySdBitBangTransfer(0xFF);
+  return response;
+}
+
+static uint8_t odysseySdStopReadRawLocked(uint32_t budgetMs) {
+  digitalWrite(ODYSSEY_SD_CS,LOW);
+  odysseySdBitBangTransfer(0x4Cu); // CMD12
+  for (uint8_t i=0;i<4;++i) odysseySdBitBangTransfer(0x00);
+  odysseySdBitBangTransfer(0x61u);
+  (void)odysseySdBitBangTransfer(0xFF); // CMD12 stuff byte
+
+  uint16_t idleRun=0;
+  uint32_t drained=0;
+  bool idle=false;
+  const uint32_t started=millis();
+  for (;drained<8192u;++drained) {
+    if (budgetMs && uint32_t(millis()-started)>=budgetMs) break;
+    const uint8_t value=odysseySdBitBangTransfer(0xFF);
+    if (value==0xFF) {
+      if (++idleRun>=64u) { idle=true;++drained;break; }
+    } else idleRun=0;
+  }
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  for (uint8_t i=0;i<10;++i) (void)odysseySdBitBangTransfer(0xFF);
+  odysseySdRecoveryDrainBytes=drained;
+  odysseySdRecoveryReadIdle=idle?1u:2u;
+  return idle?1u:2u;
+}
+
+static uint8_t odysseySdStopWriteRawLocked(uint32_t readyMs,uint32_t releaseMs) {
+  digitalWrite(ODYSSEY_SD_CS,LOW);
+  uint8_t last=0;
+  if (!odysseySdBitBangWaitReady(readyMs,last)) {
+    digitalWrite(ODYSSEY_SD_CS,HIGH);
+    (void)odysseySdBitBangTransfer(0xFF);
+    odysseySdRecoveryWriteStop=3;
+    return 3;
+  }
+  (void)odysseySdBitBangTransfer(0xFD); // CMD25 stop-transmission token
+  const bool released=odysseySdBitBangWaitReady(releaseMs,last);
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  (void)odysseySdBitBangTransfer(0xFF);
+  odysseySdRecoveryWriteStop=released?1u:2u;
+  return released?1u:2u;
+}
+
+static uint8_t odysseySdGoIdleRawLocked() {
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  for (uint8_t i=0;i<20;++i) (void)odysseySdBitBangTransfer(0xFF);
+  uint8_t cmd0=0xFF;
+  for (uint8_t attempt=0;attempt<2 && cmd0!=0x01;++attempt) {
+    cmd0=odysseySdBitBangCommand(0u,0u,0x95u);
+    if (cmd0!=0x01) {
+      digitalWrite(ODYSSEY_SD_CS,HIGH);
+      for (uint8_t i=0;i<20;++i) (void)odysseySdBitBangTransfer(0xFF);
+      delay(20);
+    }
+  }
+  odysseySdRecoveryCmd0=int16_t(cmd0);
+  return cmd0;
+}
+
+static void odysseySdSampleRawLocked() {
+  uint16_t zero=0,ff=0;
+  digitalWrite(ODYSSEY_SD_CS,LOW);
+  for (uint16_t i=0;i<512u;++i) {
+    const uint8_t value=odysseySdBitBangTransfer(0xFF);
+    if (value==0x00) ++zero;
+    else if (value==0xFF) ++ff;
+  }
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  (void)odysseySdBitBangTransfer(0xFF);
+  odysseySdRecoveryRawZero=zero;
+  odysseySdRecoveryRawFF=ff;
+}
+
+// Recover the *card protocol* after stock SD.begin() fails. Arduino SD.end()
+// sends CMD0, but a card still inside CMD18/CMD25 may not be accepting normal
+// commands yet. Terminate those states first, then enter SPI idle and retry the
+// stock Arduino mount path.
+static bool odysseySdRecoverCardProtocolLocked(const char* reason,uint32_t budgetMs=1200u) {
+  (void)odysseySdReleaseLocked();
+  pinMode(ODYSSEY_SD_CS,OUTPUT);digitalWrite(ODYSSEY_SD_CS,HIGH);
+  pinMode(ODYSSEY_SD_SCK,OUTPUT);digitalWrite(ODYSSEY_SD_SCK,LOW);
+  pinMode(ODYSSEY_SD_MOSI,OUTPUT);digitalWrite(ODYSSEY_SD_MOSI,HIGH);
+  pinMode(ODYSSEY_SD_MISO,INPUT_PULLUP);
+  delayMicroseconds(100);
+
+  odysseySdSampleRawLocked();
+  const uint32_t started=millis();
+  (void)odysseySdStopReadRawLocked(budgetMs/2u);
+  uint8_t cmd0=odysseySdGoIdleRawLocked();
+  if (cmd0!=0x01 && uint32_t(millis()-started)<budgetMs) {
+    const uint32_t remaining=budgetMs-uint32_t(millis()-started);
+    if (odysseySdStopWriteRawLocked(remaining/2u+1u,remaining/2u+1u)==1)
+      cmd0=odysseySdGoIdleRawLocked();
+  }
+
+  uint8_t r7[4]{};
+  uint8_t cmd8=0xFF;
+  if (cmd0==0x01) cmd8=odysseySdBitBangCommand(8u,0x1AAu,0x87u,r7,sizeof(r7));
+  odysseySdRecoveryCmd8=int16_t(cmd8);
+
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  digitalWrite(ODYSSEY_SD_SCK,LOW);
+  digitalWrite(ODYSSEY_SD_MOSI,HIGH);
+  Serial.printf("[SD] %s raw recovery raw0=%u rawFF=%u readIdle=%u drain=%lu writeStop=%u CMD0=0x%02X CMD8=0x%02X\n",
+    reason,unsigned(odysseySdRecoveryRawZero.load()),unsigned(odysseySdRecoveryRawFF.load()),
+    unsigned(odysseySdRecoveryReadIdle.load()),static_cast<unsigned long>(odysseySdRecoveryDrainBytes.load()),
+    unsigned(odysseySdRecoveryWriteStop.load()),unsigned(cmd0),unsigned(cmd8));
+  return cmd0==0x01;
+}
+
+// Put a successfully mounted, continuously-powered card into a command-safe
+// state before deep sleep or restart. If SD.end()'s CMD0 was ignored because
+// the card was mid-stream, the raw stop sequence repairs that state.
+static bool odysseySdQuiesceCardLocked(uint32_t budgetMs) {
+  if (!odysseySdReleaseLocked()) return false;
+  pinMode(ODYSSEY_SD_CS,OUTPUT);digitalWrite(ODYSSEY_SD_CS,HIGH);
+  pinMode(ODYSSEY_SD_SCK,OUTPUT);digitalWrite(ODYSSEY_SD_SCK,LOW);
+  pinMode(ODYSSEY_SD_MOSI,OUTPUT);digitalWrite(ODYSSEY_SD_MOSI,HIGH);
+  pinMode(ODYSSEY_SD_MISO,INPUT_PULLUP);
+  delayMicroseconds(100);
+
+  const uint32_t started=millis();
+  const uint8_t readIdle=odysseySdStopReadRawLocked(budgetMs/2u);
+  uint8_t cmd0=odysseySdGoIdleRawLocked();
+  if (cmd0!=0x01 && readIdle!=1u && uint32_t(millis()-started)<budgetMs) {
+    const uint32_t remaining=budgetMs-uint32_t(millis()-started);
+    if (odysseySdStopWriteRawLocked(remaining/2u+1u,remaining/2u+1u)==1)
+      cmd0=odysseySdGoIdleRawLocked();
+  }
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  digitalWrite(ODYSSEY_SD_SCK,LOW);
+  digitalWrite(ODYSSEY_SD_MOSI,HIGH);
+  Serial.printf("[SD] power quiesce readIdle=%u drain=%lu writeStop=%u CMD0=0x%02X\n",
+    unsigned(odysseySdRecoveryReadIdle.load()),static_cast<unsigned long>(odysseySdRecoveryDrainBytes.load()),
+    unsigned(odysseySdRecoveryWriteStop.load()),unsigned(cmd0));
+  return cmd0==0x01;
+}
+
 static bool odysseySdBeginLocked(bool formatIfMountFailed=false) {
   ++odysseySdBeginAttempts;
   if (!odysseySdReleaseLocked()) {
@@ -2882,7 +3077,13 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   Serial.printf("[SD] %s attempt %u proven Arduino SPI mount at %lu Hz pins CS=%d SCK=%d MOSI=%d MISO=%d\n",
     reason,unsigned(attempt),static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ),
     ODYSSEY_SD_CS,ODYSSEY_SD_SCK,ODYSSEY_SD_MOSI,ODYSSEY_SD_MISO);
-  if (!odysseySdBeginLocked()) return false;
+  if (!odysseySdBeginLocked()) {
+    // A continuously-powered card may have survived a host reset inside
+    // CMD18/CMD25. Recover that protocol state once, then retry the exact same
+    // stock Arduino SD.begin() path.
+    if (!odysseySdRecoverCardProtocolLocked(reason) || !odysseySdBeginLocked())
+      return false;
+  }
   const uint8_t type=SD.cardType();
   const uint64_t cardBytes=SD.cardSize();
   const size_t sectorBytes=SD.sectorSize();
@@ -3023,11 +3224,14 @@ bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
     return false;
   }
   const bool wasReady=odysseySdReady();
-  if (!odysseySdReleaseLocked()) return false;
+  bool safe=true;
+  if (wasReady) safe=odysseySdQuiesceCardLocked(timeoutMs);
+  else safe=odysseySdReleaseLocked();
   odysseySdLastFreeBytes=0;
   odysseySdBootState=0;odysseySdProbeStage=0;
-  Serial.printf("[SD] power transition prepared; Arduino SD host released ready=%u\n",wasReady?1u:0u);
-  return true;
+  Serial.printf("[SD] power transition prepared ready=%u cardIdle=%u\n",
+    wasReady?1u:0u,safe?1u:0u);
+  return safe;
 }
 #else
 // Odyssey S3 remains detection-only and retains its existing Arduino SD probe.
@@ -4054,15 +4258,18 @@ static void worker(void*) {
       default:error=BAD_COMMAND;break;
     }
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
-      char detail[640];
+      char detail[800];
       const int n=snprintf(detail,sizeof(detail),
-        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"ioErrno\":%ld,\"releaseErr\":%ld,\"freeBytes\":%llu,\"lastGoodFreeBytes\":%llu,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"releaseAttempts\":%lu,\"mountWhy\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"lastRecordStage\":%lu,\"lastRecordErrno\":%ld,\"lastRecordBytes\":%lu,\"lastRecordBuild\":%lu,\"rootRecordStage\":%lu,\"rootRecordErrno\":%ld,\"rootRecordBytes\":%lu,\"rootRecordBuild\":%lu}",
+        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"ioErrno\":%ld,\"releaseErr\":%ld,\"freeBytes\":%llu,\"lastGoodFreeBytes\":%llu,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"releaseAttempts\":%lu,\"mountWhy\":%u,\"cardRaw0\":%u,\"cardRawFF\":%u,\"cardReadIdle\":%u,\"cardDrain\":%lu,\"cardWriteStop\":%u,\"cardCmd0\":%d,\"cardCmd8\":%d,\"recordStage\":%u,\"recordBytes\":%lu,\"lastRecordStage\":%lu,\"lastRecordErrno\":%ld,\"lastRecordBytes\":%lu,\"lastRecordBuild\":%lu,\"rootRecordStage\":%lu,\"rootRecordErrno\":%ld,\"rootRecordBytes\":%lu,\"rootRecordBuild\":%lu}",
         catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
         static_cast<long>(odysseySdLastError()),static_cast<long>(odysseySdLastIoError()),
         static_cast<long>(odysseySdLastReleaseErrorCode()),static_cast<unsigned long long>(odysseySdLastFreeByteCount()),
         static_cast<unsigned long long>(odysseySdLastGoodFreeByteCount()),
         static_cast<unsigned long>(odysseySdAttemptCount()),static_cast<unsigned long>(odysseySdBeginAttemptCount()),
         static_cast<unsigned long>(odysseySdReleaseAttemptCount()),unsigned(odysseySdLastMountReasonCode()),
+        unsigned(odysseySdRecoveryRawZeroCount()),unsigned(odysseySdRecoveryRawFFCount()),
+        unsigned(odysseySdRecoveryReadIdleState()),static_cast<unsigned long>(odysseySdRecoveryDrainByteCount()),
+        unsigned(odysseySdRecoveryWriteStopState()),int(odysseySdRecoveryCmd0Response()),int(odysseySdRecoveryCmd8Response()),
         unsigned(odysseySdRecordFailureStage()),static_cast<unsigned long>(odysseySdRecordLastBytes()),
         static_cast<unsigned long>(odysseyStoredStage),static_cast<long>(odysseyStoredErrno),
         static_cast<unsigned long>(odysseyStoredBytes),static_cast<unsigned long>(odysseyStoredBuild),

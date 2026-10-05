@@ -243,3 +243,18 @@ test('C3 diagnostics preserve root SD failure when recovery later collapses to E
   assert.match(transfer,/lastGoodFreeBytes/);
   assert.match(detect,/odysseySdHostMounted=false;[\s\S]*odysseySdLastFreeBytes=0/);
 });
+
+test('C3 restores card protocol before retrying mount and before power loss',()=>{
+  const detect=read('firmware/shared/odyssey-sd-detect.cpp');
+  const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
+  assert.match(detect,/static bool odysseySdRecoverCardProtocolLocked/);
+  assert.match(detect,/CMD25 stop-transmission token/);
+  assert.match(detect,/odysseySdBitBangCommand\(8u,0x1AAu,0x87u/);
+  assert.match(detect,/if \(!odysseySdRecoverCardProtocolLocked\(reason\) \|\| !odysseySdBeginLocked\(\)\)/);
+  assert.match(detect,/static bool odysseySdQuiesceCardLocked/);
+  assert.match(detect,/if \(wasReady\) safe=odysseySdQuiesceCardLocked\(timeoutMs\)/);
+  assert.match(transfer,/cardReadIdle/);
+  assert.match(transfer,/cardWriteStop/);
+  assert.match(transfer,/cardCmd0/);
+  assert.match(transfer,/cardCmd8/);
+});
