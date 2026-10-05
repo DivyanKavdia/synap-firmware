@@ -35,3 +35,10 @@ assert.match(source,/unlink\(full\)/);
 assert.match(source,/OdysseySdGuard guard/);
 assert.doesNotMatch(source,/\bSD\.|\bFile\b|format_if_empty/);
 console.log('PASS: Odyssey C3 exposes VFS-backed SD catalogue, verified-delete, non-formatting clear, and explicit format actions.');
+
+const removeBlock=source.split('static uint8_t removeFileLocked(const char* path) {')[1].split('static uint8_t removeFile(const char* path) {')[0];
+assert.match(removeBlock,/Deletion is intentionally idempotent and ordered WAV -> journal/);
+assert(removeBlock.indexOf('unlink(full)')<removeBlock.indexOf('odysseyRemoveJournal(full)'),
+  'WAV must be removed before its recovery journal');
+assert.match(removeBlock,/statResult!=0 && errno!=ENOENT/);
+assert.match(removeBlock,/odysseyJournalPresence\(full\)/);

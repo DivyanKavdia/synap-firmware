@@ -132,7 +132,7 @@ test('C3 production image exposes truthful SD read/write/delete diagnostics',()=
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/static int segmentedWavState/);
   assert.match(c3,/static uint8_t clearRecordings\(uint32_t& removed\)/);
-  assert.match(c3,/Verify metadata visibility before telling the PWA it may forget its source/);
+  assert.match(c3,/Verify both source objects are gone before acknowledging deletion/);
   assert.match(c3,/odysseySaveRecordFailure\(0,0,0\)/);
   assert.match(c3,/\\"ioErrno\\":%ld/);
   assert.match(c3,/\\"releaseErr\\":%ld/);
