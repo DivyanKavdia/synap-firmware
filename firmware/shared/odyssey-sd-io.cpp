@@ -43,8 +43,11 @@ static inline uint32_t odysseySdCrc(const uint8_t* data,size_t size) {
   return ~odysseySdCrcUpdate(0xffffffffu,data,size);
 }
 static constexpr uint32_t ODYSSEY_WAV_MAX_PCM_BYTES=9600000u;
-static constexpr off_t ODYSSEY_INLINE_JOURNAL_OFFSET=44+off_t(ODYSSEY_WAV_MAX_PCM_BYTES);
+static constexpr off_t ODYSSEY_INLINE_JOURNAL_OFFSET=
+  (44+off_t(ODYSSEY_WAV_MAX_PCM_BYTES)+511)&~off_t(511);
 static constexpr size_t ODYSSEY_INLINE_JOURNAL_BYTES=1024u;
+static_assert((ODYSSEY_INLINE_JOURNAL_OFFSET&511)==0,
+  "inline recovery journal must begin on a physical SD sector boundary");
 static constexpr int ODYSSEY_INLINE_JOURNAL=-2;
 
 static inline bool odysseyPwriteAll(int fd,const uint8_t* data,size_t size,off_t offset) {
