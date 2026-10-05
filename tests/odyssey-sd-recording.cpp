@@ -119,7 +119,7 @@ int main(){
  assert(get32(data,24)==16000&&get32(data,28)==32000);
  assert(data[44]==0xff&&data[45]==0x7f&&data[46]==0&&data[47]==0x80);
  assert(lastPath.find("/tmp/synap-odyssey-test/synap/odyssey_audio_00000005_00000006_p0000.wav")==0);
- assert(preallocationCalls==1&&preallocatedSizes[0]==9600044);
+ assert(preallocationCalls==1&&preallocatedSizes[0]==9601536);
  OdysseyWavMeta firstMeta{};
  assert(odysseyReadWavMeta(lastPath.c_str(),firstMeta.takeHigh,firstMeta.takeLow,
    firstMeta.part,firstMeta.pcmBytes,firstMeta.crc32)==1);
@@ -141,7 +141,7 @@ int main(){
  struct stat firstStat{};assert(stat(firstPath,&firstStat)==0&&firstStat.st_size==9600044);
  assert(lastPath.find("_p0001.wav")!=std::string::npos);
  data=load();assert(data.size()==44+1600&&get32(data,40)==1600);
- assert(preallocationCalls==2&&preallocatedSizes[0]==9600044&&preallocatedSizes[1]==9600044);
+ assert(preallocationCalls==2&&preallocatedSizes[0]==9601536&&preallocatedSizes[1]==9601536);
  assert(odysseySdRecordLastBytes()==9601600);
 
  reset();reconnect=true;odysseyToggleRecording();run();data=load();
