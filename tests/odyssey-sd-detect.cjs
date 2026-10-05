@@ -17,7 +17,7 @@ test('C3 uses the proven Arduino SPI host with the locked device pins',()=>{
   assert.match(source,/static SPIClass odysseySdSpi\(FSPI\)/);
   assert.match(source,/ODYSSEY_SD_DATA_FREQ_HZ=400000u/);
   assert.match(source,/ODYSSEY_SD_STARTUP_SETTLE_MS=3000u/);
-  assert.match(source,/ODYSSEY_SD_MAX_OPEN_FILES=1/);
+  assert.match(source,/ODYSSEY_SD_MAX_OPEN_FILES=4/);
   assert.match(source,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
   assert.doesNotMatch(source,/SDSPI_HOST_DEFAULT|esp_vfs_fat_sdspi_mount|spi_bus_initialize/);
   assert.match(source,/esp_vfs_fat_create_contiguous_file\(/);
