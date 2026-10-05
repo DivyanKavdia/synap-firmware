@@ -2559,9 +2559,11 @@ static std::atomic<uint8_t> odysseySdLastMountReason{0}; // 1=boot,2=op14,3=touc
 static std::atomic<int32_t> odysseySdLastIoErrno{0};
 static std::atomic<int32_t> odysseySdLastReleaseError{ESP_OK};
 static std::atomic<uint64_t> odysseySdLastFreeBytes{0};
+static std::atomic<uint64_t> odysseySdLastGoodFreeBytes{0};
 int32_t odysseySdLastError() { return odysseySdLastMountError.load(); }
 int32_t odysseySdLastIoError() { return odysseySdLastIoErrno.load(); }
 int32_t odysseySdLastReleaseErrorCode() { return odysseySdLastReleaseError.load(); }
+uint64_t odysseySdLastGoodFreeByteCount() { return odysseySdLastGoodFreeBytes.load(); }
 uint32_t odysseySdAttemptCount() { return odysseySdMountAttempts.load(); }
 uint32_t odysseySdBeginAttemptCount() { return odysseySdBeginAttempts.load(); }
 uint32_t odysseySdReleaseAttemptCount() { return odysseySdReleaseAttempts.load(); }
@@ -2573,6 +2575,7 @@ uint64_t odysseySdFreeBytesLocked() {
   const uint64_t total=SD.totalBytes(),used=SD.usedBytes();
   const uint64_t freeBytes=total>=used?total-used:0;
   odysseySdLastFreeBytes=freeBytes;
+  odysseySdLastGoodFreeBytes=freeBytes;
   return freeBytes;
 }
 
@@ -2581,6 +2584,7 @@ void odysseySdMarkVfsFailure(int error) {
   // A VFS failure means the current mount is no longer trusted. Keep the host
   // owned until explicit recovery/power-down so teardown happens under the SD mutex.
   odysseySdLastIoErrno=error?error:EIO;
+  odysseySdLastFreeBytes=0;
   odysseySdBootState=2;
   odysseySdProbeStage=4;
   odysseySdLastMountError=ESP_FAIL;
@@ -2613,6 +2617,8 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
 // Last completed failure survives a manual power cycle; write once per failed take.
 static uint32_t odysseyStoredStage=0,odysseyStoredBytes=0,odysseyStoredBuild=0;
 static int32_t odysseyStoredErrno=0;
+static uint32_t odysseyRootStage=0,odysseyRootBytes=0,odysseyRootBuild=0;
+static int32_t odysseyRootErrno=0;
 static void odysseyLoadRecordFailure() {
   Preferences prefs;
   if (!prefs.begin("sd-failure",true)) return;
@@ -2621,6 +2627,12 @@ static void odysseyLoadRecordFailure() {
       prefs.getBytes("record",record,sizeof(record))==sizeof(record) && record[0]==1) {
     odysseyStoredStage=record[1];odysseyStoredErrno=int32_t(record[2]);
     odysseyStoredBytes=record[3];odysseyStoredBuild=record[4];
+  }
+  uint32_t root[5]{};
+  if (prefs.getBytesLength("root")==sizeof(root) &&
+      prefs.getBytes("root",root,sizeof(root))==sizeof(root) && root[0]==1) {
+    odysseyRootStage=root[1];odysseyRootErrno=int32_t(root[2]);
+    odysseyRootBytes=root[3];odysseyRootBuild=root[4];
   }
   prefs.end();
 }
@@ -2632,6 +2644,22 @@ void odysseySaveRecordFailure(uint8_t stage,int error,uint32_t bytes) {
   const uint32_t record[]={stage?1u:0u,stage,uint32_t(error),bytes,stage?uint32_t(SYNAP_BUILD):0u};
   if (prefs.putBytes("record",record,sizeof(record))!=sizeof(record))
     Serial.println("[SD] could not persist recording failure");
+  if (!stage) {
+    const uint32_t cleared[5]{};
+    (void)prefs.putBytes("root",cleared,sizeof(cleared));
+    odysseyRootStage=0;odysseyRootErrno=0;odysseyRootBytes=0;odysseyRootBuild=0;
+  }
+  prefs.end();
+}
+void odysseySaveRootStorageFailure(uint8_t stage,int error,uint32_t bytes) {
+  if (!stage || stage==1 || stage==4 || stage==8 || stage==31) return;
+  odysseyRootStage=stage;odysseyRootErrno=error;
+  odysseyRootBytes=bytes;odysseyRootBuild=SYNAP_BUILD;
+  Preferences prefs;
+  if (!prefs.begin("sd-failure",false)) return;
+  const uint32_t root[]={1u,stage,uint32_t(error),bytes,uint32_t(SYNAP_BUILD)};
+  if (prefs.putBytes("root",root,sizeof(root))!=sizeof(root))
+    Serial.println("[SD] could not persist root storage failure");
   prefs.end();
 }
 bool odysseySdPreallocateFile(const char* fullPath,uint64_t size) {
@@ -2699,6 +2727,7 @@ static bool odysseySdReleaseLocked() {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   pinMode(ODYSSEY_SD_CS,OUTPUT);
   odysseySdHostMounted=false;
+  odysseySdLastFreeBytes=0;
   if (hadHost) delay(2);
   return teardownOk;
 }
@@ -3367,7 +3396,10 @@ static void odysseyRecordTake() {
     failed?" (mount retained for explicit recovery)":"");
   if (failed) odysseySaveRecordFailure(failureStage,firstErrno,odysseyRecordLastBytes.load());
   else if (totalBytes) odysseySaveRecordFailure(0,0,0);
-  if (storageFailed) { errno=firstErrno?firstErrno:EIO;odysseySdMarkVfsFailure(); }
+  if (storageFailed) {
+    odysseySaveRootStorageFailure(failureStage,firstErrno,odysseyRecordLastBytes.load());
+    errno=firstErrno?firstErrno:EIO;odysseySdMarkVfsFailure();
+  }
   if (failed || totalBytes==0) odysseyRecordFaultAt=millis();
 }
 // FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
@@ -4022,17 +4054,20 @@ static void worker(void*) {
       default:error=BAD_COMMAND;break;
     }
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
-      char detail[480];
+      char detail[640];
       const int n=snprintf(detail,sizeof(detail),
-        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"ioErrno\":%ld,\"releaseErr\":%ld,\"freeBytes\":%llu,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"releaseAttempts\":%lu,\"mountWhy\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"lastRecordStage\":%lu,\"lastRecordErrno\":%ld,\"lastRecordBytes\":%lu,\"lastRecordBuild\":%lu}",
+        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"ioErrno\":%ld,\"releaseErr\":%ld,\"freeBytes\":%llu,\"lastGoodFreeBytes\":%llu,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"releaseAttempts\":%lu,\"mountWhy\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"lastRecordStage\":%lu,\"lastRecordErrno\":%ld,\"lastRecordBytes\":%lu,\"lastRecordBuild\":%lu,\"rootRecordStage\":%lu,\"rootRecordErrno\":%ld,\"rootRecordBytes\":%lu,\"rootRecordBuild\":%lu}",
         catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
         static_cast<long>(odysseySdLastError()),static_cast<long>(odysseySdLastIoError()),
         static_cast<long>(odysseySdLastReleaseErrorCode()),static_cast<unsigned long long>(odysseySdLastFreeByteCount()),
+        static_cast<unsigned long long>(odysseySdLastGoodFreeByteCount()),
         static_cast<unsigned long>(odysseySdAttemptCount()),static_cast<unsigned long>(odysseySdBeginAttemptCount()),
         static_cast<unsigned long>(odysseySdReleaseAttemptCount()),unsigned(odysseySdLastMountReasonCode()),
         unsigned(odysseySdRecordFailureStage()),static_cast<unsigned long>(odysseySdRecordLastBytes()),
         static_cast<unsigned long>(odysseyStoredStage),static_cast<long>(odysseyStoredErrno),
-        static_cast<unsigned long>(odysseyStoredBytes),static_cast<unsigned long>(odysseyStoredBuild));
+        static_cast<unsigned long>(odysseyStoredBytes),static_cast<unsigned long>(odysseyStoredBuild),
+        static_cast<unsigned long>(odysseyRootStage),static_cast<long>(odysseyRootErrno),
+        static_cast<unsigned long>(odysseyRootBytes),static_cast<unsigned long>(odysseyRootBuild));
       reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),
         n>0?std::min(size_t(n),sizeof(detail)-1):0);
     } else reply(request,error,total,request.offset,bytes,size);
