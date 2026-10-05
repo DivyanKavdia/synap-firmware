@@ -224,7 +224,8 @@ static uint8_t catalogue(uint32_t& total) {
       if (!state) continue;
     }
     OdysseyWavMeta meta{};
-    const int metaState=odysseyReadWavMeta(full,meta);
+    const int metaState=odysseyReadWavMeta(full,meta.takeHigh,meta.takeLow,
+      meta.part,meta.pcmBytes,meta.crc32);
     if (metaState==-2) { catalogueErrno=errno?errno:EIO;break; }
     // Invalid/missing metadata never hides a valid WAV. Existing PWA SHA
     // verification remains the fallback for recovered or legacy recordings.
@@ -293,7 +294,8 @@ static uint8_t removeFileLocked(const char* path) {
   if (journal<0) return IO_ERROR;
   if (journal>0) { errno=EIO;return IO_ERROR; }
   OdysseyWavMeta meta{};
-  const int metaState=odysseyReadWavMeta(full,meta);
+  const int metaState=odysseyReadWavMeta(full,meta.takeHigh,meta.takeLow,
+    meta.part,meta.pcmBytes,meta.crc32);
   if (metaState==-2) return IO_ERROR;
   if (metaState!=0) { errno=EIO;return IO_ERROR; }
   errno=0;
