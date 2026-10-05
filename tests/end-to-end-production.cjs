@@ -61,7 +61,7 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   const sdBackend=c3.split('// Odyssey S3 remains detection-only')[0];
   assert.match(sdBackend,/static SPIClass odysseySdSpi\(FSPI\)/);
   assert.match(sdBackend,/ODYSSEY_SD_DATA_FREQ_HZ=400000u/);
-  assert.match(sdBackend,/ODYSSEY_SD_MAX_OPEN_FILES=1/);
+  assert.match(sdBackend,/ODYSSEY_SD_MAX_OPEN_FILES=4/);
   assert.match(sdBackend,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
   assert.match(sdBackend,/SD\.end\(\)/);
   assert.match(sdBackend,/odysseySdSpi\.end\(\)/);
