@@ -18,6 +18,7 @@ test('C3 uses the proven Arduino SPI host with the locked device pins',()=>{
   assert.match(source,/ODYSSEY_SD_DATA_FREQ_HZ=400000u/);
   assert.match(source,/ODYSSEY_SD_STARTUP_SETTLE_MS=3000u/);
   assert.match(source,/ODYSSEY_SD_MAX_OPEN_FILES=4/);
+  assert.match(source,/if \(!odysseySdSpi\.begin\(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS\)\)/);
   assert.match(source,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
   assert.doesNotMatch(source,/SDSPI_HOST_DEFAULT|esp_vfs_fat_sdspi_mount|spi_bus_initialize/);
   assert.match(source,/esp_vfs_fat_create_contiguous_file\(/);
@@ -30,8 +31,14 @@ test('C3 uses the proven Arduino SPI host with the locked device pins',()=>{
 test('C3 VFS has one guarded owner and an explicit Arduino host release lifecycle',()=>{
   assert.match(source,/xSemaphoreCreateMutexStatic/);
   assert.match(source,/SD\.end\(\)/);
+  assert.match(source,/esp_vfs_fat_unregister_path\(ODYSSEY_SD_MOUNT_POINT\)/);
+  assert.match(source,/residual==ESP_ERR_INVALID_STATE/);
   assert.match(source,/odysseySdSpi\.end\(\)/);
   assert.match(source,/odysseySdReleaseLocked\(\)/);
+  const release=source.split('static bool odysseySdReleaseLocked()')[1].split('static bool odysseySdBeginLocked')[0];
+  assert.doesNotMatch(release,/if \(!odysseySdCloseReadLocked\(\)\) return false/);
+  assert(release.indexOf('SD.end()')<release.indexOf('odysseySdHostMounted=false'),
+    'host ownership must be cleared only after teardown is attempted');
   assert.match(source,/bool odysseyPrepareSdForPowerTransition/);
   assert.match(source,/odysseyRecording\.load\(\)/);
   assert.match(source,/odysseySdValidateVfsLocked/);
@@ -66,4 +73,17 @@ test('the C3-only backend leaves the S3 Arduino detection path and supported tar
     assert.equal(target.features.includes('sd'),id==='esp32c3-supermini-4m');
   }
   assert(!renderProfile(getTarget('xiao-esp32s3-sense-8m')).includes('SYNAP_SD_'));
+});
+
+
+test('C3 media operations distinguish missing content from FAT I/O failure',()=>{
+  assert.match(transfer,/static int segmentedWavState/);
+  assert.match(transfer,/journal<0\) return -1/);
+  assert.match(transfer,/return errno==ENOENT\?FILE_UNAVAILABLE:IO_ERROR/);
+  assert.match(transfer,/Verify metadata visibility before telling the PWA it may forget its source/);
+  assert.match(transfer,/static uint8_t clearRecordings\(uint32_t& removed\)/);
+  assert.match(transfer,/if \(error==IO_ERROR\) odysseySdMarkVfsFailure\(errno\)/);
+  assert.match(transfer,/ioErrno/);
+  assert.match(transfer,/releaseErr/);
+  assert.match(transfer,/releaseAttempts/);
 });
