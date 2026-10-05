@@ -62,8 +62,10 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(sdBackend,/static SPIClass odysseySdSpi\(FSPI\)/);
   assert.match(sdBackend,/ODYSSEY_SD_DATA_FREQ_HZ=400000u/);
   assert.match(sdBackend,/ODYSSEY_SD_MAX_OPEN_FILES=4/);
+  assert.match(sdBackend,/if \(!odysseySdSpi\.begin\(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS\)\)/);
   assert.match(sdBackend,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
   assert.match(sdBackend,/SD\.end\(\)/);
+  assert.match(sdBackend,/esp_vfs_fat_unregister_path\(ODYSSEY_SD_MOUNT_POINT\)/);
   assert.match(sdBackend,/odysseySdSpi\.end\(\)/);
   assert.doesNotMatch(sdBackend,/SDSPI_HOST_DEFAULT|esp_vfs_fat_sdspi_mount|spi_bus_initialize/);
   assert.match(sdBackend,/odysseySdMountLocked\("boot",1\)/);
@@ -106,8 +108,10 @@ test('C3 Arduino SPI mount precedes BLE and retains the guarded VFS storage API'
   assert(worker>0 && sd>worker && ble>sd,'C3 must preserve worker -> mount -> BLE ordering');
   assert.match(c3,/static SPIClass odysseySdSpi\(FSPI\)/);
   assert.match(c3,/ODYSSEY_SD_DATA_FREQ_HZ=400000u/);
+  assert.match(c3,/if \(!odysseySdSpi\.begin\(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS\)\)/);
   assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
   assert.match(c3,/SD\.end\(\)/);
+  assert.match(c3,/esp_vfs_fat_unregister_path\(ODYSSEY_SD_MOUNT_POINT\)/);
   assert.match(c3,/odysseySdSpi\.end\(\)/);
   assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|spi_bus_initialize|SDSPI_HOST_DEFAULT/);
   assert.match(c3,/OdysseySdGuard/);
@@ -121,4 +125,15 @@ test('C3 Arduino SPI mount precedes BLE and retains the guarded VFS storage API'
   assert.doesNotMatch(storage,/odysseyDetectSdCard|odysseyRecoverSdCard/);
   const toggle=c3.match(/void odysseyToggleRecording\(\) \{[\s\S]*?\n\}/)?.[0]||'';
   assert.doesNotMatch(toggle,/odysseyDetectSdCard|odysseyRecoverSdCard/);
+});
+
+
+test('C3 production image exposes truthful SD read/write/delete diagnostics',()=>{
+  const c3=materialize(productionS3(),'esp32c3-supermini-4m');
+  assert.match(c3,/static int segmentedWavState/);
+  assert.match(c3,/static uint8_t clearRecordings\(uint32_t& removed\)/);
+  assert.match(c3,/Verify metadata visibility before telling the PWA it may forget its source/);
+  assert.match(c3,/odysseyClearRecordFailure\(\)/);
+  assert.match(c3,/\\"ioErrno\\":%ld/);
+  assert.match(c3,/\\"releaseErr\\":%ld/);
 });
