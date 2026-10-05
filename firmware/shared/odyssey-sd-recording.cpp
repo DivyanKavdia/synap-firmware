@@ -342,7 +342,10 @@ static void odysseyRecordTake() {
     failed?" (mount retained for explicit recovery)":"");
   if (failed) odysseySaveRecordFailure(failureStage,firstErrno,odysseyRecordLastBytes.load());
   else if (totalBytes) odysseySaveRecordFailure(0,0,0);
-  if (storageFailed) { errno=firstErrno?firstErrno:EIO;odysseySdMarkVfsFailure(); }
+  if (storageFailed) {
+    odysseySaveRootStorageFailure(failureStage,firstErrno,odysseyRecordLastBytes.load());
+    errno=firstErrno?firstErrno:EIO;odysseySdMarkVfsFailure();
+  }
   if (failed || totalBytes==0) odysseyRecordFaultAt=millis();
 }
 // FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
