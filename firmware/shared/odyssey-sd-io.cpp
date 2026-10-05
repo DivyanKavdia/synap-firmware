@@ -139,7 +139,8 @@ static inline bool odysseyWriteWavMeta(const char* wav,uint32_t takeHigh,uint32_
   return true;
 }
 // 1=valid metadata, 0=absent, -1=invalid metadata, -2=filesystem I/O failure.
-static inline int odysseyReadWavMeta(const char* wav,OdysseyWavMeta& meta) {
+static inline int odysseyReadWavMeta(const char* wav,uint32_t& takeHigh,uint32_t& takeLow,
+    uint32_t& part,uint32_t& pcmBytes,uint32_t& crc32) {
   char path[144];
   if (!odysseyMetaPath(wav,path,sizeof(path))) return -2;
   errno=0;
@@ -160,9 +161,9 @@ static inline int odysseyReadWavMeta(const char* wav,OdysseyWavMeta& meta) {
       odysseySdLe32(record+28)!=odysseySdCrc(record,28)) {
     errno=0;return -1;
   }
-  meta.takeHigh=odysseySdLe32(record+8);meta.takeLow=odysseySdLe32(record+12);
-  meta.part=odysseySdLe32(record+16);meta.pcmBytes=odysseySdLe32(record+20);
-  meta.crc32=odysseySdLe32(record+24);
+  takeHigh=odysseySdLe32(record+8);takeLow=odysseySdLe32(record+12);
+  part=odysseySdLe32(record+16);pcmBytes=odysseySdLe32(record+20);
+  crc32=odysseySdLe32(record+24);
   errno=0;
   return 1;
 }
