@@ -59,17 +59,17 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(c3,/!odysseySdReady\(\)/);
   assert.match(c3,/ready\|=SYNAP_CAP_SDAUDIO/);
   const sdBackend=c3.split('// Odyssey S3 remains detection-only')[0];
-  assert.match(sdBackend,/SDSPI_HOST_DEFAULT\(\)/);
-  assert.match(sdBackend,/ODYSSEY_SD_MAX_FREQ_KHZ=1000u/);
-  assert.match(sdBackend,/spi_bus_initialize\(SPI2_HOST,&bus,SDSPI_DEFAULT_DMA\)/);
-  assert.match(sdBackend,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT/);
-  assert.match(sdBackend,/esp_vfs_fat_sdcard_unmount\(ODYSSEY_SD_MOUNT_POINT,odysseySdCard\)/);
-  assert.match(sdBackend,/spi_bus_free\(SPI2_HOST\)/);
-  assert.doesNotMatch(sdBackend,/SPIClass|SD\.begin|SD\.end|BitBang|digitalRead\(ODYSSEY_SD_MISO\)/);
+  assert.match(sdBackend,/static SPIClass odysseySdSpi\(FSPI\)/);
+  assert.match(sdBackend,/ODYSSEY_SD_DATA_FREQ_HZ=400000u/);
+  assert.match(sdBackend,/ODYSSEY_SD_MAX_OPEN_FILES=1/);
+  assert.match(sdBackend,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
+  assert.match(sdBackend,/SD\.end\(\)/);
+  assert.match(sdBackend,/odysseySdSpi\.end\(\)/);
+  assert.doesNotMatch(sdBackend,/SDSPI_HOST_DEFAULT|esp_vfs_fat_sdspi_mount|spi_bus_initialize/);
   assert.match(sdBackend,/odysseySdMountLocked\("boot",1\)/);
   assert.match(sdBackend,/odysseySdMountLocked\(reason\?reason:"op14",1\)/);
   assert.doesNotMatch(sdBackend,/odysseySdConsumeAutoRearm|scheduled re-arm/);
-  assert.match(sdBackend,/config\.format_if_mount_failed=formatIfMountFailed/);
+  assert.match(sdBackend,/SD\.writeRAW\(blankSector,0\)/);
   assert.match(sdBackend,/odysseySdBeginLocked\(true\)/);
   assert.match(c3,/Normal PWA reads are observational only\. Only operation 14 may remount/);
   const transferInit=c3.indexOf('OdysseyTransfer::initialize();');
@@ -97,18 +97,19 @@ test('release workflow compiles the shared complete production pipeline',()=>{
   assert.match(workflow,/arduino-cli core install esp32:esp32@3\.3\.5/);
   assert.doesNotMatch(workflow,/patch-arduino-sd\.cjs|SYNAP_ARDUINO_SD_SRC/);
 });
-test('C3 IDF SDSPI mount precedes BLE and retains the guarded VFS storage API',()=>{
+
+test('C3 Arduino SPI mount precedes BLE and retains the guarded VFS storage API',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   const worker=c3.indexOf('OdysseyTransfer::initialize();');
   const sd=c3.indexOf('odysseyInitializeSdCardBeforeBle();',worker);
   const ble=c3.indexOf('initializeBLE();',sd);
-  assert(worker>0 && sd>worker && ble>sd,'C3 must reproduce 1445 worker -> mount -> BLE ordering');
-  assert.match(c3,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT/);
-  assert.match(c3,/spi_bus_initialize\(SPI2_HOST,&bus,SDSPI_DEFAULT_DMA\)/);
-  assert.match(c3,/esp_vfs_fat_sdcard_unmount\(ODYSSEY_SD_MOUNT_POINT,odysseySdCard\)/);
-  assert.match(c3,/spi_bus_free\(SPI2_HOST\)/);
-  const c3Backend=c3.split('// Odyssey S3 remains detection-only')[0];
-  assert.doesNotMatch(c3Backend,/SPIClass|SD\.begin|SD\.end|BitBang|digitalRead\(ODYSSEY_SD_MISO\)/);
+  assert(worker>0 && sd>worker && ble>sd,'C3 must preserve worker -> mount -> BLE ordering');
+  assert.match(c3,/static SPIClass odysseySdSpi\(FSPI\)/);
+  assert.match(c3,/ODYSSEY_SD_DATA_FREQ_HZ=400000u/);
+  assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
+  assert.match(c3,/SD\.end\(\)/);
+  assert.match(c3,/odysseySdSpi\.end\(\)/);
+  assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|spi_bus_initialize|SDSPI_HOST_DEFAULT/);
   assert.match(c3,/OdysseySdGuard/);
   assert.match(c3,/open\(fullPath,O_RDWR\)/);
   assert.match(c3,/esp_vfs_fat_create_contiguous_file\(/);
