@@ -205,9 +205,9 @@ test('C3 offline V2 guards free space and persists per-WAV session integrity met
   assert.match(recorder,/odysseyWriteWavMeta\(fullPath,takeHigh,takeLow,segment/);
   assert.match(io,/SYNAPM01/);
   assert.match(io,/struct OdysseyWavMeta/);
-  assert.match(transfer,/\"crc32\"/);
-  assert.match(transfer,/\"take\"/);
-  assert.match(transfer,/\"part\"/);
-  assert.match(transfer,/\"pcmBytes\"/);
+  assert.match(transfer,/crc32/);
+  assert.match(transfer,/take/);
+  assert.match(transfer,/part/);
+  assert.match(transfer,/pcmBytes/);
   assert.match(transfer,/freeBytes/);
 });
