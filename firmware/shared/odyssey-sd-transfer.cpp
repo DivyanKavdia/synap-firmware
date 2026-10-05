@@ -244,19 +244,37 @@ static uint8_t catalogue(uint32_t& total) {
 static uint8_t removeFileLocked(const char* path) {
   char full[96];
   if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
+
+  // Deletion is intentionally idempotent and ordered WAV -> journal. If power
+  // disappears between the two unlinks, the remaining journal keeps any
+  // unfinished WAV hidden/recoverable. A retry can safely finish cleanup.
   struct stat st{};
   errno=0;
-  if (stat(full,&st)!=0) return errno==ENOENT?FILE_UNAVAILABLE:IO_ERROR;
-  if (!S_ISREG(st.st_mode)) return FILE_UNAVAILABLE;
+  const int statResult=stat(full,&st);
+  if (statResult!=0 && errno!=ENOENT) return IO_ERROR;
+  if (statResult==0 && !S_ISREG(st.st_mode)) return FILE_UNAVAILABLE;
+
   errno=0;
   if (!odysseySdCloseReadLocked()) return IO_ERROR;
-  if (!odysseyRemoveJournal(full)) return IO_ERROR;
+
+  if (statResult==0) {
+    errno=0;
+    if (unlink(full)!=0 && errno!=ENOENT) return IO_ERROR;
+    errno=0;
+    if (stat(full,&st)==0) { errno=EIO;return IO_ERROR; }
+    if (errno!=ENOENT) return IO_ERROR;
+  }
+
   errno=0;
-  if (unlink(full)!=0) return errno==ENOENT?FILE_UNAVAILABLE:IO_ERROR;
-  // Verify metadata visibility before telling the PWA it may forget its source.
+  if (!odysseyRemoveJournal(full)) return IO_ERROR;
+
+  // Verify both source objects are gone before acknowledging deletion.
   errno=0;
   if (stat(full,&st)==0) { errno=EIO;return IO_ERROR; }
   if (errno!=ENOENT) return IO_ERROR;
+  const int journal=odysseyJournalPresence(full);
+  if (journal<0) return IO_ERROR;
+  if (journal>0) { errno=EIO;return IO_ERROR; }
   errno=0;
   return OK;
 }
