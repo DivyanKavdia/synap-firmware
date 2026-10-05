@@ -2287,7 +2287,8 @@ static inline bool odysseyWriteWavMeta(const char* wav,uint32_t takeHigh,uint32_
   return true;
 }
 // 1=valid metadata, 0=absent, -1=invalid metadata, -2=filesystem I/O failure.
-static inline int odysseyReadWavMeta(const char* wav,OdysseyWavMeta& meta) {
+static inline int odysseyReadWavMeta(const char* wav,uint32_t& takeHigh,uint32_t& takeLow,
+    uint32_t& part,uint32_t& pcmBytes,uint32_t& crc32) {
   char path[144];
   if (!odysseyMetaPath(wav,path,sizeof(path))) return -2;
   errno=0;
@@ -2308,9 +2309,9 @@ static inline int odysseyReadWavMeta(const char* wav,OdysseyWavMeta& meta) {
       odysseySdLe32(record+28)!=odysseySdCrc(record,28)) {
     errno=0;return -1;
   }
-  meta.takeHigh=odysseySdLe32(record+8);meta.takeLow=odysseySdLe32(record+12);
-  meta.part=odysseySdLe32(record+16);meta.pcmBytes=odysseySdLe32(record+20);
-  meta.crc32=odysseySdLe32(record+24);
+  takeHigh=odysseySdLe32(record+8);takeLow=odysseySdLe32(record+12);
+  part=odysseySdLe32(record+16);pcmBytes=odysseySdLe32(record+20);
+  crc32=odysseySdLe32(record+24);
   errno=0;
   return 1;
 }
@@ -3652,7 +3653,8 @@ static uint8_t catalogue(uint32_t& total) {
       if (!state) continue;
     }
     OdysseyWavMeta meta{};
-    const int metaState=odysseyReadWavMeta(full,meta);
+    const int metaState=odysseyReadWavMeta(full,meta.takeHigh,meta.takeLow,
+      meta.part,meta.pcmBytes,meta.crc32);
     if (metaState==-2) { catalogueErrno=errno?errno:EIO;break; }
     // Invalid/missing metadata never hides a valid WAV. Existing PWA SHA
     // verification remains the fallback for recovered or legacy recordings.
@@ -3721,7 +3723,8 @@ static uint8_t removeFileLocked(const char* path) {
   if (journal<0) return IO_ERROR;
   if (journal>0) { errno=EIO;return IO_ERROR; }
   OdysseyWavMeta meta{};
-  const int metaState=odysseyReadWavMeta(full,meta);
+  const int metaState=odysseyReadWavMeta(full,meta.takeHigh,meta.takeLow,
+    meta.part,meta.pcmBytes,meta.crc32);
   if (metaState==-2) return IO_ERROR;
   if (metaState!=0) { errno=EIO;return IO_ERROR; }
   errno=0;
