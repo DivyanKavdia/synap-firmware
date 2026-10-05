@@ -6,6 +6,7 @@ const {patch}=require('../tools/patch-arduino-sd.cjs');
 const fixture=fs.readFileSync('tests/fixtures/arduino-sd-init-3.3.5.cpp','utf8');
 // Include only boundaries needed by the patch; the real installed SDK is also
 // checked in CI. Native execution uses the actual old/new initializer bodies.
+const writeFixture=fs.readFileSync('tests/fixtures/arduino-sd-write-3.3.5.cpp','utf8');
 const skeleton=`  CRC_ON_OFF = 59
 } ardu_sdcard_command_t;
 
@@ -14,6 +15,7 @@ typedef struct {
 }
 
 bool sdReadBytes
+${writeFixture}
 ${fixture}
 DSTATUS ff_sd_status(
   esp_err_t err = esp_vfs_fat_register(path, drv, max_files, &fs);
@@ -41,7 +43,14 @@ test('installed SDK must contain the C3 driver patch before compilation',{
  skip:!process.env.SYNAP_ARDUINO_SD_SRC
 },()=>{
   const actual=fs.readFileSync(path.join(process.env.SYNAP_ARDUINO_SD_SRC,'sd_diskio.cpp'),'utf8');
-  assert.match(actual,/SYNAP_C3_SD_INIT_V1/);
+  assert.match(actual,/SYNAP_C3_SD_INIT_V2/);
   assert.equal(patch(actual),actual);
   assert(actual.includes(init.trim()));
+});
+
+test('C3 single-sector writes reject every unaccepted response, even when CMD13 succeeds',()=>{
+  const start=fixed.indexOf('bool sdWriteSector(');
+  const write=fixed.slice(start,fixed.indexOf('\n}',start)+2);
+  nativeTest(fs.readFileSync('tests/arduino-sd-write.cpp','utf8').replace('// INSERT WRITE',write),
+    ['-DCONFIG_IDF_TARGET_ESP32C3=1','-funsigned-char']);
 });

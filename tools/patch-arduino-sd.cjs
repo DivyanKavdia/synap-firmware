@@ -116,7 +116,7 @@ typedef struct {`,'constants');
 }
 // Apply the compatibility fix only to C3; preserve the other targets' driver.
 function patch(source){
-  if(source.includes('// SYNAP_C3_SD_INIT_V1')) return source;
+  if(source.includes('// SYNAP_C3_SD_INIT_V2')) return source;
   const start=source.indexOf('DSTATUS ff_sd_initialize(uint8_t pdrv) {');
   const end=source.indexOf('DSTATUS ff_sd_status(',start);
   if(start<0 || end<0) throw Error('Pinned SD initialization boundary missing');
@@ -135,7 +135,7 @@ function patch(source){
     '  synap_sd_tracking = false;\n  return card->status;');
   fixed=fixed.slice(0,fixedStart)+'#if CONFIG_IDF_TARGET_ESP32C3\n'+init+
     '#else\n'+original+'#endif\n\n'+fixed.slice(fixedEnd);
-  const diagnostics=`// SYNAP_C3_SD_INIT_V1
+  const diagnostics=`// SYNAP_C3_SD_INIT_V2
 // Read only after SD.begin returns, under the application's storage mutex.
 // Stop tracking before SD.begin failure cleanup sends a fresh CMD0.
 #if CONFIG_IDF_TARGET_ESP32C3
@@ -178,6 +178,23 @@ bool sdReadBytes`,'command result');
 #if CONFIG_IDF_TARGET_ESP32C3
   synap_sd_fat=res;
 #endif`,'FAT result');
+  // A write is accepted only on SD data-response token 0x05. Stock 3.3.5
+  // rejects explicit CRC/write errors but can accept timeout/unknown tokens
+  // if the subsequent status command succeeds, silently losing a sector.
+  fixed=replaceOnce(fixed,
+`      } else if (token == 0x0C) {
+        return false;
+      }
+
+      unsigned int resp;`,
+`      } else if (token == 0x0C) {
+        return false;
+      }
+#if CONFIG_IDF_TARGET_ESP32C3
+      if (token != 0x05) return false;
+#endif
+
+      unsigned int resp;`,'single-sector write acceptance');
   return fixed;
 }
 function install(directory){

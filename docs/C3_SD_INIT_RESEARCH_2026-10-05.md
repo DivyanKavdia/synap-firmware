@@ -53,6 +53,17 @@ Error JSON falls back to a compact complete object if counters exceed the BLE
 payload budget. Firmware linkage requires the patched driver; CI cannot silently
 omit it again.
 
+## Single-sector write acceptance
+
+The pinned driver's single-sector writer explicitly rejects CRC/write error
+responses, but other responses (including its data-wait timeout value zero)
+can fall through to CMD13 and be reported successful. C3 now requires the
+accepted data-response token 0x05. The existing 0x0A CRC retry remains. A native
+regression executes the patched writer for all 32 masked response tokens and
+requires every nonaccepted token to fail, even with a successful CMD13. This
+protects WAV headers, recovery sectors and FAT metadata from false success;
+it does not make an electrically unresponsive card writable.
+
 ## First-checkpoint recovery correction
 
 A separate, reproduced recorder bug affected optional contiguous-allocation
