@@ -28,7 +28,7 @@ assert.match(source,/odysseyFormatSdCard\(\)/);
 assert.match(caps,/p\[16\]\|=4/);
 assert.match(source,/\/synap\//);
 assert.match(source,/opendir\(directoryPath\)/);
-assert.match(source,/segmentedWavComplete\(full,st\)/,'reserved or invalid recording parts must not enter the PWA catalogue');
+assert.match(source,/segmentedWavState\(full,st\)/,'reserved or invalid recording parts must not enter the PWA catalogue');
 assert.match(source,/uint64_t\(st\.st_size\)==44ull\+audioBytes/);
 assert.match(source,/open\(full,O_RDONLY\)/);
 assert.match(source,/unlink\(full\)/);
