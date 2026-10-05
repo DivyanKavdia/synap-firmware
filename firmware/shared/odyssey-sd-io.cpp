@@ -1,6 +1,7 @@
 // C3 file I/O and recoverable recording commit records. All callers own the SD mutex.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 #include <cerrno>
+#include <cstdio>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -31,13 +32,15 @@ static inline void odysseyWavHeader(uint8_t* h,uint32_t bytes) {
   put32le(h+28,SAMPLE_RATE*2);h[32]=2;h[34]=16;
   memcpy(h+36,"data",4);put32le(h+40,bytes);
 }
-static inline uint32_t odysseySdCrc(const uint8_t* data,size_t size) {
-  uint32_t crc=0xffffffffu;
+static inline uint32_t odysseySdCrcUpdate(uint32_t crc,const uint8_t* data,size_t size) {
   for (size_t i=0;i<size;++i) {
     crc^=data[i];
     for (unsigned bit=0;bit<8;++bit) crc=(crc>>1)^((crc&1u)?0xedb88320u:0u);
   }
-  return ~crc;
+  return crc;
+}
+static inline uint32_t odysseySdCrc(const uint8_t* data,size_t size) {
+  return ~odysseySdCrcUpdate(0xffffffffu,data,size);
 }
 static inline bool odysseyPwriteAll(int fd,const uint8_t* data,size_t size,off_t offset) {
   // The pinned IDF FatFs pwrite has a zero-write/ENOSPC early return
@@ -82,6 +85,86 @@ static inline int odysseyJournalPresence(const char* wav) {
 }
 static inline bool odysseyJournalAbsent(const char* wav) {
   return odysseyJournalPresence(wav)==0;
+}
+
+struct OdysseyWavMeta {
+  uint32_t takeHigh=0,takeLow=0,part=0,pcmBytes=0,crc32=0;
+};
+static inline bool odysseyMetaPath(const char* wav,char* path,size_t capacity) {
+  const int n=snprintf(path,capacity,"%s.meta",wav);
+  if (n<0 || size_t(n)>=capacity) { errno=ENAMETOOLONG;return false; }
+  return true;
+}
+static inline bool odysseyRemoveMeta(const char* wav) {
+  char path[144];
+  if (!odysseyMetaPath(wav,path,sizeof(path))) return false;
+  errno=0;
+  return unlink(path)==0 || errno==ENOENT;
+}
+// Metadata is an integrity accelerator, not the source of truth. A WAV remains
+// recoverable/syncable if this sidecar is absent after sudden power loss.
+static inline bool odysseyWriteWavMeta(const char* wav,uint32_t takeHigh,uint32_t takeLow,
+    uint32_t part,uint32_t pcmBytes,uint32_t crc32) {
+  char path[144],temp[152];
+  if (!odysseyMetaPath(wav,path,sizeof(path))) return false;
+  const int n=snprintf(temp,sizeof(temp),"%s.tmp",path);
+  if (n<0 || size_t(n)>=sizeof(temp)) { errno=ENAMETOOLONG;return false; }
+
+  uint8_t record[32]{};
+  memcpy(record,"SYNAPM01",8);
+  put32le(record+8,takeHigh);put32le(record+12,takeLow);
+  put32le(record+16,part);put32le(record+20,pcmBytes);put32le(record+24,crc32);
+  put32le(record+28,odysseySdCrc(record,28));
+
+  errno=0;
+  if (unlink(temp)!=0 && errno!=ENOENT) return false;
+  errno=0;
+  const int fd=open(temp,O_CREAT|O_TRUNC|O_RDWR,0644);
+  if (fd<0) return false;
+  bool ok=odysseyPwriteAll(fd,record,sizeof(record),0) && fsync(fd)==0;
+  int saved=ok?0:(errno?errno:EIO);
+  errno=0;
+  if (close(fd)!=0) { if (!saved) saved=errno?errno:EIO;ok=false; }
+  if (!ok) { (void)unlink(temp);errno=saved?saved:EIO;return false; }
+
+  errno=0;
+  if (unlink(path)!=0 && errno!=ENOENT) {
+    saved=errno?errno:EIO;(void)unlink(temp);errno=saved;return false;
+  }
+  errno=0;
+  if (rename(temp,path)!=0) {
+    saved=errno?errno:EIO;(void)unlink(temp);errno=saved;return false;
+  }
+  errno=0;
+  return true;
+}
+// 1=valid metadata, 0=absent, -1=invalid metadata, -2=filesystem I/O failure.
+static inline int odysseyReadWavMeta(const char* wav,OdysseyWavMeta& meta) {
+  char path[144];
+  if (!odysseyMetaPath(wav,path,sizeof(path))) return -2;
+  errno=0;
+  const int fd=open(path,O_RDONLY);
+  if (fd<0) {
+    if (errno==ENOENT) { errno=0;return 0; }
+    return -2;
+  }
+  uint8_t record[32]{};
+  struct stat st{};
+  bool ok=fstat(fd,&st)==0 && st.st_size==off_t(sizeof(record)) &&
+    odysseyPreadAll(fd,record,sizeof(record),0);
+  int saved=ok?0:(errno?errno:EIO);
+  errno=0;
+  if (close(fd)!=0) { if (!saved) saved=errno?errno:EIO;ok=false; }
+  if (!ok) { errno=saved?saved:EIO;return -2; }
+  if (memcmp(record,"SYNAPM01",8)!=0 ||
+      odysseySdLe32(record+28)!=odysseySdCrc(record,28)) {
+    errno=0;return -1;
+  }
+  meta.takeHigh=odysseySdLe32(record+8);meta.takeLow=odysseySdLe32(record+12);
+  meta.part=odysseySdLe32(record+16);meta.pcmBytes=odysseySdLe32(record+20);
+  meta.crc32=odysseySdLe32(record+24);
+  errno=0;
+  return 1;
 }
 static inline int odysseyCreateJournal(const char* wav) {
   char path[144];
