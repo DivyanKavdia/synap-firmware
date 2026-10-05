@@ -489,19 +489,9 @@ static void worker(void*) {
     }
 
     if (xQueueReceive(requests,&request,pdMS_TO_TICKS(500))!=pdTRUE) {
-      // Never remount merely because the worker is idle or catalogue failed.
-      // A physical disconnected double-tap is an explicit recovery request,
-      // just like PWA operation 14, and may safely run while storage is idle.
-      const bool idleEnough=!odysseyRecording.load() && !streamingEnabled.load() &&
-        !otaBusy() && !sleepPending;
-      if (odysseySdConsumeRecoveryRequest()) {
-        if (idleEnough) {
-          Serial.println("[SD] physical touch requested software recovery");
-          (void)odysseyRecoverSdCard("touch");
-        } else {
-          odysseySdRequestRecovery();
-        }
-      }
+      // The media worker is observational while idle. Offline touch recovery
+      // belongs exclusively to odysseyRecordTask(); connected remount belongs
+      // exclusively to explicit PWA operation 14.
       continue;
     }
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load()) continue;
