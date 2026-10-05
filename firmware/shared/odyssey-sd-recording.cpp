@@ -353,7 +353,9 @@ static void odysseyRecordTake() {
 // function first so SD and microphone guards release their mutexes.
 static void odysseyRecordTask(void*) {
   bool ready=odysseySdReady();
+  bool captureAttempted=false,startRecoveryAttempted=false;
   if (!ready && !odysseyStopRequested.load()) {
+    startRecoveryAttempted=true;
     odysseySdRecoveryActive=true;
     updateStatusLed(true);
     Serial.println("[SD] one-gesture offline start: recovering storage before capture");
@@ -367,6 +369,7 @@ static void odysseyRecordTask(void*) {
   }
 
   if (ready && !odysseyStopRequested.load()) {
+    captureAttempted=true;
     odysseyRecordTake();
   } else if (!ready) {
     errno=ENODEV;
@@ -392,7 +395,8 @@ static void odysseyRecordTask(void*) {
   // A media I/O failure invalidates the current VFS, but a disconnected device
   // must not depend on the phone for recovery. Prepare the next take only; never
   // append to or retry the failed WAV.
-  if (!odysseySdReady() && !deviceConnected.load() && !streamingEnabled.load() &&
+  if (captureAttempted && !startRecoveryAttempted && !odysseySdReady() &&
+      !deviceConnected.load() && !streamingEnabled.load() &&
       !otaBusy() && !sleepPending && !batteryCritical()) {
     odysseySdRecoveryActive=true;
     updateStatusLed(true);
