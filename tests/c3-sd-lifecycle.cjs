@@ -218,3 +218,15 @@ test('C3 warm boot mount retries are bounded and progressively settled',()=>{
   assert.match(detect,/retryDelayMs=250u\*uint32_t\(attempt\)\*uint32_t\(attempt\)/);
   assert.match(detect,/Every retry starts from a full/);
 });
+
+test('C3 offline LED truth separates preparation from confirmed PCM capture',()=>{
+  const runtime=read('firmware/shared/runtime.cpp');
+  const recorder=read('firmware/shared/odyssey-sd-recording.cpp');
+  const led=read('firmware/shared/status-led.cpp');
+  assert.match(runtime,/odysseyCaptureActive/);
+  assert.match(led,/else if \(odysseyCaptureActive\.load\(\)\)/);
+  assert.doesNotMatch(led,/else if \(odysseyRecording\.load\(\)\)/);
+  assert.match(recorder,/odysseySdRecoveryActive=true;[\s\S]*xTaskCreate/);
+  assert.match(recorder,/startMicrophone\(\)[\s\S]*odysseyCaptureActive=true;[\s\S]*odysseySdRecoveryActive=false/);
+  assert.match(recorder,/odysseyCaptureActive=false;[\s\S]*stopMicrophone\(\)/);
+});
