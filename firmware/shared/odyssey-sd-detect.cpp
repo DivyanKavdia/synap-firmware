@@ -319,7 +319,7 @@ static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
       if (!verify) { failureErrno=errno?errno:EIO;ok=false; }
     }
     if (ok && fread(readback,1,sizeof(readback),verify)!=sizeof(readback)) {
-      failureErrno=ferror(verify) && errno?errno:EIO;ok=false;
+      failureErrno=(ferror(verify) && errno)?errno:EIO;ok=false;
     }
     if (ok && memcmp(readback,"SD",sizeof(readback))!=0) {
       failureErrno=EIO;ok=false;
