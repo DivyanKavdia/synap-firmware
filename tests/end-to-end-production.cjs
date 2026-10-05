@@ -69,7 +69,7 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(sdBackend,/odysseySdSpi\.end\(\)/);
   assert.doesNotMatch(sdBackend,/SDSPI_HOST_DEFAULT|esp_vfs_fat_sdspi_mount|spi_bus_initialize/);
   assert.match(sdBackend,/odysseySdMountLocked\("boot",1\)/);
-  assert.match(sdBackend,/odysseySdMountLocked\(reason\?reason:"op14",1\)/);
+  assert.match(sdBackend,/odysseySdMountLocked\(why,attempts\)/);
   assert.doesNotMatch(sdBackend,/odysseySdConsumeAutoRearm|scheduled re-arm/);
   assert.match(sdBackend,/SD\.writeRAW\(blankSector,0\)/);
   assert.match(sdBackend,/odysseySdBeginLocked\(true\)/);
@@ -132,7 +132,7 @@ test('C3 production image exposes truthful SD read/write/delete diagnostics',()=
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/static int segmentedWavState/);
   assert.match(c3,/static uint8_t clearRecordings\(uint32_t& removed\)/);
-  assert.match(c3,/Verify both source objects are gone before acknowledging deletion/);
+  assert.match(c3,/Verify WAV, journal and integrity metadata are all gone before acknowledging deletion/);
   assert.match(c3,/odysseySaveRecordFailure\(0,0,0\)/);
   assert.match(c3,/\\"ioErrno\\":%ld/);
   assert.match(c3,/\\"releaseErr\\":%ld/);
