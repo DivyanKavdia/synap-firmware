@@ -177,7 +177,7 @@ BLE2902* audioCccd = nullptr;
 QueueHandle_t audioFrameQueue = nullptr, controlQueue = nullptr;
 TaskHandle_t captureTaskHandle = nullptr;
 std::atomic<bool> deviceConnected{false}, streamingEnabled{false};
-std::atomic<bool> odysseySdRecoveryActive{false};
+std::atomic<bool> odysseySdRecoveryActive{false}, odysseyCaptureActive{false};
 std::atomic<bool> connectionEventPending{false}, transmitterActive{false};
 std::atomic<uint32_t> connectionGeneration{0}, streamGeneration{0};
 std::atomic<uint32_t> audioReplayGeneration{0};
@@ -697,9 +697,9 @@ void updateStatusLed(bool force) {
     // before capture (or preparing storage after a failed take).
     const uint32_t phase=now%900u;
     if (phase<120u || (phase>=240u && phase<360u)) { r=LED_DIM+4; g=LED_DIM+2; }
-  } else if (odysseyRecording.load()) {
-    // An immediate 260 ms purple pulse repeats every 1.8 s while SD audio is
-    // running. Keep the duty cycle low for pendant battery life.
+  } else if (odysseyCaptureActive.load()) {
+    // Purple means confirmed PCM capture only: microphone started and the WAV
+    // recovery header is durable. Preparation/recovery remains amber.
     const uint32_t phase=uint32_t(now-odysseyRecordingStartedAt.load())%1800u;
     if (!odysseyStopRequested.load() && phase<260u) { r=LED_DIM+4; b=LED_DIM+6; }
   } else if (odysseyRecordFaultAt.load() &&
@@ -3196,6 +3196,13 @@ static void odysseyRecordTake() {
     MicrophoneGuard guard;
     errno=0;
     if (!startMicrophone()) { failed=true;failureStage=failure(4); }
+    else {
+      odysseyRecordingStartedAt=millis();
+      odysseyCaptureActive=true;
+      odysseySdRecoveryActive=false;
+      updateStatusLed(true);
+      Serial.println("[SD] PCM capture active");
+    }
     int32_t raw[SAMPLES_PER_FRAME];
     int16_t pcm[SAMPLES_PER_FRAME];
     uint32_t checkpointAt=millis();
@@ -3303,6 +3310,8 @@ static void odysseyRecordTake() {
         segmentCrcState=0xffffffffu;
       }
     }
+    odysseyCaptureActive=false;
+    updateStatusLed(true);
     stopMicrophone();
   }
 #else
@@ -3364,6 +3373,7 @@ static void odysseyRecordTake() {
 // FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
 // function first so SD and microphone guards release their mutexes.
 static void odysseyRecordTask(void*) {
+  odysseyCaptureActive=false;
   bool ready=odysseySdReady();
   bool captureAttempted=false,startRecoveryAttempted=false;
   if (!ready && !odysseyStopRequested.load()) {
@@ -3372,11 +3382,10 @@ static void odysseyRecordTask(void*) {
     updateStatusLed(true);
     Serial.println("[SD] one-gesture offline start: recovering storage before capture");
     ready=odysseyRecoverSdCard("touch");
-    odysseySdRecoveryActive=false;
     if (ready) {
-      odysseyRecordingStartedAt=millis();
-      updateStatusLed(true);
-      Serial.println("[SD] offline recovery succeeded; capture starting from original double tap");
+      Serial.println("[SD] offline recovery succeeded; preparing capture from original double tap");
+    } else {
+      odysseySdRecoveryActive=false;
     }
   }
 
@@ -3399,6 +3408,8 @@ static void odysseyRecordTask(void*) {
   const uint32_t finalizedAt=millis();
   odysseySdSleepGuardUntil=finalizedAt+5000u;
   disconnectedAt=finalizedAt;
+  odysseyCaptureActive=false;
+  odysseySdRecoveryActive=false;
   odysseyRecording=false;
   odysseyStopRequested=false;
   applyCpuPowerProfile(false);
@@ -3436,22 +3447,27 @@ bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs) {
   return true;
 }
 void odysseyToggleRecording() {
-  if (odysseySdRecoveryActive.load()) return;
+  // A second double-tap must always cancel an in-flight offline request,
+  // including amber preparation/recovery before PCM capture begins.
   if (odysseyRecording.load()) {
     odysseyStopRequested=true;
     updateStatusLed(true);
     Serial.println("[TOUCH] double tap -> SD audio STOP");
     return;
   }
+  if (odysseySdRecoveryActive.load()) return;
   if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) return;
   odysseyStopRequested=false;
-  odysseyRecordingStartedAt=millis();
   odysseyRecordFaultAt=0;
+  odysseyCaptureActive=false;
   odysseyRecording=true;
-  if (!odysseySdReady()) odysseySdRecoveryActive=true;
+  // Amber covers all preparation, including an already-mounted card; purple is
+  // asserted only after microphone startup inside odysseyRecordTake().
+  odysseySdRecoveryActive=true;
   applyCpuPowerProfile(true);
   updateStatusLed(true);
   if (xTaskCreate(odysseyRecordTask,"sd-audio",8192,nullptr,2,nullptr)!=pdPASS) {
+    odysseyCaptureActive=false;
     odysseyRecording=false;
     odysseyStopRequested=false;
     odysseySdRecoveryActive=false;

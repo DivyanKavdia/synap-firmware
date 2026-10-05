@@ -10,9 +10,9 @@ void updateStatusLed(bool force) {
     // before capture (or preparing storage after a failed take).
     const uint32_t phase=now%900u;
     if (phase<120u || (phase>=240u && phase<360u)) { r=LED_DIM+4; g=LED_DIM+2; }
-  } else if (odysseyRecording.load()) {
-    // An immediate 260 ms purple pulse repeats every 1.8 s while SD audio is
-    // running. Keep the duty cycle low for pendant battery life.
+  } else if (odysseyCaptureActive.load()) {
+    // Purple means confirmed PCM capture only: microphone started and the WAV
+    // recovery header is durable. Preparation/recovery remains amber.
     const uint32_t phase=uint32_t(now-odysseyRecordingStartedAt.load())%1800u;
     if (!odysseyStopRequested.load() && phase<260u) { r=LED_DIM+4; b=LED_DIM+6; }
   } else if (odysseyRecordFaultAt.load() &&

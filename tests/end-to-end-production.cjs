@@ -147,3 +147,10 @@ test('C3 production image contains offline SD V2 recovery, capacity and CRC meta
   assert.match(c3,/odysseyRecoverSdCard\("post-record"\)/);
   assert.match(c3,/odysseySdRecoveryActive\.load\(\)/);
 });
+
+test('C3 production LED uses capture-active rather than request-active state',()=>{
+  const c3=materialize(productionS3(),'esp32c3-supermini-4m');
+  assert.match(c3,/odysseyCaptureActive/);
+  assert.match(c3,/else if \(odysseyCaptureActive\.load\(\)\)/);
+  assert.match(c3,/\[SD\] PCM capture active/);
+});
