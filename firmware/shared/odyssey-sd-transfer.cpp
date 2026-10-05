@@ -221,9 +221,12 @@ static uint8_t catalogue(uint32_t& total) {
       if (state<0) { catalogueErrno=errno?errno:EIO;break; }
       if (!state) continue;
     }
+    // Keep the C3 heap bounded, but never present a truncated catalogue as
+    // complete. A caller can clear/sync files and retry after an explicit
+    // overflow instead of silently orphaning everything beyond entry 100.
+    if (count>=100) { catalogueErrno=EOVERFLOW;break; }
     if (count++) catalogueBuffer+=",";
     catalogueBuffer+="{\"path\":\""+String(logical)+"\",\"bytes\":"+String(uint32_t(st.st_size))+"}";
-    if (count>=100) break;
   }
   if (closedir(directory)!=0 && !catalogueErrno) catalogueErrno=errno;
   if (catalogueErrno) {
@@ -264,6 +267,20 @@ static uint8_t removeFile(const char* path) {
   return removeFileLocked(path);
 }
 
+static bool orphanJournalPath(const char* name,char* full,size_t capacity) {
+  if (!name || !full || capacity<2) return false;
+  const size_t length=strlen(name);
+  static constexpr char suffix[]=".wav.jrn";
+  if (length<=sizeof(suffix)-1 || strcmp(name+length-(sizeof(suffix)-1),suffix)!=0) return false;
+  char logicalWav[64];
+  const int n=snprintf(logicalWav,sizeof(logicalWav),"/synap/%.*s",
+    int(length-4),name); // strip only ".jrn"; safeWavPath validates the base
+  if (n<=0 || size_t(n)>=sizeof(logicalWav) || !safeWavPath(logicalWav)) return false;
+  char fullWav[96];
+  return odysseySdPath(logicalWav,fullWav,sizeof(fullWav)) &&
+    odysseyJournalPath(fullWav,full,capacity);
+}
+
 static uint8_t clearRecordings(uint32_t& removed) {
   removed=0;
   OdysseySdGuard guard;
@@ -272,40 +289,88 @@ static uint8_t clearRecordings(uint32_t& removed) {
   if (!odysseySdCloseReadLocked()) return IO_ERROR;
   char directoryPath[96];
   if (!odysseySdPath("/synap",directoryPath,sizeof(directoryPath))) { errno=EINVAL;return IO_ERROR; }
-  errno=0;
-  DIR* directory=opendir(directoryPath);
-  if (!directory) return IO_ERROR;
 
-  String logicalPaths[100];
-  uint16_t count=0;
-  int scanError=0;
+  // Reopen between bounded batches. This avoids holding a DIR handle while
+  // unlinking entries and removes every recording without a fixed 100-file cap.
   for (;;) {
+    String batch[16];
+    uint8_t count=0;
+    int scanError=0;
     errno=0;
-    dirent* entry=readdir(directory);
-    if (!entry) { if (errno) scanError=errno;break; }
-    if (count>=100) break;
-    if (!entry->d_name || !strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
-    char logical[64];
-    const int n=snprintf(logical,sizeof(logical),"/synap/%s",entry->d_name);
-    if (n<=0 || size_t(n)>=sizeof(logical) || !safeWavPath(logical)) continue;
-    char full[96];
-    if (!odysseySdPath(logical,full,sizeof(full))) { scanError=EINVAL;break; }
-    struct stat st{};
-    errno=0;
-    if (stat(full,&st)!=0) {
-      if (errno==ENOENT) continue;
-      scanError=errno?errno:EIO;break;
+    DIR* directory=opendir(directoryPath);
+    if (!directory) return IO_ERROR;
+    for (;;) {
+      errno=0;
+      dirent* entry=readdir(directory);
+      if (!entry) { if (errno) scanError=errno;break; }
+      if (!entry->d_name || !strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
+      char logical[64];
+      const int n=snprintf(logical,sizeof(logical),"/synap/%s",entry->d_name);
+      if (n<=0 || size_t(n)>=sizeof(logical) || !safeWavPath(logical)) continue;
+      char full[96];
+      if (!odysseySdPath(logical,full,sizeof(full))) { scanError=EINVAL;break; }
+      struct stat st{};
+      errno=0;
+      if (stat(full,&st)!=0) {
+        if (errno==ENOENT) continue;
+        scanError=errno?errno:EIO;break;
+      }
+      if (S_ISREG(st.st_mode)) batch[count++]=logical;
+      if (count==16) break;
     }
-    if (S_ISREG(st.st_mode)) logicalPaths[count++]=logical;
-  }
-  if (closedir(directory)!=0 && !scanError) scanError=errno?errno:EIO;
-  if (scanError) { errno=scanError;return IO_ERROR; }
+    if (closedir(directory)!=0 && !scanError) scanError=errno?errno:EIO;
+    if (scanError) { errno=scanError;return IO_ERROR; }
+    if (!count) break;
 
-  for (uint16_t i=0;i<count;++i) {
-    const uint8_t result=removeFileLocked(logicalPaths[i].c_str());
-    if (result==OK) ++removed;
-    else if (result!=FILE_UNAVAILABLE) return result;
+    for (uint8_t i=0;i<count;++i) {
+      const uint8_t result=removeFileLocked(batch[i].c_str());
+      if (result==OK) ++removed;
+      else if (result!=FILE_UNAVAILABLE) return result;
+    }
   }
+
+  // Clean journals that lost their WAV due to a previous interrupted firmware
+  // version. These are Synap-owned recovery metadata only; unrelated card
+  // content is never touched.
+  for (;;) {
+    String journals[16];
+    uint8_t count=0;
+    int scanError=0;
+    errno=0;
+    DIR* directory=opendir(directoryPath);
+    if (!directory) return IO_ERROR;
+    for (;;) {
+      errno=0;
+      dirent* entry=readdir(directory);
+      if (!entry) { if (errno) scanError=errno;break; }
+      if (!entry->d_name || !strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
+      char journal[144];
+      if (!orphanJournalPath(entry->d_name,journal,sizeof(journal))) continue;
+      struct stat st{};
+      errno=0;
+      if (stat(journal,&st)!=0) {
+        if (errno==ENOENT) continue;
+        scanError=errno?errno:EIO;break;
+      }
+      if (S_ISREG(st.st_mode)) journals[count++]=journal;
+      if (count==16) break;
+    }
+    if (closedir(directory)!=0 && !scanError) scanError=errno?errno:EIO;
+    if (scanError) { errno=scanError;return IO_ERROR; }
+    if (!count) break;
+
+    for (uint8_t i=0;i<count;++i) {
+      const char* journal=journals[i].c_str();
+      errno=0;
+      if (unlink(journal)!=0 && errno!=ENOENT) return IO_ERROR;
+      struct stat st{};
+      errno=0;
+      if (stat(journal,&st)==0) { errno=EIO;return IO_ERROR; }
+      if (errno!=ENOENT) return IO_ERROR;
+      errno=0;
+    }
+  }
+
   errno=0;
   return OK;
 }
