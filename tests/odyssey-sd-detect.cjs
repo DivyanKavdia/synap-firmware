@@ -82,7 +82,7 @@ test('C3 media operations distinguish missing content from FAT I/O failure',()=>
   assert.match(transfer,/return errno==ENOENT\?FILE_UNAVAILABLE:IO_ERROR/);
   assert.match(transfer,/Verify metadata visibility before telling the PWA it may forget its source/);
   assert.match(transfer,/static uint8_t clearRecordings\(uint32_t& removed\)/);
-  assert.match(transfer,/if \(error==IO_ERROR\) odysseySdMarkVfsFailure\(errno\)/);
+  assert.match(transfer,/if \(error==IO_ERROR\) odysseySdMarkVfsFailure\(\)/);
   assert.match(transfer,/ioErrno/);
   assert.match(transfer,/releaseErr/);
   assert.match(transfer,/releaseAttempts/);
@@ -90,11 +90,11 @@ test('C3 media operations distinguish missing content from FAT I/O failure',()=>
 
 test('C3 catalogue refuses silent truncation and clear drains every Synap recording in batches',()=>{
   assert.match(transfer,/if \(count>=100\) \{ catalogueErrno=EOVERFLOW;break; \}/);
-  assert.match(transfer,/String batch\[16\]/);
+  assert.match(transfer,/char batch\[16\]\[64\]\{\}/);
   assert.match(transfer,/for \(;;\) \{[\s\S]*DIR\* directory=opendir\(directoryPath\)/);
   assert.match(transfer,/static bool orphanJournalPath/);
-  assert.match(transfer,/String journals\[16\]/);
-  assert.doesNotMatch(transfer,/String logicalPaths\[100\]/);
+  assert.match(transfer,/char journals\[16\]\[144\]\{\}/);
+  assert.doesNotMatch(transfer,/String (?:logicalPaths|batch|journals)\[/);
   assert.match(transfer,/These are Synap-owned recovery metadata only/);
   assert.match(transfer,/catalogueBuffer\.reserve\(12288\)/);
 });
