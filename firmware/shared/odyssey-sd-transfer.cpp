@@ -229,7 +229,7 @@ static uint8_t catalogue(uint32_t& total) {
     // Invalid/missing metadata never hides a valid WAV. Existing PWA SHA
     // verification remains the fallback for recovered or legacy recordings.
     const bool metaValid=metaState==1 &&
-      uint64_t(meta.pcmBytes)+ODYSSEY_WAV_HEADER_BYTES==uint64_t(st.st_size);
+      uint64_t(meta.pcmBytes)+44ull==uint64_t(st.st_size);
     // Keep the C3 heap bounded, but never present a truncated catalogue as
     // complete. A caller can clear/sync files and retry after an explicit
     // overflow instead of silently orphaning everything beyond entry 100.
