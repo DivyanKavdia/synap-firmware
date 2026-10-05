@@ -88,7 +88,7 @@ test('C3 catalogue failure is observational and never auto-remounts',()=>{
   assert.match(transfer,/case 7:[\s\S]*?error=catalogue\(total\)/);
   const catalogueCase=transfer.split('case 7:')[1].split('case 8:')[0];
   assert.doesNotMatch(catalogueCase,/odysseyRecoverSdCard\(/);
-  assert.match(catalogueCase,/odysseySdMarkVfsFailure\(catalogueErrno\?catalogueErrno:errno\)/);
+  assert.match(catalogueCase,/errno=catalogueErrno\?catalogueErrno:\(errno\?errno:EIO\);odysseySdMarkVfsFailure\(\)/);
   assert.match(transfer,/case 14:[\s\S]*odysseyRecoverSdCard\("op14"\)/);
   assert.match(transfer,/sdProbe/);
 });
@@ -181,6 +181,6 @@ test('C3 recovery performs one checked teardown and successful takes clear stale
   const recovery=detect.split('bool odysseyRecoverSdCard(const char* reason)')[1].split('bool odysseyFormatSdCard()')[0];
   assert.doesNotMatch(recovery,/odysseySdReleaseLocked\(\)/);
   assert.match(recovery,/odysseySdMountLocked\(reason\?reason:"op14",1\)/);
-  assert.match(recorder,/else if \(totalBytes\) odysseyClearRecordFailure\(\)/);
-  assert.match(recorder,/odysseySdMarkVfsFailure\(firstErrno\)/);
+  assert.match(recorder,/else if \(totalBytes\) odysseySaveRecordFailure\(0,0,0\)/);
+  assert.match(recorder,/errno=firstErrno\?firstErrno:EIO;odysseySdMarkVfsFailure\(\)/);
 });
