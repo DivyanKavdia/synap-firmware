@@ -13,7 +13,12 @@ static uint32_t odysseySdReadConnection=0,odysseySdReadAt=0;
 static inline bool odysseySdCloseReadLocked() {
   const int fd=odysseySdReadFd;odysseySdReadFd=-1;odysseySdReadPath[0]=0;
   odysseySdReadConnection=0;odysseySdReadAt=0;
-  return fd<0 || close(fd)==0;
+  if (fd<0) return true;
+  errno=0;
+  if (close(fd)==0) return true;
+  const int saved=errno?errno:EIO;
+  errno=saved;
+  return false;
 }
 static inline uint32_t odysseySdLe32(const uint8_t* p) {
   return uint32_t(p[0])|(uint32_t(p[1])<<8)|(uint32_t(p[2])<<16)|(uint32_t(p[3])<<24);
@@ -66,9 +71,17 @@ static inline bool odysseyRemoveJournal(const char* wav) {
   char path[144];
   return odysseyJournalPath(wav,path,sizeof(path)) && (unlink(path)==0 || errno==ENOENT);
 }
-static inline bool odysseyJournalAbsent(const char* wav) {
+// 0=absent, 1=present, -1=filesystem/path error.
+static inline int odysseyJournalPresence(const char* wav) {
   char path[144];struct stat st{};
-  return odysseyJournalPath(wav,path,sizeof(path)) && stat(path,&st)!=0 && errno==ENOENT;
+  if (!odysseyJournalPath(wav,path,sizeof(path))) return -1;
+  errno=0;
+  if (stat(path,&st)==0) return 1;
+  if (errno==ENOENT) { errno=0;return 0; }
+  return -1;
+}
+static inline bool odysseyJournalAbsent(const char* wav) {
+  return odysseyJournalPresence(wav)==0;
 }
 static inline int odysseyCreateJournal(const char* wav) {
   char path[144];
@@ -107,16 +120,29 @@ static inline bool odysseyJournalCommit(int wavFd,int journal,const char* path,
 static inline int odysseyJournalRead(const char* path,uint32_t& bytes,uint8_t* firstPcm) {
   char journalPath[144];
   if (!odysseyJournalPath(path,journalPath,sizeof(journalPath))) return -2;
+  errno=0;
   const int fd=open(journalPath,O_RDONLY);
-  if (fd<0) return errno==ENOENT?0:-2;
+  if (fd<0) {
+    if (errno==ENOENT) { errno=0;return 0; }
+    return -2;
+  }
   struct stat st{};
-  if (fstat(fd,&st)!=0) { close(fd);return -2; }
-  if (st.st_size!=1024) { close(fd);return -1; }
+  if (fstat(fd,&st)!=0) {
+    const int saved=errno?errno:EIO;(void)close(fd);errno=saved;return -2;
+  }
+  if (st.st_size!=1024) {
+    errno=0;
+    if (close(fd)!=0) return -2;
+    errno=0;
+    return -1;
+  }
   uint32_t newest=0;
   const uint32_t identity=odysseySdCrc(reinterpret_cast<const uint8_t*>(path),strlen(path));
   for (unsigned slot=0;slot<2;++slot) {
     uint8_t record[512]{};
-    if (!odysseyPreadAll(fd,record,sizeof(record),off_t(slot)*512)) { close(fd);return -2; }
+    if (!odysseyPreadAll(fd,record,sizeof(record),off_t(slot)*512)) {
+      const int saved=errno?errno:EIO;(void)close(fd);errno=saved;return -2;
+    }
     const uint32_t seq=odysseySdLe32(record+8),size=odysseySdLe32(record+12);
     if (memcmp(record,"SYNAPJ01",8)==0 && seq>newest && size<=9600000u && !(size&1u) &&
         odysseySdLe32(record+16)==identity && odysseySdLe32(record+20)==SAMPLE_RATE &&
@@ -124,7 +150,9 @@ static inline int odysseyJournalRead(const char* path,uint32_t& bytes,uint8_t* f
       newest=seq;bytes=size;memcpy(firstPcm,record+24,468);
     }
   }
+  errno=0;
   if (close(fd)!=0) return -2;
+  errno=0;
   return newest?1:-1;
 }
 static inline bool odysseyWavValid(const uint8_t* h,uint32_t& bytes) {
@@ -134,21 +162,30 @@ static inline bool odysseyWavValid(const uint8_t* h,uint32_t& bytes) {
 }
 // Retryable recovery: retain the journal until header, length and close all succeed.
 static inline bool odysseyRecoverWav(const char* path) {
+  errno=0;
   struct stat st{};
   if (stat(path,&st)!=0) return false;
   uint32_t bytes=0;
   uint8_t firstSector[512]{};
   const int journal=odysseyJournalRead(path,bytes,firstSector+44);
   if (journal==-2) return false;
-  if (journal==-1) return true; // Preserve questionable data; catalogue excludes journalled files.
+  if (journal==-1) {
+    // Preserve questionable data and its journal for manual recovery; this is
+    // a content-integrity condition, not evidence that the volume itself failed.
+    errno=0;
+    return true;
+  }
+  errno=0;
   const int fd=open(path,O_RDWR);
   if (fd<0) return false;
   uint8_t header[44]{};
   bool ok=true,valid=true;
+  int savedError=0;
   if (!journal) {
     if (st.st_size<44) valid=false;
-    else if (!odysseyPreadAll(fd,header,sizeof(header),0)) ok=false;
-    else valid=odysseyWavValid(header,bytes);
+    else if (!odysseyPreadAll(fd,header,sizeof(header),0)) {
+      savedError=errno?errno:EIO;ok=false;
+    } else valid=odysseyWavValid(header,bytes);
   }
   const uint64_t committed=44ull+bytes;
   if (committed>uint64_t(st.st_size)) valid=false;
@@ -156,12 +193,21 @@ static inline bool odysseyRecoverWav(const char* path) {
     odysseyWavHeader(header,bytes);
     memcpy(firstSector,header,44);
     const size_t repairBytes=journal?44+std::min(size_t(bytes),size_t(468)):44;
-    ok=odysseyPwriteAll(fd,firstSector,repairBytes,0) && fsync(fd)==0 &&
-      ftruncate(fd,off_t(committed))==0 && fsync(fd)==0;
+    if (!odysseyPwriteAll(fd,firstSector,repairBytes,0) || fsync(fd)!=0 ||
+        ftruncate(fd,off_t(committed))!=0 || fsync(fd)!=0) {
+      savedError=errno?errno:EIO;ok=false;
+    }
   }
-  if (close(fd)!=0) ok=false;
-  if (!ok || !valid) return ok;
+  if (close(fd)!=0) {
+    if (!savedError) savedError=errno?errno:EIO;
+    ok=false;
+  }
+  if (!ok) { errno=savedError?savedError:EIO;return false; }
+  if (!valid) { errno=0;return true; }
   if (journal && !odysseyRemoveJournal(path)) return false;
-  return bytes || unlink(path)==0;
+  if (bytes) { errno=0;return true; }
+  errno=0;
+  if (unlink(path)==0 || errno==ENOENT) { errno=0;return true; }
+  return false;
 }
 #endif
