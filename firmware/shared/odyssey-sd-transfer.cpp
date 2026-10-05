@@ -392,7 +392,7 @@ static void worker(void*) {
       if (guard && odysseySdReadFd>=0 && (!deviceConnected.load() ||
           odysseySdReadConnection!=connectionGeneration.load() ||
           uint32_t(millis()-odysseySdReadAt)>=15000u || odysseyRecording.load() || sleepPending)) {
-        if (!odysseySdCloseReadLocked()) odysseySdMarkVfsFailure(errno);
+        if (!odysseySdCloseReadLocked()) odysseySdMarkVfsFailure();
       }
     }
 
@@ -422,34 +422,31 @@ static void worker(void*) {
     switch (request.operation) {
       case 3:
         error=selectFile(request.path,total);
-        if (error==IO_ERROR) odysseySdMarkVfsFailure(errno);
+        if (error==IO_ERROR) odysseySdMarkVfsFailure();
         break;
       case 4:
         error=readSelected(request.path,request.offset,total,bytes,size);
-        if (error==IO_ERROR) odysseySdMarkVfsFailure(errno);
+        if (error==IO_ERROR) odysseySdMarkVfsFailure();
         break;
       case 7:
         error=catalogue(total);
         // Never auto-unmount/remount a mounted card because a catalogue read
         // failed. Preserve the observed state for diagnosis; explicit op 14 is
         // the only connected remount path.
-        if (error==IO_ERROR) odysseySdMarkVfsFailure(catalogueErrno?catalogueErrno:errno);
+        if (error==IO_ERROR) { errno=catalogueErrno?catalogueErrno:(errno?errno:EIO);odysseySdMarkVfsFailure(); }
         break;
       case 8: total=catalogueBuffer.length();if(!total)error=FILE_UNAVAILABLE;break;
       case 14:
         selectedPath[0]=0;catalogueBuffer="";
         error=odysseyRecoverSdCard("op14")?OK:NO_SD;
         break;
-      case 17:
-        error=removeFile(request.path);
-        if (error==IO_ERROR) odysseySdMarkVfsFailure(errno);
-        break;
+      case 17: error=removeFile(request.path);if(error==IO_ERROR)odysseySdMarkVfsFailure();break;
       case 18:
         selectedPath[0]=0;catalogueBuffer="";
         if(!storageReady()) error=NO_SD;
         else {
           error=clearRecordings(total);
-          if (error==IO_ERROR) odysseySdMarkVfsFailure(errno);
+          if (error==IO_ERROR) odysseySdMarkVfsFailure();
         }
         break;
       case 19:
