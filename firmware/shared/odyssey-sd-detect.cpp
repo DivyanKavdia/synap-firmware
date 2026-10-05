@@ -238,6 +238,7 @@ static bool odysseySdReleaseLocked() {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   pinMode(ODYSSEY_SD_CS,OUTPUT);
   odysseySdHostMounted=false;
+  odysseySdLastFreeBytes=0;
   if (hadHost) delay(2);
   return teardownOk;
 }
