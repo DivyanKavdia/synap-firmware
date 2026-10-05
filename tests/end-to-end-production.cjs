@@ -54,8 +54,8 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(c3,/BLE capture requested; finalizing local audio before live stream/);
   const connect=c3.match(/void onConnect\(BLEServer\* server\) override \{[\s\S]*?\n  \}/)?.[0]||'';
   assert.doesNotMatch(connect,/odysseyStopRequested\s*=\s*true/);
-  assert.match(c3,/SD unavailable; requesting background recovery/);
-  assert.match(c3,/physical touch requested software recovery/);
+  assert.match(c3,/one-gesture offline start: recovering storage before capture/);
+  assert.match(c3,/double tap -> SD recover \+ audio START/);
   assert.match(c3,/!odysseySdReady\(\)/);
   assert.match(c3,/ready\|=SYNAP_CAP_SDAUDIO/);
   const sdBackend=c3.split('// Odyssey S3 remains detection-only')[0];
@@ -136,4 +136,14 @@ test('C3 production image exposes truthful SD read/write/delete diagnostics',()=
   assert.match(c3,/odysseySaveRecordFailure\(0,0,0\)/);
   assert.match(c3,/\\"ioErrno\\":%ld/);
   assert.match(c3,/\\"releaseErr\\":%ld/);
+});
+
+test('C3 production image contains offline SD V2 recovery, capacity and CRC metadata',()=>{
+  const c3=materialize(productionS3(),'esp32c3-supermini-4m');
+  assert.match(c3,/ODYSSEY_SD_FREE_RESERVE_BYTES=2ull\*1024ull\*1024ull/);
+  assert.match(c3,/SYNAPM01/);
+  assert.match(c3,/odysseySdCrcUpdate\(segmentCrcState/);
+  assert.match(c3,/odysseyRecoverSdCard\("touch"\)/);
+  assert.match(c3,/odysseyRecoverSdCard\("post-record"\)/);
+  assert.match(c3,/odysseySdRecoveryActive\.load\(\)/);
 });
