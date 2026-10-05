@@ -230,3 +230,16 @@ test('C3 offline LED truth separates preparation from confirmed PCM capture',()=
   assert.match(recorder,/startMicrophone\(\)[\s\S]*odysseyCaptureActive=true;[\s\S]*odysseySdRecoveryActive=false/);
   assert.match(recorder,/odysseyCaptureActive=false;[\s\S]*stopMicrophone\(\)/);
 });
+
+test('C3 diagnostics preserve root SD failure when recovery later collapses to ENODEV',()=>{
+  const detect=read('firmware/shared/odyssey-sd-detect.cpp');
+  const recorder=read('firmware/shared/odyssey-sd-recording.cpp');
+  const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
+  assert.match(detect,/void odysseySaveRootStorageFailure/);
+  assert.match(detect,/stage==1 \|\| stage==4 \|\| stage==8 \|\| stage==31/);
+  assert.match(recorder,/odysseySaveRootStorageFailure\(failureStage,firstErrno/);
+  assert.match(transfer,/rootRecordStage/);
+  assert.match(transfer,/rootRecordErrno/);
+  assert.match(transfer,/lastGoodFreeBytes/);
+  assert.match(detect,/odysseySdHostMounted=false;[\s\S]*odysseySdLastFreeBytes=0/);
+});

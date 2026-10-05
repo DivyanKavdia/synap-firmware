@@ -155,3 +155,11 @@ test('C3 production LED uses capture-active rather than request-active state',()
   assert.match(c3,/else if \(odysseyCaptureActive\.load\(\)\)/);
   assert.match(c3,/\[SD\] PCM capture active/);
 });
+
+test('C3 production diagnostics expose root storage failure and last-good capacity',()=>{
+  const c3=materialize(productionS3(),'esp32c3-supermini-4m');
+  assert.match(c3,/odysseySaveRootStorageFailure/);
+  assert.match(c3,/rootRecordStage/);
+  assert.match(c3,/rootRecordErrno/);
+  assert.match(c3,/lastGoodFreeBytes/);
+});

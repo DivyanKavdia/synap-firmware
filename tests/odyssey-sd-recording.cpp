@@ -25,6 +25,7 @@ uint64_t freeBytes=64ull*1024ull*1024ull;
 uint8_t odysseySdBootState=1;
 uint32_t clockMs=0,randomCounter=0;
 int reads=0,micStarts=0,micStops=0,powerActive=0,powerIdle=0;
+uint8_t rootFailureStage=0;int rootFailureErrno=0;uint32_t rootFailureBytes=0;
 int preallocationCalls=0;
 std::vector<uint64_t> preallocatedSizes;
 void (*pendingTask)(void*)=nullptr;
@@ -83,6 +84,9 @@ bool odysseySdPreallocateFile(const char* full,uint64_t size){
 int xTaskCreate(void(*fn)(void*),const char*,int,void*,int,void*){if(!allocOk)return 0;pendingTask=fn;return pdPASS;}
 void vTaskDelete(void*){}
 void odysseySaveRecordFailure(uint8_t,int,uint32_t) {}
+void odysseySaveRootStorageFailure(uint8_t stage,int error,uint32_t bytes) {
+ rootFailureStage=stage;rootFailureErrno=error;rootFailureBytes=bytes;
+}
 // INSERT RECORDER
 
 void reset(){
@@ -92,6 +96,7 @@ void reset(){
  sleepPending=critical=ota=reconnect=finalizeOnDelay=false;micOk=cardOk=allocOk=pathOk=recoverOk=true;odysseySdBootState=1;
  freeBytes=64ull*1024ull*1024ull;
  clockMs=randomCounter=0;reads=micStarts=micStops=powerActive=powerIdle=vfsFailures=recoverCalls=0;preallocationCalls=0;preallocatedSizes.clear();stopAfterReads=4;pendingTask=nullptr;lastPath.clear();
+ rootFailureStage=0;rootFailureErrno=0;rootFailureBytes=0;
  {const int rc=system("rm -rf /tmp/synap-odyssey-test");assert(rc==0);}
  assert(mkdir("/tmp/synap-odyssey-test",0755)==0);
  assert(mkdir("/tmp/synap-odyssey-test/synap",0755)==0);
