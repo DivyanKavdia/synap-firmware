@@ -27,10 +27,12 @@ static int testSync(int fd) {
 #undef write
 #undef fsync
 const char* path="/tmp/synap-journal-test.wav";
-static int createWav() {
-  unlink(path);assert(odysseyRemoveJournal(path));
+static int createWav(bool inlineReservation=false) {
+  unlink(path);assert(odysseyRemoveJournal(path));assert(odysseyRemoveMeta(path));
   int fd=open(path,O_CREAT|O_EXCL|O_RDWR,0600);assert(fd>=0);
-  assert(ftruncate(fd,9600044)==0);
+  const off_t reservation=inlineReservation?
+    ODYSSEY_INLINE_JOURNAL_OFFSET+off_t(ODYSSEY_INLINE_JOURNAL_BYTES):9600044;
+  assert(ftruncate(fd,reservation)==0);
   uint8_t header[44];odysseyWavHeader(header,0);
   assert(odysseyPwriteAll(fd,header,44,0));
   uint8_t pcm[16384];memset(pcm,0x6a,sizeof(pcm));
@@ -47,7 +49,9 @@ static void verify(uint32_t bytes) {
   assert(close(fd)==0);assert(odysseyJournalAbsent(path));
 }
 int main() {
-  int fd=createWav();int journal=odysseyCreateJournal(path);assert(journal>=0);
+  // New recordings use one WAV descriptor. The two alternating recovery
+  // sectors live at the aligned reservation tail.
+  int fd=createWav(true);int journal=ODYSSEY_INLINE_JOURNAL;
   uint32_t seq=0;
   const off_t cursor=lseek(fd,99,SEEK_SET);assert(cursor==99);
   uint8_t sample=0x6a;assert(odysseyPwriteAll(fd,&sample,1,44));
@@ -58,20 +62,29 @@ int main() {
   assert(odysseyJournalCommit(fd,journal,path,8192,seq));assert(seq==1);
   writeLimit=0;
   assert(odysseyJournalCommit(fd,journal,path,16384,seq));assert(seq==2);
-  // Corrupt the newer commit and the whole first WAV sector. Recovery uses the older CRC-valid slot.
+  assert((ODYSSEY_INLINE_JOURNAL_OFFSET&511)==0);
+  // Corrupt the newer commit and the whole first WAV sector. Recovery must
+  // fall back to the older CRC-valid inline slot.
   uint8_t bad[512]{};assert(pwrite(fd,bad,512,0)==512);
-  assert(pwrite(journal,bad,1,512+508)==1);
-  assert(close(fd)==0&&close(journal)==0);
+  assert(pwrite(fd,bad,1,ODYSSEY_INLINE_JOURNAL_OFFSET+512+508)==1);
+  assert(close(fd)==0);
   assert(odysseyRecoverWav(path));verify(8192);
   assert(odysseyRecoverWav(path));verify(8192); // idempotent
 
-  fd=createWav();journal=odysseyCreateJournal(path);seq=0;
+  // A failed newer fsync must never advance the advertised commit length.
+  fd=createWav(true);journal=ODYSSEY_INLINE_JOURNAL;seq=0;
   assert(odysseyJournalCommit(fd,journal,path,8192,seq));
   syncFailures=1;assert(!odysseyJournalCommit(fd,journal,path,16384,seq));assert(seq==1);
+  assert(close(fd)==0);
+  assert(odysseyRecoverWav(path));verify(8192);
+
+  // Legacy sidecar journals remain recoverable after OTA.
+  fd=createWav();journal=odysseyCreateJournal(path);assert(journal>=0);seq=0;
+  assert(odysseyJournalCommit(fd,journal,path,8192,seq));
   assert(close(fd)==0&&close(journal)==0);
   assert(odysseyRecoverWav(path));verify(8192);
 
-  // Unknown or torn journals must preserve reservations, never publish fake PCM.
+  // Unknown or torn legacy journals preserve reservations, never publish fake PCM.
   fd=createWav();journal=odysseyCreateJournal(path);assert(journal>=0);
   assert(close(fd)==0&&close(journal)==0);
   assert(odysseyRecoverWav(path));assert(!odysseyJournalAbsent(path));
@@ -91,5 +104,5 @@ int main() {
   assert(odysseySdCloseReadLocked());assert(odysseySdReadFd==-1);
   assert(fcntl(cached,F_GETFD)==-1&&errno==EBADF);
   assert(odysseySdCloseReadLocked());
-  assert(unlink(path)==0);assert(odysseyRemoveJournal(path));
+  assert(unlink(path)==0);assert(odysseyRemoveJournal(path));assert(odysseyRemoveMeta(path));
 }

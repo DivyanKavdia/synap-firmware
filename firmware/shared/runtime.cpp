@@ -141,6 +141,7 @@ BLE2902* audioCccd = nullptr;
 QueueHandle_t audioFrameQueue = nullptr, controlQueue = nullptr;
 TaskHandle_t captureTaskHandle = nullptr;
 std::atomic<bool> deviceConnected{false}, streamingEnabled{false};
+std::atomic<bool> odysseySdRecoveryActive{false};
 std::atomic<bool> connectionEventPending{false}, transmitterActive{false};
 std::atomic<uint32_t> connectionGeneration{0}, streamGeneration{0};
 std::atomic<uint32_t> audioReplayGeneration{0};

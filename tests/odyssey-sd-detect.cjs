@@ -80,7 +80,7 @@ test('C3 media operations distinguish missing content from FAT I/O failure',()=>
   assert.match(transfer,/static int segmentedWavState/);
   assert.match(transfer,/journal<0\) return -1/);
   assert.match(transfer,/return errno==ENOENT\?FILE_UNAVAILABLE:IO_ERROR/);
-  assert.match(transfer,/Verify both source objects are gone before acknowledging deletion/);
+  assert.match(transfer,/Verify WAV, journal and integrity metadata are all gone before acknowledging deletion/);
   assert.match(transfer,/static uint8_t clearRecordings\(uint32_t& removed\)/);
   assert.match(transfer,/if \(error==IO_ERROR\) odysseySdMarkVfsFailure\(\)/);
   assert.match(transfer,/ioErrno/);
@@ -96,5 +96,16 @@ test('C3 catalogue refuses silent truncation and clear drains every Synap record
   assert.match(transfer,/char journals\[16\]\[144\]\{\}/);
   assert.doesNotMatch(transfer,/String (?:logicalPaths|batch|journals)\[/);
   assert.match(transfer,/These are Synap-owned recovery metadata only/);
-  assert.match(transfer,/catalogueBuffer\.reserve\(12288\)/);
+  assert.match(transfer,/catalogueBuffer\.reserve\(22528\)/);
+});
+
+test('C3 offline V2 exposes capacity and integrity sidecars without making metadata mandatory',()=>{
+  assert.match(source,/uint64_t odysseySdFreeBytesLocked\(\)/);
+  assert.match(source,/SD\.totalBytes\(\)/);
+  assert.match(source,/SD\.usedBytes\(\)/);
+  assert.match(transfer,/OdysseyWavMeta meta/);
+  assert.match(transfer,/metaState==-2/);
+  assert.match(transfer,/Invalid\/missing metadata never hides a valid WAV/);
+  assert.match(transfer,/odysseyRemoveMeta\(full\)/);
+  assert.match(transfer,/static bool orphanMetaPath/);
 });

@@ -15,11 +15,13 @@ constexpr uint32_t SAMPLE_RATE=16000;
 constexpr uint16_t SAMPLES_PER_FRAME=800;
 constexpr int pdPASS=1;
 std::atomic<bool> odysseyRecording{false},odysseyStopRequested{false},deviceConnected{false},streamingEnabled{false};
+std::atomic<bool> odysseySdRecoveryActive{false};
 std::atomic<uint32_t> odysseyRecordingStartedAt{0},odysseyRecordFaultAt{0};
 std::atomic<uint32_t> odysseySdSleepGuardUntil{0};
 uint32_t disconnectedAt=0;
-bool sleepPending=false,critical=false,ota=false,micOk=true,cardOk=true,allocOk=true,reconnect=false,pathOk=true,finalizeOnDelay=false;
+bool sleepPending=false,critical=false,ota=false,micOk=true,cardOk=true,allocOk=true,reconnect=false,pathOk=true,finalizeOnDelay=false,recoverOk=true;
 int stopAfterReads=4;
+uint64_t freeBytes=64ull*1024ull*1024ull;
 uint8_t odysseySdBootState=1;
 uint32_t clockMs=0,randomCounter=0;
 int reads=0,micStarts=0,micStops=0,powerActive=0,powerIdle=0;
@@ -36,10 +38,13 @@ void delay(unsigned ms){
 }
 uint32_t esp_random(){return ++randomCounter;}
 bool otaBusy(){return ota;}
-// Native harness records the deferred request; the production transfer worker
-// is responsible for remounting away from the touch/control task.
-int recoveryRequests=0;
-void odysseySdRequestRecovery(){++recoveryRequests;}
+int recoverCalls=0;
+bool odysseyRecoverSdCard(const char*) {
+ ++recoverCalls;
+ if(!recoverOk)return false;
+ cardOk=true;odysseySdBootState=1;return true;
+}
+uint64_t odysseySdFreeBytesLocked(){return freeBytes;}
 int vfsFailures=0;
 void odysseySdMarkVfsFailure(){++vfsFailures;odysseySdBootState=2;}
 bool batteryCritical(){return critical;}
@@ -81,11 +86,12 @@ void odysseySaveRecordFailure(uint8_t,int,uint32_t) {}
 // INSERT RECORDER
 
 void reset(){
- odysseyRecording=false;odysseyStopRequested=false;deviceConnected=false;streamingEnabled=false;
+ odysseyRecording=false;odysseyStopRequested=false;deviceConnected=false;streamingEnabled=false;odysseySdRecoveryActive=false;
  odysseyRecordingStartedAt=0;odysseyRecordFaultAt=0;
  odysseySdSleepGuardUntil=0;disconnectedAt=0;
- sleepPending=critical=ota=reconnect=finalizeOnDelay=false;micOk=cardOk=allocOk=pathOk=true;odysseySdBootState=1;
- clockMs=randomCounter=0;reads=micStarts=micStops=powerActive=powerIdle=vfsFailures=0;preallocationCalls=0;preallocatedSizes.clear();stopAfterReads=4;pendingTask=nullptr;lastPath.clear();
+ sleepPending=critical=ota=reconnect=finalizeOnDelay=false;micOk=cardOk=allocOk=pathOk=recoverOk=true;odysseySdBootState=1;
+ freeBytes=64ull*1024ull*1024ull;
+ clockMs=randomCounter=0;reads=micStarts=micStops=powerActive=powerIdle=vfsFailures=recoverCalls=0;preallocationCalls=0;preallocatedSizes.clear();stopAfterReads=4;pendingTask=nullptr;lastPath.clear();
  {const int rc=system("rm -rf /tmp/synap-odyssey-test");assert(rc==0);}
  assert(mkdir("/tmp/synap-odyssey-test",0755)==0);
  assert(mkdir("/tmp/synap-odyssey-test/synap",0755)==0);
@@ -113,7 +119,12 @@ int main(){
  assert(get32(data,24)==16000&&get32(data,28)==32000);
  assert(data[44]==0xff&&data[45]==0x7f&&data[46]==0&&data[47]==0x80);
  assert(lastPath.find("/tmp/synap-odyssey-test/synap/odyssey_audio_00000005_00000006_p0000.wav")==0);
- assert(preallocationCalls==1&&preallocatedSizes[0]==9600044);
+ assert(preallocationCalls==1&&preallocatedSizes[0]==9601536);
+ OdysseyWavMeta firstMeta{};
+ assert(odysseyReadWavMeta(lastPath.c_str(),firstMeta.takeHigh,firstMeta.takeLow,
+   firstMeta.part,firstMeta.pcmBytes,firstMeta.crc32)==1);
+ assert(firstMeta.takeHigh==5&&firstMeta.takeLow==6&&firstMeta.part==0&&firstMeta.pcmBytes==3200);
+ assert(firstMeta.crc32==odysseySdCrc(data.data()+44,data.size()-44));
 
  // Exercise routine sector-aware draining and multiple 15-second checkpoints,
  // not only the short final-flush path.
@@ -130,7 +141,7 @@ int main(){
  struct stat firstStat{};assert(stat(firstPath,&firstStat)==0&&firstStat.st_size==9600044);
  assert(lastPath.find("_p0001.wav")!=std::string::npos);
  data=load();assert(data.size()==44+1600&&get32(data,40)==1600);
- assert(preallocationCalls==2&&preallocatedSizes[0]==9600044&&preallocatedSizes[1]==9600044);
+ assert(preallocationCalls==2&&preallocatedSizes[0]==9601536&&preallocatedSizes[1]==9601536);
  assert(odysseySdRecordLastBytes()==9601600);
 
  reset();reconnect=true;odysseyToggleRecording();run();data=load();
@@ -140,13 +151,20 @@ int main(){
  struct stat emptyStat{};assert(!micStarts&&stat(lastPath.c_str(),&emptyStat)!=0&&errno==ENOENT);
 
  reset();cardOk=false;odysseySdBootState=2;odysseyToggleRecording();
- assert(!odysseyRecording&&!pendingTask&&micStarts==0);
- cardOk=true;odysseyToggleRecording();
- assert(!odysseyRecording&&!pendingTask); // no implicit remount
- odysseySdBootState=1;odysseyToggleRecording();assert(odysseyRecording&&pendingTask);run();data=load();
- assert(get32(data,40)==3200);
+ assert(odysseyRecording&&pendingTask&&odysseySdRecoveryActive);
+ run();data=load();
+ assert(recoverCalls==1&&micStarts==1&&get32(data,40)==3200);
 
- reset();pathOk=false;odysseyToggleRecording();run();assert(micStarts==0);
+ reset();cardOk=false;odysseySdBootState=2;recoverOk=false;odysseyToggleRecording();
+ assert(odysseyRecording&&pendingTask);run();
+ assert(recoverCalls==1&&micStarts==0&&!odysseyRecording&&odysseySdRecordFailureStage()==1);
+
+ reset();freeBytes=5ull*1024ull*1024ull;odysseyToggleRecording();run();
+ assert(micStarts==0&&odysseySdRecordFailureStage()==31&&vfsFailures==0&&odysseySdBootState==1);
+
+ reset();pathOk=false;odysseyToggleRecording();run();
+ assert(recoverCalls==1&&odysseySdBootState==1); // failed take autonomously prepares the next one
+
  reset();micOk=false;odysseyToggleRecording();run();
  assert(stat(lastPath.c_str(),&emptyStat)!=0&&errno==ENOENT&&odysseySdRecordFailureStage()==4);
  reset();allocOk=false;odysseyToggleRecording();assert(!odysseyRecording&&!pendingTask&&powerActive==1&&powerIdle==1);

@@ -5,6 +5,11 @@ void updateStatusLed(bool force) {
     const uint32_t phase=now%1400u;
     if (phase<55u || (phase>=180u && phase<235u)) { r=LED_DIM; g=2; }
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  } else if (odysseySdRecoveryActive.load()) {
+    // Amber double-pulse means the same offline double-tap is recovering SD
+    // before capture (or preparing storage after a failed take).
+    const uint32_t phase=now%900u;
+    if (phase<120u || (phase>=240u && phase<360u)) { r=LED_DIM+4; g=LED_DIM+2; }
   } else if (odysseyRecording.load()) {
     // An immediate 260 ms purple pulse repeats every 1.8 s while SD audio is
     // running. Keep the duty cycle low for pendant battery life.

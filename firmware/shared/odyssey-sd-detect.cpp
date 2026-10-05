@@ -52,11 +52,11 @@ static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
 static constexpr uint32_t ODYSSEY_SD_STARTUP_SETTLE_MS=3000u;
 // Builds 1631/1445 proved this exact C3/card/module combination on Arduino SD at 400 kHz.
-// The recoverable recorder holds the WAV and its .jrn file open together, so
-// max_files must exceed the legacy single-file catalogue/recording design.
+// New offline recording uses one WAV descriptor with an inline recovery tail.
+// Keep descriptor headroom for BLE reads, metadata, legacy recovery and maintenance.
 static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=400000u;
 static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=4;
-static_assert(ODYSSEY_SD_MAX_OPEN_FILES>=2,"recoverable SD recording needs WAV + journal descriptors");
+static_assert(ODYSSEY_SD_MAX_OPEN_FILES>=2,"C3 SD maintenance requires descriptor headroom");
 
 static StaticSemaphore_t odysseySdMutexStorage;
 static SemaphoreHandle_t odysseySdMutex=nullptr;
@@ -69,10 +69,7 @@ static std::atomic<uint32_t> odysseySdReleaseAttempts{0};
 static std::atomic<uint8_t> odysseySdLastMountReason{0}; // 1=boot,2=op14,3=touch,4=probe,6=format
 static std::atomic<int32_t> odysseySdLastIoErrno{0};
 static std::atomic<int32_t> odysseySdLastReleaseError{ESP_OK};
-static std::atomic<bool> odysseySdRecoveryRequested{false};
-
-void odysseySdRequestRecovery() { odysseySdRecoveryRequested=true; }
-bool odysseySdConsumeRecoveryRequest() { return odysseySdRecoveryRequested.exchange(false); }
+static std::atomic<uint64_t> odysseySdLastFreeBytes{0};
 int32_t odysseySdLastError() { return odysseySdLastMountError.load(); }
 int32_t odysseySdLastIoError() { return odysseySdLastIoErrno.load(); }
 int32_t odysseySdLastReleaseErrorCode() { return odysseySdLastReleaseError.load(); }
@@ -80,6 +77,15 @@ uint32_t odysseySdAttemptCount() { return odysseySdMountAttempts.load(); }
 uint32_t odysseySdBeginAttemptCount() { return odysseySdBeginAttempts.load(); }
 uint32_t odysseySdReleaseAttemptCount() { return odysseySdReleaseAttempts.load(); }
 uint8_t odysseySdLastMountReasonCode() { return odysseySdLastMountReason.load(); }
+uint64_t odysseySdLastFreeByteCount() { return odysseySdLastFreeBytes.load(); }
+
+uint64_t odysseySdFreeBytesLocked() {
+  if (!odysseySdHostMounted.load()) { odysseySdLastFreeBytes=0;return 0; }
+  const uint64_t total=SD.totalBytes(),used=SD.usedBytes();
+  const uint64_t freeBytes=total>=used?total-used:0;
+  odysseySdLastFreeBytes=freeBytes;
+  return freeBytes;
+}
 
 void odysseySdUseProbingClock() {}
 void odysseySdMarkVfsFailure(int error) {
@@ -384,17 +390,20 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   odysseySdLastMountError=ESP_OK;
   odysseySdBootState=1;odysseySdProbeStage=6;
   const char* label=type==CARD_MMC?"MMC":type==CARD_SD?"SDSC":type==CARD_SDHC?"SDHC/SDXC":"unknown";
-  odysseySdRecoveryRequested=false;
-  Serial.printf("[SD] ready via proven Arduino SPI path: %s, %llu MiB, %lu Hz\n",
+  const uint64_t freeBytes=odysseySdFreeBytesLocked();
+  Serial.printf("[SD] ready via proven Arduino SPI path: %s, %llu MiB, free=%llu MiB, %lu Hz\n",
     label,static_cast<unsigned long long>(cardBytes/(1024ULL*1024ULL)),
+    static_cast<unsigned long long>(freeBytes/(1024ULL*1024ULL)),
     static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ));
   return true;
 }
 
 static bool odysseySdMountLocked(const char* reason,uint8_t attempts) {
   if (odysseySdReady()) return true;
-  for (uint8_t attempt=1;attempt<=attempts;++attempt)
+  for (uint8_t attempt=1;attempt<=attempts;++attempt) {
     if (odysseySdMountOnceLocked(reason,attempt)) return true;
+    if (attempt<attempts) delay(250u);
+  }
   Serial.printf("[SD] %s failed after %u attempt(s), state=%u stage=%u err=%ld\n",
     reason,unsigned(attempts),unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()),
     static_cast<long>(odysseySdLastMountError.load()));
@@ -424,10 +433,12 @@ bool odysseyInitializeSdCardBeforeBle() {
 bool odysseyRecoverSdCard(const char* reason) {
   OdysseySdGuard guard(pdMS_TO_TICKS(5000));
   if (!guard) return false;
-  // Force one fresh mount. odysseySdBeginLocked() owns the single checked
-  // teardown, avoiding the previous double SD.end()/SPI.end() recovery cycle.
+  // Physical offline recovery gets two bounded attempts. Connected op14 stays
+  // single-shot so the PWA remains responsive and can report the exact failure.
+  const char* why=reason?reason:"op14";
+  const uint8_t attempts=(!strcmp(why,"touch") || !strcmp(why,"post-record"))?2u:1u;
   odysseySdBootState=0;odysseySdProbeStage=0;
-  return odysseySdMountLocked(reason?reason:"op14",1);
+  return odysseySdMountLocked(why,attempts);
 }
 
 bool odysseyFormatSdCard() {
@@ -482,6 +493,7 @@ bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
   }
   const bool wasReady=odysseySdReady();
   if (!odysseySdReleaseLocked()) return false;
+  odysseySdLastFreeBytes=0;
   odysseySdBootState=0;odysseySdProbeStage=0;
   Serial.printf("[SD] power transition prepared; Arduino SD host released ready=%u\n",wasReady?1u:0u);
   return true;

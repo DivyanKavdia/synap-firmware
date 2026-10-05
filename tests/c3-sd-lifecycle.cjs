@@ -16,20 +16,19 @@ test('C3 reconnect never stops SD capture; START performs explicit handoff',()=>
   const session=read('firmware/shared/audio-session.cpp');
   assert.match(session,/odysseyPrepareForConnectedStreaming\(1500u\)/);
 });
-test('C3 remounts only on explicit op14 or physical touch',()=>{
+test('C3 keeps connected reads observational while offline double-tap owns bounded recovery',()=>{
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
   const recorder=read('firmware/shared/odyssey-sd-recording.cpp');
   const detect=read('firmware/shared/odyssey-sd-detect.cpp');
-  assert.doesNotMatch(transfer,/automaticRetries|background mount retry|odysseySdConsumeAutoRearm|scheduled re-arm/);
-  assert.doesNotMatch(detect,/ODYSSEY_SD_REARM_STEPS|odysseySdArmBootRearm|odysseySdConsumeAutoRearm/);
+  assert.doesNotMatch(transfer,/automaticRetries|ODYSSEY_SD_REARM_STEPS|scheduled re-arm/);
   assert.match(detect,/odysseySdMountLocked\("boot",1\)/);
-  assert.match(detect,/odysseySdMountLocked\(reason\?reason:"op14",1\)/);
-  assert.match(transfer,/physical touch requested software recovery/);
-  assert.match(transfer,/odysseyRecoverSdCard\("touch"\)/);
+  assert.match(detect,/const uint8_t attempts=\(!strcmp\(why,"touch"\) \|\| !strcmp\(why,"post-record"\)\)\?2u:1u/);
+  assert.match(recorder,/one-gesture offline start: recovering storage before capture/);
+  assert.match(recorder,/odysseyRecoverSdCard\("touch"\)/);
+  assert.match(recorder,/odysseyRecoverSdCard\("post-record"\)/);
   assert.match(transfer,/case 14:[\s\S]*odysseyRecoverSdCard\("op14"\)/);
   const readCase=transfer.split('case 4:')[1].split('case 7:')[0];
-  assert.doesNotMatch(readCase,/odysseySdRequestRecovery\(/);
-  assert.match(recorder,/odysseySdRequestRecovery\(\)/);
+  assert.doesNotMatch(readCase,/odysseyRecoverSdCard\(/);
 });
 test('BLE STOP and reconnect cannot release SD-owned I2S or block the control task',()=>{
   const session=read('firmware/shared/audio-session.cpp');
@@ -65,7 +64,8 @@ test('C3 offline recording has visible purple heartbeat and failed-start feedbac
   assert.match(led,/phase<140u \|\| \(phase>=260u && phase<400u\)/);
   assert.match(recorder,/odysseyRecordingStartedAt=millis\(\);[\s\S]*?odysseyRecording=true/);
   assert.match(recorder,/if \(failed \|\| totalBytes==0\) odysseyRecordFaultAt=millis\(\)/);
-  assert.match(recorder,/odysseySdRequestRecovery\(\);\s*odysseyRecordFaultAt=millis\(\)/);
+  assert.match(led,/odysseySdRecoveryActive\.load\(\)/);
+  assert.match(recorder,/double tap -> SD recover \+ audio START/);
 });
 
 
@@ -180,7 +180,8 @@ test('C3 recovery performs one checked teardown and successful takes clear stale
   const recorder=read('firmware/shared/odyssey-sd-recording.cpp');
   const recovery=detect.split('bool odysseyRecoverSdCard(const char* reason)')[1].split('bool odysseyFormatSdCard()')[0];
   assert.doesNotMatch(recovery,/odysseySdReleaseLocked\(\)/);
-  assert.match(recovery,/odysseySdMountLocked\(reason\?reason:"op14",1\)/);
+  assert.match(recovery,/const uint8_t attempts=/);
+  assert.match(recovery,/odysseySdMountLocked\(why,attempts\)/);
   assert.match(recorder,/else if \(totalBytes\) odysseySaveRecordFailure\(0,0,0\)/);
   assert.match(recorder,/errno=firstErrno\?firstErrno:EIO;odysseySdMarkVfsFailure\(\)/);
 });
@@ -190,6 +191,23 @@ test('C3 sync-source deletion is idempotent and keeps the journal until the WAV 
   const remove=transfer.split('static uint8_t removeFileLocked(const char* path) {')[1].split('static uint8_t removeFile(const char* path) {')[0];
   assert(remove.indexOf('unlink(full)')<remove.indexOf('odysseyRemoveJournal(full)'));
   assert.match(remove,/statResult!=0 && errno!=ENOENT/);
-  assert.match(remove,/Verify both source objects are gone before acknowledging deletion/);
+  assert.match(remove,/Verify WAV, journal and integrity metadata are all gone before acknowledging deletion/);
   assert.match(remove,/odysseyJournalPresence\(full\)/);
+});
+
+test('C3 offline V2 guards free space and persists per-WAV session integrity metadata',()=>{
+  const recorder=read('firmware/shared/odyssey-sd-recording.cpp');
+  const io=read('firmware/shared/odyssey-sd-io.cpp');
+  const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
+  assert.match(recorder,/ODYSSEY_SD_FREE_RESERVE_BYTES=2ull\*1024ull\*1024ull/);
+  assert.match(recorder,/failureStage=failure\(31\)/);
+  assert.match(recorder,/odysseySdCrcUpdate\(segmentCrcState/);
+  assert.match(recorder,/odysseyWriteWavMeta\(fullPath,takeHigh,takeLow,segment/);
+  assert.match(io,/SYNAPM01/);
+  assert.match(io,/struct OdysseyWavMeta/);
+  assert.match(transfer,/crc32/);
+  assert.match(transfer,/take/);
+  assert.match(transfer,/part/);
+  assert.match(transfer,/pcmBytes/);
+  assert.match(transfer,/freeBytes/);
 });
