@@ -157,12 +157,12 @@ bool odysseySdPreallocateFile(const char* fullPath,uint64_t size) {
   const esp_err_t err=esp_vfs_fat_create_contiguous_file(
     ODYSSEY_SD_MOUNT_POINT,fullPath,size,true);
   if (err!=ESP_OK) {
-    const int saved=errno;
+    const int saved=errno?errno:EIO;
     // No contiguous extent is not an I/O fault. Keep the exclusively reserved
     // empty file and allocate clusters sequentially, but never retry EIO.
     if (saved==ENOSPC || saved==EACCES) {
       struct stat st{};
-      if (stat(fullPath,&st)==0 && st.st_size==0) return true;
+      if (stat(fullPath,&st)==0 && st.st_size==0) { errno=0;return true; }
     }
     errno=saved;
     odysseySdLastMountError=err;
@@ -170,6 +170,7 @@ bool odysseySdPreallocateFile(const char* fullPath,uint64_t size) {
       esp_err_to_name(err),static_cast<unsigned long>(err),static_cast<unsigned long long>(size));
     return false;
   }
+  errno=0;
   return true;
 }
 
