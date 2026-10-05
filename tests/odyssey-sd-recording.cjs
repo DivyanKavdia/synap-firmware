@@ -8,6 +8,11 @@ test('C3 local WAV preserves PCM, destination and final header across stop, reco
  assert.match(source,/ODYSSEY_SD_WRITE_CHUNK_BYTES=4096u/);
   assert.match(source,/ODYSSEY_SD_SECTOR_BYTES=512u/);
   assert.match(source,/ODYSSEY_WAV_SEGMENT_SECONDS=300u/);
+ assert.match(source,/ODYSSEY_SD_FREE_RESERVE_BYTES=2ull\*1024ull\*1024ull/);
+ assert.match(source,/odysseyHasSpaceForSegment\(\)/);
+ assert.match(source,/odysseySdCrcUpdate\(segmentCrcState/);
+ assert.match(source,/odysseyRecoverSdCard\("touch"\)/);
+ assert.match(source,/odysseyRecoverSdCard\("post-record"\)/);
   assert.match(source,/ODYSSEY_WAV_SEGMENT_PCM_BYTES=ODYSSEY_WAV_SEGMENT_FRAMES\*SAMPLES_PER_FRAME\*2u/);
   assert.match(source,/odysseySdPreallocateFile\(fullPath,ODYSSEY_WAV_SEGMENT_FILE_BYTES\)/);
  assert.match(source,/ftruncate\(file,off_t\(ODYSSEY_WAV_HEADER_BYTES\+bytes\)\)/);
