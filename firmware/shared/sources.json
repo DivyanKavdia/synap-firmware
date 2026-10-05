@@ -11,9 +11,6 @@
   "ble-control.cpp",
   "audio-capture.cpp",
   "audio-transport.cpp",
-  "odyssey-sd-io.cpp",
-  "odyssey-sd-detect.cpp",
-  "odyssey-sd-recording.cpp",
-  "odyssey-sd-transfer.cpp",
+  "odyssey-sd-clean-control.cpp",
   "boot.cpp"
 ]
