@@ -14,7 +14,7 @@ static constexpr uint32_t ODYSSEY_WAV_SEGMENT_PCM_BYTES=ODYSSEY_WAV_SEGMENT_FRAM
 static_assert(ODYSSEY_WAV_SEGMENT_PCM_BYTES==ODYSSEY_WAV_MAX_PCM_BYTES,
   "inline recovery journal offset must match the five-minute PCM reservation");
 static constexpr uint64_t ODYSSEY_WAV_SEGMENT_FILE_BYTES=
-  ODYSSEY_WAV_HEADER_BYTES+uint64_t(ODYSSEY_WAV_SEGMENT_PCM_BYTES)+ODYSSEY_INLINE_JOURNAL_BYTES;
+  uint64_t(ODYSSEY_INLINE_JOURNAL_OFFSET)+ODYSSEY_INLINE_JOURNAL_BYTES;
 static constexpr uint64_t ODYSSEY_SD_FREE_RESERVE_BYTES=2ull*1024ull*1024ull;
 static_assert((SAMPLE_RATE*ODYSSEY_WAV_SEGMENT_SECONDS)%SAMPLES_PER_FRAME==0,
   "WAV rollover must align with complete microphone frames");
