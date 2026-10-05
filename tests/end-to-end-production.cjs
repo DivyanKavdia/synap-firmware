@@ -162,3 +162,12 @@ test('C3 production diagnostics expose root storage failure and last-good capaci
   assert.match(c3,/rootRecordErrno/);
   assert.match(c3,/lastGoodFreeBytes/);
 });
+
+test('C3 production image quiesces and recovers continuously-powered SD card protocol',()=>{
+  const c3=materialize(productionS3(),'esp32c3-supermini-4m');
+  assert.match(c3,/odysseySdRecoverCardProtocolLocked/);
+  assert.match(c3,/odysseySdQuiesceCardLocked/);
+  assert.match(c3,/CMD25 stop-transmission token/);
+  assert.match(c3,/cardReadIdle/);
+  assert.match(c3,/cardCmd0/);
+});
