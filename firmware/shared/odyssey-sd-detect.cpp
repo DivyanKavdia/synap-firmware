@@ -194,6 +194,7 @@ static bool odysseySdReleaseLocked() {
   // before another SD.begin() can encounter ESP_ERR_INVALID_STATE.
   const esp_err_t residual=esp_vfs_fat_unregister_path(ODYSSEY_SD_MOUNT_POINT);
   if (residual==ESP_OK) {
+    odysseySdLastReleaseError=ESP_OK;
     Serial.println("[SD] reclaimed residual FAT VFS registration after SD.end");
   } else if (residual!=ESP_ERR_INVALID_STATE) {
     teardownOk=false;
@@ -235,9 +236,10 @@ static bool odysseySdBeginLocked(bool formatIfMountFailed=false) {
   if (!mounted) {
     odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=formatIfMountFailed?3:2;
-    odysseySdHostMounted=false;
-    SD.end();odysseySdSpi.end();
-    digitalWrite(ODYSSEY_SD_CS,HIGH);pinMode(ODYSSEY_SD_CS,OUTPUT);
+    // SD.begin() normally cleans its own failed mount, but use the same
+    // verified teardown here so a residual VFS registration cannot poison the
+    // next explicit recovery attempt.
+    (void)odysseySdReleaseLocked();
     return false;
   }
   odysseySdHostMounted=true;
