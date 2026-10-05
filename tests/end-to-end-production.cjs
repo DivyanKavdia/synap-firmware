@@ -97,7 +97,8 @@ test('release workflow compiles the shared complete production pipeline',()=>{
   assert.equal(compileLines.length,3);
   assert(compileLines.every(line=>line.includes('-DUSE_REAL_I2S_MIC=1')));
   assert.match(workflow,/arduino-cli core install esp32:esp32@3\.3\.5/);
-  assert.doesNotMatch(workflow,/patch-arduino-sd\.cjs|SYNAP_ARDUINO_SD_SRC/);
+  assert.match(workflow,/patch-arduino-sd\.cjs/);
+  assert.match(workflow,/SYNAP_ARDUINO_SD_SRC/);
 });
 
 test('C3 Arduino SPI mount precedes BLE and retains the guarded VFS storage API',()=>{

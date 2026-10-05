@@ -61,6 +61,13 @@ static_assert(ODYSSEY_SD_MAX_OPEN_FILES>=2,"C3 SD maintenance requires descripto
 static StaticSemaphore_t odysseySdMutexStorage;
 static SemaphoreHandle_t odysseySdMutex=nullptr;
 static SPIClass odysseySdSpi(FSPI);
+// Required C3 driver backport: missing build integration fails at link time.
+extern "C" void synap_sd_reset_diagnostics();
+extern "C" int synap_sd_diagnostic(unsigned field);
+static std::atomic<int> odysseySdInitDetail[5];
+static void odysseySdSnapshotInitDetail() {
+  for (unsigned i=0;i<5;++i) odysseySdInitDetail[i]=synap_sd_diagnostic(i);
+}
 static std::atomic<bool> odysseySdHostMounted{false};
 static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
@@ -92,6 +99,7 @@ void odysseySdMarkVfsFailure(int error) {
   // A VFS failure means the current mount is no longer trusted. Keep the host
   // owned until explicit recovery/power-down so teardown happens under the SD mutex.
   odysseySdLastIoErrno=error?error:EIO;
+  odysseySdLastFreeBytes=0;
   odysseySdBootState=2;
   odysseySdProbeStage=4;
   odysseySdLastMountError=ESP_FAIL;
@@ -210,12 +218,16 @@ static bool odysseySdReleaseLocked() {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   pinMode(ODYSSEY_SD_CS,OUTPUT);
   odysseySdHostMounted=false;
+  odysseySdLastFreeBytes=0;
   if (hadHost) delay(2);
   return teardownOk;
 }
 
 static bool odysseySdBeginLocked(bool formatIfMountFailed=false) {
   ++odysseySdBeginAttempts;
+  odysseySdLastIoErrno=0;
+  synap_sd_reset_diagnostics();
+  odysseySdSnapshotInitDetail();
   if (!odysseySdReleaseLocked()) {
     odysseySdLastMountError=odysseySdLastReleaseError.load();
     odysseySdBootState=2;odysseySdProbeStage=1;
@@ -233,7 +245,11 @@ static bool odysseySdBeginLocked(bool formatIfMountFailed=false) {
   }
   const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,
     ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,formatIfMountFailed);
+  odysseySdSnapshotInitDetail();
   if (!mounted) {
+    Serial.printf("[SD] init failed step=%d cmd=%d r1=%d fat=%d vfs=%d\n",
+      odysseySdInitDetail[0].load(),odysseySdInitDetail[1].load(),odysseySdInitDetail[2].load(),
+      odysseySdInitDetail[3].load(),odysseySdInitDetail[4].load());
     odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=formatIfMountFailed?3:2;
     // SD.begin() normally cleans its own failed mount, but use the same

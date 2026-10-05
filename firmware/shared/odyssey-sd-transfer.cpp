@@ -539,16 +539,29 @@ static void worker(void*) {
     }
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
       char detail[480];
-      const int n=snprintf(detail,sizeof(detail),
-        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"ioErrno\":%ld,\"releaseErr\":%ld,\"freeBytes\":%llu,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"releaseAttempts\":%lu,\"mountWhy\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"lastRecordStage\":%lu,\"lastRecordErrno\":%ld,\"lastRecordBytes\":%lu,\"lastRecordBuild\":%lu}",
+      int n=snprintf(detail,sizeof(detail),
+        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"ioErrno\":%ld,\"releaseErr\":%ld,\"freeBytes\":%llu,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"releaseAttempts\":%lu,\"mountWhy\":%u,\"sdInit\":[%d,%d,%d,%d,%d],\"recordStage\":%u,\"recordBytes\":%lu,\"lastRecordStage\":%lu,\"lastRecordErrno\":%ld,\"lastRecordBytes\":%lu,\"lastRecordBuild\":%lu}",
         catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
         static_cast<long>(odysseySdLastError()),static_cast<long>(odysseySdLastIoError()),
         static_cast<long>(odysseySdLastReleaseErrorCode()),static_cast<unsigned long long>(odysseySdLastFreeByteCount()),
         static_cast<unsigned long>(odysseySdAttemptCount()),static_cast<unsigned long>(odysseySdBeginAttemptCount()),
         static_cast<unsigned long>(odysseySdReleaseAttemptCount()),unsigned(odysseySdLastMountReasonCode()),
+        odysseySdInitDetail[0].load(),odysseySdInitDetail[1].load(),odysseySdInitDetail[2].load(),
+        odysseySdInitDetail[3].load(),odysseySdInitDetail[4].load(),
         unsigned(odysseySdRecordFailureStage()),static_cast<unsigned long>(odysseySdRecordLastBytes()),
         static_cast<unsigned long>(odysseyStoredStage),static_cast<long>(odysseyStoredErrno),
         static_cast<unsigned long>(odysseyStoredBytes),static_cast<unsigned long>(odysseyStoredBuild));
+      // Keep valid JSON within the media-v1 480-byte payload even when counters
+      // reach their maximum widths. Preserve the decisive mount/record evidence.
+      if (n<0 || size_t(n)>=sizeof(detail)) {
+        n=snprintf(detail,sizeof(detail),
+          "{\"stage\":\"catalogue\",\"sdState\":%u,\"sdProbe\":%u,\"sdInit\":[%d,%d,%d,%d,%d],\"lastRecordStage\":%lu,\"lastRecordErrno\":%ld,\"lastRecordBytes\":%lu,\"lastRecordBuild\":%lu}",
+          unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
+          odysseySdInitDetail[0].load(),odysseySdInitDetail[1].load(),odysseySdInitDetail[2].load(),
+          odysseySdInitDetail[3].load(),odysseySdInitDetail[4].load(),
+          static_cast<unsigned long>(odysseyStoredStage),static_cast<long>(odysseyStoredErrno),
+          static_cast<unsigned long>(odysseyStoredBytes),static_cast<unsigned long>(odysseyStoredBuild));
+      }
       reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),
         n>0?std::min(size_t(n),sizeof(detail)-1):0);
     } else reply(request,error,total,request.offset,bytes,size);

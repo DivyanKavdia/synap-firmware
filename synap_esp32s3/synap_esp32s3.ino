@@ -2550,6 +2550,13 @@ static_assert(ODYSSEY_SD_MAX_OPEN_FILES>=2,"C3 SD maintenance requires descripto
 static StaticSemaphore_t odysseySdMutexStorage;
 static SemaphoreHandle_t odysseySdMutex=nullptr;
 static SPIClass odysseySdSpi(FSPI);
+// Required C3 driver backport: missing build integration fails at link time.
+extern "C" void synap_sd_reset_diagnostics();
+extern "C" int synap_sd_diagnostic(unsigned field);
+static std::atomic<int> odysseySdInitDetail[5];
+static void odysseySdSnapshotInitDetail() {
+  for (unsigned i=0;i<5;++i) odysseySdInitDetail[i]=synap_sd_diagnostic(i);
+}
 static std::atomic<bool> odysseySdHostMounted{false};
 static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
@@ -2581,6 +2588,7 @@ void odysseySdMarkVfsFailure(int error) {
   // A VFS failure means the current mount is no longer trusted. Keep the host
   // owned until explicit recovery/power-down so teardown happens under the SD mutex.
   odysseySdLastIoErrno=error?error:EIO;
+  odysseySdLastFreeBytes=0;
   odysseySdBootState=2;
   odysseySdProbeStage=4;
   odysseySdLastMountError=ESP_FAIL;
@@ -2699,12 +2707,16 @@ static bool odysseySdReleaseLocked() {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   pinMode(ODYSSEY_SD_CS,OUTPUT);
   odysseySdHostMounted=false;
+  odysseySdLastFreeBytes=0;
   if (hadHost) delay(2);
   return teardownOk;
 }
 
 static bool odysseySdBeginLocked(bool formatIfMountFailed=false) {
   ++odysseySdBeginAttempts;
+  odysseySdLastIoErrno=0;
+  synap_sd_reset_diagnostics();
+  odysseySdSnapshotInitDetail();
   if (!odysseySdReleaseLocked()) {
     odysseySdLastMountError=odysseySdLastReleaseError.load();
     odysseySdBootState=2;odysseySdProbeStage=1;
@@ -2722,7 +2734,11 @@ static bool odysseySdBeginLocked(bool formatIfMountFailed=false) {
   }
   const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,
     ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,formatIfMountFailed);
+  odysseySdSnapshotInitDetail();
   if (!mounted) {
+    Serial.printf("[SD] init failed step=%d cmd=%d r1=%d fat=%d vfs=%d\n",
+      odysseySdInitDetail[0].load(),odysseySdInitDetail[1].load(),odysseySdInitDetail[2].load(),
+      odysseySdInitDetail[3].load(),odysseySdInitDetail[4].load());
     odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=formatIfMountFailed?3:2;
     // SD.begin() normally cleans its own failed mount, but use the same
@@ -4023,16 +4039,29 @@ static void worker(void*) {
     }
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
       char detail[480];
-      const int n=snprintf(detail,sizeof(detail),
-        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"ioErrno\":%ld,\"releaseErr\":%ld,\"freeBytes\":%llu,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"releaseAttempts\":%lu,\"mountWhy\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"lastRecordStage\":%lu,\"lastRecordErrno\":%ld,\"lastRecordBytes\":%lu,\"lastRecordBuild\":%lu}",
+      int n=snprintf(detail,sizeof(detail),
+        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"ioErrno\":%ld,\"releaseErr\":%ld,\"freeBytes\":%llu,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"releaseAttempts\":%lu,\"mountWhy\":%u,\"sdInit\":[%d,%d,%d,%d,%d],\"recordStage\":%u,\"recordBytes\":%lu,\"lastRecordStage\":%lu,\"lastRecordErrno\":%ld,\"lastRecordBytes\":%lu,\"lastRecordBuild\":%lu}",
         catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
         static_cast<long>(odysseySdLastError()),static_cast<long>(odysseySdLastIoError()),
         static_cast<long>(odysseySdLastReleaseErrorCode()),static_cast<unsigned long long>(odysseySdLastFreeByteCount()),
         static_cast<unsigned long>(odysseySdAttemptCount()),static_cast<unsigned long>(odysseySdBeginAttemptCount()),
         static_cast<unsigned long>(odysseySdReleaseAttemptCount()),unsigned(odysseySdLastMountReasonCode()),
+        odysseySdInitDetail[0].load(),odysseySdInitDetail[1].load(),odysseySdInitDetail[2].load(),
+        odysseySdInitDetail[3].load(),odysseySdInitDetail[4].load(),
         unsigned(odysseySdRecordFailureStage()),static_cast<unsigned long>(odysseySdRecordLastBytes()),
         static_cast<unsigned long>(odysseyStoredStage),static_cast<long>(odysseyStoredErrno),
         static_cast<unsigned long>(odysseyStoredBytes),static_cast<unsigned long>(odysseyStoredBuild));
+      // Keep valid JSON within the media-v1 480-byte payload even when counters
+      // reach their maximum widths. Preserve the decisive mount/record evidence.
+      if (n<0 || size_t(n)>=sizeof(detail)) {
+        n=snprintf(detail,sizeof(detail),
+          "{\"stage\":\"catalogue\",\"sdState\":%u,\"sdProbe\":%u,\"sdInit\":[%d,%d,%d,%d,%d],\"lastRecordStage\":%lu,\"lastRecordErrno\":%ld,\"lastRecordBytes\":%lu,\"lastRecordBuild\":%lu}",
+          unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
+          odysseySdInitDetail[0].load(),odysseySdInitDetail[1].load(),odysseySdInitDetail[2].load(),
+          odysseySdInitDetail[3].load(),odysseySdInitDetail[4].load(),
+          static_cast<unsigned long>(odysseyStoredStage),static_cast<long>(odysseyStoredErrno),
+          static_cast<unsigned long>(odysseyStoredBytes),static_cast<unsigned long>(odysseyStoredBuild));
+      }
       reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),
         n>0?std::min(size_t(n),sizeof(detail)-1):0);
     } else reply(request,error,total,request.offset,bytes,size);

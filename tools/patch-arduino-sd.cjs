@@ -7,7 +7,7 @@ function replaceOnce(source,before,after,label){
   if(source.split(before).length!==2)throw Error('Pinned SD patch no longer matches: '+label);
   return source.replace(before,after);
 }
-function patch(source){
+function patchInitialization(source){
   if(source.includes('static constexpr uint32_t sd_go_idle_delay_ms = 20;') &&
      source.includes('APP_OP_COND, 0x40000000') &&
      source.includes('sd_op_cond_timeout_ms')) return source;
@@ -113,6 +113,72 @@ typedef struct {`,'constants');
       } while (token != 0x00 && (millis() - start) < sd_op_cond_timeout_ms);`,'MMC CMD1');
 
   return source;
+}
+// Apply the compatibility fix only to C3; preserve the other targets' driver.
+function patch(source){
+  if(source.includes('// SYNAP_C3_SD_INIT_V1')) return source;
+  const start=source.indexOf('DSTATUS ff_sd_initialize(uint8_t pdrv) {');
+  const end=source.indexOf('DSTATUS ff_sd_status(',start);
+  if(start<0 || end<0) throw Error('Pinned SD initialization boundary missing');
+  const original=source.slice(start,end);
+  let fixed=patchInitialization(source);
+  const fixedStart=fixed.indexOf('DSTATUS ff_sd_initialize(uint8_t pdrv) {');
+  const fixedEnd=fixed.indexOf('DSTATUS ff_sd_status(',fixedStart);
+  let init=fixed.slice(fixedStart,fixedEnd);
+  init=replaceOnce(init,'  char token;',
+    '  synap_sd_tracking = true;\n  char token;','diagnostic start');
+  for(let step=1;step<=7;step++) {
+    const marker='  // Step '+step+':';
+    init=replaceOnce(init,marker,'  synap_sd_stage = '+step+';\n'+marker,'stage '+step);
+  }
+  init=init.replaceAll('  return card->status;',
+    '  synap_sd_tracking = false;\n  return card->status;');
+  fixed=fixed.slice(0,fixedStart)+'#if CONFIG_IDF_TARGET_ESP32C3\n'+init+
+    '#else\n'+original+'#endif\n\n'+fixed.slice(fixedEnd);
+  const diagnostics=`// SYNAP_C3_SD_INIT_V1
+// Read only after SD.begin returns, under the application's storage mutex.
+// Stop tracking before SD.begin failure cleanup sends a fresh CMD0.
+#if CONFIG_IDF_TARGET_ESP32C3
+static int synap_sd_stage=0, synap_sd_cmd=-1, synap_sd_r1=-1;
+static int synap_sd_fat=-1, synap_sd_vfs=0;
+static bool synap_sd_tracking=false;
+extern "C" void synap_sd_reset_diagnostics() {
+  synap_sd_stage=0; synap_sd_cmd=-1; synap_sd_r1=-1;
+  synap_sd_fat=-1; synap_sd_vfs=0; synap_sd_tracking=false;
+}
+extern "C" int synap_sd_diagnostic(unsigned field) {
+  switch(field) {
+    case 0: return synap_sd_stage;
+    case 1: return synap_sd_cmd;
+    case 2: return synap_sd_r1;
+    case 3: return synap_sd_fat;
+    case 4: return synap_sd_vfs;
+    default: return -1;
+  }
+}
+#endif
+
+`;
+  fixed=replaceOnce(fixed,'typedef struct {',diagnostics+'typedef struct {','diagnostic storage');
+  fixed=replaceOnce(fixed,'  return token;\n}\n\nbool sdReadBytes',
+`#if CONFIG_IDF_TARGET_ESP32C3
+  if (synap_sd_tracking) { synap_sd_cmd=uint8_t(cmd); synap_sd_r1=uint8_t(token); }
+#endif
+  return token;
+}
+
+bool sdReadBytes`,'command result');
+  fixed=replaceOnce(fixed,'  esp_err_t err = esp_vfs_fat_register(path, drv, max_files, &fs);',
+`  esp_err_t err = esp_vfs_fat_register(path, drv, max_files, &fs);
+#if CONFIG_IDF_TARGET_ESP32C3
+  synap_sd_vfs=err;
+#endif`,'VFS result');
+  fixed=replaceOnce(fixed,'  FRESULT res = f_mount(fs, drv, 1);',
+`  FRESULT res = f_mount(fs, drv, 1);
+#if CONFIG_IDF_TARGET_ESP32C3
+  synap_sd_fat=res;
+#endif`,'FAT result');
+  return fixed;
 }
 function install(directory){
   const file=path.join(directory,'sd_diskio.cpp');
