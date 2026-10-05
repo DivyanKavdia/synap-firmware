@@ -96,4 +96,5 @@ test('C3 catalogue refuses silent truncation and clear drains every Synap record
   assert.match(transfer,/String journals\[16\]/);
   assert.doesNotMatch(transfer,/String logicalPaths\[100\]/);
   assert.match(transfer,/These are Synap-owned recovery metadata only/);
+  assert.match(transfer,/catalogueBuffer\.reserve\(12288\)/);
 });
