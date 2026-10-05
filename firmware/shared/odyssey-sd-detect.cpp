@@ -131,19 +131,12 @@ static void odysseyLoadRecordFailure() {
 }
 void odysseySaveRecordFailure(uint8_t stage,int error,uint32_t bytes) {
   odysseyStoredStage=stage;odysseyStoredErrno=error;
-  odysseyStoredBytes=bytes;odysseyStoredBuild=SYNAP_BUILD;
+  odysseyStoredBytes=bytes;odysseyStoredBuild=stage?SYNAP_BUILD:0;
   Preferences prefs;
   if (!prefs.begin("sd-failure",false)) return;
-  const uint32_t record[]={1,stage,uint32_t(error),bytes,SYNAP_BUILD};
+  const uint32_t record[]={stage?1u:0u,stage,uint32_t(error),bytes,stage?uint32_t(SYNAP_BUILD):0u};
   if (prefs.putBytes("record",record,sizeof(record))!=sizeof(record))
     Serial.println("[SD] could not persist recording failure");
-  prefs.end();
-}
-void odysseyClearRecordFailure() {
-  odysseyStoredStage=0;odysseyStoredErrno=0;odysseyStoredBytes=0;odysseyStoredBuild=0;
-  Preferences prefs;
-  if (!prefs.begin("sd-failure",false)) return;
-  (void)prefs.remove("record");
   prefs.end();
 }
 bool odysseySdPreallocateFile(const char* fullPath,uint64_t size) {
