@@ -43,6 +43,19 @@ static bool storageReady() {
 static bool fullPath(const char* logical,char* full,size_t capacity) {
   return safeWavPath(logical) && odysseySdPath(logical,full,capacity);
 }
+static bool isSegmentedRecording(const char* path) {
+  return path && strstr(path,"_p")!=nullptr;
+}
+static bool segmentedWavComplete(const char* fullPath,const struct stat& st) {
+  if (!odysseyJournalAbsent(fullPath)) return false;
+  const int fd=open(fullPath,O_RDONLY);
+  if (fd<0) return false;
+  uint8_t h[44]{};uint32_t audioBytes=0;
+  const bool read=odysseyPreadAll(fd,h,sizeof(h),0);
+  const bool closed=close(fd)==0;
+  return read && closed && odysseyWavValid(h,audioBytes) &&
+    uint64_t(st.st_size)==44ull+audioBytes;
+}
 
 static void reply(const Request& request,uint8_t error,uint32_t total=0,uint32_t offset=0,
                   const uint8_t* bytes=nullptr,size_t size=0) {
@@ -69,6 +82,7 @@ static uint8_t selectFile(const char* path,uint32_t& total) {
   if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
   struct stat st{};
   if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0) return FILE_UNAVAILABLE;
+  if (isSegmentedRecording(path) && !segmentedWavComplete(full,st)) return FILE_UNAVAILABLE;
   if (uint64_t(st.st_size)>UINT32_MAX) return FILE_UNAVAILABLE;
   total=uint32_t(st.st_size);
   snprintf(selectedPath,sizeof(selectedPath),"%s",path);
@@ -76,60 +90,47 @@ static uint8_t selectFile(const char* path,uint32_t& total) {
 }
 
 static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& total,uint8_t* bytes,size_t& size) {
-  // New clients make every chunk self-describing. This prevents catalogue
-  // refreshes or another client from replacing the selected file mid-transfer.
-  if (requestedPath && requestedPath[0]) {
-    if (!strcmp(requestedPath,"@catalogue")) {
-      total=catalogueBuffer.length();
-      if (!total || offset>=total) return FILE_UNAVAILABLE;
-      size=std::min(size_t(480),size_t(total-offset));
-      memcpy(bytes,catalogueBuffer.c_str()+offset,size);
-      return OK;
-    }
-    if (!safeWavPath(requestedPath)) return BAD_COMMAND;
-    if (offset==0) Serial.printf("[SD] transfer begin path=%s\n",requestedPath);
-    OdysseySdGuard guard;
-    if (!guard || !storageReady()) return NO_SD;
-    char full[96];
-    if (!fullPath(requestedPath,full,sizeof(full))) return BAD_COMMAND;
-    struct stat st{};
-    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
-      return FILE_UNAVAILABLE;
-    total=uint32_t(st.st_size);
-    if (offset>=total) return FILE_UNAVAILABLE;
-    size=std::min(size_t(480),size_t(total-offset));
-    FILE* file=fopen(full,"rb");
-    if (!file) return FILE_UNAVAILABLE;
-    const bool ok=fseek(file,long(offset),SEEK_SET)==0 && fread(bytes,1,size,file)==size;
-    fclose(file);
-    return ok?OK:IO_ERROR;
-  }
-
-  // Legacy clients still use the selected-file/catalogue state.
-  if (!selectedPath[0]) {
+  // New clients make every chunk self-describing. Cache is scoped to path and
+  // BLE generation; pread supports retransmission without shared seek state.
+  const char* path=(requestedPath && requestedPath[0])?requestedPath:selectedPath;
+  if (!path[0] || !strcmp(path,"@catalogue")) {
     total=catalogueBuffer.length();
     if (!total || offset>=total) return FILE_UNAVAILABLE;
     size=std::min(size_t(480),size_t(total-offset));
     memcpy(bytes,catalogueBuffer.c_str()+offset,size);
     return OK;
   }
-
+  if (!safeWavPath(path)) return BAD_COMMAND;
   OdysseySdGuard guard;
   if (!guard || !storageReady()) return NO_SD;
   char full[96];
-  if (!fullPath(selectedPath,full,sizeof(full))) return BAD_COMMAND;
+  if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
+  const uint32_t generation=connectionGeneration.load();
+  if (odysseySdReadFd>=0 && (odysseySdReadConnection!=generation || strcmp(odysseySdReadPath,full)!=0))
+    if (!odysseySdCloseReadLocked()) return IO_ERROR;
+  if (odysseySdReadFd<0) {
+    struct stat st{};
+    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
+      return FILE_UNAVAILABLE;
+    if (isSegmentedRecording(path) && !segmentedWavComplete(full,st)) return FILE_UNAVAILABLE;
+    odysseySdReadFd=open(full,O_RDONLY);
+    if (odysseySdReadFd<0) return IO_ERROR;
+    snprintf(odysseySdReadPath,sizeof(odysseySdReadPath),"%s",full);
+    odysseySdReadConnection=generation;
+    Serial.printf("[SD] transfer begin path=%s\n",path);
+  }
   struct stat st{};
-  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
-    return FILE_UNAVAILABLE;
+  if (fstat(odysseySdReadFd,&st)!=0) { odysseySdCloseReadLocked();return IO_ERROR; }
   total=uint32_t(st.st_size);
-  if (offset>=total) return FILE_UNAVAILABLE;
+  if (offset>=total) { odysseySdCloseReadLocked();return FILE_UNAVAILABLE; }
   size=std::min(size_t(480),size_t(total-offset));
-
-  FILE* file=fopen(full,"rb");
-  if (!file) return FILE_UNAVAILABLE;
-  const bool ok=fseek(file,long(offset),SEEK_SET)==0 && fread(bytes,1,size,file)==size;
-  fclose(file);
-  return ok?OK:IO_ERROR;
+  const bool ok=odysseyPreadAll(odysseySdReadFd,bytes,size,off_t(offset));
+  odysseySdReadAt=millis();
+  if (!ok || uint64_t(offset)+size==total) {
+    const bool closed=odysseySdCloseReadLocked();
+    if (!ok || !closed) return IO_ERROR;
+  }
+  return OK;
 }
 
 static uint8_t catalogue(uint32_t& total) {
@@ -170,6 +171,7 @@ static uint8_t catalogue(uint32_t& total) {
     if (!odysseySdPath(logical,full,sizeof(full))) continue;
     struct stat st{};
     if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<0) continue;
+    if (isSegmentedRecording(logical) && !segmentedWavComplete(full,st)) continue;
     if (count++) catalogueBuffer+=",";
     catalogueBuffer+="{\"path\":\""+String(logical)+"\",\"bytes\":"+String(uint32_t(st.st_size))+"}";
     if (count>=100) break;
@@ -194,12 +196,13 @@ static uint8_t removeFile(const char* path) {
   if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
   struct stat st{};
   if (stat(full,&st)!=0 || !S_ISREG(st.st_mode)) return FILE_UNAVAILABLE;
+  if (!odysseySdCloseReadLocked() || !odysseyRemoveJournal(full)) return IO_ERROR;
   return unlink(full)==0?OK:IO_ERROR;
 }
 
 static uint16_t clearRecordings() {
   OdysseySdGuard guard;
-  if (!guard || !storageReady()) return 0;
+  if (!guard || !storageReady() || !odysseySdCloseReadLocked()) return 0;
   char directoryPath[96];
   if (!odysseySdPath("/synap",directoryPath,sizeof(directoryPath))) return 0;
   DIR* directory=opendir(directoryPath);
@@ -223,7 +226,7 @@ static uint16_t clearRecordings() {
   uint16_t removed=0;
   for (uint16_t i=0;i<count;++i) {
     char full[96];
-    if (odysseySdPath(logicalPaths[i].c_str(),full,sizeof(full)) && unlink(full)==0) ++removed;
+    if (odysseySdPath(logicalPaths[i].c_str(),full,sizeof(full)) && odysseyRemoveJournal(full) && unlink(full)==0) ++removed;
   }
   return removed;
 }
@@ -232,6 +235,15 @@ static void worker(void*) {
   Request request;
   uint8_t bytes[480];
   for (;;) {
+    {
+      OdysseySdGuard guard(0);
+      if (guard && odysseySdReadFd>=0 && (!deviceConnected.load() ||
+          odysseySdReadConnection!=connectionGeneration.load() ||
+          uint32_t(millis()-odysseySdReadAt)>=15000u || odysseyRecording.load() || sleepPending)) {
+        if (!odysseySdCloseReadLocked()) odysseySdMarkVfsFailure();
+      }
+    }
+
     if (xQueueReceive(requests,&request,pdMS_TO_TICKS(500))!=pdTRUE) {
       // Never remount merely because the worker is idle or catalogue failed.
       // A physical disconnected double-tap is an explicit recovery request,

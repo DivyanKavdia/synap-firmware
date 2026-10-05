@@ -22,6 +22,8 @@ test('C3 uses one native IDF SDSPI host with the locked device pins',()=>{
   assert.match(source,/slot\.host_id=SPI2_HOST/);
   assert.match(source,/slot\.gpio_cs=static_cast<gpio_num_t>\(ODYSSEY_SD_CS\)/);
   assert.match(source,/config\.format_if_mount_failed=false/);
+  assert.match(source,/esp_vfs_fat_create_contiguous_file\(/);
+  assert.match(source,/odysseySdRecoverRecordingPartsLocked\(\)/);
   assert.match(source,/now<ODYSSEY_SD_STARTUP_SETTLE_MS/);
   assert.match(boot,/OdysseyTransfer::initialize\(\);[\s\S]*odysseyInitializeSdCardBeforeBle\(\);/);
   assert.match(boot,/odysseyInitializeSdCardBeforeBle\(\);[\s\S]*if \(odysseySdBatteryDividerPresent\(\)\) sampleBattery\(true\);/);
@@ -38,10 +40,10 @@ test('C3 VFS has a single guarded owner and explicit checked unmount lifecycle',
   assert.match(source,/opendir\(ODYSSEY_SD_RECORDING_DIR\)/);
   assert.match(source,/fsync\(fileno\(probe\)\)/);
   assert.match(recording,/OdysseySdGuard storage/);
-  assert.match(recording,/fopen\(fullPath,"wb\+"\)/);
+  assert.match(recording,/open\(fullPath,O_RDWR\)/);
   assert.match(transfer,/OdysseySdGuard guard/);
   assert.match(transfer,/opendir\(directoryPath\)/);
-  assert.match(transfer,/fopen\(full,"rb"\)/);
+  assert.match(transfer,/open\(full,O_RDONLY\)/);
   assert.match(transfer,/unlink\(full\)/);
 });
 

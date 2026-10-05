@@ -109,9 +109,28 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
   const int n=snprintf(full,capacity,"%s%s",ODYSSEY_SD_MOUNT_POINT,logical);
   return n>0 && size_t(n)<capacity;
 }
+bool odysseySdPreallocateFile(const char* fullPath,uint64_t size) {
+  const size_t mountLength=strlen(ODYSSEY_SD_MOUNT_POINT);
+  if (!fullPath || strncmp(fullPath,ODYSSEY_SD_MOUNT_POINT,mountLength)!=0 || fullPath[mountLength]!='/')
+    return false;
+  // Reserve the name exclusively before the IDF helper opens it with FA_OPEN_ALWAYS.
+  const int reserved=open(fullPath,O_CREAT|O_EXCL|O_RDWR,0644);
+  if (reserved<0) return false;
+  if (close(reserved)!=0) return false;
+  const esp_err_t err=esp_vfs_fat_create_contiguous_file(
+    ODYSSEY_SD_MOUNT_POINT,fullPath,size,true);
+  if (err!=ESP_OK) {
+    odysseySdLastMountError=err;
+    Serial.printf("[SD] contiguous preallocation failed err=%s (0x%lx) size=%llu\n",
+      esp_err_to_name(err),static_cast<unsigned long>(err),static_cast<unsigned long long>(size));
+    return false;
+  }
+  return true;
+}
 
 static bool odysseySdReleaseLocked() {
-  // All callers hold the storage mutex; recorder and transfer FILE* handles are closed.
+  // All callers hold the storage mutex; no descriptor may survive unmount.
+  if (!odysseySdCloseReadLocked()) return false;
   if (odysseySdHostMounted.load()) {
     const esp_err_t err=esp_vfs_fat_sdcard_unmount(ODYSSEY_SD_MOUNT_POINT,odysseySdCard);
     if (err!=ESP_OK) {
@@ -190,6 +209,26 @@ static bool odysseySdBeginLocked(bool formatIfMountFailed=false) {
   return true;
 }
 
+// Recover reserved recording parts before making them visible to catalogue reads.
+static bool odysseySdRecoverRecordingPartsLocked() {
+  DIR* dir=opendir(ODYSSEY_SD_RECORDING_DIR);
+  if (!dir) return false;
+  bool ok=true;
+  for (;;) {
+    errno=0;dirent* entry=readdir(dir);
+    if (!entry) { if (errno) ok=false;break; }
+    if (strncmp(entry->d_name,"odyssey_audio_",14)!=0) continue;
+    const size_t length=strlen(entry->d_name);
+    if (length<8 || strcmp(entry->d_name+length-4,".wav")!=0 || !strstr(entry->d_name,"_p")) continue;
+    char path[128];
+    const int n=snprintf(path,sizeof(path),"%s/%s",ODYSSEY_SD_RECORDING_DIR,entry->d_name);
+    if (n<=0 || size_t(n)>=sizeof(path)) { ok=false;errno=ENAMETOOLONG;break; }
+    if (!odysseyRecoverWav(path)) { ok=false;break; }
+  }
+  if (closedir(dir)!=0) ok=false;
+  return ok;
+}
+
 static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
   struct stat root{};
   struct stat recordings{};
@@ -197,6 +236,8 @@ static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
   if (stat(ODYSSEY_SD_RECORDING_DIR,&recordings)!=0) {
     if (errno!=ENOENT || mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) goto failed;
   } else if (!S_ISDIR(recordings.st_mode)) { errno=ENOTDIR; goto failed; }
+
+  if (!odysseySdRecoverRecordingPartsLocked()) goto failed;
 
   {
     DIR* verified=opendir(ODYSSEY_SD_RECORDING_DIR);
@@ -292,7 +333,7 @@ bool odysseyRecoverSdCard(const char* reason) {
 
 bool odysseyFormatSdCard() {
   OdysseySdGuard guard(pdMS_TO_TICKS(15000));
-  if (!guard) return false;
+  if (!guard || !odysseySdCloseReadLocked()) return false;
   if (!odysseySdHostMounted.load() && !odysseySdBeginLocked(true)) {
     odysseySdBootState=2;odysseySdProbeStage=3;
     Serial.println("[SD] explicit format could not mount card/FAT");

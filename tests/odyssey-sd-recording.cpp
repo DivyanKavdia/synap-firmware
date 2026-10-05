@@ -8,6 +8,7 @@
 #include <string>
 #include <algorithm>
 #include <cerrno>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 constexpr uint32_t SAMPLE_RATE=16000;
@@ -22,6 +23,8 @@ int stopAfterReads=4;
 uint8_t odysseySdBootState=1;
 uint32_t clockMs=0,randomCounter=0;
 int reads=0,micStarts=0,micStops=0,powerActive=0,powerIdle=0;
+int preallocationCalls=0;
+std::vector<uint64_t> preallocatedSizes;
 void (*pendingTask)(void*)=nullptr;
 std::string lastPath;
 struct Logger {void println(const char*){} template<class... T> void printf(const char*,T...){} } Serial;
@@ -67,6 +70,11 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity){
  if(n<=0||size_t(n)>=capacity)return false;
  lastPath=full;return true;
 }
+bool odysseySdPreallocateFile(const char* full,uint64_t size){
+ int fd=open(full,O_CREAT|O_EXCL|O_RDWR,0644);if(fd<0)return false;
+ const bool ok=ftruncate(fd,off_t(size))==0;close(fd);
+ if(ok){++preallocationCalls;preallocatedSizes.push_back(size);}return ok;
+}
 int xTaskCreate(void(*fn)(void*),const char*,int,void*,int,void*){if(!allocOk)return 0;pendingTask=fn;return pdPASS;}
 void vTaskDelete(void*){}
 // INSERT RECORDER
@@ -76,7 +84,7 @@ void reset(){
  odysseyRecordingStartedAt=0;odysseyRecordFaultAt=0;
  odysseySdSleepGuardUntil=0;disconnectedAt=0;
  sleepPending=critical=ota=reconnect=finalizeOnDelay=false;micOk=cardOk=allocOk=pathOk=true;odysseySdBootState=1;
- clockMs=randomCounter=0;reads=micStarts=micStops=powerActive=powerIdle=vfsFailures=0;stopAfterReads=4;pendingTask=nullptr;lastPath.clear();
+ clockMs=randomCounter=0;reads=micStarts=micStops=powerActive=powerIdle=vfsFailures=0;preallocationCalls=0;preallocatedSizes.clear();stopAfterReads=4;pendingTask=nullptr;lastPath.clear();
  {const int rc=system("rm -rf /tmp/synap-odyssey-test");assert(rc==0);}
  assert(mkdir("/tmp/synap-odyssey-test",0755)==0);
  assert(mkdir("/tmp/synap-odyssey-test/synap",0755)==0);
@@ -95,15 +103,16 @@ void run(){assert(pendingTask);auto fn=pendingTask;pendingTask=nullptr;fn(nullpt
 int main(){
  reset();
  // Force two filename collisions to prove exclusive path selection still works.
- FILE* a=fopen("/tmp/synap-odyssey-test/synap/odyssey_audio_00000002_00000001.wav","wb");assert(a);fclose(a);
- FILE* b=fopen("/tmp/synap-odyssey-test/synap/odyssey_audio_00000004_00000003.wav","wb");assert(b);fclose(b);
+ FILE* a=fopen("/tmp/synap-odyssey-test/synap/odyssey_audio_00000001_00000002_p0000.wav","wb");assert(a);fclose(a);
+ FILE* b=fopen("/tmp/synap-odyssey-test/synap/odyssey_audio_00000003_00000004_p0000.wav","wb");assert(b);fclose(b);
  odysseyToggleRecording();assert(odysseyRecording);run();
  auto data=load();
  assert(micStarts==1&&micStops==1&&powerActive>=1&&powerIdle>=1);
  assert(data.size()==44+3200&&get32(data,40)==3200&&get32(data,4)==3236);
  assert(get32(data,24)==16000&&get32(data,28)==32000);
  assert(data[44]==0xff&&data[45]==0x7f&&data[46]==0&&data[47]==0x80);
- assert(lastPath.find("/tmp/synap-odyssey-test/synap/odyssey_audio_")==0);
+ assert(lastPath.find("/tmp/synap-odyssey-test/synap/odyssey_audio_00000005_00000006_p0000.wav")==0);
+ assert(preallocationCalls==1&&preallocatedSizes[0]==9600044);
 
  // Exercise routine sector-aware draining and multiple 15-second checkpoints,
  // not only the short final-flush path.
@@ -113,11 +122,21 @@ int main(){
  assert(odysseySdRecordFailureStage()==0);
  assert(odysseySdRecordLastBytes()==32000);
 
+ // A five-minute extent rolls into a consecutive WAV part with exact sample ordering in this non-timed fixture and
+ // each part is trimmed from its reservation before it is exposed to sync.
+ reset();stopAfterReads=12002;odysseyToggleRecording();run();
+ char firstPath[128];snprintf(firstPath,sizeof(firstPath),"/tmp/synap-odyssey-test/synap/odyssey_audio_00000001_00000002_p0000.wav");
+ struct stat firstStat{};assert(stat(firstPath,&firstStat)==0&&firstStat.st_size==9600044);
+ assert(lastPath.find("_p0001.wav")!=std::string::npos);
+ data=load();assert(data.size()==44+1600&&get32(data,40)==1600);
+ assert(preallocationCalls==2&&preallocatedSizes[0]==9600044&&preallocatedSizes[1]==9600044);
+ assert(odysseySdRecordLastBytes()==9601600);
+
  reset();reconnect=true;odysseyToggleRecording();run();data=load();
  assert(deviceConnected&&get32(data,40)==3200);
 
- reset();odysseyToggleRecording();odysseyToggleRecording();assert(odysseyStopRequested);run();data=load();
- assert(!micStarts&&get32(data,40)==0);
+ reset();odysseyToggleRecording();odysseyToggleRecording();assert(odysseyStopRequested);run();
+ struct stat emptyStat{};assert(!micStarts&&stat(lastPath.c_str(),&emptyStat)!=0&&errno==ENOENT);
 
  reset();cardOk=false;odysseySdBootState=2;odysseyToggleRecording();
  assert(!odysseyRecording&&!pendingTask&&micStarts==0);
@@ -127,7 +146,8 @@ int main(){
  assert(get32(data,40)==3200);
 
  reset();pathOk=false;odysseyToggleRecording();run();assert(micStarts==0);
- reset();micOk=false;odysseyToggleRecording();run();data=load();assert(get32(data,40)==0);
+ reset();micOk=false;odysseyToggleRecording();run();
+ assert(stat(lastPath.c_str(),&emptyStat)!=0&&errno==ENOENT&&odysseySdRecordFailureStage()==4);
  reset();allocOk=false;odysseyToggleRecording();assert(!odysseyRecording&&!pendingTask&&powerActive==1&&powerIdle==1);
 
  reset();odysseyRecording=true;finalizeOnDelay=true;

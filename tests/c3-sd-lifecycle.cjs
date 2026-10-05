@@ -64,7 +64,7 @@ test('C3 offline recording has visible purple heartbeat and failed-start feedbac
   assert.match(led,/uint32_t\(now-odysseyRecordFaultAt\.load\(\)\)<6000u/);
   assert.match(led,/phase<140u \|\| \(phase>=260u && phase<400u\)/);
   assert.match(recorder,/odysseyRecordingStartedAt=millis\(\);[\s\S]*?odysseyRecording=true/);
-  assert.match(recorder,/if \(failed \|\| bytes==0\) odysseyRecordFaultAt=millis\(\)/);
+  assert.match(recorder,/if \(failed \|\| totalBytes==0\) odysseyRecordFaultAt=millis\(\)/);
   assert.match(recorder,/odysseySdRequestRecovery\(\);\s*odysseyRecordFaultAt=millis\(\)/);
 });
 
@@ -78,6 +78,8 @@ test('C3 SD readiness validates directory, durable write and read-back before pu
   assert(sd.indexOf('DIR* verified=opendir')<sd.indexOf('odysseySdLastMountError=ESP_OK;\n  odysseySdBootState=1;odysseySdProbeStage=6;'));
   assert.match(sd,/ODYSSEY_SD_MAX_FREQ_KHZ=4000u/);
   assert.match(sd,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT/);
+  assert.match(sd,/esp_vfs_fat_create_contiguous_file\(/);
+  assert.match(sd,/odysseySdRecoverRecordingPartsLocked\(\)/);
 });
 test('C3 catalogue failure is observational and never auto-remounts',()=>{
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
