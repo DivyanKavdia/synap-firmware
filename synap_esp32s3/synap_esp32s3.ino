@@ -2512,12 +2512,12 @@ bool odysseySdPreallocateFile(const char* fullPath,uint64_t size) {
   const esp_err_t err=esp_vfs_fat_create_contiguous_file(
     ODYSSEY_SD_MOUNT_POINT,fullPath,size,true);
   if (err!=ESP_OK) {
-    const int saved=errno;
+    const int saved=errno?errno:EIO;
     // No contiguous extent is not an I/O fault. Keep the exclusively reserved
     // empty file and allocate clusters sequentially, but never retry EIO.
     if (saved==ENOSPC || saved==EACCES) {
       struct stat st{};
-      if (stat(fullPath,&st)==0 && st.st_size==0) return true;
+      if (stat(fullPath,&st)==0 && st.st_size==0) { errno=0;return true; }
     }
     errno=saved;
     odysseySdLastMountError=err;
@@ -2525,6 +2525,7 @@ bool odysseySdPreallocateFile(const char* fullPath,uint64_t size) {
       esp_err_to_name(err),static_cast<unsigned long>(err),static_cast<unsigned long long>(size));
     return false;
   }
+  errno=0;
   return true;
 }
 
@@ -2964,12 +2965,20 @@ static void odysseyRecordTake() {
 
   odysseyRecordFailureStage=0;
   odysseyRecordLastBytes=0;
+  errno=0;
 
   // Hold the single storage mutex for the whole take. A recovery/remount can
   // never tear down the VFS beneath an open recording.
   OdysseySdGuard storage;
-  if (!storage || !odysseySdReady() || !odysseySdCloseReadLocked()) {
-    failed=true;storageFailed=true;failureStage=failure(1);
+  if (!storage) {
+    errno=EBUSY;failed=true;storageFailed=true;failureStage=failure(1);
+  } else if (!odysseySdReady()) {
+    errno=ENODEV;failed=true;storageFailed=true;failureStage=failure(1);
+  } else {
+    errno=0;
+    if (!odysseySdCloseReadLocked()) {
+      failed=true;storageFailed=true;failureStage=failure(1);
+    }
   }
 
   if (!failed) {
@@ -2982,6 +2991,7 @@ static void odysseyRecordTake() {
         failed=true;storageFailed=true;failureStage=failure(2);break;
       }
       struct stat existing{};
+      errno=0;
       if (stat(fullPath,&existing)==0) {
         // A collision is improbable; regenerate both take identifiers before
         // opening anything so later parts remain a contiguous numbered set.
@@ -2992,6 +3002,7 @@ static void odysseyRecordTake() {
       if (!odysseySdPreallocateFile(fullPath,ODYSSEY_WAV_SEGMENT_FILE_BYTES)) {
         failed=true;storageFailed=true;failureStage=failure(30);break;
       }
+      errno=0;
       file=open(fullPath,O_RDWR);
       if (file>=0) break;
       failed=true;storageFailed=true;failureStage=failure(3);break;
@@ -3001,6 +3012,7 @@ static void odysseyRecordTake() {
 
   odysseyWavHeader(header,0);
   if (!failed) {
+    errno=0;
     journal=odysseyCreateJournal(fullPath);
     if (journal<0) failureStage=failure(32);
     else if (!odysseyPwriteAll(file,header,sizeof(header),0)) failureStage=failure(33);
@@ -3012,6 +3024,7 @@ static void odysseyRecordTake() {
 #if USE_REAL_I2S_MIC
   if (!failed && !odysseyStopRequested.load()) {
     MicrophoneGuard guard;
+    errno=0;
     if (!startMicrophone()) { failed=true;failureStage=failure(4); }
     int32_t raw[SAMPLES_PER_FRAME];
     int16_t pcm[SAMPLES_PER_FRAME];
@@ -3433,7 +3446,9 @@ static uint8_t catalogue(uint32_t& total) {
     return IO_ERROR;
   }
 
-  if (!catalogueBuffer.reserve(2048)) {
+  // 100 maximum entries × worst-case path/size JSON fits below 12 KiB. Reserve
+  // once so catalogue construction does not repeatedly fragment the C3 heap.
+  if (!catalogueBuffer.reserve(12288)) {
     catalogueErrno=ENOMEM;closedir(directory);return IO_ERROR;
   }
   catalogueBuffer="[";
@@ -3536,7 +3551,7 @@ static uint8_t clearRecordings(uint32_t& removed) {
   // Reopen between bounded batches. This avoids holding a DIR handle while
   // unlinking entries and removes every recording without a fixed 100-file cap.
   for (;;) {
-    String batch[16];
+    char batch[16][64]{};
     uint8_t count=0;
     int scanError=0;
     errno=0;
@@ -3558,7 +3573,10 @@ static uint8_t clearRecordings(uint32_t& removed) {
         if (errno==ENOENT) continue;
         scanError=errno?errno:EIO;break;
       }
-      if (S_ISREG(st.st_mode)) batch[count++]=logical;
+      if (S_ISREG(st.st_mode)) {
+        snprintf(batch[count],sizeof(batch[count]),"%s",logical);
+        ++count;
+      }
       if (count==16) break;
     }
     if (closedir(directory)!=0 && !scanError) scanError=errno?errno:EIO;
@@ -3566,7 +3584,7 @@ static uint8_t clearRecordings(uint32_t& removed) {
     if (!count) break;
 
     for (uint8_t i=0;i<count;++i) {
-      const uint8_t result=removeFileLocked(batch[i].c_str());
+      const uint8_t result=removeFileLocked(batch[i]);
       if (result==OK) ++removed;
       else if (result!=FILE_UNAVAILABLE) return result;
     }
@@ -3576,7 +3594,7 @@ static uint8_t clearRecordings(uint32_t& removed) {
   // version. These are Synap-owned recovery metadata only; unrelated card
   // content is never touched.
   for (;;) {
-    String journals[16];
+    char journals[16][144]{};
     uint8_t count=0;
     int scanError=0;
     errno=0;
@@ -3595,7 +3613,10 @@ static uint8_t clearRecordings(uint32_t& removed) {
         if (errno==ENOENT) continue;
         scanError=errno?errno:EIO;break;
       }
-      if (S_ISREG(st.st_mode)) journals[count++]=journal;
+      if (S_ISREG(st.st_mode)) {
+        snprintf(journals[count],sizeof(journals[count]),"%s",journal);
+        ++count;
+      }
       if (count==16) break;
     }
     if (closedir(directory)!=0 && !scanError) scanError=errno?errno:EIO;
@@ -3603,7 +3624,7 @@ static uint8_t clearRecordings(uint32_t& removed) {
     if (!count) break;
 
     for (uint8_t i=0;i<count;++i) {
-      const char* journal=journals[i].c_str();
+      const char* journal=journals[i];
       errno=0;
       if (unlink(journal)!=0 && errno!=ENOENT) return IO_ERROR;
       struct stat st{};
