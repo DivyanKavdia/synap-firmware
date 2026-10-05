@@ -121,7 +121,8 @@ int main(){
  assert(lastPath.find("/tmp/synap-odyssey-test/synap/odyssey_audio_00000005_00000006_p0000.wav")==0);
  assert(preallocationCalls==1&&preallocatedSizes[0]==9600044);
  OdysseyWavMeta firstMeta{};
- assert(odysseyReadWavMeta(lastPath.c_str(),firstMeta)==1);
+ assert(odysseyReadWavMeta(lastPath.c_str(),firstMeta.takeHigh,firstMeta.takeLow,
+   firstMeta.part,firstMeta.pcmBytes,firstMeta.crc32)==1);
  assert(firstMeta.takeHigh==5&&firstMeta.takeLow==6&&firstMeta.part==0&&firstMeta.pcmBytes==3200);
  assert(firstMeta.crc32==odysseySdCrc(data.data()+44,data.size()-44));
 
