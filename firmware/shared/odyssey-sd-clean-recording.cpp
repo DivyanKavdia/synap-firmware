@@ -146,18 +146,6 @@ static bool odysseyCleanMountForTake() {
   return true;
 }
 
-static bool odysseyCleanDrain(File& file,size_t& buffered,uint32_t& pcmBytes) {
-  if (!buffered) return true;
-  const size_t written=file.write(odysseyCleanWriteBuffer,buffered);
-  if (written!=buffered) {
-    Serial.printf("[SD] clean write short requested=%u written=%u\n",unsigned(buffered),unsigned(written));
-    return false;
-  }
-  pcmBytes+=uint32_t(written);
-  buffered=0;
-  return true;
-}
-
 static bool odysseyCleanRecordTake() {
   if (!odysseyCleanMountForTake()) return false;
 
@@ -184,6 +172,18 @@ static bool odysseyCleanRecordTake() {
   uint32_t pcmBytes=0;
   size_t buffered=0;
   uint32_t lastFlush=millis();
+  auto drain=[&]() -> bool {
+    if (!buffered) return true;
+    const size_t requested=buffered;
+    const size_t written=file.write(odysseyCleanWriteBuffer,requested);
+    if (written!=requested) {
+      Serial.printf("[SD] clean write short requested=%u written=%u\n",unsigned(requested),unsigned(written));
+      return false;
+    }
+    pcmBytes+=uint32_t(written);
+    buffered=0;
+    return true;
+  };
 
 #if USE_REAL_I2S_MIC
   {
@@ -216,14 +216,14 @@ static bool odysseyCleanRecordTake() {
         for (uint16_t i=0;i<SAMPLES_PER_FRAME;++i) pcm[i]=static_cast<int16_t>(raw[i]>>16);
 
         if (buffered+sizeof(pcm)>sizeof(odysseyCleanWriteBuffer) &&
-            !odysseyCleanDrain(file,buffered,pcmBytes)) {
+            !drain()) {
           ok=false;break;
         }
         memcpy(odysseyCleanWriteBuffer+buffered,pcm,sizeof(pcm));
         buffered+=sizeof(pcm);
 
         if (uint32_t(millis()-lastFlush)>=ODYSSEY_SD_FLUSH_MS) {
-          if (!odysseyCleanDrain(file,buffered,pcmBytes)) { ok=false;break; }
+          if (!drain()) { ok=false;break; }
           file.flush();
           lastFlush=millis();
         }
@@ -237,7 +237,7 @@ static bool odysseyCleanRecordTake() {
   ok=false;
 #endif
 
-  if (ok && !odysseyCleanDrain(file,buffered,pcmBytes)) ok=false;
+  if (ok && !drain()) ok=false;
   if (ok && pcmBytes) {
     odysseyCleanWavHeader(header,pcmBytes);
     if (!file.seek(0,SeekSet) || file.write(header,sizeof(header))!=sizeof(header)) ok=false;
