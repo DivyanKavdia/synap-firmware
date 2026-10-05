@@ -88,7 +88,7 @@ test('C3 catalogue failure is observational and never auto-remounts',()=>{
   assert.match(transfer,/case 7:[\s\S]*?error=catalogue\(total\)/);
   const catalogueCase=transfer.split('case 7:')[1].split('case 8:')[0];
   assert.doesNotMatch(catalogueCase,/odysseyRecoverSdCard\(/);
-  assert.match(catalogueCase,/odysseySdMarkVfsFailure\(\)/);
+  assert.match(catalogueCase,/errno=catalogueErrno\?catalogueErrno:\(errno\?errno:EIO\);odysseySdMarkVfsFailure\(\)/);
   assert.match(transfer,/case 14:[\s\S]*odysseyRecoverSdCard\("op14"\)/);
   assert.match(transfer,/sdProbe/);
 });
@@ -139,6 +139,7 @@ test('C3 releases the Arduino SD host before OTA reboot, app restart and deep sl
   assert.match(transition,/odysseySdReleaseLocked\(\)/);
   assert.match(transition,/if \(odysseyRecording\.load\(\)\)[\s\S]*return false/);
   assert.match(detect,/SD\.end\(\)/);
+  assert.match(detect,/esp_vfs_fat_unregister_path\(ODYSSEY_SD_MOUNT_POINT\)/);
   assert.match(detect,/odysseySdSpi\.end\(\)/);
   assert.doesNotMatch(detect,/esp_vfs_fat_sdcard_unmount|spi_bus_free/);
   assert.match(ota,/otaSession\.state==Synap::COMMITTED[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*ESP\.restart\(\)/);
@@ -150,7 +151,8 @@ test('C3 runtime VFS failure retains Arduino host ownership until explicit relea
   const detect=read('firmware/shared/odyssey-sd-detect.cpp');
   assert.match(detect,/std::atomic<bool> odysseySdHostMounted\{false\}/);
   assert.match(detect,/odysseySdHostMounted=true;[\s\S]*markOdysseySdBatteryDividerPresent\(\)/);
-  assert.match(detect,/odysseySdHostMounted=false;[\s\S]*SD\.end\(\);[\s\S]*odysseySdSpi\.end\(\)/);
+  const release=detect.split('static bool odysseySdReleaseLocked()')[1].split('static bool odysseySdBeginLocked')[0];
+  assert.match(release,/SD\.end\(\)[\s\S]*odysseySdSpi\.end\(\)[\s\S]*odysseySdHostMounted=false/);
   assert.match(detect,/const bool wasReady=odysseySdReady\(\)/);
 });
 test('C3 offline failure telemetry identifies write stage and persisted bytes',()=>{
@@ -162,4 +164,23 @@ test('C3 offline failure telemetry identifies write stage and persisted bytes',(
   assert.match(recorder,/failureStage=failure\(7\)/);
   assert.match(transfer,/\\\"recordStage\\\":%u/);
   assert.match(transfer,/\\\"recordBytes\\\":%lu/);
+});
+
+
+test('C3 mount validates custom SPI startup and card geometry before publishing ready',()=>{
+  const detect=read('firmware/shared/odyssey-sd-detect.cpp');
+  assert.match(detect,/if \(!odysseySdSpi\.begin\(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS\)\)/);
+  assert.match(detect,/const uint64_t cardBytes=SD\.cardSize\(\)/);
+  assert.match(detect,/sectorBytes!=512u/);
+  assert.match(detect,/odysseySdValidateVfsLocked\(reason,attempt\)/);
+});
+
+test('C3 recovery performs one checked teardown and successful takes clear stale failure evidence',()=>{
+  const detect=read('firmware/shared/odyssey-sd-detect.cpp');
+  const recorder=read('firmware/shared/odyssey-sd-recording.cpp');
+  const recovery=detect.split('bool odysseyRecoverSdCard(const char* reason)')[1].split('bool odysseyFormatSdCard()')[0];
+  assert.doesNotMatch(recovery,/odysseySdReleaseLocked\(\)/);
+  assert.match(recovery,/odysseySdMountLocked\(reason\?reason:"op14",1\)/);
+  assert.match(recorder,/else if \(totalBytes\) odysseySaveRecordFailure\(0,0,0\)/);
+  assert.match(recorder,/errno=firstErrno\?firstErrno:EIO;odysseySdMarkVfsFailure\(\)/);
 });
