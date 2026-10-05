@@ -32,7 +32,7 @@ test('C3 VFS has one guarded owner and an explicit Arduino host release lifecycl
   assert.match(source,/xSemaphoreCreateMutexStatic/);
   assert.match(source,/SD\.end\(\)/);
   assert.match(source,/esp_vfs_fat_unregister_path\(ODYSSEY_SD_MOUNT_POINT\)/);
-  assert.match(source,/residual==ESP_ERR_INVALID_STATE/);
+  assert.match(source,/residual!=ESP_ERR_INVALID_STATE/);
   assert.match(source,/odysseySdSpi\.end\(\)/);
   assert.match(source,/odysseySdReleaseLocked\(\)/);
   const release=source.split('static bool odysseySdReleaseLocked()')[1].split('static bool odysseySdBeginLocked')[0];
