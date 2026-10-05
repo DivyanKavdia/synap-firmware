@@ -190,9 +190,9 @@ static uint8_t catalogue(uint32_t& total) {
     return IO_ERROR;
   }
 
-  // 100 maximum entries × worst-case path/size JSON fits below 12 KiB. Reserve
-  // once so catalogue construction does not repeatedly fragment the C3 heap.
-  if (!catalogueBuffer.reserve(12288)) {
+  // Integrity/session metadata is optional and adds ~80 bytes per WAV. Reserve
+  // once so a full 100-entry catalogue does not repeatedly fragment C3 heap.
+  if (!catalogueBuffer.reserve(22528)) {
     catalogueErrno=ENOMEM;closedir(directory);return IO_ERROR;
   }
   catalogueBuffer="[";
@@ -223,12 +223,27 @@ static uint8_t catalogue(uint32_t& total) {
       if (state<0) { catalogueErrno=errno?errno:EIO;break; }
       if (!state) continue;
     }
+    OdysseyWavMeta meta{};
+    const int metaState=odysseyReadWavMeta(full,meta);
+    if (metaState==-2) { catalogueErrno=errno?errno:EIO;break; }
+    // Invalid/missing metadata never hides a valid WAV. Existing PWA SHA
+    // verification remains the fallback for recovered or legacy recordings.
+    const bool metaValid=metaState==1 &&
+      uint64_t(meta.pcmBytes)+ODYSSEY_WAV_HEADER_BYTES==uint64_t(st.st_size);
     // Keep the C3 heap bounded, but never present a truncated catalogue as
     // complete. A caller can clear/sync files and retry after an explicit
     // overflow instead of silently orphaning everything beyond entry 100.
     if (count>=100) { catalogueErrno=EOVERFLOW;break; }
     if (count++) catalogueBuffer+=",";
-    catalogueBuffer+="{\"path\":\""+String(logical)+"\",\"bytes\":"+String(uint32_t(st.st_size))+"}";
+    catalogueBuffer+="{\"path\":\""+String(logical)+"\",\"bytes\":"+String(uint32_t(st.st_size));
+    if (metaValid) {
+      char take[17];
+      snprintf(take,sizeof(take),"%08lx%08lx",
+        static_cast<unsigned long>(meta.takeHigh),static_cast<unsigned long>(meta.takeLow));
+      catalogueBuffer+=" ,\"take\":\""+String(take)+"\",\"part\":"+String(meta.part)+
+        ",\"pcmBytes\":"+String(meta.pcmBytes)+",\"crc32\":"+String(meta.crc32);
+    }
+    catalogueBuffer+="}";
   }
   if (closedir(directory)!=0 && !catalogueErrno) catalogueErrno=errno;
   if (catalogueErrno) {
@@ -267,14 +282,20 @@ static uint8_t removeFileLocked(const char* path) {
 
   errno=0;
   if (!odysseyRemoveJournal(full)) return IO_ERROR;
+  errno=0;
+  if (!odysseyRemoveMeta(full)) return IO_ERROR;
 
-  // Verify both source objects are gone before acknowledging deletion.
+  // Verify WAV, journal and integrity metadata are all gone before acknowledging deletion.
   errno=0;
   if (stat(full,&st)==0) { errno=EIO;return IO_ERROR; }
   if (errno!=ENOENT) return IO_ERROR;
   const int journal=odysseyJournalPresence(full);
   if (journal<0) return IO_ERROR;
   if (journal>0) { errno=EIO;return IO_ERROR; }
+  OdysseyWavMeta meta{};
+  const int metaState=odysseyReadWavMeta(full,meta);
+  if (metaState==-2) return IO_ERROR;
+  if (metaState!=0) { errno=EIO;return IO_ERROR; }
   errno=0;
   return OK;
 }
@@ -299,6 +320,19 @@ static bool orphanJournalPath(const char* name,char* full,size_t capacity) {
   char fullWav[96];
   return odysseySdPath(logicalWav,fullWav,sizeof(fullWav)) &&
     odysseyJournalPath(fullWav,full,capacity);
+}
+static bool orphanMetaPath(const char* name,char* full,size_t capacity) {
+  if (!name || !full || capacity<2) return false;
+  const size_t length=strlen(name);
+  static constexpr char suffix[]=".wav.meta";
+  if (length<=sizeof(suffix)-1 || strcmp(name+length-(sizeof(suffix)-1),suffix)!=0) return false;
+  char logicalWav[64];
+  const int n=snprintf(logicalWav,sizeof(logicalWav),"/synap/%.*s",
+    int(length-5),name); // strip ".meta"; safeWavPath validates the WAV base
+  if (n<=0 || size_t(n)>=sizeof(logicalWav) || !safeWavPath(logicalWav)) return false;
+  char fullWav[96];
+  return odysseySdPath(logicalWav,fullWav,sizeof(fullWav)) &&
+    odysseyMetaPath(fullWav,full,capacity);
 }
 
 static uint8_t clearRecordings(uint32_t& removed) {
@@ -397,6 +431,44 @@ static uint8_t clearRecordings(uint32_t& removed) {
     }
   }
 
+  // Remove orphan integrity sidecars left if power disappeared after the WAV
+  // was deleted but before metadata cleanup completed.
+  for (;;) {
+    char metadata[16][144]{};
+    uint8_t count=0;
+    int scanError=0;
+    errno=0;
+    DIR* directory=opendir(directoryPath);
+    if (!directory) return IO_ERROR;
+    for (;;) {
+      errno=0;
+      dirent* entry=readdir(directory);
+      if (!entry) { if (errno) scanError=errno;break; }
+      if (!entry->d_name || !strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
+      char metaPath[144];
+      if (!orphanMetaPath(entry->d_name,metaPath,sizeof(metaPath))) continue;
+      struct stat st{};
+      errno=0;
+      if (stat(metaPath,&st)!=0) {
+        if (errno==ENOENT) continue;
+        scanError=errno?errno:EIO;break;
+      }
+      if (S_ISREG(st.st_mode)) {
+        snprintf(metadata[count],sizeof(metadata[count]),"%s",metaPath);
+        ++count;
+      }
+      if (count==16) break;
+    }
+    if (closedir(directory)!=0 && !scanError) scanError=errno?errno:EIO;
+    if (scanError) { errno=scanError;return IO_ERROR; }
+    if (!count) break;
+
+    for (uint8_t i=0;i<count;++i) {
+      errno=0;
+      if (unlink(metadata[i])!=0 && errno!=ENOENT) return IO_ERROR;
+    }
+  }
+
   errno=0;
   return OK;
 }
@@ -476,15 +548,15 @@ static void worker(void*) {
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
       char detail[480];
       const int n=snprintf(detail,sizeof(detail),
-        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"ioErrno\":%ld,\"releaseErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"releaseAttempts\":%lu,\"mountWhy\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"lastRecordStage\":%lu,\"lastRecordErrno\":%ld,\"lastRecordBytes\":%lu,\"lastRecordBuild\":%lu}",
+        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"ioErrno\":%ld,\"releaseErr\":%ld,\"freeBytes\":%llu,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"releaseAttempts\":%lu,\"mountWhy\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"lastRecordStage\":%lu,\"lastRecordErrno\":%ld,\"lastRecordBytes\":%lu,\"lastRecordBuild\":%lu}",
         catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
         static_cast<long>(odysseySdLastError()),static_cast<long>(odysseySdLastIoError()),
-        static_cast<long>(odysseySdLastReleaseErrorCode()),static_cast<unsigned long>(odysseySdAttemptCount()),
-        static_cast<unsigned long>(odysseySdBeginAttemptCount()),static_cast<unsigned long>(odysseySdReleaseAttemptCount()),
-        unsigned(odysseySdLastMountReasonCode()),unsigned(odysseySdRecordFailureStage()),
-        static_cast<unsigned long>(odysseySdRecordLastBytes()),static_cast<unsigned long>(odysseyStoredStage),
-        static_cast<long>(odysseyStoredErrno),static_cast<unsigned long>(odysseyStoredBytes),
-        static_cast<unsigned long>(odysseyStoredBuild));
+        static_cast<long>(odysseySdLastReleaseErrorCode()),static_cast<unsigned long long>(odysseySdLastFreeByteCount()),
+        static_cast<unsigned long>(odysseySdAttemptCount()),static_cast<unsigned long>(odysseySdBeginAttemptCount()),
+        static_cast<unsigned long>(odysseySdReleaseAttemptCount()),unsigned(odysseySdLastMountReasonCode()),
+        unsigned(odysseySdRecordFailureStage()),static_cast<unsigned long>(odysseySdRecordLastBytes()),
+        static_cast<unsigned long>(odysseyStoredStage),static_cast<long>(odysseyStoredErrno),
+        static_cast<unsigned long>(odysseyStoredBytes),static_cast<unsigned long>(odysseyStoredBuild));
       reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),
         n>0?std::min(size_t(n),sizeof(detail)-1):0);
     } else reply(request,error,total,request.offset,bytes,size);
