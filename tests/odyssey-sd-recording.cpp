@@ -77,6 +77,7 @@ bool odysseySdPreallocateFile(const char* full,uint64_t size){
 }
 int xTaskCreate(void(*fn)(void*),const char*,int,void*,int,void*){if(!allocOk)return 0;pendingTask=fn;return pdPASS;}
 void vTaskDelete(void*){}
+void odysseySaveRecordFailure(uint8_t,int,uint32_t) {}
 // INSERT RECORDER
 
 void reset(){

@@ -76,7 +76,7 @@ test('C3 SD readiness validates directory, durable write and read-back before pu
   assert.match(sd,/fread\(readback,1,sizeof\(readback\),verify\)/);
   assert.match(sd,/memcmp\(readback,"SD",sizeof\(readback\)\)/);
   assert(sd.indexOf('DIR* verified=opendir')<sd.indexOf('odysseySdLastMountError=ESP_OK;\n  odysseySdBootState=1;odysseySdProbeStage=6;'));
-  assert.match(sd,/ODYSSEY_SD_MAX_FREQ_KHZ=4000u/);
+  assert.match(sd,/ODYSSEY_SD_MAX_FREQ_KHZ=1000u/);
   assert.match(sd,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT/);
   assert.match(sd,/esp_vfs_fat_create_contiguous_file\(/);
   assert.match(sd,/odysseySdRecoverRecordingPartsLocked\(\)/);
@@ -159,9 +159,9 @@ test('C3 offline failure telemetry identifies write stage and persisted bytes',(
   const recorder=read('firmware/shared/odyssey-sd-recording.cpp');
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
   assert.match(recorder,/odysseyRecordFailureStage/);
-  assert.match(recorder,/failureStage=5/);
-  assert.match(recorder,/failureStage=6/);
-  assert.match(recorder,/failureStage=7/);
+  assert.match(recorder,/failureStage=failure\(5\)/);
+  assert.match(recorder,/failureStage=failure\(6\)/);
+  assert.match(recorder,/failureStage=failure\(7\)/);
   assert.match(transfer,/\\\"recordStage\\\":%u/);
   assert.match(transfer,/\\\"recordBytes\\\":%lu/);
 });

@@ -1,6 +1,6 @@
 # Odyssey C3 recording I/O
 
-The C3 uses the mounted ESP-IDF SDSPI/FatFs VFS at 4 MHz. Hardware pins and the
+The C3 uses the mounted ESP-IDF SDSPI/FatFs VFS at 1 MHz. Hardware pins and the
 media-v1 BLE wire format are unchanged. S3/Chakshu storage is unchanged.
 
 ## Recording
@@ -15,7 +15,7 @@ media-v1 BLE wire format are unchanged. S3/Chakshu storage is unchanged.
   committed PCM length, path identity CRC, sample rate, the first 468 PCM bytes,
   and a CRC32 over bytes 0..507. The first audio bytes back up the sector shared
   with the normal 44-byte WAV header.
-- On stop or rollover, drain PCM, commit the final journal record, pwrite the WAV
+- On stop or rollover, drain PCM, commit the final journal record, seek/write the WAV
   header, sync, truncate unused preallocation, sync, and check both close results.
   Remove the journal only after successful sealing. Advance to the next numbered
   WAV automatically for a longer take.
@@ -60,3 +60,19 @@ FAT throughout, correct WAV sizes/sample ordering, no deleted unsynced recording
 recovery of the latest valid checkpoint, and no audio gaps on a known test signal.
 Measure 3.3 V at the SD socket during writes and log reset reason, recording stage,
 SD state, write/sync latency and DMA overflow. Formatting is not a repair test.
+
+## Follow-up after build 1723
+
+The C3 data clock is reduced to 1 MHz for hardware qualification. Contiguous
+preallocation is optional on allocation denial only if the reserved file remains
+empty. Real I/O errors stop recording. Header/journal writes use checked
+seek/write under the storage mutex to avoid the IDF 5.5 FatFs pwrite zero-write
+ENOSPC path that leaks the VFS lock. Success restores the original cursor.
+
+A failed take saves its first stage/errno, bytes and firmware build as one NVS
+blob, loaded before the next mount. Catalogue error responses include these
+lastRecord fields separately from current boot state. This records completed
+failure handling, not abrupt loss of power before the NVS write. Stages 30 and
+32–35 distinguish initial preallocation, journal creation, header write, seek
+and initial checkpoint. PWA discovery requests one catalogue even on mount
+failure, exposing this information without an SD-ready UI requirement.

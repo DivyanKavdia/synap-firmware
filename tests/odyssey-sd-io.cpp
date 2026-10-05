@@ -10,19 +10,21 @@
 constexpr uint32_t SAMPLE_RATE=16000;
 void put32le(uint8_t* p,uint32_t v) { for(unsigned i=0;i<4;++i)p[i]=uint8_t(v>>(8*i)); }
 static int interrupted=0,syncFailures=0;
+static bool noSpace=false;
 static size_t writeLimit=0;
-static ssize_t testPwrite(int fd,const void* p,size_t n,off_t off) {
+static ssize_t testWrite(int fd,const void* p,size_t n) {
+  if (noSpace) return 0;
   if (interrupted) { --interrupted;errno=EINTR;return -1; }
-  return ::pwrite(fd,p,writeLimit?std::min(n,writeLimit):n,off);
+  return ::write(fd,p,writeLimit?std::min(n,writeLimit):n);
 }
 static int testSync(int fd) {
   if (syncFailures) { --syncFailures;errno=EIO;return -1; }
   return ::fsync(fd);
 }
-#define pwrite testPwrite
+#define write testWrite
 #define fsync testSync
 // INSERT IO
-#undef pwrite
+#undef write
 #undef fsync
 const char* path="/tmp/synap-journal-test.wav";
 static int createWav() {
@@ -47,6 +49,11 @@ static void verify(uint32_t bytes) {
 int main() {
   int fd=createWav();int journal=odysseyCreateJournal(path);assert(journal>=0);
   uint32_t seq=0;
+  const off_t cursor=lseek(fd,99,SEEK_SET);assert(cursor==99);
+  uint8_t sample=0x6a;assert(odysseyPwriteAll(fd,&sample,1,44));
+  assert(lseek(fd,0,SEEK_CUR)==99);
+  noSpace=true;assert(!odysseyPwriteAll(fd,&sample,1,44)&&errno==ENOSPC);
+  noSpace=false;assert(odysseyPwriteAll(fd,&sample,1,44));
   interrupted=2;writeLimit=31;
   assert(odysseyJournalCommit(fd,journal,path,8192,seq));assert(seq==1);
   writeLimit=0;

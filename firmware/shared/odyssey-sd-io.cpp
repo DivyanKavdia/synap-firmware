@@ -35,13 +35,18 @@ static inline uint32_t odysseySdCrc(const uint8_t* data,size_t size) {
   return ~crc;
 }
 static inline bool odysseyPwriteAll(int fd,const uint8_t* data,size_t size,off_t offset) {
+  // The pinned IDF FatFs pwrite has a zero-write/ENOSPC early return
+  // that skips releasing its VFS lock. Own the cursor under the SD mutex.
+  const off_t previous=lseek(fd,0,SEEK_CUR);
+  if (previous<0 || lseek(fd,offset,SEEK_SET)<0) return false;
   while (size) {
-    const ssize_t n=pwrite(fd,data,size,offset);
+    const ssize_t n=write(fd,data,size);
     if (n<0 && errno==EINTR) continue;
-    if (n<=0) { if (!n) errno=EIO;return false; }
-    data+=n;size-=size_t(n);offset+=n;
+    // Do not issue another filesystem operation after a failed write.
+    if (n<=0) { if (!n) errno=ENOSPC;return false; }
+    data+=n;size-=size_t(n);
   }
-  return true;
+  return lseek(fd,previous,SEEK_SET)>=0;
 }
 static inline bool odysseyPreadAll(int fd,uint8_t* data,size_t size,off_t offset) {
   while (size) {
