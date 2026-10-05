@@ -15,7 +15,7 @@ constexpr uint32_t SAMPLE_RATE=16000;
 constexpr uint16_t SAMPLES_PER_FRAME=800;
 constexpr int pdPASS=1;
 std::atomic<bool> odysseyRecording{false},odysseyStopRequested{false},deviceConnected{false},streamingEnabled{false};
-std::atomic<bool> odysseySdRecoveryActive{false};
+std::atomic<bool> odysseySdRecoveryActive{false},odysseyCaptureActive{false};
 std::atomic<uint32_t> odysseyRecordingStartedAt{0},odysseyRecordFaultAt{0};
 std::atomic<uint32_t> odysseySdSleepGuardUntil{0};
 uint32_t disconnectedAt=0;
@@ -55,7 +55,7 @@ bool startMicrophone(){++micStarts;return micOk;}
 void stopMicrophone(){++micStops;}
 struct Mic {
  size_t readBytes(char* out,size_t n){
-  ++reads;clockMs+=1000;
+  ++reads;assert(odysseyCaptureActive.load());assert(!odysseySdRecoveryActive.load());clockMs+=1000;
   if(reconnect)deviceConnected=true;
   if(reads>stopAfterReads){odysseyStopRequested=true;return 0;}
   n=std::min(n,size_t(1600));
@@ -86,7 +86,7 @@ void odysseySaveRecordFailure(uint8_t,int,uint32_t) {}
 // INSERT RECORDER
 
 void reset(){
- odysseyRecording=false;odysseyStopRequested=false;deviceConnected=false;streamingEnabled=false;odysseySdRecoveryActive=false;
+ odysseyRecording=false;odysseyStopRequested=false;deviceConnected=false;streamingEnabled=false;odysseySdRecoveryActive=false;odysseyCaptureActive=false;
  odysseyRecordingStartedAt=0;odysseyRecordFaultAt=0;
  odysseySdSleepGuardUntil=0;disconnectedAt=0;
  sleepPending=critical=ota=reconnect=finalizeOnDelay=false;micOk=cardOk=allocOk=pathOk=recoverOk=true;odysseySdBootState=1;
@@ -112,7 +112,7 @@ int main(){
  // Force two filename collisions to prove exclusive path selection still works.
  FILE* a=fopen("/tmp/synap-odyssey-test/synap/odyssey_audio_00000001_00000002_p0000.wav","wb");assert(a);fclose(a);
  FILE* b=fopen("/tmp/synap-odyssey-test/synap/odyssey_audio_00000003_00000004_p0000.wav","wb");assert(b);fclose(b);
- odysseyToggleRecording();assert(odysseyRecording);run();
+ odysseyToggleRecording();assert(odysseyRecording&&odysseySdRecoveryActive&&!odysseyCaptureActive);run();
  auto data=load();
  assert(micStarts==1&&micStops==1&&powerActive>=1&&powerIdle>=1);
  assert(data.size()==44+3200&&get32(data,40)==3200&&get32(data,4)==3236);
