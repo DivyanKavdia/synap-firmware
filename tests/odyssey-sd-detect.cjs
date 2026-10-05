@@ -87,3 +87,13 @@ test('C3 media operations distinguish missing content from FAT I/O failure',()=>
   assert.match(transfer,/releaseErr/);
   assert.match(transfer,/releaseAttempts/);
 });
+
+test('C3 catalogue refuses silent truncation and clear drains every Synap recording in batches',()=>{
+  assert.match(transfer,/if \(count>=100\) \{ catalogueErrno=EOVERFLOW;break; \}/);
+  assert.match(transfer,/String batch\[16\]/);
+  assert.match(transfer,/for \(;;\) \{[\s\S]*DIR\* directory=opendir\(directoryPath\)/);
+  assert.match(transfer,/static bool orphanJournalPath/);
+  assert.match(transfer,/String journals\[16\]/);
+  assert.doesNotMatch(transfer,/String logicalPaths\[100\]/);
+  assert.match(transfer,/These are Synap-owned recovery metadata only/);
+});
