@@ -139,6 +139,13 @@ void odysseySaveRecordFailure(uint8_t stage,int error,uint32_t bytes) {
     Serial.println("[SD] could not persist recording failure");
   prefs.end();
 }
+void odysseyClearRecordFailure() {
+  odysseyStoredStage=0;odysseyStoredErrno=0;odysseyStoredBytes=0;odysseyStoredBuild=0;
+  Preferences prefs;
+  if (!prefs.begin("sd-failure",false)) return;
+  (void)prefs.remove("record");
+  prefs.end();
+}
 bool odysseySdPreallocateFile(const char* fullPath,uint64_t size) {
   const size_t mountLength=strlen(ODYSSEY_SD_MOUNT_POINT);
   if (!fullPath || strncmp(fullPath,ODYSSEY_SD_MOUNT_POINT,mountLength)!=0 || fullPath[mountLength]!='/')
