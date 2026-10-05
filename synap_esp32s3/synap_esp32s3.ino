@@ -2559,10 +2559,6 @@ static std::atomic<uint8_t> odysseySdLastMountReason{0}; // 1=boot,2=op14,3=touc
 static std::atomic<int32_t> odysseySdLastIoErrno{0};
 static std::atomic<int32_t> odysseySdLastReleaseError{ESP_OK};
 static std::atomic<uint64_t> odysseySdLastFreeBytes{0};
-static std::atomic<bool> odysseySdRecoveryRequested{false};
-
-void odysseySdRequestRecovery() { odysseySdRecoveryRequested=true; }
-bool odysseySdConsumeRecoveryRequest() { return odysseySdRecoveryRequested.exchange(false); }
 int32_t odysseySdLastError() { return odysseySdLastMountError.load(); }
 int32_t odysseySdLastIoError() { return odysseySdLastIoErrno.load(); }
 int32_t odysseySdLastReleaseErrorCode() { return odysseySdLastReleaseError.load(); }
@@ -2883,7 +2879,6 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   odysseySdLastMountError=ESP_OK;
   odysseySdBootState=1;odysseySdProbeStage=6;
   const char* label=type==CARD_MMC?"MMC":type==CARD_SD?"SDSC":type==CARD_SDHC?"SDHC/SDXC":"unknown";
-  odysseySdRecoveryRequested=false;
   const uint64_t freeBytes=odysseySdFreeBytesLocked();
   Serial.printf("[SD] ready via proven Arduino SPI path: %s, %llu MiB, free=%llu MiB, %lu Hz\n",
     label,static_cast<unsigned long long>(cardBytes/(1024ULL*1024ULL)),
@@ -3949,19 +3944,9 @@ static void worker(void*) {
     }
 
     if (xQueueReceive(requests,&request,pdMS_TO_TICKS(500))!=pdTRUE) {
-      // Never remount merely because the worker is idle or catalogue failed.
-      // A physical disconnected double-tap is an explicit recovery request,
-      // just like PWA operation 14, and may safely run while storage is idle.
-      const bool idleEnough=!odysseyRecording.load() && !streamingEnabled.load() &&
-        !otaBusy() && !sleepPending;
-      if (odysseySdConsumeRecoveryRequest()) {
-        if (idleEnough) {
-          Serial.println("[SD] physical touch requested software recovery");
-          (void)odysseyRecoverSdCard("touch");
-        } else {
-          odysseySdRequestRecovery();
-        }
-      }
+      // The media worker is observational while idle. Offline touch recovery
+      // belongs exclusively to odysseyRecordTask(); connected remount belongs
+      // exclusively to explicit PWA operation 14.
       continue;
     }
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load()) continue;
