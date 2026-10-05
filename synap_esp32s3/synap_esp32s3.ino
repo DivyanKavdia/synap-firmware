@@ -2361,8 +2361,11 @@ static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
 static constexpr uint32_t ODYSSEY_SD_STARTUP_SETTLE_MS=3000u;
 // Builds 1631/1445 proved this exact C3/card/module combination on Arduino SD at 400 kHz.
+// The recoverable recorder holds the WAV and its .jrn file open together, so
+// max_files must exceed the legacy single-file catalogue/recording design.
 static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=400000u;
-static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=1;
+static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=4;
+static_assert(ODYSSEY_SD_MAX_OPEN_FILES>=2,"recoverable SD recording needs WAV + journal descriptors");
 
 static StaticSemaphore_t odysseySdMutexStorage;
 static SemaphoreHandle_t odysseySdMutex=nullptr;
