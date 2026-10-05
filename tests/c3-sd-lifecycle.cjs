@@ -68,6 +68,7 @@ test('C3 offline recording has visible purple heartbeat and failed-start feedbac
   assert.match(recorder,/odysseySdRequestRecovery\(\);\s*odysseyRecordFaultAt=millis\(\)/);
 });
 
+
 test('C3 SD readiness validates directory, durable write and read-back before publishing ready',()=>{
   const sd=read('firmware/shared/odyssey-sd-detect.cpp');
   assert.match(sd,/DIR\* verified=opendir\(ODYSSEY_SD_RECORDING_DIR\)/);
@@ -75,9 +76,10 @@ test('C3 SD readiness validates directory, durable write and read-back before pu
   assert.match(sd,/fsync\(fileno\(probe\)\)/);
   assert.match(sd,/fread\(readback,1,sizeof\(readback\),verify\)/);
   assert.match(sd,/memcmp\(readback,"SD",sizeof\(readback\)\)/);
-  assert(sd.indexOf('DIR* verified=opendir')<sd.indexOf('odysseySdLastMountError=ESP_OK;\n  odysseySdBootState=1;odysseySdProbeStage=6;'));
-  assert.match(sd,/ODYSSEY_SD_MAX_FREQ_KHZ=1000u/);
-  assert.match(sd,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT/);
+  assert.match(sd,/ODYSSEY_SD_DATA_FREQ_HZ=400000u/);
+  assert.match(sd,/static SPIClass odysseySdSpi\(FSPI\)/);
+  assert.match(sd,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
+  assert.doesNotMatch(sd,/esp_vfs_fat_sdspi_mount|spi_bus_initialize/);
   assert.match(sd,/esp_vfs_fat_create_contiguous_file\(/);
   assert.match(sd,/odysseySdRecoverRecordingPartsLocked\(\)/);
 });
@@ -96,38 +98,36 @@ test('C3 PWA connection is acknowledged by three visible green flashes',()=>{
   assert.match(led,/elapsed<1500u && elapsed%500u<180u\) g=LED_DIM\+5/);
 });
 
-test('C3 failed mount never formats implicitly and still reports IDF diagnostics',()=>{
+
+test('C3 failed mount never formats implicitly and still reports diagnostics',()=>{
   const detect=read('firmware/shared/odyssey-sd-detect.cpp');
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
   const normalMount=detect.split('static bool odysseySdMountOnceLocked')[1].split('static bool odysseySdMountLocked')[0];
   const explicitFormat=detect.split('bool odysseyFormatSdCard()')[1].split('bool odysseyPrepareSdForPowerTransition')[0];
   assert.match(normalMount,/odysseySdBeginLocked\(\)/);
   assert.doesNotMatch(normalMount,/odysseySdBeginLocked\(true\)/);
+  assert.match(explicitFormat,/SD\.writeRAW\(blankSector,0\)/);
   assert.match(explicitFormat,/odysseySdBeginLocked\(true\)/);
-  assert.match(detect,/config\.format_if_mount_failed=formatIfMountFailed/);
-  assert.match(detect,/config\.format_if_mount_failed=false/);
-  assert.match(detect,/esp_vfs_fat_sdcard_format\(ODYSSEY_SD_MOUNT_POINT,odysseySdCard\)/);
-  assert.match(detect,/odysseySdLastMountError=ESP_FAIL/);
-  assert.match(detect,/odysseySdProbeStage=\(err==ESP_ERR_NOT_FOUND\)\?0:2/);
+  assert.match(detect,/odysseySdProbeStage=formatIfMountFailed\?3:2/);
   assert.match(transfer,/espErr/);
   assert.match(transfer,/mountAttempts/);
 });
 
-
-test('C3 uses only the IDF SDSPI driver and never bitbangs around its state machine',()=>{
+test('C3 uses the proven Arduino SPI mount while retaining guarded VFS diagnostics',()=>{
   const detect=read('firmware/shared/odyssey-sd-detect.cpp');
   const c3=detect.split('// Odyssey S3 remains detection-only')[0];
   const transfer=read('firmware/shared/odyssey-sd-transfer.cpp');
-  assert.match(detect,/spi_bus_initialize\(SPI2_HOST,&bus,SDSPI_DEFAULT_DMA\)/);
-  assert.match(detect,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT/);
-  assert.match(detect,/esp_vfs_fat_sdcard_unmount\(ODYSSEY_SD_MOUNT_POINT,odysseySdCard\)/);
-  assert.match(detect,/spi_bus_free\(SPI2_HOST\)/);
-  assert.doesNotMatch(c3,/SPIClass|SD\.begin|SD\.end|BitBang|digitalRead\(ODYSSEY_SD_MISO\)/);
-  assert.doesNotMatch(transfer,/bbHigh|rawFF|bbCmd12|bbCmd0/);
+  assert.match(c3,/static SPIClass odysseySdSpi\(FSPI\)/);
+  assert.match(c3,/ODYSSEY_SD_DATA_FREQ_HZ=400000u/);
+  assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
+  assert.match(c3,/SD\.end\(\)/);
+  assert.match(c3,/odysseySdSpi\.end\(\)/);
+  assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|spi_bus_initialize|SDSPI_HOST_DEFAULT/);
   assert.match(transfer,/espErr/);
   assert.match(transfer,/recordStage/);
 });
-test('C3 unmounts FatFs before OTA reboot, app restart and deep sleep',()=>{
+
+test('C3 releases the Arduino SD host before OTA reboot, app restart and deep sleep',()=>{
   const runtime=read('firmware/shared/runtime.cpp');
   const ota=read('firmware/shared/ota.cpp');
   const ble=read('firmware/shared/ble-control.cpp');
@@ -137,22 +137,20 @@ test('C3 unmounts FatFs before OTA reboot, app restart and deep sleep',()=>{
   assert.match(detect,/bool odysseyPrepareSdForPowerTransition\(uint32_t timeoutMs\)/);
   const transition=detect.split('bool odysseyPrepareSdForPowerTransition')[1];
   assert.match(transition,/odysseySdReleaseLocked\(\)/);
-  assert.match(transition,/odysseySdReleaseLocked\(\)/);
   assert.match(transition,/if \(odysseyRecording\.load\(\)\)[\s\S]*return false/);
-  assert.match(detect,/esp_vfs_fat_sdcard_unmount\(ODYSSEY_SD_MOUNT_POINT,odysseySdCard\)/);
-  assert.match(detect,/spi_bus_free\(SPI2_HOST\)/);
-  assert.match(detect,/if \(err!=ESP_OK\)[\s\S]*keeping SPI bus owned/);
+  assert.match(detect,/SD\.end\(\)/);
+  assert.match(detect,/odysseySdSpi\.end\(\)/);
+  assert.doesNotMatch(detect,/esp_vfs_fat_sdcard_unmount|spi_bus_free/);
   assert.match(ota,/otaSession\.state==Synap::COMMITTED[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*ESP\.restart\(\)/);
   assert.match(ble,/CMD_RESTART:[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*ESP\.restart\(\)/);
   assert.match(power,/entering deep sleep request=[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*esp_deep_sleep_start\(\)/);
 });
 
-test('C3 runtime VFS failure retains driver ownership until checked unmount',()=>{
+test('C3 runtime VFS failure retains Arduino host ownership until explicit release',()=>{
   const detect=read('firmware/shared/odyssey-sd-detect.cpp');
   assert.match(detect,/std::atomic<bool> odysseySdHostMounted\{false\}/);
   assert.match(detect,/odysseySdHostMounted=true;[\s\S]*markOdysseySdBatteryDividerPresent\(\)/);
-  assert.match(detect,/if \(odysseySdHostMounted\.load\(\)\)[\s\S]*esp_vfs_fat_sdcard_unmount/);
-  assert.match(detect,/if \(err!=ESP_OK\)[\s\S]*keeping SPI bus owned/);
+  assert.match(detect,/odysseySdHostMounted=false;[\s\S]*SD\.end\(\);[\s\S]*odysseySdSpi\.end\(\)/);
   assert.match(detect,/const bool wasReady=odysseySdReady\(\)/);
 });
 test('C3 offline failure telemetry identifies write stage and persisted bytes',()=>{
