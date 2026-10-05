@@ -190,7 +190,9 @@ static uint8_t catalogue(uint32_t& total) {
     return IO_ERROR;
   }
 
-  if (!catalogueBuffer.reserve(2048)) {
+  // 100 maximum entries × worst-case path/size JSON fits below 12 KiB. Reserve
+  // once so catalogue construction does not repeatedly fragment the C3 heap.
+  if (!catalogueBuffer.reserve(12288)) {
     catalogueErrno=ENOMEM;closedir(directory);return IO_ERROR;
   }
   catalogueBuffer="[";
@@ -293,7 +295,7 @@ static uint8_t clearRecordings(uint32_t& removed) {
   // Reopen between bounded batches. This avoids holding a DIR handle while
   // unlinking entries and removes every recording without a fixed 100-file cap.
   for (;;) {
-    String batch[16];
+    char batch[16][64]{};
     uint8_t count=0;
     int scanError=0;
     errno=0;
@@ -315,7 +317,10 @@ static uint8_t clearRecordings(uint32_t& removed) {
         if (errno==ENOENT) continue;
         scanError=errno?errno:EIO;break;
       }
-      if (S_ISREG(st.st_mode)) batch[count++]=logical;
+      if (S_ISREG(st.st_mode)) {
+        snprintf(batch[count],sizeof(batch[count]),"%s",logical);
+        ++count;
+      }
       if (count==16) break;
     }
     if (closedir(directory)!=0 && !scanError) scanError=errno?errno:EIO;
@@ -323,7 +328,7 @@ static uint8_t clearRecordings(uint32_t& removed) {
     if (!count) break;
 
     for (uint8_t i=0;i<count;++i) {
-      const uint8_t result=removeFileLocked(batch[i].c_str());
+      const uint8_t result=removeFileLocked(batch[i]);
       if (result==OK) ++removed;
       else if (result!=FILE_UNAVAILABLE) return result;
     }
@@ -333,7 +338,7 @@ static uint8_t clearRecordings(uint32_t& removed) {
   // version. These are Synap-owned recovery metadata only; unrelated card
   // content is never touched.
   for (;;) {
-    String journals[16];
+    char journals[16][144]{};
     uint8_t count=0;
     int scanError=0;
     errno=0;
@@ -352,7 +357,10 @@ static uint8_t clearRecordings(uint32_t& removed) {
         if (errno==ENOENT) continue;
         scanError=errno?errno:EIO;break;
       }
-      if (S_ISREG(st.st_mode)) journals[count++]=journal;
+      if (S_ISREG(st.st_mode)) {
+        snprintf(journals[count],sizeof(journals[count]),"%s",journal);
+        ++count;
+      }
       if (count==16) break;
     }
     if (closedir(directory)!=0 && !scanError) scanError=errno?errno:EIO;
@@ -360,7 +368,7 @@ static uint8_t clearRecordings(uint32_t& removed) {
     if (!count) break;
 
     for (uint8_t i=0;i<count;++i) {
-      const char* journal=journals[i].c_str();
+      const char* journal=journals[i];
       errno=0;
       if (unlink(journal)!=0 && errno!=ENOENT) return IO_ERROR;
       struct stat st{};
