@@ -241,5 +241,5 @@ test('C3 diagnostics preserve root SD failure when recovery later collapses to E
   assert.match(transfer,/\"rootRecordStage\"/);
   assert.match(transfer,/\"rootRecordErrno\"/);
   assert.match(transfer,/\"lastGoodFreeBytes\"/);
-  assert.match(detect,/odysseySdLastFreeBytes=0;[\s\S]*odysseySdHostMounted=false/);
+  assert.match(detect,/odysseySdHostMounted=false;[\s\S]*odysseySdLastFreeBytes=0/);
 });
