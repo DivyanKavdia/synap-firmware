@@ -2140,6 +2140,168 @@ void transmitterTask(void* parameter) {
   }
 }
 
+// C3 file I/O and recoverable recording commit records. All callers own the SD mutex.
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+#include <cerrno>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+// A cached transfer descriptor is always closed under the same storage mutex
+// before unmount, format, recording, deletion, or a new transfer identity.
+static int odysseySdReadFd=-1;
+static char odysseySdReadPath[96]{};
+static uint32_t odysseySdReadConnection=0,odysseySdReadAt=0;
+static inline bool odysseySdCloseReadLocked() {
+  const int fd=odysseySdReadFd;odysseySdReadFd=-1;odysseySdReadPath[0]=0;
+  odysseySdReadConnection=0;odysseySdReadAt=0;
+  return fd<0 || close(fd)==0;
+}
+static inline uint32_t odysseySdLe32(const uint8_t* p) {
+  return uint32_t(p[0])|(uint32_t(p[1])<<8)|(uint32_t(p[2])<<16)|(uint32_t(p[3])<<24);
+}
+static inline void odysseyWavHeader(uint8_t* h,uint32_t bytes) {
+  memset(h,0,44);
+  memcpy(h,"RIFF",4);put32le(h+4,bytes+36);
+  memcpy(h+8,"WAVEfmt ",8);put32le(h+16,16);
+  h[20]=1;h[22]=1;put32le(h+24,SAMPLE_RATE);
+  put32le(h+28,SAMPLE_RATE*2);h[32]=2;h[34]=16;
+  memcpy(h+36,"data",4);put32le(h+40,bytes);
+}
+static inline uint32_t odysseySdCrc(const uint8_t* data,size_t size) {
+  uint32_t crc=0xffffffffu;
+  for (size_t i=0;i<size;++i) {
+    crc^=data[i];
+    for (unsigned bit=0;bit<8;++bit) crc=(crc>>1)^((crc&1u)?0xedb88320u:0u);
+  }
+  return ~crc;
+}
+static inline bool odysseyPwriteAll(int fd,const uint8_t* data,size_t size,off_t offset) {
+  while (size) {
+    const ssize_t n=pwrite(fd,data,size,offset);
+    if (n<0 && errno==EINTR) continue;
+    if (n<=0) { if (!n) errno=EIO;return false; }
+    data+=n;size-=size_t(n);offset+=n;
+  }
+  return true;
+}
+static inline bool odysseyPreadAll(int fd,uint8_t* data,size_t size,off_t offset) {
+  while (size) {
+    const ssize_t n=pread(fd,data,size,offset);
+    if (n<0 && errno==EINTR) continue;
+    if (n<=0) { if (!n) errno=EIO;return false; }
+    data+=n;size-=size_t(n);offset+=n;
+  }
+  return true;
+}
+static inline bool odysseyJournalPath(const char* wav,char* path,size_t capacity) {
+  const int n=snprintf(path,capacity,"%s.jrn",wav);
+  if (n<0 || size_t(n)>=capacity) { errno=ENAMETOOLONG;return false; }
+  return true;
+}
+static inline bool odysseyRemoveJournal(const char* wav) {
+  char path[144];
+  return odysseyJournalPath(wav,path,sizeof(path)) && (unlink(path)==0 || errno==ENOENT);
+}
+static inline bool odysseyJournalAbsent(const char* wav) {
+  char path[144];struct stat st{};
+  return odysseyJournalPath(wav,path,sizeof(path)) && stat(path,&st)!=0 && errno==ENOENT;
+}
+static inline int odysseyCreateJournal(const char* wav) {
+  char path[144];
+  if (!odysseyJournalPath(wav,path,sizeof(path))) return -1;
+  const int fd=open(path,O_CREAT|O_EXCL|O_RDWR,0644);
+  if (fd<0) return -1;
+  // Reserve both sectors before capture starts; checkpoints never grow this file.
+  uint8_t empty[512]{};
+  if (!odysseyPwriteAll(fd,empty,sizeof(empty),0) ||
+      !odysseyPwriteAll(fd,empty,sizeof(empty),512) || fsync(fd)!=0) {
+    const int saved=errno;close(fd);errno=saved;return -1;
+  }
+  return fd;
+}
+static inline bool odysseyJournalCommit(int wavFd,int journal,const char* path,
+    uint32_t bytes,uint32_t& sequence) {
+  // Sync PCM first. Only then advertise its length in the alternate journal sector.
+  if (fsync(wavFd)!=0) return false;
+  uint8_t record[512]{};
+  memcpy(record,"SYNAPJ01",8);
+  const uint32_t next=sequence+1;
+  put32le(record+8,next);put32le(record+12,bytes);
+  put32le(record+16,odysseySdCrc(reinterpret_cast<const uint8_t*>(path),strlen(path)));
+  put32le(record+20,SAMPLE_RATE);
+  // Preserve the PCM sharing the first sector with the 44-byte WAV header.
+  // Recovery can repair that whole sector if final header sealing is interrupted.
+  const size_t prefix=std::min(size_t(bytes),size_t(468));
+  if (prefix && !odysseyPreadAll(wavFd,record+24,prefix,44)) return false;
+  put32le(record+508,odysseySdCrc(record,508));
+  if (!odysseyPwriteAll(journal,record,sizeof(record),off_t((next-1u)&1u)*512) || fsync(journal)!=0)
+    return false;
+  sequence=next;
+  return true;
+}
+// Returns 1 for a valid commit, 0 for no journal, -1 for invalid journal, -2 for I/O failure.
+static inline int odysseyJournalRead(const char* path,uint32_t& bytes,uint8_t* firstPcm) {
+  char journalPath[144];
+  if (!odysseyJournalPath(path,journalPath,sizeof(journalPath))) return -2;
+  const int fd=open(journalPath,O_RDONLY);
+  if (fd<0) return errno==ENOENT?0:-2;
+  struct stat st{};
+  if (fstat(fd,&st)!=0) { close(fd);return -2; }
+  if (st.st_size!=1024) { close(fd);return -1; }
+  uint32_t newest=0;
+  const uint32_t identity=odysseySdCrc(reinterpret_cast<const uint8_t*>(path),strlen(path));
+  for (unsigned slot=0;slot<2;++slot) {
+    uint8_t record[512]{};
+    if (!odysseyPreadAll(fd,record,sizeof(record),off_t(slot)*512)) { close(fd);return -2; }
+    const uint32_t seq=odysseySdLe32(record+8),size=odysseySdLe32(record+12);
+    if (memcmp(record,"SYNAPJ01",8)==0 && seq>newest && size<=9600000u && !(size&1u) &&
+        odysseySdLe32(record+16)==identity && odysseySdLe32(record+20)==SAMPLE_RATE &&
+        odysseySdLe32(record+508)==odysseySdCrc(record,508)) {
+      newest=seq;bytes=size;memcpy(firstPcm,record+24,468);
+    }
+  }
+  if (close(fd)!=0) return -2;
+  return newest?1:-1;
+}
+static inline bool odysseyWavValid(const uint8_t* h,uint32_t& bytes) {
+  bytes=odysseySdLe32(h+40);
+  uint8_t expected[44];odysseyWavHeader(expected,bytes);
+  return bytes<=9600000u && !(bytes&1u) && memcmp(h,expected,44)==0;
+}
+// Retryable recovery: retain the journal until header, length and close all succeed.
+static inline bool odysseyRecoverWav(const char* path) {
+  struct stat st{};
+  if (stat(path,&st)!=0) return false;
+  uint32_t bytes=0;
+  uint8_t firstSector[512]{};
+  const int journal=odysseyJournalRead(path,bytes,firstSector+44);
+  if (journal==-2) return false;
+  if (journal==-1) return true; // Preserve questionable data; catalogue excludes journalled files.
+  const int fd=open(path,O_RDWR);
+  if (fd<0) return false;
+  uint8_t header[44]{};
+  bool ok=true,valid=true;
+  if (!journal) {
+    if (st.st_size<44) valid=false;
+    else if (!odysseyPreadAll(fd,header,sizeof(header),0)) ok=false;
+    else valid=odysseyWavValid(header,bytes);
+  }
+  const uint64_t committed=44ull+bytes;
+  if (committed>uint64_t(st.st_size)) valid=false;
+  if (ok && valid && (journal || committed!=uint64_t(st.st_size))) {
+    odysseyWavHeader(header,bytes);
+    memcpy(firstSector,header,44);
+    const size_t repairBytes=journal?44+std::min(size_t(bytes),size_t(468)):44;
+    ok=odysseyPwriteAll(fd,firstSector,repairBytes,0) && fsync(fd)==0 &&
+      ftruncate(fd,off_t(committed))==0 && fsync(fd)==0;
+  }
+  if (close(fd)!=0) ok=false;
+  if (!ok || !valid) return ok;
+  if (journal && !odysseyRemoveJournal(path)) return false;
+  return bytes || unlink(path)==0;
+}
+#endif
 // Odyssey SD storage.
 // C3 owns SPI through ESP-IDF SDSPI and FAT/VFS. S3 retains its legacy one-shot probe.
 #if !SYNAP_CHAKSHU
@@ -2251,9 +2413,28 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
   const int n=snprintf(full,capacity,"%s%s",ODYSSEY_SD_MOUNT_POINT,logical);
   return n>0 && size_t(n)<capacity;
 }
+bool odysseySdPreallocateFile(const char* fullPath,uint64_t size) {
+  const size_t mountLength=strlen(ODYSSEY_SD_MOUNT_POINT);
+  if (!fullPath || strncmp(fullPath,ODYSSEY_SD_MOUNT_POINT,mountLength)!=0 || fullPath[mountLength]!='/')
+    return false;
+  // Reserve the name exclusively before the IDF helper opens it with FA_OPEN_ALWAYS.
+  const int reserved=open(fullPath,O_CREAT|O_EXCL|O_RDWR,0644);
+  if (reserved<0) return false;
+  if (close(reserved)!=0) return false;
+  const esp_err_t err=esp_vfs_fat_create_contiguous_file(
+    ODYSSEY_SD_MOUNT_POINT,fullPath,size,true);
+  if (err!=ESP_OK) {
+    odysseySdLastMountError=err;
+    Serial.printf("[SD] contiguous preallocation failed err=%s (0x%lx) size=%llu\n",
+      esp_err_to_name(err),static_cast<unsigned long>(err),static_cast<unsigned long long>(size));
+    return false;
+  }
+  return true;
+}
 
 static bool odysseySdReleaseLocked() {
-  // All callers hold the storage mutex; recorder and transfer FILE* handles are closed.
+  // All callers hold the storage mutex; no descriptor may survive unmount.
+  if (!odysseySdCloseReadLocked()) return false;
   if (odysseySdHostMounted.load()) {
     const esp_err_t err=esp_vfs_fat_sdcard_unmount(ODYSSEY_SD_MOUNT_POINT,odysseySdCard);
     if (err!=ESP_OK) {
@@ -2332,6 +2513,26 @@ static bool odysseySdBeginLocked(bool formatIfMountFailed=false) {
   return true;
 }
 
+// Recover reserved recording parts before making them visible to catalogue reads.
+static bool odysseySdRecoverRecordingPartsLocked() {
+  DIR* dir=opendir(ODYSSEY_SD_RECORDING_DIR);
+  if (!dir) return false;
+  bool ok=true;
+  for (;;) {
+    errno=0;dirent* entry=readdir(dir);
+    if (!entry) { if (errno) ok=false;break; }
+    if (strncmp(entry->d_name,"odyssey_audio_",14)!=0) continue;
+    const size_t length=strlen(entry->d_name);
+    if (length<8 || strcmp(entry->d_name+length-4,".wav")!=0 || !strstr(entry->d_name,"_p")) continue;
+    char path[128];
+    const int n=snprintf(path,sizeof(path),"%s/%s",ODYSSEY_SD_RECORDING_DIR,entry->d_name);
+    if (n<=0 || size_t(n)>=sizeof(path)) { ok=false;errno=ENAMETOOLONG;break; }
+    if (!odysseyRecoverWav(path)) { ok=false;break; }
+  }
+  if (closedir(dir)!=0) ok=false;
+  return ok;
+}
+
 static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
   struct stat root{};
   struct stat recordings{};
@@ -2339,6 +2540,8 @@ static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
   if (stat(ODYSSEY_SD_RECORDING_DIR,&recordings)!=0) {
     if (errno!=ENOENT || mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) goto failed;
   } else if (!S_ISDIR(recordings.st_mode)) { errno=ENOTDIR; goto failed; }
+
+  if (!odysseySdRecoverRecordingPartsLocked()) goto failed;
 
   {
     DIR* verified=opendir(ODYSSEY_SD_RECORDING_DIR);
@@ -2434,7 +2637,7 @@ bool odysseyRecoverSdCard(const char* reason) {
 
 bool odysseyFormatSdCard() {
   OdysseySdGuard guard(pdMS_TO_TICKS(15000));
-  if (!guard) return false;
+  if (!guard || !odysseySdCloseReadLocked()) return false;
   if (!odysseySdHostMounted.load() && !odysseySdBeginLocked(true)) {
     odysseySdBootState=2;odysseySdProbeStage=3;
     Serial.println("[SD] explicit format could not mount card/FAT");
@@ -2501,19 +2704,17 @@ void odysseyDetectSdCard() {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 #include <unistd.h>
 
-static void odysseyWavHeader(uint8_t* h,uint32_t bytes) {
-  memset(h,0,44);
-  memcpy(h,"RIFF",4);put32le(h+4,bytes+36);
-  memcpy(h+8,"WAVEfmt ",8);put32le(h+16,16);
-  h[20]=1;h[22]=1;put32le(h+24,SAMPLE_RATE);
-  put32le(h+28,SAMPLE_RATE*2);h[32]=2;h[34]=16;
-  memcpy(h+36,"data",4);put32le(h+40,bytes);
-}
 static constexpr size_t ODYSSEY_SD_WRITE_BUFFER_BYTES=8192u;
 static constexpr size_t ODYSSEY_SD_WRITE_CHUNK_BYTES=4096u;
 static constexpr size_t ODYSSEY_SD_SECTOR_BYTES=512u;
 static constexpr size_t ODYSSEY_WAV_HEADER_BYTES=44u;
 static constexpr uint32_t ODYSSEY_WAV_CHECKPOINT_MS=15000u;
+static constexpr uint32_t ODYSSEY_WAV_SEGMENT_SECONDS=300u;
+static constexpr uint32_t ODYSSEY_WAV_SEGMENT_FRAMES=(SAMPLE_RATE*ODYSSEY_WAV_SEGMENT_SECONDS)/SAMPLES_PER_FRAME;
+static constexpr uint32_t ODYSSEY_WAV_SEGMENT_PCM_BYTES=ODYSSEY_WAV_SEGMENT_FRAMES*SAMPLES_PER_FRAME*2u;
+static constexpr uint64_t ODYSSEY_WAV_SEGMENT_FILE_BYTES=ODYSSEY_WAV_HEADER_BYTES+uint64_t(ODYSSEY_WAV_SEGMENT_PCM_BYTES);
+static_assert((SAMPLE_RATE*ODYSSEY_WAV_SEGMENT_SECONDS)%SAMPLES_PER_FRAME==0,
+  "WAV rollover must align with complete microphone frames");
 static uint8_t odysseySdWriteBuffer[ODYSSEY_SD_WRITE_BUFFER_BYTES];
 static std::atomic<uint8_t> odysseyRecordFailureStage{0};
 static std::atomic<uint32_t> odysseyRecordLastBytes{0};
@@ -2521,29 +2722,22 @@ static std::atomic<uint32_t> odysseyRecordLastBytes{0};
 uint8_t odysseySdRecordFailureStage() { return odysseyRecordFailureStage.load(); }
 uint32_t odysseySdRecordLastBytes() { return odysseyRecordLastBytes.load(); }
 
-static bool odysseyCheckpointWav(FILE* file,uint8_t* header,uint32_t bytes) {
-  odysseyWavHeader(header,bytes);
-  if (fseek(file,0,SEEK_SET)!=0) return false;
-  if (fwrite(header,1,ODYSSEY_WAV_HEADER_BYTES,file)!=ODYSSEY_WAV_HEADER_BYTES) return false;
-  if (fseek(file,long(ODYSSEY_WAV_HEADER_BYTES+bytes),SEEK_SET)!=0) return false;
-  // With _IONBF there is no stdio payload buffer to drain; fsync() reaches
-  // the FatFs VFS callback (f_sync) and returns errors from the disk layer.
-  return fflush(file)==0 && fsync(fileno(file))==0;
-}
-
-static bool odysseyWriteBufferedChunk(FILE* file,uint8_t* buffer,size_t& buffered,
+static bool odysseyWriteBufferedChunk(int file,uint8_t* buffer,size_t& buffered,
     size_t count,uint32_t& bytes) {
   if (!count || count>buffered) return count==0;
-  const size_t written=fwrite(buffer,1,count,file);
-  if (written) {
-    bytes+=uint32_t(written);
-    buffered-=written;
-    if (buffered) memmove(buffer,buffer+written,buffered);
+  size_t completed=0;
+  while (completed<count) {
+    const ssize_t n=write(file,buffer+completed,count-completed);
+    if (n<0 && errno==EINTR) continue;
+    if (n<=0) { if (!n) errno=EIO;break; }
+    completed+=size_t(n);
   }
-  return written==count;
+  bytes+=uint32_t(completed);buffered-=completed;
+  if (buffered && completed) memmove(buffer,buffer+completed,buffered);
+  return completed==count;
 }
 
-static bool odysseyDrainPcmBuffer(FILE* file,uint8_t* buffer,size_t& buffered,
+static bool odysseyDrainPcmBuffer(int file,uint8_t* buffer,size_t& buffered,
     uint32_t& bytes,bool finalFlush) {
   while (buffered) {
     const size_t fileOffset=ODYSSEY_WAV_HEADER_BYTES+size_t(bytes);
@@ -2568,14 +2762,28 @@ static bool odysseyDrainPcmBuffer(FILE* file,uint8_t* buffer,size_t& buffered,
   return true;
 }
 
+static bool odysseyFinalizeWav(int file,int journal,const char* path,uint32_t& sequence,
+    uint8_t* header,uint8_t* buffer,size_t& buffered,uint32_t& bytes) {
+  if (!odysseyDrainPcmBuffer(file,buffer,buffered,bytes,true) ||
+      !odysseyJournalCommit(file,journal,path,bytes,sequence)) return false;
+  // Header is overwritten only when sealing a part. The journal can repair an
+  // interrupted header update; it cannot make SD hardware power-loss atomic.
+  odysseyWavHeader(header,bytes);
+  return odysseyPwriteAll(file,header,ODYSSEY_WAV_HEADER_BYTES,0) && fsync(file)==0 &&
+    ftruncate(file,off_t(ODYSSEY_WAV_HEADER_BYTES+bytes))==0 && fsync(file)==0;
+}
+
 static void odysseyRecordTake() {
   bool failed=false,storageFailed=false;
   uint8_t failureStage=0;
-  uint32_t bytes=0;
+  uint64_t totalBytes=0;
+  uint32_t bytes=0,segment=0;
+  uint32_t takeHigh=0,takeLow=0;
   char logicalPath[64]{};
   char fullPath[96]{};
   uint8_t header[44];
-  FILE* file=nullptr;
+  int file=-1,journal=-1;
+  uint32_t journalSequence=0;
   size_t bufferedBytes=0;
 
   odysseyRecordFailureStage=0;
@@ -2584,35 +2792,45 @@ static void odysseyRecordTake() {
   // Hold the single storage mutex for the whole take. A recovery/remount can
   // never tear down the VFS beneath an open recording.
   OdysseySdGuard storage;
-  if (!storage || !odysseySdReady()) {
+  if (!storage || !odysseySdReady() || !odysseySdCloseReadLocked()) {
     failed=true;storageFailed=true;failureStage=1;
   }
 
   if (!failed) {
-    struct stat existing{};
+    takeHigh=esp_random();takeLow=esp_random();
     for (uint8_t attempt=0;attempt<16;++attempt) {
-      snprintf(logicalPath,sizeof(logicalPath),"/synap/odyssey_audio_%08lx_%08lx.wav",
-        static_cast<unsigned long>(esp_random()),static_cast<unsigned long>(esp_random()));
+      snprintf(logicalPath,sizeof(logicalPath),"/synap/odyssey_audio_%08lx_%08lx_p%04lu.wav",
+        static_cast<unsigned long>(takeHigh),static_cast<unsigned long>(takeLow),
+        static_cast<unsigned long>(segment));
       if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) {
         failed=true;storageFailed=true;failureStage=2;break;
       }
-      if (stat(fullPath,&existing)!=0 && errno==ENOENT) {
-        file=fopen(fullPath,"wb+");
-        if (file) break;
+      struct stat existing{};
+      if (stat(fullPath,&existing)==0) {
+        // A collision is improbable; regenerate both take identifiers before
+        // opening anything so later parts remain a contiguous numbered set.
+        takeHigh=esp_random();takeLow=esp_random();
+        continue;
       }
+      if (errno!=ENOENT) { failed=true;storageFailed=true;failureStage=2;break; }
+      if (!odysseySdPreallocateFile(fullPath,ODYSSEY_WAV_SEGMENT_FILE_BYTES)) {
+        failed=true;storageFailed=true;failureStage=3;break;
+      }
+      file=open(fullPath,O_RDWR);
+      if (file>=0) break;
+      failed=true;storageFailed=true;failureStage=3;break;
     }
-    if (!file) { failed=true;storageFailed=true;failureStage=2; }
-  }
-
-  // We own buffering explicitly. Disable stdio's hidden buffer so the 4 KiB
-  // sector-aware writes below are the writes presented to the VFS/FatFs layer.
-  if (!failed && setvbuf(file,nullptr,_IONBF,0)!=0) {
-    failed=true;failureStage=3;
+    if (file<0 && !failed) { failed=true;storageFailed=true;failureStage=2; }
   }
 
   odysseyWavHeader(header,0);
-  if (!failed && fwrite(header,1,sizeof(header),file)!=sizeof(header)) {
-    failed=true;storageFailed=true;failureStage=3;
+  if (!failed) {
+    journal=odysseyCreateJournal(fullPath);
+    if (journal<0 || !odysseyPwriteAll(file,header,sizeof(header),0) ||
+        lseek(file,ODYSSEY_WAV_HEADER_BYTES,SEEK_SET)<0 ||
+        !odysseyJournalCommit(file,journal,fullPath,0,journalSequence)) {
+      failed=true;storageFailed=true;failureStage=3;
+    }
   }
 
 #if USE_REAL_I2S_MIC
@@ -2635,7 +2853,31 @@ static void odysseyRecordTake() {
       }
       if (failed || odysseyStopRequested.load()) break;
       for (uint16_t i=0;i<SAMPLES_PER_FRAME;++i) pcm[i]=static_cast<int16_t>(raw[i]>>16);
-      if (uint64_t(bytes)+uint64_t(bufferedBytes)+sizeof(pcm)>0xffffff00ull) break;
+      if (uint64_t(bytes)+uint64_t(bufferedBytes)+sizeof(pcm)>ODYSSEY_WAV_SEGMENT_PCM_BYTES) {
+        failed=true;storageFailed=true;failureStage=5;break;
+      }
+
+      // Open the next reserved part only after a complete PCM frame has been
+      // captured. A stop exactly at a segment boundary then leaves no empty
+      // next-part file on the card.
+      if (file<0) {
+        snprintf(logicalPath,sizeof(logicalPath),"/synap/odyssey_audio_%08lx_%08lx_p%04lu.wav",
+          static_cast<unsigned long>(takeHigh),static_cast<unsigned long>(takeLow),
+          static_cast<unsigned long>(segment));
+        if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath)) ||
+            !odysseySdPreallocateFile(fullPath,ODYSSEY_WAV_SEGMENT_FILE_BYTES)) {
+          failed=true;storageFailed=true;failureStage=3;break;
+        }
+        file=open(fullPath,O_RDWR);
+        journal=odysseyCreateJournal(fullPath);journalSequence=0;
+        bytes=0;bufferedBytes=0;odysseyWavHeader(header,0);
+        if (file<0 || journal<0 || !odysseyPwriteAll(file,header,sizeof(header),0) ||
+            lseek(file,ODYSSEY_WAV_HEADER_BYTES,SEEK_SET)<0 ||
+            !odysseyJournalCommit(file,journal,fullPath,0,journalSequence)) {
+          failed=true;storageFailed=true;failureStage=3;break;
+        }
+        checkpointAt=millis();
+      }
 
       if (bufferedBytes+sizeof(pcm)>ODYSSEY_SD_WRITE_BUFFER_BYTES) {
         if (!odysseyDrainPcmBuffer(file,odysseySdWriteBuffer,bufferedBytes,bytes,false)) {
@@ -2654,13 +2896,28 @@ static void odysseyRecordTake() {
         }
       }
 
-      // Retain crash recoverability without the old 2-second metadata churn.
+      // Commit progress without repeatedly overwriting the WAV header sector.
       if (uint32_t(millis()-checkpointAt)>=ODYSSEY_WAV_CHECKPOINT_MS) {
         if (!odysseyDrainPcmBuffer(file,odysseySdWriteBuffer,bufferedBytes,bytes,false) ||
-            !odysseyCheckpointWav(file,header,bytes)) {
+            !odysseyJournalCommit(file,journal,fullPath,bytes,journalSequence)) {
           failed=true;storageFailed=true;failureStage=6;break;
         }
         checkpointAt=millis();
+      }
+
+      if (uint64_t(bytes)+bufferedBytes==ODYSSEY_WAV_SEGMENT_PCM_BYTES) {
+        if (!odysseyFinalizeWav(file,journal,fullPath,journalSequence,header,odysseySdWriteBuffer,bufferedBytes,bytes)) {
+          failed=true;storageFailed=true;failureStage=6;break;
+        }
+        totalBytes+=bytes;
+        bytes=0;
+        const int completed=file;file=-1;
+        const bool wavClosed=close(completed)==0;
+        const bool journalClosed=close(journal)==0;journal=-1;
+        if (!wavClosed || !journalClosed || !odysseyRemoveJournal(fullPath)) {
+          failed=true;storageFailed=true;failureStage=7;break;
+        }
+        ++segment;
       }
     }
     stopMicrophone();
@@ -2669,41 +2926,55 @@ static void odysseyRecordTake() {
   failed=true;failureStage=4;
 #endif
 
-  if (file) {
+  if (file>=0) {
     // Do not retry writes or rewrite the header after FatFs reports a storage
     // error: a failed FatFs file object may be aborted, and the seek position
     // may no longer be trustworthy. Close is still attempted for cleanup.
     if (!storageFailed) {
-      if (!odysseyDrainPcmBuffer(file,odysseySdWriteBuffer,bufferedBytes,bytes,true)) {
-        failed=true;storageFailed=true;if (!failureStage) failureStage=5;
-      }
-      if (!storageFailed && !odysseyCheckpointWav(file,header,bytes)) {
+      if (!odysseyFinalizeWav(file,journal,fullPath,journalSequence,header,odysseySdWriteBuffer,bufferedBytes,bytes)) {
         failed=true;storageFailed=true;if (!failureStage) failureStage=6;
       }
     }
-    if (fclose(file)!=0) {
+    totalBytes+=bytes;
+    if (close(file)!=0) {
       failed=true;storageFailed=true;if (!failureStage) failureStage=7;
     }
-    file=nullptr;
+    file=-1;
   }
 
-  if (!failed && bytes==0) failureStage=8;
-  odysseyRecordFailureStage=failureStage;
-  odysseyRecordLastBytes=bytes;
+  if (journal>=0) {
+    if (close(journal)!=0) { failed=true;storageFailed=true;if (!failureStage) failureStage=7; }
+    journal=-1;
+    if (!storageFailed && !odysseyRemoveJournal(fullPath)) {
+      failed=true;storageFailed=true;if (!failureStage) failureStage=7;
+    }
+  }
 
-  Serial.printf("[SD] local audio %s: %s, %lu PCM bytes, stage=%u buffer=%u chunk=%u checkpoint=%lus%s\n",
-    failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),unsigned(failureStage),
+  // A user can stop before the first complete PCM frame, and I2S can fail at
+  // startup. Do not leave an empty, otherwise-valid WAV in the sync catalogue.
+  if (!storageFailed && totalBytes==0 && fullPath[0] && unlink(fullPath)!=0 && errno!=ENOENT) {
+    failed=true;storageFailed=true;if (!failureStage) failureStage=7;
+  }
+
+  if (!failed && totalBytes==0) failureStage=8;
+  odysseyRecordFailureStage=failureStage;
+  odysseyRecordLastBytes=uint32_t(std::min<uint64_t>(totalBytes,0xffffffffull));
+
+  Serial.printf("[SD] local audio %s: %08lx_%08lx, %llu PCM bytes, segments=%lu stage=%u buffer=%u chunk=%u segment=%lus checkpoint=%lus%s\n",
+    failed?"failed":"saved",static_cast<unsigned long>(takeHigh),static_cast<unsigned long>(takeLow),
+    static_cast<unsigned long long>(totalBytes),static_cast<unsigned long>(segment+1),unsigned(failureStage),
     unsigned(ODYSSEY_SD_WRITE_BUFFER_BYTES),unsigned(ODYSSEY_SD_WRITE_CHUNK_BYTES),
+    static_cast<unsigned long>(ODYSSEY_WAV_SEGMENT_SECONDS),
     static_cast<unsigned long>(ODYSSEY_WAV_CHECKPOINT_MS/1000u),
     failed?" (mount retained for explicit recovery)":"");
   if (storageFailed) odysseySdMarkVfsFailure();
-  if (failed || bytes==0) odysseyRecordFaultAt=millis();
+  if (failed || totalBytes==0) odysseyRecordFaultAt=millis();
 }
 // FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
 // function first so SD and microphone guards release their mutexes.
 static void odysseyRecordTask(void*) {
   odysseyRecordTake();
-  // Even after fflush/fclose returns, give the SD card time to finish any
+  // After checked fsync/close returns, give the SD card time to finish any
   // internal flash programming before power management is allowed to tear
   // down the SPI host. This also resets the disconnected idle window after
   // every offline take instead of inheriting a stale BLE disconnect timestamp.
@@ -2809,6 +3080,19 @@ static bool storageReady() {
 static bool fullPath(const char* logical,char* full,size_t capacity) {
   return safeWavPath(logical) && odysseySdPath(logical,full,capacity);
 }
+static bool isSegmentedRecording(const char* path) {
+  return path && strstr(path,"_p")!=nullptr;
+}
+static bool segmentedWavComplete(const char* fullPath,const struct stat& st) {
+  if (!odysseyJournalAbsent(fullPath)) return false;
+  const int fd=open(fullPath,O_RDONLY);
+  if (fd<0) return false;
+  uint8_t h[44]{};uint32_t audioBytes=0;
+  const bool read=odysseyPreadAll(fd,h,sizeof(h),0);
+  const bool closed=close(fd)==0;
+  return read && closed && odysseyWavValid(h,audioBytes) &&
+    uint64_t(st.st_size)==44ull+audioBytes;
+}
 
 static void reply(const Request& request,uint8_t error,uint32_t total=0,uint32_t offset=0,
                   const uint8_t* bytes=nullptr,size_t size=0) {
@@ -2835,6 +3119,7 @@ static uint8_t selectFile(const char* path,uint32_t& total) {
   if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
   struct stat st{};
   if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0) return FILE_UNAVAILABLE;
+  if (isSegmentedRecording(path) && !segmentedWavComplete(full,st)) return FILE_UNAVAILABLE;
   if (uint64_t(st.st_size)>UINT32_MAX) return FILE_UNAVAILABLE;
   total=uint32_t(st.st_size);
   snprintf(selectedPath,sizeof(selectedPath),"%s",path);
@@ -2842,60 +3127,47 @@ static uint8_t selectFile(const char* path,uint32_t& total) {
 }
 
 static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& total,uint8_t* bytes,size_t& size) {
-  // New clients make every chunk self-describing. This prevents catalogue
-  // refreshes or another client from replacing the selected file mid-transfer.
-  if (requestedPath && requestedPath[0]) {
-    if (!strcmp(requestedPath,"@catalogue")) {
-      total=catalogueBuffer.length();
-      if (!total || offset>=total) return FILE_UNAVAILABLE;
-      size=std::min(size_t(480),size_t(total-offset));
-      memcpy(bytes,catalogueBuffer.c_str()+offset,size);
-      return OK;
-    }
-    if (!safeWavPath(requestedPath)) return BAD_COMMAND;
-    if (offset==0) Serial.printf("[SD] transfer begin path=%s\n",requestedPath);
-    OdysseySdGuard guard;
-    if (!guard || !storageReady()) return NO_SD;
-    char full[96];
-    if (!fullPath(requestedPath,full,sizeof(full))) return BAD_COMMAND;
-    struct stat st{};
-    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
-      return FILE_UNAVAILABLE;
-    total=uint32_t(st.st_size);
-    if (offset>=total) return FILE_UNAVAILABLE;
-    size=std::min(size_t(480),size_t(total-offset));
-    FILE* file=fopen(full,"rb");
-    if (!file) return FILE_UNAVAILABLE;
-    const bool ok=fseek(file,long(offset),SEEK_SET)==0 && fread(bytes,1,size,file)==size;
-    fclose(file);
-    return ok?OK:IO_ERROR;
-  }
-
-  // Legacy clients still use the selected-file/catalogue state.
-  if (!selectedPath[0]) {
+  // New clients make every chunk self-describing. Cache is scoped to path and
+  // BLE generation; pread supports retransmission without shared seek state.
+  const char* path=(requestedPath && requestedPath[0])?requestedPath:selectedPath;
+  if (!path[0] || !strcmp(path,"@catalogue")) {
     total=catalogueBuffer.length();
     if (!total || offset>=total) return FILE_UNAVAILABLE;
     size=std::min(size_t(480),size_t(total-offset));
     memcpy(bytes,catalogueBuffer.c_str()+offset,size);
     return OK;
   }
-
+  if (!safeWavPath(path)) return BAD_COMMAND;
   OdysseySdGuard guard;
   if (!guard || !storageReady()) return NO_SD;
   char full[96];
-  if (!fullPath(selectedPath,full,sizeof(full))) return BAD_COMMAND;
+  if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
+  const uint32_t generation=connectionGeneration.load();
+  if (odysseySdReadFd>=0 && (odysseySdReadConnection!=generation || strcmp(odysseySdReadPath,full)!=0))
+    if (!odysseySdCloseReadLocked()) return IO_ERROR;
+  if (odysseySdReadFd<0) {
+    struct stat st{};
+    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
+      return FILE_UNAVAILABLE;
+    if (isSegmentedRecording(path) && !segmentedWavComplete(full,st)) return FILE_UNAVAILABLE;
+    odysseySdReadFd=open(full,O_RDONLY);
+    if (odysseySdReadFd<0) return IO_ERROR;
+    snprintf(odysseySdReadPath,sizeof(odysseySdReadPath),"%s",full);
+    odysseySdReadConnection=generation;
+    Serial.printf("[SD] transfer begin path=%s\n",path);
+  }
   struct stat st{};
-  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
-    return FILE_UNAVAILABLE;
+  if (fstat(odysseySdReadFd,&st)!=0) { odysseySdCloseReadLocked();return IO_ERROR; }
   total=uint32_t(st.st_size);
-  if (offset>=total) return FILE_UNAVAILABLE;
+  if (offset>=total) { odysseySdCloseReadLocked();return FILE_UNAVAILABLE; }
   size=std::min(size_t(480),size_t(total-offset));
-
-  FILE* file=fopen(full,"rb");
-  if (!file) return FILE_UNAVAILABLE;
-  const bool ok=fseek(file,long(offset),SEEK_SET)==0 && fread(bytes,1,size,file)==size;
-  fclose(file);
-  return ok?OK:IO_ERROR;
+  const bool ok=odysseyPreadAll(odysseySdReadFd,bytes,size,off_t(offset));
+  odysseySdReadAt=millis();
+  if (!ok || uint64_t(offset)+size==total) {
+    const bool closed=odysseySdCloseReadLocked();
+    if (!ok || !closed) return IO_ERROR;
+  }
+  return OK;
 }
 
 static uint8_t catalogue(uint32_t& total) {
@@ -2936,6 +3208,7 @@ static uint8_t catalogue(uint32_t& total) {
     if (!odysseySdPath(logical,full,sizeof(full))) continue;
     struct stat st{};
     if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<0) continue;
+    if (isSegmentedRecording(logical) && !segmentedWavComplete(full,st)) continue;
     if (count++) catalogueBuffer+=",";
     catalogueBuffer+="{\"path\":\""+String(logical)+"\",\"bytes\":"+String(uint32_t(st.st_size))+"}";
     if (count>=100) break;
@@ -2960,12 +3233,13 @@ static uint8_t removeFile(const char* path) {
   if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
   struct stat st{};
   if (stat(full,&st)!=0 || !S_ISREG(st.st_mode)) return FILE_UNAVAILABLE;
+  if (!odysseySdCloseReadLocked() || !odysseyRemoveJournal(full)) return IO_ERROR;
   return unlink(full)==0?OK:IO_ERROR;
 }
 
 static uint16_t clearRecordings() {
   OdysseySdGuard guard;
-  if (!guard || !storageReady()) return 0;
+  if (!guard || !storageReady() || !odysseySdCloseReadLocked()) return 0;
   char directoryPath[96];
   if (!odysseySdPath("/synap",directoryPath,sizeof(directoryPath))) return 0;
   DIR* directory=opendir(directoryPath);
@@ -2989,7 +3263,7 @@ static uint16_t clearRecordings() {
   uint16_t removed=0;
   for (uint16_t i=0;i<count;++i) {
     char full[96];
-    if (odysseySdPath(logicalPaths[i].c_str(),full,sizeof(full)) && unlink(full)==0) ++removed;
+    if (odysseySdPath(logicalPaths[i].c_str(),full,sizeof(full)) && odysseyRemoveJournal(full) && unlink(full)==0) ++removed;
   }
   return removed;
 }
@@ -2998,6 +3272,15 @@ static void worker(void*) {
   Request request;
   uint8_t bytes[480];
   for (;;) {
+    {
+      OdysseySdGuard guard(0);
+      if (guard && odysseySdReadFd>=0 && (!deviceConnected.load() ||
+          odysseySdReadConnection!=connectionGeneration.load() ||
+          uint32_t(millis()-odysseySdReadAt)>=15000u || odysseyRecording.load() || sleepPending)) {
+        if (!odysseySdCloseReadLocked()) odysseySdMarkVfsFailure();
+      }
+    }
+
     if (xQueueReceive(requests,&request,pdMS_TO_TICKS(500))!=pdTRUE) {
       // Never remount merely because the worker is idle or catalogue failed.
       // A physical disconnected double-tap is an explicit recovery request,

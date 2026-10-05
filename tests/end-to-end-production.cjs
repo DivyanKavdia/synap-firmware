@@ -110,7 +110,9 @@ test('C3 IDF SDSPI mount precedes BLE and retains the guarded VFS storage API',(
   const c3Backend=c3.split('// Odyssey S3 remains detection-only')[0];
   assert.doesNotMatch(c3Backend,/SPIClass|SD\.begin|SD\.end|BitBang|digitalRead\(ODYSSEY_SD_MISO\)/);
   assert.match(c3,/OdysseySdGuard/);
-  assert.match(c3,/fopen\(fullPath,"wb\+"\)/);
+  assert.match(c3,/open\(fullPath,O_RDWR\)/);
+  assert.match(c3,/esp_vfs_fat_create_contiguous_file\(/);
+  assert.match(c3,/ODYSSEY_WAV_SEGMENT_SECONDS=300u/);
   assert.match(c3,/opendir\(directoryPath\)/);
   assert.match(c3,/readSelected\(request\.path,request\.offset,total,bytes,size\)/);
   assert.match(c3,/"@catalogue"/);

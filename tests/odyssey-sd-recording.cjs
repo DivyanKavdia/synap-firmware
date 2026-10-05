@@ -6,16 +6,19 @@ test('C3 local WAV preserves PCM, destination and final header across stop, reco
  const fixture=fs.readFileSync('tests/odyssey-sd-recording.cpp','utf8');
  assert.match(source,/ODYSSEY_SD_WRITE_BUFFER_BYTES=8192u/);
  assert.match(source,/ODYSSEY_SD_WRITE_CHUNK_BYTES=4096u/);
- assert.match(source,/ODYSSEY_SD_SECTOR_BYTES=512u/);
-  assert.match(source,/setvbuf\(file,nullptr,_IONBF,0\)/);
-  assert.match(source,/fsync\(fileno\(file\)\)==0/,'recording checkpoints must reach FatFs f_sync');
-  assert.match(source,/Do not retry writes or rewrite the header[\s\S]*if \(!storageFailed\) \{/,
-    'a failed storage operation must not be followed by writes on the failed file object');
+  assert.match(source,/ODYSSEY_SD_SECTOR_BYTES=512u/);
+  assert.match(source,/ODYSSEY_WAV_SEGMENT_SECONDS=300u/);
+  assert.match(source,/ODYSSEY_WAV_SEGMENT_PCM_BYTES=ODYSSEY_WAV_SEGMENT_FRAMES\*SAMPLES_PER_FRAME\*2u/);
+  assert.match(source,/odysseySdPreallocateFile\(fullPath,ODYSSEY_WAV_SEGMENT_FILE_BYTES\)/);
+ assert.match(source,/ftruncate\(file,off_t\(ODYSSEY_WAV_HEADER_BYTES\+bytes\)\)/);
+ assert.doesNotMatch(source,/fwrite|fseek|fopen|fflush|fclose/);
+ assert.match(source,/odysseyJournalCommit/);
+ assert.match(source,/odysseyPwriteAll/);
  assert.match(source,/odysseyDrainPcmBuffer/);
  assert.match(source,/ODYSSEY_WAV_HEADER_BYTES\+size_t\(bytes\)/);
  assert.doesNotMatch(source,/malloc\(ODYSSEY_SD_WRITE_BUFFER_BYTES\)/);
  assert.doesNotMatch(source,/checkpointAt\)>=2000u/);
  assert.match(source,/odysseySdSleepGuardUntil=finalizedAt\+5000u/);
  assert.match(source,/disconnectedAt=finalizedAt/);
- nativeTest(fixture.replace('// INSERT RECORDER',source),['-DCONFIG_IDF_TARGET_ESP32C3=1','-DUSE_REAL_I2S_MIC=1']);
+ nativeTest(fixture.replace('// INSERT RECORDER',fs.readFileSync('firmware/shared/odyssey-sd-io.cpp','utf8')+'\n'+source),['-DCONFIG_IDF_TARGET_ESP32C3=1','-DUSE_REAL_I2S_MIC=1']);
 });
