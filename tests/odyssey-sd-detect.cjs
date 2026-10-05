@@ -14,7 +14,7 @@ test('C3 uses one native IDF SDSPI host with the locked device pins',()=>{
   const target=getTarget('esp32c3-supermini-4m');
   assert.deepEqual(target.hardware.sdDetection,{cs:0,sck:10,mosi:21,miso:20});
   assert.match(source,/SDSPI_HOST_DEFAULT\(\)/);
-  assert.match(source,/ODYSSEY_SD_MAX_FREQ_KHZ=4000u/);
+  assert.match(source,/ODYSSEY_SD_MAX_FREQ_KHZ=1000u/);
   assert.match(source,/ODYSSEY_SD_STARTUP_SETTLE_MS=3000u/);
   assert.match(source,/SDSPI_DEVICE_CONFIG_DEFAULT\(\)/);
   assert.match(source,/spi_bus_initialize\(SPI2_HOST,&bus,SDSPI_DEFAULT_DMA\)/);

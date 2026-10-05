@@ -55,7 +55,7 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
 static constexpr uint32_t ODYSSEY_SD_STARTUP_SETTLE_MS=3000u;
-static constexpr uint32_t ODYSSEY_SD_MAX_FREQ_KHZ=4000u;
+static constexpr uint32_t ODYSSEY_SD_MAX_FREQ_KHZ=1000u;
 static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=4;
 static constexpr size_t ODYSSEY_SD_MAX_TRANSFER_BYTES=4096;
 
@@ -109,6 +109,30 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
   const int n=snprintf(full,capacity,"%s%s",ODYSSEY_SD_MOUNT_POINT,logical);
   return n>0 && size_t(n)<capacity;
 }
+// Last completed failure survives a manual power cycle; write once per failed take.
+static uint32_t odysseyStoredStage=0,odysseyStoredBytes=0,odysseyStoredBuild=0;
+static int32_t odysseyStoredErrno=0;
+static void odysseyLoadRecordFailure() {
+  Preferences prefs;
+  if (!prefs.begin("sd-failure",true)) return;
+  uint32_t record[5]{};
+  if (prefs.getBytesLength("record")==sizeof(record) &&
+      prefs.getBytes("record",record,sizeof(record))==sizeof(record) && record[0]==1) {
+    odysseyStoredStage=record[1];odysseyStoredErrno=int32_t(record[2]);
+    odysseyStoredBytes=record[3];odysseyStoredBuild=record[4];
+  }
+  prefs.end();
+}
+void odysseySaveRecordFailure(uint8_t stage,int error,uint32_t bytes) {
+  odysseyStoredStage=stage;odysseyStoredErrno=error;
+  odysseyStoredBytes=bytes;odysseyStoredBuild=SYNAP_BUILD;
+  Preferences prefs;
+  if (!prefs.begin("sd-failure",false)) return;
+  const uint32_t record[]={1,stage,uint32_t(error),bytes,SYNAP_BUILD};
+  if (prefs.putBytes("record",record,sizeof(record))!=sizeof(record))
+    Serial.println("[SD] could not persist recording failure");
+  prefs.end();
+}
 bool odysseySdPreallocateFile(const char* fullPath,uint64_t size) {
   const size_t mountLength=strlen(ODYSSEY_SD_MOUNT_POINT);
   if (!fullPath || strncmp(fullPath,ODYSSEY_SD_MOUNT_POINT,mountLength)!=0 || fullPath[mountLength]!='/')
@@ -120,6 +144,14 @@ bool odysseySdPreallocateFile(const char* fullPath,uint64_t size) {
   const esp_err_t err=esp_vfs_fat_create_contiguous_file(
     ODYSSEY_SD_MOUNT_POINT,fullPath,size,true);
   if (err!=ESP_OK) {
+    const int saved=errno;
+    // No contiguous extent is not an I/O fault. Keep the exclusively reserved
+    // empty file and allocate clusters sequentially, but never retry EIO.
+    if (saved==ENOSPC || saved==EACCES) {
+      struct stat st{};
+      if (stat(fullPath,&st)==0 && st.st_size==0) return true;
+    }
+    errno=saved;
     odysseySdLastMountError=err;
     Serial.printf("[SD] contiguous preallocation failed err=%s (0x%lx) size=%llu\n",
       esp_err_to_name(err),static_cast<unsigned long>(err),static_cast<unsigned long long>(size));
@@ -311,6 +343,7 @@ void odysseyDetectSdCard() {
   odysseySdMountLocked("probe",1);
 }
 bool odysseyInitializeSdCardBeforeBle() {
+  odysseyLoadRecordFailure();
   const uint32_t now=millis();
   if (now<ODYSSEY_SD_STARTUP_SETTLE_MS) {
     const uint32_t waitMs=ODYSSEY_SD_STARTUP_SETTLE_MS-now;

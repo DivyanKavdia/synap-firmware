@@ -60,7 +60,7 @@ test('secondary C3 target retains shared gestures and its own pins and tasks',()
   assert.match(c3,/ready\|=SYNAP_CAP_SDAUDIO/);
   const sdBackend=c3.split('// Odyssey S3 remains detection-only')[0];
   assert.match(sdBackend,/SDSPI_HOST_DEFAULT\(\)/);
-  assert.match(sdBackend,/ODYSSEY_SD_MAX_FREQ_KHZ=4000u/);
+  assert.match(sdBackend,/ODYSSEY_SD_MAX_FREQ_KHZ=1000u/);
   assert.match(sdBackend,/spi_bus_initialize\(SPI2_HOST,&bus,SDSPI_DEFAULT_DMA\)/);
   assert.match(sdBackend,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT/);
   assert.match(sdBackend,/esp_vfs_fat_sdcard_unmount\(ODYSSEY_SD_MOUNT_POINT,odysseySdCard\)/);

@@ -75,6 +75,11 @@ static bool odysseyFinalizeWav(int file,int journal,const char* path,uint32_t& s
 static void odysseyRecordTake() {
   bool failed=false,storageFailed=false;
   uint8_t failureStage=0;
+  int firstErrno=0;
+  auto failure=[&](uint8_t stage) -> uint8_t {
+    if (!failureStage) firstErrno=errno;
+    return failureStage?failureStage:stage;
+  };
   uint64_t totalBytes=0;
   uint32_t bytes=0,segment=0;
   uint32_t takeHigh=0,takeLow=0;
@@ -92,7 +97,7 @@ static void odysseyRecordTake() {
   // never tear down the VFS beneath an open recording.
   OdysseySdGuard storage;
   if (!storage || !odysseySdReady() || !odysseySdCloseReadLocked()) {
-    failed=true;storageFailed=true;failureStage=1;
+    failed=true;storageFailed=true;failureStage=failure(1);
   }
 
   if (!failed) {
@@ -102,7 +107,7 @@ static void odysseyRecordTake() {
         static_cast<unsigned long>(takeHigh),static_cast<unsigned long>(takeLow),
         static_cast<unsigned long>(segment));
       if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) {
-        failed=true;storageFailed=true;failureStage=2;break;
+        failed=true;storageFailed=true;failureStage=failure(2);break;
       }
       struct stat existing{};
       if (stat(fullPath,&existing)==0) {
@@ -111,31 +116,31 @@ static void odysseyRecordTake() {
         takeHigh=esp_random();takeLow=esp_random();
         continue;
       }
-      if (errno!=ENOENT) { failed=true;storageFailed=true;failureStage=2;break; }
+      if (errno!=ENOENT) { failed=true;storageFailed=true;failureStage=failure(2);break; }
       if (!odysseySdPreallocateFile(fullPath,ODYSSEY_WAV_SEGMENT_FILE_BYTES)) {
-        failed=true;storageFailed=true;failureStage=3;break;
+        failed=true;storageFailed=true;failureStage=failure(30);break;
       }
       file=open(fullPath,O_RDWR);
       if (file>=0) break;
-      failed=true;storageFailed=true;failureStage=3;break;
+      failed=true;storageFailed=true;failureStage=failure(3);break;
     }
-    if (file<0 && !failed) { failed=true;storageFailed=true;failureStage=2; }
+    if (file<0 && !failed) { failed=true;storageFailed=true;failureStage=failure(2); }
   }
 
   odysseyWavHeader(header,0);
   if (!failed) {
     journal=odysseyCreateJournal(fullPath);
-    if (journal<0 || !odysseyPwriteAll(file,header,sizeof(header),0) ||
-        lseek(file,ODYSSEY_WAV_HEADER_BYTES,SEEK_SET)<0 ||
-        !odysseyJournalCommit(file,journal,fullPath,0,journalSequence)) {
-      failed=true;storageFailed=true;failureStage=3;
-    }
+    if (journal<0) failureStage=failure(32);
+    else if (!odysseyPwriteAll(file,header,sizeof(header),0)) failureStage=failure(33);
+    else if (lseek(file,ODYSSEY_WAV_HEADER_BYTES,SEEK_SET)<0) failureStage=failure(34);
+    else if (!odysseyJournalCommit(file,journal,fullPath,0,journalSequence)) failureStage=failure(35);
+    if (failureStage) { failed=true;storageFailed=true; }
   }
 
 #if USE_REAL_I2S_MIC
   if (!failed && !odysseyStopRequested.load()) {
     MicrophoneGuard guard;
-    if (!startMicrophone()) { failed=true;failureStage=4; }
+    if (!startMicrophone()) { failed=true;failureStage=failure(4); }
     int32_t raw[SAMPLES_PER_FRAME];
     int16_t pcm[SAMPLES_PER_FRAME];
     uint32_t checkpointAt=millis();
@@ -145,7 +150,7 @@ static void odysseyRecordTake() {
       while (received<sizeof(raw) && !odysseyStopRequested.load()) {
         const size_t count=microphoneI2S.readBytes(reinterpret_cast<char*>(raw)+received,sizeof(raw)-received);
         if (!count) {
-          if (++emptyReads>=3) { failed=true;failureStage=4;break; }
+          if (++emptyReads>=3) { failed=true;failureStage=failure(4);break; }
         } else {
           received+=count;emptyReads=0;
         }
@@ -153,7 +158,7 @@ static void odysseyRecordTake() {
       if (failed || odysseyStopRequested.load()) break;
       for (uint16_t i=0;i<SAMPLES_PER_FRAME;++i) pcm[i]=static_cast<int16_t>(raw[i]>>16);
       if (uint64_t(bytes)+uint64_t(bufferedBytes)+sizeof(pcm)>ODYSSEY_WAV_SEGMENT_PCM_BYTES) {
-        failed=true;storageFailed=true;failureStage=5;break;
+        failed=true;storageFailed=true;failureStage=failure(5);break;
       }
 
       // Open the next reserved part only after a complete PCM frame has been
@@ -165,7 +170,7 @@ static void odysseyRecordTake() {
           static_cast<unsigned long>(segment));
         if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath)) ||
             !odysseySdPreallocateFile(fullPath,ODYSSEY_WAV_SEGMENT_FILE_BYTES)) {
-          failed=true;storageFailed=true;failureStage=3;break;
+          failed=true;storageFailed=true;failureStage=failure(3);break;
         }
         file=open(fullPath,O_RDWR);
         journal=odysseyCreateJournal(fullPath);journalSequence=0;
@@ -173,25 +178,25 @@ static void odysseyRecordTake() {
         if (file<0 || journal<0 || !odysseyPwriteAll(file,header,sizeof(header),0) ||
             lseek(file,ODYSSEY_WAV_HEADER_BYTES,SEEK_SET)<0 ||
             !odysseyJournalCommit(file,journal,fullPath,0,journalSequence)) {
-          failed=true;storageFailed=true;failureStage=3;break;
+          failed=true;storageFailed=true;failureStage=failure(3);break;
         }
         checkpointAt=millis();
       }
 
       if (bufferedBytes+sizeof(pcm)>ODYSSEY_SD_WRITE_BUFFER_BYTES) {
         if (!odysseyDrainPcmBuffer(file,odysseySdWriteBuffer,bufferedBytes,bytes,false)) {
-          failed=true;storageFailed=true;failureStage=5;break;
+          failed=true;storageFailed=true;failureStage=failure(5);break;
         }
       }
       if (bufferedBytes+sizeof(pcm)>ODYSSEY_SD_WRITE_BUFFER_BYTES) {
-        failed=true;failureStage=5;break;
+        failed=true;failureStage=failure(5);break;
       }
       memcpy(odysseySdWriteBuffer+bufferedBytes,pcm,sizeof(pcm));
       bufferedBytes+=sizeof(pcm);
 
       if (bufferedBytes>=ODYSSEY_SD_WRITE_CHUNK_BYTES+ODYSSEY_SD_SECTOR_BYTES) {
         if (!odysseyDrainPcmBuffer(file,odysseySdWriteBuffer,bufferedBytes,bytes,false)) {
-          failed=true;storageFailed=true;failureStage=5;break;
+          failed=true;storageFailed=true;failureStage=failure(5);break;
         }
       }
 
@@ -199,14 +204,14 @@ static void odysseyRecordTake() {
       if (uint32_t(millis()-checkpointAt)>=ODYSSEY_WAV_CHECKPOINT_MS) {
         if (!odysseyDrainPcmBuffer(file,odysseySdWriteBuffer,bufferedBytes,bytes,false) ||
             !odysseyJournalCommit(file,journal,fullPath,bytes,journalSequence)) {
-          failed=true;storageFailed=true;failureStage=6;break;
+          failed=true;storageFailed=true;failureStage=failure(6);break;
         }
         checkpointAt=millis();
       }
 
       if (uint64_t(bytes)+bufferedBytes==ODYSSEY_WAV_SEGMENT_PCM_BYTES) {
         if (!odysseyFinalizeWav(file,journal,fullPath,journalSequence,header,odysseySdWriteBuffer,bufferedBytes,bytes)) {
-          failed=true;storageFailed=true;failureStage=6;break;
+          failed=true;storageFailed=true;failureStage=failure(6);break;
         }
         totalBytes+=bytes;
         bytes=0;
@@ -214,7 +219,7 @@ static void odysseyRecordTake() {
         const bool wavClosed=close(completed)==0;
         const bool journalClosed=close(journal)==0;journal=-1;
         if (!wavClosed || !journalClosed || !odysseyRemoveJournal(fullPath)) {
-          failed=true;storageFailed=true;failureStage=7;break;
+          failed=true;storageFailed=true;failureStage=failure(7);break;
         }
         ++segment;
       }
@@ -222,7 +227,7 @@ static void odysseyRecordTake() {
     stopMicrophone();
   }
 #else
-  failed=true;failureStage=4;
+  failed=true;failureStage=failure(4);
 #endif
 
   if (file>=0) {
@@ -231,31 +236,31 @@ static void odysseyRecordTake() {
     // may no longer be trustworthy. Close is still attempted for cleanup.
     if (!storageFailed) {
       if (!odysseyFinalizeWav(file,journal,fullPath,journalSequence,header,odysseySdWriteBuffer,bufferedBytes,bytes)) {
-        failed=true;storageFailed=true;if (!failureStage) failureStage=6;
+        failed=true;storageFailed=true;if (!failureStage) failureStage=failure(6);
       }
     }
     totalBytes+=bytes;
     if (close(file)!=0) {
-      failed=true;storageFailed=true;if (!failureStage) failureStage=7;
+      failed=true;storageFailed=true;if (!failureStage) failureStage=failure(7);
     }
     file=-1;
   }
 
   if (journal>=0) {
-    if (close(journal)!=0) { failed=true;storageFailed=true;if (!failureStage) failureStage=7; }
+    if (close(journal)!=0) { failed=true;storageFailed=true;if (!failureStage) failureStage=failure(7); }
     journal=-1;
     if (!storageFailed && !odysseyRemoveJournal(fullPath)) {
-      failed=true;storageFailed=true;if (!failureStage) failureStage=7;
+      failed=true;storageFailed=true;if (!failureStage) failureStage=failure(7);
     }
   }
 
   // A user can stop before the first complete PCM frame, and I2S can fail at
   // startup. Do not leave an empty, otherwise-valid WAV in the sync catalogue.
   if (!storageFailed && totalBytes==0 && fullPath[0] && unlink(fullPath)!=0 && errno!=ENOENT) {
-    failed=true;storageFailed=true;if (!failureStage) failureStage=7;
+    failed=true;storageFailed=true;if (!failureStage) failureStage=failure(7);
   }
 
-  if (!failed && totalBytes==0) failureStage=8;
+  if (!failed && totalBytes==0) failureStage=failure(8);
   odysseyRecordFailureStage=failureStage;
   odysseyRecordLastBytes=uint32_t(std::min<uint64_t>(totalBytes,0xffffffffull));
 
@@ -266,6 +271,7 @@ static void odysseyRecordTake() {
     static_cast<unsigned long>(ODYSSEY_WAV_SEGMENT_SECONDS),
     static_cast<unsigned long>(ODYSSEY_WAV_CHECKPOINT_MS/1000u),
     failed?" (mount retained for explicit recovery)":"");
+  if (failed) odysseySaveRecordFailure(failureStage,firstErrno,odysseyRecordLastBytes.load());
   if (storageFailed) odysseySdMarkVfsFailure();
   if (failed || totalBytes==0) odysseyRecordFaultAt=millis();
 }
