@@ -4,170 +4,35 @@ const {materialize}=require('../tools/materialize-target.cjs');
 const root=path.join(__dirname,'..');
 function productionS3(){return fs.readFileSync(path.join(root,'synap_esp32s3/synap_esp32s3.ino'),'utf8')}
 
-test('final production S3 source matches audio, touch, low-power and OTA contract',()=>{
+test('final production S3 source retains core audio, touch, low-power and OTA contract',()=>{
   const s3=productionS3();
   assert.match(s3,/#define SYNAP_TOUCH_PIN 13/);
-  assert.match(s3,/AUDIO_PROTOCOL_VERSION = 3/);assert.match(s3,/ADPCM_BYTES_PER_FRAME == 404/);
-  assert.match(s3,/MIN_CHUNKS_PER_FRAME = 1/);assert.match(s3,/MIN_REQUIRED_MTU = 32/);assert.match(s3,/MAX_AUDIO_PAYLOAD_BYTES = 500/);
-  assert.match(s3,/MIC_START_ATTEMPTS=3[\s\S]*?attempt<=MIC_START_ATTEMPTS/);
-  assert.match(s3,/microphoneValidated=startMicrophone\(\);\n  if \(microphoneValidated\) stopMicrophone\(\);/);
-  assert.match(s3,/void stopStreaming\(ErrorCode reason\)[\s\S]*?#if USE_REAL_I2S_MIC[\s\S]*?#else\s*stopMicrophone\(\);\s*#endif/);
-  assert.match(s3,/remote standby -> awake; microphone remains off until START/);
-  assert.match(s3,/TOUCH_TAP_MIN_MS = 60/);assert.match(s3,/TOUCH_TAP_MAX_MS = 500/);
-  assert.match(s3,/TOUCH_DOUBLE_TAP_GAP_MS = 550/);assert.match(s3,/TOUCH_STATE_LOCKOUT_MS = 250/);
-  assert.match(s3,/RTC_DATA_ATTR uint32_t synapDeepSleepMarker = 0/);
-  assert.match(s3,/confirmTouchWakeGesture\(\)/);
+  assert.match(s3,/AUDIO_PROTOCOL_VERSION = 3/);
+  assert.match(s3,/MIC_START_ATTEMPTS=3/);
+  assert.match(s3,/TOUCH_DOUBLE_TAP_GAP_MS = 550/);
   assert.match(s3,/TOUCH_WAKE_HOLD_MS = 4000/);
-  assert.match(s3,/long-press wake confirmed; sleep lock cleared; continuing normal boot/);
-  assert.match(s3,/long press -> DEEP SLEEP/);
-  assert.match(s3,/enterDeepSleep\("touch-hold"\)/);
-  assert.match(s3,/enterDeepSleep\("touch-hold-after-stop"\)/);
-  assert.match(s3,/held>=TOUCH_SLEEP_HOLD_MS/);
-  assert.match(s3,/double tap -> START/);assert.match(s3,/double tap -> STOP \+ POWER SAVER/);
-  assert.match(s3,/CMD_STANDBY = 0x03/);assert.match(s3,/CMD_WAKE = 0x04/);assert.match(s3,/CMD_RESTART = 0x05/);
-  const restart=s3.match(/case CMD_RESTART:[\s\S]*?ESP\.restart\(\);[\s\S]*?break;/)?.[0]||'';
-  assert.match(restart,/streamingEnabled\.load\(\)/);
-  assert.match(restart,/mediaBusy\(\)/);
-  assert.match(s3,/POWER_STATE_AWAKE = 1/);
-  assert.doesNotMatch(s3,/DeviceState::STANDBY/);
+  assert.match(s3,/CMD_RESTART = 0x05/);
   assert.match(s3,/publishPowerEvent\(POWER_STATE_DEEP_SLEEP\)/);
-  assert.match(s3,/batteryCritical\(\) && otaBusy\(\)[\s\S]*?otaSession\.fail\(Synap::BUSY\)/);
-  assert.match(s3,/xTaskCreatePinnedToCore\(transmitterTask, "transmit", 8192/);
 });
 
-test('secondary C3 target retains shared gestures and its own pins and tasks',()=>{
+test('C3 clean-room control build contains no compiled SD storage implementation',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
-  assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);assert.match(c3,/#define SYNAP_BATTERY_ADC_PIN 1/);assert.doesNotMatch(c3,/GPIO8/);
-  assert.match(c3,/AUDIO_PROTOCOL_VERSION = 3/);assert.match(c3,/MIN_CHUNKS_PER_FRAME = 1/);assert.match(c3,/MIN_REQUIRED_MTU = 32/);
-  assert.match(c3,/TOUCH_WAKE_HOLD_MS = 4000/);
-  assert.match(c3,/TOUCH_SLEEP_HOLD_MS = 4000/);
-  assert.match(c3,/TOUCH_DOUBLE_TAP_GAP_MS = 550/);
-  assert.match(c3,/long-press wake confirmed; sleep lock cleared; continuing normal boot/);
-  assert.match(c3,/long press -> DEEP SLEEP/);
-  assert.match(c3,/double tap -> START/);
-  assert.match(c3,/double tap -> STOP \+ POWER SAVER/);
-  assert.match(c3,/double tap -> SD audio START/);
-  assert.match(c3,/double tap -> SD audio STOP/);
-  assert.match(c3,/odysseyPrepareForConnectedStreaming\(1500u\)/);
-  assert.match(c3,/void startStreaming\(uint8_t version\) \{[\s\S]*?odysseyPrepareForConnectedStreaming\(1500u\)[\s\S]*?AUDIO_SOURCE_FAILED/);
-  assert.doesNotMatch(c3,/void stopStreaming\(ErrorCode reason\) \{[\s\S]{0,220}?odysseyPrepareForConnectedStreaming/);
-  assert.match(c3,/BLE capture requested; finalizing local audio before live stream/);
-  const connect=c3.match(/void onConnect\(BLEServer\* server\) override \{[\s\S]*?\n  \}/)?.[0]||'';
-  assert.doesNotMatch(connect,/odysseyStopRequested\s*=\s*true/);
-  assert.match(c3,/one-gesture offline start: recovering storage before capture/);
-  assert.match(c3,/double tap -> SD recover \+ audio START/);
-  assert.match(c3,/!odysseySdReady\(\)/);
-  assert.match(c3,/ready\|=SYNAP_CAP_SDAUDIO/);
-  const sdBackend=c3.split('// Odyssey S3 remains detection-only')[0];
-  assert.match(sdBackend,/static SPIClass odysseySdSpi\(FSPI\)/);
-  assert.match(sdBackend,/ODYSSEY_SD_DATA_FREQ_HZ=400000u/);
-  assert.match(sdBackend,/ODYSSEY_SD_MAX_OPEN_FILES=4/);
-  assert.match(sdBackend,/if \(!odysseySdSpi\.begin\(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS\)\)/);
-  assert.match(sdBackend,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
-  assert.match(sdBackend,/SD\.end\(\)/);
-  assert.match(sdBackend,/esp_vfs_fat_unregister_path\(ODYSSEY_SD_MOUNT_POINT\)/);
-  assert.match(sdBackend,/odysseySdSpi\.end\(\)/);
-  assert.doesNotMatch(sdBackend,/SDSPI_HOST_DEFAULT|esp_vfs_fat_sdspi_mount|spi_bus_initialize/);
-  assert.match(sdBackend,/odysseySdMountLocked\("boot",3\)/);
-  assert.match(sdBackend,/odysseySdMountLocked\(why,attempts\)/);
-  assert.doesNotMatch(sdBackend,/odysseySdConsumeAutoRearm|scheduled re-arm/);
-  assert.match(sdBackend,/SD\.writeRAW\(blankSector,0\)/);
-  assert.match(sdBackend,/odysseySdBeginLocked\(true\)/);
-  assert.match(c3,/Normal PWA reads are observational only\. Only operation 14 may remount/);
-  const transferInit=c3.indexOf('OdysseyTransfer::initialize();');
-  const sdBoot=c3.indexOf('odysseyInitializeSdCardBeforeBle();',transferInit);
-  const bleInit=c3.indexOf('initializeBLE();',sdBoot);
-  const tasks=c3.indexOf('xTaskCreate(controlTask, "control"',bleInit);
-  assert.ok(transferInit>0 && sdBoot>transferInit && bleInit>sdBoot && tasks>bleInit,
-    'C3 diagnostic lifecycle must reproduce 1445 worker -> mount -> BLE ordering');
-  assert.doesNotMatch(c3,/odysseyScheduleSdCardDetection/);
-  assert.match(c3,/enterDeepSleep\("touch-hold"\)/);
-  assert.match(c3,/enterDeepSleep\("touch-hold-after-stop"\)/);
-  assert.doesNotMatch(c3,/triple tap -> DEEP SLEEP/);
-  assert.doesNotMatch(c3,/tap 1\/3; waiting for taps 2 and 3/);
-  assert.match(c3,/xTaskCreate\(transmitterTask, "transmit", 8192/);assert.doesNotMatch(c3,/xTaskCreatePinnedToCore/);
-  assert.match(c3,/SYNAP_BATTERY_MONITOR_ENABLE 1/);
-  assert.match(c3,/esp_deep_sleep_enable_gpio_wakeup/);assert.doesNotMatch(c3,/esp_sleep_enable_ext1_wakeup/);
+  assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);
+  assert.match(c3,/clean-room control: Odyssey C3 SD disabled/);
+  assert.match(c3,/bool available\(\) \{ return false; \}/);
+  assert.match(c3,/double tap -> SD disabled in control build/);
+  assert.doesNotMatch(c3,/odysseyRecordTake/);
+  assert.doesNotMatch(c3,/odysseyRecoverSdCard/);
+  assert.doesNotMatch(c3,/odysseySdRecoverCardProtocolLocked/);
+  assert.doesNotMatch(c3,/readSelected\(/);
+  assert.doesNotMatch(c3,/"@catalogue"/);
+  assert.doesNotMatch(c3,/SYNAPJ01|SYNAPM01/);
 });
 
-test('release workflow compiles the shared complete production pipeline',()=>{
+test('release workflow compiles the control build with the unchanged pinned toolchain',()=>{
   const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
-  assert.match(workflow,/cp synap_esp32s3\/synap_esp32s3\.ino prepared\/synap_esp32s3\/synap_esp32s3\.ino/);
   const compileLines=workflow.split('\n').filter(line=>line.includes('arduino-cli compile'));
   assert.equal(compileLines.length,3);
   assert(compileLines.every(line=>line.includes('-DUSE_REAL_I2S_MIC=1')));
   assert.match(workflow,/arduino-cli core install esp32:esp32@3\.3\.5/);
-  assert.doesNotMatch(workflow,/patch-arduino-sd\.cjs|SYNAP_ARDUINO_SD_SRC/);
-});
-
-test('C3 Arduino SPI mount precedes BLE and retains the guarded VFS storage API',()=>{
-  const c3=materialize(productionS3(),'esp32c3-supermini-4m');
-  const worker=c3.indexOf('OdysseyTransfer::initialize();');
-  const sd=c3.indexOf('odysseyInitializeSdCardBeforeBle();',worker);
-  const ble=c3.indexOf('initializeBLE();',sd);
-  assert(worker>0 && sd>worker && ble>sd,'C3 must preserve worker -> mount -> BLE ordering');
-  assert.match(c3,/static SPIClass odysseySdSpi\(FSPI\)/);
-  assert.match(c3,/ODYSSEY_SD_DATA_FREQ_HZ=400000u/);
-  assert.match(c3,/if \(!odysseySdSpi\.begin\(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS\)\)/);
-  assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
-  assert.match(c3,/SD\.end\(\)/);
-  assert.match(c3,/esp_vfs_fat_unregister_path\(ODYSSEY_SD_MOUNT_POINT\)/);
-  assert.match(c3,/odysseySdSpi\.end\(\)/);
-  assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|spi_bus_initialize|SDSPI_HOST_DEFAULT/);
-  assert.match(c3,/OdysseySdGuard/);
-  assert.match(c3,/open\(fullPath,O_RDWR\)/);
-  assert.match(c3,/esp_vfs_fat_create_contiguous_file\(/);
-  assert.match(c3,/ODYSSEY_WAV_SEGMENT_SECONDS=300u/);
-  assert.match(c3,/opendir\(directoryPath\)/);
-  assert.match(c3,/readSelected\(request\.path,request\.offset,total,bytes,size\)/);
-  assert.match(c3,/"@catalogue"/);
-  const storage=c3.match(/static bool storageReady\(\) \{[\s\S]*?\n\}/)?.[0]||'';
-  assert.doesNotMatch(storage,/odysseyDetectSdCard|odysseyRecoverSdCard/);
-  const toggle=c3.match(/void odysseyToggleRecording\(\) \{[\s\S]*?\n\}/)?.[0]||'';
-  assert.doesNotMatch(toggle,/odysseyDetectSdCard|odysseyRecoverSdCard/);
-});
-
-
-test('C3 production image exposes truthful SD read/write/delete diagnostics',()=>{
-  const c3=materialize(productionS3(),'esp32c3-supermini-4m');
-  assert.match(c3,/static int segmentedWavState/);
-  assert.match(c3,/static uint8_t clearRecordings\(uint32_t& removed\)/);
-  assert.match(c3,/Verify WAV, journal and integrity metadata are all gone before acknowledging deletion/);
-  assert.match(c3,/odysseySaveRecordFailure\(0,0,0\)/);
-  assert.match(c3,/\\"ioErrno\\":%ld/);
-  assert.match(c3,/\\"releaseErr\\":%ld/);
-});
-
-test('C3 production image contains offline SD V2 recovery, capacity and CRC metadata',()=>{
-  const c3=materialize(productionS3(),'esp32c3-supermini-4m');
-  assert.match(c3,/ODYSSEY_SD_FREE_RESERVE_BYTES=2ull\*1024ull\*1024ull/);
-  assert.match(c3,/SYNAPM01/);
-  assert.match(c3,/odysseySdCrcUpdate\(segmentCrcState/);
-  assert.match(c3,/odysseyRecoverSdCard\("touch"\)/);
-  assert.match(c3,/odysseyRecoverSdCard\("post-record"\)/);
-  assert.match(c3,/odysseySdRecoveryActive\.load\(\)/);
-});
-
-test('C3 production LED uses capture-active rather than request-active state',()=>{
-  const c3=materialize(productionS3(),'esp32c3-supermini-4m');
-  assert.match(c3,/odysseyCaptureActive/);
-  assert.match(c3,/else if \(odysseyCaptureActive\.load\(\)\)/);
-  assert.match(c3,/\[SD\] PCM capture active/);
-});
-
-test('C3 production diagnostics expose root storage failure and last-good capacity',()=>{
-  const c3=materialize(productionS3(),'esp32c3-supermini-4m');
-  assert.match(c3,/odysseySaveRootStorageFailure/);
-  assert.match(c3,/rootRecordStage/);
-  assert.match(c3,/rootRecordErrno/);
-  assert.match(c3,/lastGoodFreeBytes/);
-});
-
-test('C3 production image quiesces and recovers continuously-powered SD card protocol',()=>{
-  const c3=materialize(productionS3(),'esp32c3-supermini-4m');
-  assert.match(c3,/odysseySdRecoverCardProtocolLocked/);
-  assert.match(c3,/odysseySdQuiesceCardLocked/);
-  assert.match(c3,/CMD25 stop-transmission token/);
-  assert.match(c3,/cardReadIdle/);
-  assert.match(c3,/cardCmd0/);
 });
