@@ -422,13 +422,15 @@ bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs) {
   return true;
 }
 void odysseyToggleRecording() {
-  if (odysseySdRecoveryActive.load()) return;
+  // A second double-tap must always cancel an in-flight offline request,
+  // including amber preparation/recovery before PCM capture begins.
   if (odysseyRecording.load()) {
     odysseyStopRequested=true;
     updateStatusLed(true);
     Serial.println("[TOUCH] double tap -> SD audio STOP");
     return;
   }
+  if (odysseySdRecoveryActive.load()) return;
   if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) return;
   odysseyStopRequested=false;
   odysseyRecordFaultAt=0;
