@@ -168,17 +168,31 @@ static void odysseyRecordTake() {
         snprintf(logicalPath,sizeof(logicalPath),"/synap/odyssey_audio_%08lx_%08lx_p%04lu.wav",
           static_cast<unsigned long>(takeHigh),static_cast<unsigned long>(takeLow),
           static_cast<unsigned long>(segment));
-        if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath)) ||
-            !odysseySdPreallocateFile(fullPath,ODYSSEY_WAV_SEGMENT_FILE_BYTES)) {
+        if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) {
+          failed=true;storageFailed=true;failureStage=failure(2);break;
+        }
+        if (!odysseySdPreallocateFile(fullPath,ODYSSEY_WAV_SEGMENT_FILE_BYTES)) {
+          failed=true;storageFailed=true;failureStage=failure(30);break;
+        }
+        errno=0;
+        file=open(fullPath,O_RDWR);
+        if (file<0) {
           failed=true;storageFailed=true;failureStage=failure(3);break;
         }
-        file=open(fullPath,O_RDWR);
+        errno=0;
         journal=odysseyCreateJournal(fullPath);journalSequence=0;
+        if (journal<0) {
+          failed=true;storageFailed=true;failureStage=failure(32);break;
+        }
         bytes=0;bufferedBytes=0;odysseyWavHeader(header,0);
-        if (file<0 || journal<0 || !odysseyPwriteAll(file,header,sizeof(header),0) ||
-            lseek(file,ODYSSEY_WAV_HEADER_BYTES,SEEK_SET)<0 ||
-            !odysseyJournalCommit(file,journal,fullPath,0,journalSequence)) {
-          failed=true;storageFailed=true;failureStage=failure(3);break;
+        if (!odysseyPwriteAll(file,header,sizeof(header),0)) {
+          failed=true;storageFailed=true;failureStage=failure(33);break;
+        }
+        if (lseek(file,ODYSSEY_WAV_HEADER_BYTES,SEEK_SET)<0) {
+          failed=true;storageFailed=true;failureStage=failure(34);break;
+        }
+        if (!odysseyJournalCommit(file,journal,fullPath,0,journalSequence)) {
+          failed=true;storageFailed=true;failureStage=failure(35);break;
         }
         checkpointAt=millis();
       }
@@ -216,9 +230,15 @@ static void odysseyRecordTake() {
         totalBytes+=bytes;
         bytes=0;
         const int completed=file;file=-1;
-        const bool wavClosed=close(completed)==0;
-        const bool journalClosed=close(journal)==0;journal=-1;
-        if (!wavClosed || !journalClosed || !odysseyRemoveJournal(fullPath)) {
+        int closeError=0;
+        errno=0;
+        if (close(completed)!=0) closeError=errno?errno:EIO;
+        errno=0;
+        if (close(journal)!=0 && !closeError) closeError=errno?errno:EIO;
+        journal=-1;
+        if (!closeError && !odysseyRemoveJournal(fullPath)) closeError=errno?errno:EIO;
+        if (closeError) {
+          errno=closeError;
           failed=true;storageFailed=true;failureStage=failure(7);break;
         }
         ++segment;
@@ -240,14 +260,22 @@ static void odysseyRecordTake() {
       }
     }
     totalBytes+=bytes;
+    errno=0;
     if (close(file)!=0) {
-      failed=true;storageFailed=true;if (!failureStage) failureStage=failure(7);
+      const int closeError=errno?errno:EIO;
+      failed=true;storageFailed=true;
+      if (!failureStage) { errno=closeError;failureStage=failure(7); }
     }
     file=-1;
   }
 
   if (journal>=0) {
-    if (close(journal)!=0) { failed=true;storageFailed=true;if (!failureStage) failureStage=failure(7); }
+    errno=0;
+    if (close(journal)!=0) {
+      const int closeError=errno?errno:EIO;
+      failed=true;storageFailed=true;
+      if (!failureStage) { errno=closeError;failureStage=failure(7); }
+    }
     journal=-1;
     if (!storageFailed && !odysseyRemoveJournal(fullPath)) {
       failed=true;storageFailed=true;if (!failureStage) failureStage=failure(7);
@@ -272,7 +300,8 @@ static void odysseyRecordTake() {
     static_cast<unsigned long>(ODYSSEY_WAV_CHECKPOINT_MS/1000u),
     failed?" (mount retained for explicit recovery)":"");
   if (failed) odysseySaveRecordFailure(failureStage,firstErrno,odysseyRecordLastBytes.load());
-  if (storageFailed) odysseySdMarkVfsFailure();
+  else if (totalBytes) odysseyClearRecordFailure();
+  if (storageFailed) odysseySdMarkVfsFailure(firstErrno);
   if (failed || totalBytes==0) odysseyRecordFaultAt=millis();
 }
 // FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
