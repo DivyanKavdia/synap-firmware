@@ -80,7 +80,7 @@ test('C3 media operations distinguish missing content from FAT I/O failure',()=>
   assert.match(transfer,/static int segmentedWavState/);
   assert.match(transfer,/journal<0\) return -1/);
   assert.match(transfer,/return errno==ENOENT\?FILE_UNAVAILABLE:IO_ERROR/);
-  assert.match(transfer,/Verify both source objects are gone before acknowledging deletion/);
+  assert.match(transfer,/Verify WAV, journal and integrity metadata are all gone before acknowledging deletion/);
   assert.match(transfer,/static uint8_t clearRecordings\(uint32_t& removed\)/);
   assert.match(transfer,/if \(error==IO_ERROR\) odysseySdMarkVfsFailure\(\)/);
   assert.match(transfer,/ioErrno/);
