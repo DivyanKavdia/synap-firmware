@@ -191,7 +191,7 @@ test('C3 sync-source deletion is idempotent and keeps the journal until the WAV 
   const remove=transfer.split('static uint8_t removeFileLocked(const char* path) {')[1].split('static uint8_t removeFile(const char* path) {')[0];
   assert(remove.indexOf('unlink(full)')<remove.indexOf('odysseyRemoveJournal(full)'));
   assert.match(remove,/statResult!=0 && errno!=ENOENT/);
-  assert.match(remove,/Verify both source objects are gone before acknowledging deletion/);
+  assert.match(remove,/Verify WAV, journal and integrity metadata are all gone before acknowledging deletion/);
   assert.match(remove,/odysseyJournalPresence\(full\)/);
 });
 
