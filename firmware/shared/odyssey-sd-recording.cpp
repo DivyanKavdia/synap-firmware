@@ -92,12 +92,20 @@ static void odysseyRecordTake() {
 
   odysseyRecordFailureStage=0;
   odysseyRecordLastBytes=0;
+  errno=0;
 
   // Hold the single storage mutex for the whole take. A recovery/remount can
   // never tear down the VFS beneath an open recording.
   OdysseySdGuard storage;
-  if (!storage || !odysseySdReady() || !odysseySdCloseReadLocked()) {
-    failed=true;storageFailed=true;failureStage=failure(1);
+  if (!storage) {
+    errno=EBUSY;failed=true;storageFailed=true;failureStage=failure(1);
+  } else if (!odysseySdReady()) {
+    errno=ENODEV;failed=true;storageFailed=true;failureStage=failure(1);
+  } else {
+    errno=0;
+    if (!odysseySdCloseReadLocked()) {
+      failed=true;storageFailed=true;failureStage=failure(1);
+    }
   }
 
   if (!failed) {
@@ -110,6 +118,7 @@ static void odysseyRecordTake() {
         failed=true;storageFailed=true;failureStage=failure(2);break;
       }
       struct stat existing{};
+      errno=0;
       if (stat(fullPath,&existing)==0) {
         // A collision is improbable; regenerate both take identifiers before
         // opening anything so later parts remain a contiguous numbered set.
@@ -120,6 +129,7 @@ static void odysseyRecordTake() {
       if (!odysseySdPreallocateFile(fullPath,ODYSSEY_WAV_SEGMENT_FILE_BYTES)) {
         failed=true;storageFailed=true;failureStage=failure(30);break;
       }
+      errno=0;
       file=open(fullPath,O_RDWR);
       if (file>=0) break;
       failed=true;storageFailed=true;failureStage=failure(3);break;
@@ -129,6 +139,7 @@ static void odysseyRecordTake() {
 
   odysseyWavHeader(header,0);
   if (!failed) {
+    errno=0;
     journal=odysseyCreateJournal(fullPath);
     if (journal<0) failureStage=failure(32);
     else if (!odysseyPwriteAll(file,header,sizeof(header),0)) failureStage=failure(33);
@@ -140,6 +151,7 @@ static void odysseyRecordTake() {
 #if USE_REAL_I2S_MIC
   if (!failed && !odysseyStopRequested.load()) {
     MicrophoneGuard guard;
+    errno=0;
     if (!startMicrophone()) { failed=true;failureStage=failure(4); }
     int32_t raw[SAMPLES_PER_FRAME];
     int16_t pcm[SAMPLES_PER_FRAME];
