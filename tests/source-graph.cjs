@@ -4,12 +4,18 @@ const fs=require('node:fs'),path=require('node:path'),root=path.resolve(__dirnam
 const read=p=>fs.readFileSync(path.join(root,p),'utf8');
 const list=p=>fs.existsSync(path.join(root,p))?fs.readdirSync(path.join(root,p)).filter(n=>/\.(cpp|h)$/.test(n)):[];
 
-test('shared C++ modules are listed exactly once',()=>{
+test('shared production modules are listed exactly once while retired SD implementations stay out of the image',()=>{
   const manifest=JSON.parse(read('firmware/shared/sources.json'));
+  const retired=new Set([
+    'odyssey-sd-io.cpp','odyssey-sd-detect.cpp','odyssey-sd-recording.cpp','odyssey-sd-transfer.cpp',
+    'odyssey-sd-clean-control.cpp'
+  ]);
   assert.equal(manifest.length,new Set(manifest).size);
-  assert.deepEqual([...manifest].sort(),list('firmware/shared').sort());
-  for(const n of ['odyssey-sd-detect.cpp','odyssey-sd-recording.cpp','odyssey-sd-transfer.cpp'])
-    assert.ok(manifest.includes(n));
+  const expected=list('firmware/shared').filter(n=>!retired.has(n)||manifest.includes(n));
+  assert.deepEqual([...manifest].sort(),expected.sort());
+  for(const n of ['odyssey-sd-io.cpp','odyssey-sd-detect.cpp','odyssey-sd-recording.cpp','odyssey-sd-transfer.cpp'])
+    assert.ok(!manifest.includes(n),'legacy SD module leaked into production graph: '+n);
+  assert.equal(manifest.filter(n=>n==='odyssey-sd-clean-control.cpp'||n==='odyssey-sd-clean-recording.cpp').length,1);
 });
 test('target C++ templates have live adapters',()=>{
   const owner={
