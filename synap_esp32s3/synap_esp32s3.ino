@@ -2268,6 +2268,7 @@ static bool odysseyCleanWriteAll(int fd,const uint8_t* bytes,size_t size) {
 }
 
 static bool odysseyCleanRecordTake() {
+  uint8_t failureStage=0;
   if (odysseyStopRequested.load()) return true;
   if (!odysseyCleanMountForTake()) return odysseyStopRequested.load();
   if (odysseyStopRequested.load()) { odysseyCleanUnmount();return true; }
@@ -2288,13 +2289,16 @@ static bool odysseyCleanRecordTake() {
     if (file>=0 || errno!=EEXIST) break;
   }
   if (file<0) {
+    failureStage=3;
     Serial.printf("[SD] clean record: exclusive create failed errno=%d\n",errno);
-    odysseyCleanUnmount();return false;
+    odysseyCleanUnmount();odysseySdBootState=2;odysseySdProbeStage=failureStage;return false;
   }
 
   uint8_t header[44];
   odysseyCleanWavHeader(header,0);
-  bool ok=odysseyCleanWriteAll(file,header,sizeof(header)) && fsync(file)==0;
+  bool ok=odysseyCleanWriteAll(file,header,sizeof(header));
+  if (!ok) failureStage=3;
+  if (ok && fsync(file)!=0) { ok=false;failureStage=5; }
   int failureErrno=ok?0:(errno?errno:EIO);
   uint32_t pcmBytes=0;
   size_t buffered=0;
@@ -2313,7 +2317,7 @@ static bool odysseyCleanRecordTake() {
         chunk=ODYSSEY_SD_WRITE_CHUNK_BYTES;
       } else if (finalDrain) chunk=buffered;
       else return true;
-      if (!odysseyCleanWriteAll(file,odysseyCleanWriteBuffer,chunk)) return false;
+      if (!odysseyCleanWriteAll(file,odysseyCleanWriteBuffer,chunk)) { failureStage=4;return false; }
       pcmBytes+=uint32_t(chunk);buffered-=chunk;
       if (buffered) memmove(odysseyCleanWriteBuffer,odysseyCleanWriteBuffer+chunk,buffered);
     }
@@ -2323,7 +2327,7 @@ static bool odysseyCleanRecordTake() {
 #if USE_REAL_I2S_MIC
   if (ok && !odysseyStopRequested.load()) {
     MicrophoneGuard micGuard;
-    if (!startMicrophone()) { ok=false;failureErrno=EIO; }
+    if (!startMicrophone()) { ok=false;failureErrno=EIO;failureStage=6; }
     else {
       int32_t raw[SAMPLES_PER_FRAME];
       int16_t pcm[SAMPLES_PER_FRAME];
@@ -2333,7 +2337,7 @@ static bool odysseyCleanRecordTake() {
         while (received<sizeof(raw) && !odysseyStopRequested.load()) {
           const size_t n=microphoneI2S.readBytes(reinterpret_cast<char*>(raw)+received,sizeof(raw)-received);
           if (!n) {
-            if (++emptyReads>=3) { ok=false;failureErrno=EIO;break; }
+            if (++emptyReads>=3) { ok=false;failureErrno=EIO;failureStage=6;break; }
           } else { received+=n;emptyReads=0; }
         }
         if (!ok || odysseyStopRequested.load()) break;
@@ -2348,14 +2352,15 @@ static bool odysseyCleanRecordTake() {
         if (!drain(false)) { ok=false;failureErrno=errno?errno:EIO;break; }
         if (!odysseyCaptureActive.load()) {
           // First real frame is written and synced before purple is asserted.
-          if (fsync(file)!=0) { ok=false;failureErrno=errno?errno:EIO;break; }
+          if (fsync(file)!=0) { ok=false;failureErrno=errno?errno:EIO;failureStage=5;break; }
           odysseyRecordingStartedAt=millis();
           odysseyCaptureActive=true;odysseySdRecoveryActive=false;
           updateStatusLed(true);
           Serial.printf("[SD] clean PCM capture active path=%s\n",path);
         }
         if (uint32_t(millis()-lastFlush)>=ODYSSEY_SD_FLUSH_MS) {
-          if (!drain(false) || fsync(file)!=0) { ok=false;failureErrno=errno?errno:EIO;break; }
+          if (!drain(false)) { ok=false;failureErrno=errno?errno:EIO;if(!failureStage)failureStage=4;break; }
+          if (fsync(file)!=0) { ok=false;failureErrno=errno?errno:EIO;failureStage=5;break; }
           lastFlush=millis();
         }
       }
@@ -2366,26 +2371,33 @@ static bool odysseyCleanRecordTake() {
   ok=false;failureErrno=ENOSYS;
 #endif
 
-  if (ok && !drain(true)) { ok=false;failureErrno=errno?errno:EIO; }
+  if (ok && !drain(true)) { ok=false;failureErrno=errno?errno:EIO;if(!failureStage)failureStage=4; }
   if (ok && pcmBytes) {
     odysseyCleanWavHeader(header,pcmBytes);
-    if (fsync(file)!=0 || lseek(file,0,SEEK_SET)!=0 ||
-        !odysseyCleanWriteAll(file,header,sizeof(header)) || fsync(file)!=0) {
-      ok=false;failureErrno=errno?errno:EIO;
+    if (fsync(file)!=0) {
+      ok=false;failureErrno=errno?errno:EIO;failureStage=5;
+    } else if (lseek(file,0,SEEK_SET)!=0 ||
+               !odysseyCleanWriteAll(file,header,sizeof(header))) {
+      ok=false;failureErrno=errno?errno:EIO;failureStage=3;
+    } else if (fsync(file)!=0) {
+      ok=false;failureErrno=errno?errno:EIO;failureStage=5;
     }
   }
-  if (close(file)!=0) { ok=false;if (!failureErrno) failureErrno=errno?errno:EIO; }
-  if (ok && pcmBytes && rename(path,finished)!=0) { ok=false;failureErrno=errno?errno:EIO; }
+  if (close(file)!=0) { ok=false;if (!failureErrno) failureErrno=errno?errno:EIO;if(!failureStage)failureStage=5; }
+  if (ok && pcmBytes && rename(path,finished)!=0) { ok=false;failureErrno=errno?errno:EIO;failureStage=5; }
   // Preserve any failed take for later recovery. Only an empty, cleanly
   // cancelled take is removed; no writes are retried after a storage error.
   if (ok && !pcmBytes && unlink(path)!=0) { ok=false;failureErrno=errno?errno:EIO; }
   delay(20);
   odysseyCleanUnmount();
-  if (ok && pcmBytes)
+  if (ok && pcmBytes) {
+    odysseySdBootState=1;odysseySdProbeStage=6;
     Serial.printf("[SD] clean WAV saved path=%s pcmBytes=%lu\n",finished,static_cast<unsigned long>(pcmBytes));
-  else if (!ok)
-    Serial.printf("[SD] clean WAV failed; partial retained path=%s pcmBytes=%lu errno=%d\n",
-      path,static_cast<unsigned long>(pcmBytes),failureErrno);
+  } else if (!ok) {
+    odysseySdBootState=2;odysseySdProbeStage=failureStage?failureStage:3;
+    Serial.printf("[SD] clean WAV failed; partial retained path=%s pcmBytes=%lu errno=%d stage=%u\n",
+      path,static_cast<unsigned long>(pcmBytes),failureErrno,unsigned(odysseySdProbeStage.load()));
+  }
   return ok;
 }
 
