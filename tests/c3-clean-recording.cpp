@@ -93,7 +93,7 @@ int main(){
  reset();mountOK=false;odysseyToggleRecording();run();assert(!micStarts&&files(".part").empty());
  reset();failSync=1;odysseyToggleRecording();run();assert(!micStarts&&!purple&&files(".wav").empty()&&files(".part").size()==1);
  reset();failSync=2;odysseyToggleRecording();run();assert(!purple&&files(".wav").empty()&&files(".part").size()==1);
- reset();failWrite=3;odysseyToggleRecording();run();assert(purple>0&&files(".wav").empty()&&files(".part").size()==1);
+ reset();failWrite=5;odysseyToggleRecording();run();assert(purple>0&&files(".wav").empty()&&files(".part").size()==1);
  reset();failClose=true;odysseyToggleRecording();run();assert(files(".wav").empty()&&files(".part").size()==1);
  reset();failRename=true;odysseyToggleRecording();run();assert(files(".wav").empty()&&files(".part").size()==1);
  reset();assert(chdir("/tmp")==0);assert(rmdir(dir)==0);
