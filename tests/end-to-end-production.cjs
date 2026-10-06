@@ -24,9 +24,9 @@ test('C3 clean-room recorder is write-only and owns a bounded SD session',()=>{
   assert.match(c3,/odysseyCleanIdleClocks\(20\)/);
   assert.match(c3,/uint8_t r1=odysseyCleanCmd0\(\)/);
   assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_SPI_HZ/);
-  assert.match(c3,/SD\.open\(path,FILE_WRITE\)/);
+  assert.match(c3,/open\(path,O_CREAT\|O_EXCL\|O_WRONLY,0644\)/);
   assert.match(c3,/odysseyCleanWavHeader\(header,pcmBytes\)/);
-  assert.match(c3,/file\.seek\(0,SeekSet\)/);
+  assert.match(c3,/lseek\(file,0,SEEK_SET\)/);
   assert.match(c3,/clean PCM capture active/);
   assert.match(c3,/odysseyCaptureActive=true/);
   assert.match(c3,/clean WAV saved/);
