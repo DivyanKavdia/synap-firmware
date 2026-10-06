@@ -15,30 +15,32 @@ test('final production S3 source retains core audio, touch, low-power and OTA co
   assert.match(s3,/publishPowerEvent\(POWER_STATE_DEEP_SLEEP\)/);
 });
 
-test('C3 production image restores the retained-mount 1481 SD lifecycle',()=>{
+test('C3 production image restores the build-1631 guarded VFS recorder',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);
   assert.match(c3,/static SPIClass odysseySdSpi\(FSPI\)/);
-  assert.match(c3,/ODYSSEY_SD_DATA_FREQ_HZ=400000u/);
-  assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ/);
-  assert.match(c3,/odysseyLegacyMount\("boot"\)/);
-  assert.match(c3,/reuse a healthy retained mount/i);
-  assert.match(c3,/file\.write\(reinterpret_cast<const uint8_t\*>\(pcm\),sizeof\(pcm\)\)/);
-  assert.match(c3,/millis\(\)-checkpointAt\)>=2000u/);
-  assert.match(c3,/file\.flush\(\)/);
-  assert.match(c3,/bool available\(\) \{ return false; \}/);
-  assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|spi_bus_initialize|ODYSSEY_SD_WAV_RATE|gpio_pullup_en/);
+  assert.match(c3,/ODYSSEY_SD_INIT_FREQ_HZ=400000u/);
+  assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ/);
+  assert.match(c3,/static void odysseyRecordTake\(\)/);
+  assert.match(c3,/OdysseySdGuard storage/);
+  assert.match(c3,/file=fopen\(fullPath,"wb\+"\)/);
+  assert.match(c3,/fwrite\(pcm,1,sizeof\(pcm\),file\)/);
+  assert.match(c3,/uint32_t\(millis\(\)-checkpointAt\)>=2000u/);
+  assert.match(c3,/return fflush\(file\)==0/);
+  assert.match(c3,/odysseySdRequestRecovery\(\)/);
+  assert.doesNotMatch(c3,/odysseyLegacyRecordTask|file\.write\(reinterpret_cast<const uint8_t\*>\(pcm\)/);
+  assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|ODYSSEY_SD_WAV_RATE/);
 });
 
-test('C3 healthy take does not unmount before the next offline recording',()=>{
-  const source=fs.readFileSync(path.join(root,'firmware/shared/odyssey-sd-clean-recording.cpp'),'utf8');
-  const c3=source.slice(source.indexOf('#if CONFIG_IDF_TARGET_ESP32C3'),source.indexOf('#elif CONFIG_IDF_TARGET_ESP32S3'));
-  const record=c3.split('static void odysseyLegacyRecordTask(void*) {')[1].split('void odysseyInitializeSdCardBeforeBle()')[0];
-  assert.match(record,/if \(failed\) \{[\s\S]*SD\.end\(\)/);
-  assert.doesNotMatch(record,/else if \(bytes\)[\s\S]*SD\.end\(\)/);
+test('1631 recovery worker remains active but BLE media access is disabled',()=>{
+  const c3=materialize(productionS3(),'esp32c3-supermini-4m');
+  assert.match(c3,/xTaskCreate\(worker,"odyssey-sd",TRANSFER_STACK_BYTES/);
+  assert.match(c3,/odysseySdConsumeRecoveryRequest\(\)/);
+  assert.match(c3,/bool available\(\)\{return false;\}/);
+  assert.match(c3,/void ble\(BLEService\*\) \{[\s\S]*Intentionally disabled/);
 });
 
-test('release keeps pinned Arduino core but applies no Arduino SD source patch',()=>{
+test('release keeps the exact build-1631 Arduino core and no SD library patch',()=>{
   const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
   const compileLines=workflow.split('\n').filter(line=>line.includes('arduino-cli compile'));
   assert.equal(compileLines.length,3);
