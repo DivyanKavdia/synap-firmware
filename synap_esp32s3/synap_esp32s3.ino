@@ -2270,8 +2270,6 @@ static bool odysseyNativeMountForTake() {
   sdspi_device_config_t slot=SDSPI_DEVICE_CONFIG_DEFAULT();
   slot.host_id=ODYSSEY_SD_HOST;
   slot.gpio_cs=static_cast<gpio_num_t>(ODYSSEY_SD_CS);
-  // Give a marginal MISO line the maximum supported ready-high settling time.
-  slot.wait_for_miso=127;
 
   esp_vfs_fat_sdmmc_mount_config_t mount=VFS_FAT_MOUNT_DEFAULT_CONFIG();
   mount.format_if_mount_failed=false;
