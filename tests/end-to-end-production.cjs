@@ -19,10 +19,10 @@ test('C3 clean-room recorder is write-only and owns a bounded SD session',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);
   assert.match(c3,/clean-room C3 recorder ready; mount deferred to offline double tap/);
-  assert.match(c3,/ODYSSEY_SD_SPI_HZ=400000u/);
-  assert.match(c3,/odysseyCleanResyncBeforeMount/);
-  assert.match(c3,/odysseyCleanIdleClocks\(20\)/);
-  assert.match(c3,/uint8_t r1=odysseyCleanCmd0\(\)/);
+  assert.match(c3,/ODYSSEY_SD_SPI_HZ=1000000u/);
+  assert.match(c3,/ODYSSEY_SD_WRITE_CHUNK_BYTES=512u/);
+  assert.match(c3,/odysseyCleanPrepareHost/);
+  assert.doesNotMatch(c3,/odysseyCleanRawByte|odysseyCleanCmd0|odysseyCleanStopOldTransfer|odysseyCleanResyncBeforeMount/);
   assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_SPI_HZ/);
   assert.match(c3,/open\(path,O_CREAT\|O_EXCL\|O_WRONLY,0644\)/);
   assert.match(c3,/odysseyCleanWavHeader\(header,pcmBytes\)/);
@@ -39,10 +39,16 @@ test('C3 clean-room recorder is write-only and owns a bounded SD session',()=>{
   assert.doesNotMatch(c3,/odysseyRecoverSdCard/);
 });
 
-test('clean recorder preserves the pinned BLE toolchain while SD is isolated',()=>{
+test('clean recorder preserves pinned core and applies newer SD init only before C3 compile',()=>{
   const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
   const compileLines=workflow.split('\n').filter(line=>line.includes('arduino-cli compile'));
   assert.equal(compileLines.length,3);
   assert(compileLines.every(line=>line.includes('-DUSE_REAL_I2S_MIC=1')));
   assert.match(workflow,/arduino-cli core install esp32:esp32@3\.3\.5/);
+  assert.match(workflow,/tools\/patch-arduino-sd\.cjs/);
+  const s3=workflow.indexOf('--output-dir compiled-s3');
+  const chakshu=workflow.indexOf('--output-dir compiled-chakshu');
+  const patch=workflow.indexOf('node tools/patch-arduino-sd.cjs');
+  const c3=workflow.indexOf('--output-dir compiled-c3');
+  assert.ok(s3>0&&chakshu>s3&&patch>chakshu&&c3>patch);
 });
