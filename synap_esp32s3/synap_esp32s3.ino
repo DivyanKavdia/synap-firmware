@@ -2758,6 +2758,10 @@ bool odysseyInitializeSdCardBeforeBle() {
   OdysseySdGuard guard;
   if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return false; }
 
+  // A persisted recorder write failure means the continuously-powered card may
+  // have survived the MCU reset inside a data/program state. Re-arm the SD
+  // protocol before the first Arduino SD.begin() instead of asking the same
+  // stale card state to answer a fresh host immediately.
   const uint8_t previousRecordStage=odysseyLastRecordFailureStage();
   if (previousRecordStage>=55u) {
     Serial.printf("[SD] boot re-arm after recorder stage=%u\n",unsigned(previousRecordStage));
@@ -3094,6 +3098,9 @@ static void odysseyRecordTake() {
 // FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
 // function first so SD and microphone guards release their mutexes.
 static void odysseyRecordTask(void*) {
+  // One physical double-tap owns recovery + recording. If the previous take
+  // left storage unavailable, recover it here after leaving the touch/control
+  // task rather than forcing the user to perform a separate recovery gesture.
   if (!odysseySdReady()) {
     Serial.println("[SD] one-gesture offline start: recovering storage before capture");
     if (!odysseyRecoverSdCard("touch")) {
@@ -3110,6 +3117,9 @@ static void odysseyRecordTask(void*) {
 
   odysseyRecordTake();
 
+  // A disk error marks the live mount unavailable. The take's guard has
+  // unwound at this point, so perform one bounded re-arm before returning to
+  // idle. Preserve the recorder failure stage/bytes for diagnostics.
   if (!odysseySdReady() && odysseyLastRecordFailureStage()) {
     Serial.println("[SD] post-record failure: re-arming storage for next take");
     (void)odysseyRecoverSdCard("rearm");
