@@ -15,6 +15,10 @@
 constexpr uint32_t SAMPLE_RATE=16000,SAMPLES_PER_FRAME=800,ODYSSEY_SD_FLUSH_MS=5000;
 constexpr size_t ODYSSEY_SD_WRITE_CHUNK_BYTES=512;
 constexpr int pdPASS=1;
+using esp_err_t=int;
+constexpr esp_err_t ESP_OK=0;
+const char* esp_err_to_name(esp_err_t){return "ESP_OK";}
+esp_err_t odysseyNativeLastError=ESP_OK;
 uint8_t odysseyCleanWriteBuffer[4096];
 std::atomic<bool> odysseyRecording{false},odysseyStopRequested{false},odysseyCaptureActive{false},odysseySdRecoveryActive{false},deviceConnected{false},streamingEnabled{false};
 std::atomic<uint32_t> odysseyRecordingStartedAt{0},odysseyRecordFaultAt{0},odysseySdSleepGuardUntil{0};
@@ -36,8 +40,8 @@ struct MicrophoneGuard{MicrophoneGuard(){} ~MicrophoneGuard(){}};
 bool startMicrophone(){++micStarts;return micOK;}
 void stopMicrophone(){++micStops;}
 void updateStatusLed(bool){if(odysseyCaptureActive){++purple;assert(syncs>=2);}}
-bool odysseyCleanMountForTake(){++mounts;if(cancelOnMount)odysseyStopRequested=true;return mountOK;}
-void odysseyCleanUnmount(){++unmounts;}
+bool odysseyNativeMountForTake(){++mounts;if(cancelOnMount)odysseyStopRequested=true;return mountOK;}
+void odysseyNativeUnmount(bool=true){++unmounts;}
 void odysseyToggleRecording();
 struct Mic {
  size_t readBytes(char* p,size_t n){
