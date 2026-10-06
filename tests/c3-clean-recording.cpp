@@ -18,6 +18,7 @@ constexpr int pdPASS=1;
 uint8_t odysseyCleanWriteBuffer[4096];
 std::atomic<bool> odysseyRecording{false},odysseyStopRequested{false},odysseyCaptureActive{false},odysseySdRecoveryActive{false},deviceConnected{false},streamingEnabled{false};
 std::atomic<uint32_t> odysseyRecordingStartedAt{0},odysseyRecordFaultAt{0},odysseySdSleepGuardUntil{0};
+std::atomic<uint8_t> odysseySdBootState{0},odysseySdProbeStage{0};
 uint32_t disconnectedAt=0,clockMs=1,randomId=0;
 bool mountOK=true,micOK=true,cancelOnMount=false,lowBattery=false,sleepPending=false,ota=false,connectDuringTake=false;
 int mounts=0,unmounts=0,micStarts=0,micStops=0,purple=0,reads=0,stopAfter=4;
@@ -65,6 +66,7 @@ int checkedRename(const char* a,const char* b){if(failRename){errno=EIO;return -
 void reset(){
  for(const auto& f:std::filesystem::directory_iterator("."))std::filesystem::remove(f.path());
  odysseyRecording=false;odysseyStopRequested=false;odysseyCaptureActive=false;odysseySdRecoveryActive=false;deviceConnected=false;streamingEnabled=false;
+ odysseySdBootState=0;odysseySdProbeStage=0;
  mountOK=micOK=true;cancelOnMount=lowBattery=sleepPending=ota=connectDuringTake=false;
  mounts=unmounts=micStarts=micStops=purple=reads=syncs=writes=0;stopAfter=4;
  failSync=failWrite=0;maxWrite=0;failClose=failRename=shortWrites=false;clockMs=1;randomId=0;task=nullptr;
@@ -91,9 +93,9 @@ int main(){
  reset();cancelOnMount=true;odysseyToggleRecording();run();assert(micStarts==0&&unmounts==1&&files(".part").empty());
  reset();lowBattery=true;odysseyToggleRecording();assert(!task);
  reset();mountOK=false;odysseyToggleRecording();run();assert(!micStarts&&files(".part").empty());
- reset();failSync=1;odysseyToggleRecording();run();assert(!micStarts&&!purple&&files(".wav").empty()&&files(".part").size()==1);
- reset();failSync=2;odysseyToggleRecording();run();assert(!purple&&files(".wav").empty()&&files(".part").size()==1);
- reset();failWrite=5;odysseyToggleRecording();run();assert(purple>0&&files(".wav").empty()&&files(".part").size()==1);
+ reset();failSync=1;odysseyToggleRecording();run();assert(!micStarts&&!purple&&files(".wav").empty()&&files(".part").size()==1);assert(odysseySdBootState==2&&odysseySdProbeStage==5);
+ reset();failSync=2;odysseyToggleRecording();run();assert(!purple&&files(".wav").empty()&&files(".part").size()==1);assert(odysseySdBootState==2&&odysseySdProbeStage==5);
+ reset();failWrite=5;odysseyToggleRecording();run();assert(purple>0&&files(".wav").empty()&&files(".part").size()==1);assert(odysseySdBootState==2&&odysseySdProbeStage==4);
  reset();failClose=true;odysseyToggleRecording();run();assert(files(".wav").empty()&&files(".part").size()==1);
  reset();failRename=true;odysseyToggleRecording();run();assert(files(".wav").empty()&&files(".part").size()==1);
  reset();assert(chdir("/tmp")==0);assert(rmdir(dir)==0);
