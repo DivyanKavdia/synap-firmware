@@ -1,1 +1,2 @@
-Odyssey C3 SD clean baseline: storage path intentionally disabled.
+Build 1784 is the published Odyssey C3 SD-disabled control baseline.
+The clean-room branch reintroduces offline WAV writes only; catalogue/read/sync stays disabled.
