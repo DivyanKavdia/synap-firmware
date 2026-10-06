@@ -3,22 +3,31 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 const root=path.resolve(__dirname,'..');
 const read=p=>fs.readFileSync(path.join(root,p),'utf8');
 
-test('C3 offline double tap uses the historical 1631 recorder without a diagnostic write preflight',()=>{
+test('C3 offline recorder creates directly with the proven boot-probe write mode',()=>{
   const source=read('firmware/shared/odyssey-sd-1631-recording.cpp');
   assert.doesNotMatch(source,/odysseySustainedWriteProbe|\.synap-sustained-write\.tmp|bytes=64000/);
   const take=source.split('static void odysseyRecordTake() {')[1];
   assert.match(take,/OdysseySdGuard storage/);
-  assert.match(take,/file=fopen\(fullPath,"wb\+"\)/);
+  assert.match(take,/file=fopen\(fullPath,"wb"\)/);
+  assert.doesNotMatch(take,/stat\(fullPath/);
   assert.match(take,/startMicrophone\(\)/);
-  assert(take.indexOf('file=fopen(fullPath,"wb+")')<take.indexOf('startMicrophone()'));
+  assert(take.indexOf('file=fopen(fullPath,"wb")')<take.indexOf('startMicrophone()'));
+  assert.doesNotMatch(take,/checkpointAt|odysseyCheckpointWav/);
+  assert.match(source,/odysseyFinalizeWav/);
 });
 
-test('C3 recording diagnostics retain only completed historical recorder failure stages',()=>{
+test('C3 recording diagnostics distinguish create failures from later recorder stages',()=>{
   const source=read('firmware/shared/odyssey-sd-1631-recording.cpp');
-  for(const stage of [40,41,42,43,44,45,46,47,48])
+  for(const stage of [40,41,42,43,44,46,47,48])
     assert.match(source,new RegExp('failureStage='+stage));
-  for(const stage of [50,51,52,53,54])
-    assert.doesNotMatch(source,new RegExp('failureStage='+stage));
+  assert.doesNotMatch(source,/failureStage=45/);
+  for(const stage of [49,50,51,52,53,54])
+    assert.match(source,new RegExp('return '+stage));
+  assert.match(source,/case EIO: return 49/);
+  assert.match(source,/case ENODEV: return 50/);
+  assert.match(source,/case EMFILE:[\s\S]*case ENFILE: return 51/);
+  assert.match(source,/case ENOSPC: return 52/);
+  assert.match(source,/case EROFS: return 53/);
   assert.match(source,/odysseyPersistRecordFailure\(persistedStage,bytes\)/);
   assert.match(source,/odysseyPersistRecordFailure\(0,0\)/);
 });

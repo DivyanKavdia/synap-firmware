@@ -68,7 +68,7 @@ static constexpr uint8_t ODYSSEY_SD_RECOVERY_ATTEMPTS=1;
 // answer: a healthy idle card breaks out of the drain within a millisecond.
 static constexpr uint32_t ODYSSEY_SD_QUIESCE_BUDGET_MS=250u;
 // Match the last independently observed healthy build (1445) exactly.
-static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=1;
+static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=2;
 
 // Restore the exact Arduino-ESP32 3.3.5 stock SD initialization used by the
 // known-good Odyssey C3 build 1445. Runtime recording/sync continues to use

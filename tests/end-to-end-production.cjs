@@ -23,20 +23,23 @@ test('C3 production image restores the build-1631 guarded VFS recorder',()=>{
   assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ/);
   assert.match(c3,/static void odysseyRecordTake\(\)/);
   assert.match(c3,/OdysseySdGuard storage/);
-  assert.match(c3,/file=fopen\(fullPath,"wb\+"\)/);
+  assert.match(c3,/file=fopen\(fullPath,"wb"\)/);
+  assert.doesNotMatch(c3,/stat\(fullPath/);
   assert.match(c3,/fwrite\(pcm,1,sizeof\(pcm\),file\)/);
-  assert.match(c3,/uint32_t\(millis\(\)-checkpointAt\)>=2000u/);
-  assert.match(c3,/return fflush\(file\)==0/);
+  assert.doesNotMatch(c3,/checkpointAt|odysseyCheckpointWav/);
+  assert.match(c3,/odysseyFinalizeWav/);
+  assert.match(c3,/ODYSSEY_SD_MAX_OPEN_FILES=2/);
   assert.match(c3,/odysseySdRequestRecovery\(\)/);
-  // Diagnostics must not alter the historical 1631 I/O sequence; they are
-  // published only after each existing operation reports failure.
   assert.match(c3,/failureStage=41/);
   assert.match(c3,/failureStage=42/);
   assert.match(c3,/failureStage=43/);
   assert.match(c3,/failureStage=44/);
-  assert.match(c3,/failureStage=45/);
+  assert.doesNotMatch(c3,/failureStage=45/);
   assert.match(c3,/failureStage=46/);
   assert.match(c3,/failureStage=47/);
+  assert.match(c3,/case EIO: return 49/);
+  assert.match(c3,/case ENODEV: return 50/);
+  assert.match(c3,/case ENOSPC: return 52/);
   assert.match(c3,/const uint8_t persistedStage=failureStage\?failureStage:40/);
   assert.match(c3,/odysseyPersistRecordFailure\(persistedStage,bytes\)/);
   assert.doesNotMatch(c3,/odysseySustainedWriteProbe|\\.synap-sustained-write\\.tmp/);
