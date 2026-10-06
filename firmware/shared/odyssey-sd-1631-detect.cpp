@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "esp_err.h"
+#include "esp_vfs_fat.h"
 #endif
 
 #if CONFIG_IDF_TARGET_ESP32C3
@@ -58,7 +59,7 @@ static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
 // Arduino-ESP32 3.3.5 always initializes the card at 400 kHz internally.
 // This is the post-init runtime data clock retained by the SD driver.
-static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=2000000u;
+static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=1000000u;
 // Preserve the known-good build-1445 lifecycle: one mount attempt per
 // explicit action. Repeating SD.end()/SPI.end()/SD.begin() autonomously on a
 // continuously powered card is itself a state mutation and obscures the first
@@ -151,6 +152,16 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
   const int n=snprintf(full,capacity,"%s%s",ODYSSEY_SD_MOUNT_POINT,logical);
   return n>0 && size_t(n)<capacity;
 }
+static constexpr uint32_t ODYSSEY_SD_RECORD_RESERVE_BYTES=32u*1024u*1024u;
+int odysseySdReserveRecordingFile(const char* fullPath) {
+  if (!fullPath || !*fullPath) return EINVAL;
+  errno=0;
+  const esp_err_t result=esp_vfs_fat_create_contiguous_file(
+    ODYSSEY_SD_MOUNT_POINT,fullPath,ODYSSEY_SD_RECORD_RESERVE_BYTES,true);
+  if (result==ESP_OK) return 0;
+  return errno?errno:EIO;
+}
+uint32_t odysseySdRecordingReserveBytes() { return ODYSSEY_SD_RECORD_RESERVE_BYTES; }
 
 static void odysseySdReleaseLocked() {
   SD.end();

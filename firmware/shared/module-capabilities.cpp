@@ -5,6 +5,7 @@ uint8_t odysseySdDetectionState();
 uint8_t odysseySdProbeState();
 #if CONFIG_IDF_TARGET_ESP32C3
 uint8_t odysseyLastRecordFailureStage();
+uint32_t odysseyLastRecordFailureBytes();
 #endif
 #endif
 void encodeModuleCapabilities(uint8_t* p) {
@@ -35,9 +36,11 @@ void encodeModuleCapabilities(uint8_t* p) {
   p[18]=odysseySdDetectionState();
 #if CONFIG_IDF_TARGET_ESP32C3
   const uint8_t lastRecordStage=odysseyLastRecordFailureStage();
-  // Preserve the first recording failure across reboot. p18 remains the live
-  // mount state; p19 reports the last recording substage until a take succeeds.
-  p[15]=lastRecordStage;
+  const uint32_t lastRecordBytes=odysseyLastRecordFailureBytes();
+  // Validation byte 15 reports successful PCM before the last failure in
+  // 8 KiB units (capped at 255). Byte 19 remains the exact failure/mount stage.
+  const uint32_t recordUnits=lastRecordBytes/8192u;
+  p[15]=uint8_t(recordUnits>255u?255u:recordUnits);
   p[19]=lastRecordStage?lastRecordStage:odysseySdProbeState();
 #endif
 #if CONFIG_IDF_TARGET_ESP32C3

@@ -629,6 +629,7 @@ uint8_t odysseySdDetectionState();
 uint8_t odysseySdProbeState();
 #if CONFIG_IDF_TARGET_ESP32C3
 uint8_t odysseyLastRecordFailureStage();
+uint32_t odysseyLastRecordFailureBytes();
 #endif
 #endif
 void encodeModuleCapabilities(uint8_t* p) {
@@ -659,9 +660,11 @@ void encodeModuleCapabilities(uint8_t* p) {
   p[18]=odysseySdDetectionState();
 #if CONFIG_IDF_TARGET_ESP32C3
   const uint8_t lastRecordStage=odysseyLastRecordFailureStage();
-  // Preserve the first recording failure across reboot. p18 remains the live
-  // mount state; p19 reports the last recording substage until a take succeeds.
-  p[15]=lastRecordStage;
+  const uint32_t lastRecordBytes=odysseyLastRecordFailureBytes();
+  // Validation byte 15 reports successful PCM before the last failure in
+  // 8 KiB units (capped at 255). Byte 19 remains the exact failure/mount stage.
+  const uint32_t recordUnits=lastRecordBytes/8192u;
+  p[15]=uint8_t(recordUnits>255u?255u:recordUnits);
   p[19]=lastRecordStage?lastRecordStage:odysseySdProbeState();
 #endif
 #if CONFIG_IDF_TARGET_ESP32C3
@@ -2161,6 +2164,7 @@ void transmitterTask(void* parameter) {
 #include <sys/stat.h>
 #include <unistd.h>
 #include "esp_err.h"
+#include "esp_vfs_fat.h"
 #endif
 
 #if CONFIG_IDF_TARGET_ESP32C3
@@ -2207,7 +2211,7 @@ static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
 // Arduino-ESP32 3.3.5 always initializes the card at 400 kHz internally.
 // This is the post-init runtime data clock retained by the SD driver.
-static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=2000000u;
+static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=1000000u;
 // Preserve the known-good build-1445 lifecycle: one mount attempt per
 // explicit action. Repeating SD.end()/SPI.end()/SD.begin() autonomously on a
 // continuously powered card is itself a state mutation and obscures the first
@@ -2300,6 +2304,16 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
   const int n=snprintf(full,capacity,"%s%s",ODYSSEY_SD_MOUNT_POINT,logical);
   return n>0 && size_t(n)<capacity;
 }
+static constexpr uint32_t ODYSSEY_SD_RECORD_RESERVE_BYTES=32u*1024u*1024u;
+int odysseySdReserveRecordingFile(const char* fullPath) {
+  if (!fullPath || !*fullPath) return EINVAL;
+  errno=0;
+  const esp_err_t result=esp_vfs_fat_create_contiguous_file(
+    ODYSSEY_SD_MOUNT_POINT,fullPath,ODYSSEY_SD_RECORD_RESERVE_BYTES,true);
+  if (result==ESP_OK) return 0;
+  return errno?errno:EIO;
+}
+uint32_t odysseySdRecordingReserveBytes() { return ODYSSEY_SD_RECORD_RESERVE_BYTES; }
 
 static void odysseySdReleaseLocked() {
   SD.end();
@@ -2807,6 +2821,8 @@ void odysseyDetectSdCard() {
 #endif
 // C3 local audio owns the mounted VFS and microphone until finalization.
 // BLE connection changes never redirect a take; no local PCM enters the app queue.
+int odysseySdReserveRecordingFile(const char* fullPath);
+uint32_t odysseySdRecordingReserveBytes();
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 static std::atomic<uint8_t> odysseyPersistedRecordStage{0};
 static std::atomic<uint32_t> odysseyPersistedRecordBytes{0};
@@ -2852,9 +2868,11 @@ static void odysseyWavHeader(uint8_t* h,uint32_t bytes) {
   memcpy(h+36,"data",4);put32le(h+40,bytes);
 }
 static bool odysseyFinalizeWav(FILE* file,uint8_t* header,uint32_t bytes) {
-  // Capture stays strictly sequential. Flush audio once, then rewrite the
-  // 44-byte RIFF header in place immediately before close.
+  // Capture stays strictly sequential. Flush audio, shrink the preallocated
+  // extent to the actual WAV length, then rewrite the 44-byte RIFF header.
   if (fflush(file)!=0) return false;
+  const int fd=fileno(file);
+  if (fd<0 || ftruncate(fd,off_t(44u+bytes))!=0) return false;
   odysseyWavHeader(header,bytes);
   if (fseek(file,0,SEEK_SET)!=0) return false;
   if (fwrite(header,1,44,file)!=44) return false;
@@ -2882,6 +2900,15 @@ static uint8_t odysseyWriteFailureStage(int error) {
     default: return 59;
   }
 }
+static uint8_t odysseyReserveFailureStage(int error) {
+  switch (error) {
+    case EIO: return 60;
+    case ENODEV: return 61;
+    case ENOSPC: return 62;
+    case EROFS: return 63;
+    default: return 64;
+  }
+}
 static void odysseyRecordTake() {
   bool failed=false;
   uint8_t failureStage=0;
@@ -2900,25 +2927,30 @@ static void odysseyRecordTake() {
   if (!storage || !odysseySdReady()) { failed=true;failureStage=40; }
 
   if (!failed) {
-    // A 64-bit random suffix makes a collision negligible, so do not precede
-    // creation with stat(). A failed metadata read must never block a write
-    // that the card may still be able to perform.
+    // Allocate the FAT extent before I2S starts. Runtime capture then touches
+    // already-owned data sectors only; cluster allocation cannot collide with
+    // microphone timing.
     snprintf(logicalPath,sizeof(logicalPath),"/synap/odyssey_audio_%08lx_%08lx.wav",
       static_cast<unsigned long>(esp_random()),static_cast<unsigned long>(esp_random()));
     if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) {
       failed=true;failureStage=41;
     } else {
-      errno=0;
-      // Match the boot write probe's proven access mode. Read permission is
-      // unnecessary: fseek()+fwrite() can rewrite the header on a write stream.
-      file=fopen(fullPath,"wb");
-      if (!file) {
-        const int openError=errno;
-        failed=true;failureStage=odysseyCreateFailureStage(openError);
-        Serial.printf("[SD] WAV create failed errno=%d stage=%u path=%s\n",
-          openError,unsigned(failureStage),fullPath);
-      } else if (setvbuf(file,nullptr,_IONBF,0)!=0) {
-        failed=true;failureStage=42;
+      const int reserveError=odysseySdReserveRecordingFile(fullPath);
+      if (reserveError) {
+        failed=true;failureStage=odysseyReserveFailureStage(reserveError);
+        Serial.printf("[SD] WAV reserve failed errno=%d stage=%u path=%s\n",
+          reserveError,unsigned(failureStage),fullPath);
+      } else {
+        errno=0;
+        file=fopen(fullPath,"r+b");
+        if (!file) {
+          const int openError=errno;
+          failed=true;failureStage=odysseyCreateFailureStage(openError);
+          Serial.printf("[SD] WAV reopen failed errno=%d stage=%u path=%s\n",
+            openError,unsigned(failureStage),fullPath);
+        } else if (setvbuf(file,nullptr,_IONBF,0)!=0) {
+          failed=true;failureStage=42;
+        }
       }
     }
   }
@@ -2952,6 +2984,10 @@ static void odysseyRecordTake() {
       if (bytes>0xffffff00u-sizeof(pcm)) break; // RIFF length is 32-bit.
       const uint8_t* input=reinterpret_cast<const uint8_t*>(pcm);
       size_t remaining=sizeof(pcm);
+      const uint32_t reserveBytes=odysseySdRecordingReserveBytes();
+      if (44u+bytes+sectorPcmBytes+remaining>reserveBytes) {
+        failed=true;failureStage=65;
+      }
       while (!failed && remaining) {
         const size_t room=sizeof(sector)-sectorUsed;
         const size_t take=remaining<room?remaining:room;
@@ -3000,6 +3036,13 @@ static void odysseyRecordTake() {
         sectorUsed=0;
         sectorPcmBytes=0;
       }
+    }
+    if (failed) {
+      // Best-effort shrink of the reserved extent. Preserve the original
+      // failure stage if cleanup cannot touch the card.
+      (void)fflush(file);
+      const int fd=fileno(file);
+      if (fd>=0) (void)ftruncate(fd,off_t(44u+bytes));
     }
     if (!failed && !odysseyFinalizeWav(file,header,bytes)) {
       failed=true;

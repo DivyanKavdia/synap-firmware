@@ -1,5 +1,7 @@
 // C3 local audio owns the mounted VFS and microphone until finalization.
 // BLE connection changes never redirect a take; no local PCM enters the app queue.
+int odysseySdReserveRecordingFile(const char* fullPath);
+uint32_t odysseySdRecordingReserveBytes();
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 static std::atomic<uint8_t> odysseyPersistedRecordStage{0};
 static std::atomic<uint32_t> odysseyPersistedRecordBytes{0};
@@ -45,9 +47,11 @@ static void odysseyWavHeader(uint8_t* h,uint32_t bytes) {
   memcpy(h+36,"data",4);put32le(h+40,bytes);
 }
 static bool odysseyFinalizeWav(FILE* file,uint8_t* header,uint32_t bytes) {
-  // Capture stays strictly sequential. Flush audio once, then rewrite the
-  // 44-byte RIFF header in place immediately before close.
+  // Capture stays strictly sequential. Flush audio, shrink the preallocated
+  // extent to the actual WAV length, then rewrite the 44-byte RIFF header.
   if (fflush(file)!=0) return false;
+  const int fd=fileno(file);
+  if (fd<0 || ftruncate(fd,off_t(44u+bytes))!=0) return false;
   odysseyWavHeader(header,bytes);
   if (fseek(file,0,SEEK_SET)!=0) return false;
   if (fwrite(header,1,44,file)!=44) return false;
@@ -75,6 +79,15 @@ static uint8_t odysseyWriteFailureStage(int error) {
     default: return 59;
   }
 }
+static uint8_t odysseyReserveFailureStage(int error) {
+  switch (error) {
+    case EIO: return 60;
+    case ENODEV: return 61;
+    case ENOSPC: return 62;
+    case EROFS: return 63;
+    default: return 64;
+  }
+}
 static void odysseyRecordTake() {
   bool failed=false;
   uint8_t failureStage=0;
@@ -93,25 +106,30 @@ static void odysseyRecordTake() {
   if (!storage || !odysseySdReady()) { failed=true;failureStage=40; }
 
   if (!failed) {
-    // A 64-bit random suffix makes a collision negligible, so do not precede
-    // creation with stat(). A failed metadata read must never block a write
-    // that the card may still be able to perform.
+    // Allocate the FAT extent before I2S starts. Runtime capture then touches
+    // already-owned data sectors only; cluster allocation cannot collide with
+    // microphone timing.
     snprintf(logicalPath,sizeof(logicalPath),"/synap/odyssey_audio_%08lx_%08lx.wav",
       static_cast<unsigned long>(esp_random()),static_cast<unsigned long>(esp_random()));
     if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) {
       failed=true;failureStage=41;
     } else {
-      errno=0;
-      // Match the boot write probe's proven access mode. Read permission is
-      // unnecessary: fseek()+fwrite() can rewrite the header on a write stream.
-      file=fopen(fullPath,"wb");
-      if (!file) {
-        const int openError=errno;
-        failed=true;failureStage=odysseyCreateFailureStage(openError);
-        Serial.printf("[SD] WAV create failed errno=%d stage=%u path=%s\n",
-          openError,unsigned(failureStage),fullPath);
-      } else if (setvbuf(file,nullptr,_IONBF,0)!=0) {
-        failed=true;failureStage=42;
+      const int reserveError=odysseySdReserveRecordingFile(fullPath);
+      if (reserveError) {
+        failed=true;failureStage=odysseyReserveFailureStage(reserveError);
+        Serial.printf("[SD] WAV reserve failed errno=%d stage=%u path=%s\n",
+          reserveError,unsigned(failureStage),fullPath);
+      } else {
+        errno=0;
+        file=fopen(fullPath,"r+b");
+        if (!file) {
+          const int openError=errno;
+          failed=true;failureStage=odysseyCreateFailureStage(openError);
+          Serial.printf("[SD] WAV reopen failed errno=%d stage=%u path=%s\n",
+            openError,unsigned(failureStage),fullPath);
+        } else if (setvbuf(file,nullptr,_IONBF,0)!=0) {
+          failed=true;failureStage=42;
+        }
       }
     }
   }
@@ -145,6 +163,10 @@ static void odysseyRecordTake() {
       if (bytes>0xffffff00u-sizeof(pcm)) break; // RIFF length is 32-bit.
       const uint8_t* input=reinterpret_cast<const uint8_t*>(pcm);
       size_t remaining=sizeof(pcm);
+      const uint32_t reserveBytes=odysseySdRecordingReserveBytes();
+      if (44u+bytes+sectorPcmBytes+remaining>reserveBytes) {
+        failed=true;failureStage=65;
+      }
       while (!failed && remaining) {
         const size_t room=sizeof(sector)-sectorUsed;
         const size_t take=remaining<room?remaining:room;
@@ -193,6 +215,13 @@ static void odysseyRecordTake() {
         sectorUsed=0;
         sectorPcmBytes=0;
       }
+    }
+    if (failed) {
+      // Best-effort shrink of the reserved extent. Preserve the original
+      // failure stage if cleanup cannot touch the card.
+      (void)fflush(file);
+      const int fd=fileno(file);
+      if (fd>=0) (void)ftruncate(fd,off_t(44u+bytes));
     }
     if (!failed && !odysseyFinalizeWav(file,header,bytes)) {
       failed=true;
