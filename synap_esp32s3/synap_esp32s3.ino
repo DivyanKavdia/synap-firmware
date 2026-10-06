@@ -2841,34 +2841,6 @@ static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   prefs.end();
 }
 
-static bool odysseySustainedWriteProbe(uint8_t& failureStage) {
-  static constexpr char path[]="/odyssey-sd/synap/.synap-sustained-write.tmp";
-  uint8_t block[AUDIO_BYTES_PER_FRAME];
-  for (size_t i=0;i<sizeof(block);++i) block[i]=uint8_t((i*37u+11u)&255u);
-
-  errno=0;
-  (void)unlink(path);
-  errno=0;
-  FILE* probe=fopen(path,"wb");
-  if (!probe) { failureStage=50;return false; }
-
-  bool ok=true;
-  for (uint8_t frame=0;frame<40u;++frame) {
-    if (fwrite(block,1,sizeof(block),probe)!=sizeof(block)) {
-      failureStage=51;ok=false;break;
-    }
-  }
-  if (ok && fflush(probe)!=0) { failureStage=52;ok=false; }
-  if (fclose(probe)!=0 && ok) { failureStage=53;ok=false; }
-  if (ok) {
-    errno=0;
-    if (unlink(path)!=0 && errno!=ENOENT) { failureStage=54;ok=false; }
-  }
-  Serial.printf("[SD-DIAG] sustained write probe %s stage=%u bytes=64000\n",
-    ok?"passed":"failed",unsigned(failureStage));
-  return ok;
-}
-
 static void odysseyWavHeader(uint8_t* h,uint32_t bytes) {
   memset(h,0,44);
   memcpy(h,"RIFF",4);put32le(h+4,bytes+36);
@@ -2897,10 +2869,6 @@ static void odysseyRecordTake() {
   // never tear down the VFS beneath an open recording.
   OdysseySdGuard storage;
   if (!storage || !odysseySdReady()) { failed=true;failureStage=40; }
-
-  // Diagnostic-only isolation: prove sustained FAT writes with the microphone
-  // completely off, using the same 1600-byte frame size as the 1631 recorder.
-  if (!failed && !odysseySustainedWriteProbe(failureStage)) failed=true;
 
   if (!failed) {
     struct stat existing{};

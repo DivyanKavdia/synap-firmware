@@ -3,29 +3,30 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 const root=path.resolve(__dirname,'..');
 const read=p=>fs.readFileSync(path.join(root,p),'utf8');
 
-test('C3 sustained-write diagnostic runs before microphone capture using 1631 frame size',()=>{
+test('C3 offline double tap uses the historical 1631 recorder without a diagnostic write preflight',()=>{
   const source=read('firmware/shared/odyssey-sd-1631-recording.cpp');
-  assert.match(source,/static bool odysseySustainedWriteProbe\(uint8_t& failureStage\)/);
-  assert.match(source,/uint8_t block\[AUDIO_BYTES_PER_FRAME\]/);
-  assert.match(source,/for \(uint8_t frame=0;frame<40u;\+\+frame\)/);
-  assert.match(source,/fwrite\(block,1,sizeof\(block\),probe\)!=sizeof\(block\)/);
-  assert.match(source,/fflush\(probe\)!=0/);
+  assert.doesNotMatch(source,/odysseySustainedWriteProbe|\.synap-sustained-write\.tmp|bytes=64000/);
   const take=source.split('static void odysseyRecordTake() {')[1];
-  assert(take.indexOf('odysseySustainedWriteProbe(failureStage)')<take.indexOf('startMicrophone()'));
+  assert.match(take,/OdysseySdGuard storage/);
+  assert.match(take,/file=fopen\(fullPath,"wb\+"\)/);
+  assert.match(take,/startMicrophone\(\)/);
+  assert(take.indexOf('file=fopen(fullPath,"wb+")')<take.indexOf('startMicrophone()'));
 });
 
-test('C3 write diagnostic distinguishes preflight and historical recorder stages',()=>{
+test('C3 recording diagnostics retain only completed historical recorder failure stages',()=>{
   const source=read('firmware/shared/odyssey-sd-1631-recording.cpp');
-  for(const stage of [40,41,42,43,44,45,46,47,48,50,51,52,53,54])
+  for(const stage of [40,41,42,43,44,45,46,47,48])
     assert.match(source,new RegExp('failureStage='+stage));
+  for(const stage of [50,51,52,53,54])
+    assert.doesNotMatch(source,new RegExp('failureStage='+stage));
+  assert.match(source,/odysseyPersistRecordFailure\(persistedStage,bytes\)/);
+  assert.match(source,/odysseyPersistRecordFailure\(0,0\)/);
 });
 
-test('C3 first record failure survives reboot without changing the live mount byte',()=>{
+test('C3 first completed record failure survives reboot without changing the live mount byte',()=>{
   const recorder=read('firmware/shared/odyssey-sd-1631-recording.cpp');
   const caps=read('firmware/shared/module-capabilities.cpp');
   assert.match(recorder,/prefs\.begin\("sd-recdiag",false\)/);
-  assert.match(recorder,/odysseyPersistRecordFailure\(persistedStage,bytes\)/);
-  assert.match(recorder,/odysseyPersistRecordFailure\(0,0\)/);
   assert.match(caps,/p\[18\]=odysseySdDetectionState\(\)/);
   assert.match(caps,/p\[15\]=lastRecordStage/);
   assert.match(caps,/p\[19\]=lastRecordStage\?lastRecordStage:odysseySdProbeState\(\)/);
