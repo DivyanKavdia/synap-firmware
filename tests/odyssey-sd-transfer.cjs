@@ -25,7 +25,7 @@ assert.match(source,/case 17: error=removeFile\(request\.path\)/);
 assert.match(source,/case 18:/);
 assert.match(source,/case 19:/);
 assert.match(source,/odysseyFormatSdCard\(\)/);
-assert.match(caps,/p\[16\]\|=4/);
+assert.doesNotMatch(caps,/p\[16\]\|=4/,'phase-1 C3 media must not advertise destructive format');
 assert.match(source,/\/synap\//);
 assert.match(source,/opendir\(directoryPath\)/);
 assert.match(source,/segmentedWavState\(full,st\)/,'reserved or invalid recording parts must not enter the PWA catalogue');
