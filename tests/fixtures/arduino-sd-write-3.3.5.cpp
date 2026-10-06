@@ -29,3 +29,25 @@ bool sdWriteSector(uint8_t pdrv, const char *buffer, unsigned long long sector) 
   return false;
 }
 
+
+
+DRESULT ff_sd_write(uint8_t pdrv, const uint8_t *buffer, DWORD sector, UINT count) {
+  ardu_sdcard_t *card = s_cards[pdrv];
+  if (card->status & STA_NOINIT) {
+    return RES_NOTRDY;
+  }
+
+  if (card->status & STA_PROTECT) {
+    return RES_WRPRT;
+  }
+  DRESULT res = RES_OK;
+
+  AcquireSPI lock(card);
+
+  if (count > 1) {
+    res = sdWriteSectors(pdrv, (const char *)buffer, sector, count) ? RES_OK : RES_ERROR;
+  } else {
+    res = sdWriteSector(pdrv, (const char *)buffer, sector) ? RES_OK : RES_ERROR;
+  }
+  return res;
+}
