@@ -655,7 +655,12 @@ void encodeModuleCapabilities(uint8_t* p) {
   p[17]=1;
   p[18]=odysseySdDetectionState();
 #if CONFIG_IDF_TARGET_ESP32C3
-  p[19]=odysseySdProbeState();
+  uint8_t odysseyLastRecordFailureStage();
+  const uint8_t lastRecordStage=odysseyLastRecordFailureStage();
+  // Preserve the first recording failure across reboot. p18 remains the live
+  // mount state; p19 reports the last recording substage until a take succeeds.
+  p[15]=lastRecordStage;
+  p[19]=lastRecordStage?lastRecordStage:odysseySdProbeState();
 #endif
 #if CONFIG_IDF_TARGET_ESP32C3
   if (OdysseyTransfer::available()) {
@@ -2799,6 +2804,69 @@ void odysseyDetectSdCard() {
 // C3 local audio owns the mounted VFS and microphone until finalization.
 // BLE connection changes never redirect a take; no local PCM enters the app queue.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+static std::atomic<uint8_t> odysseyPersistedRecordStage{0};
+static std::atomic<uint32_t> odysseyPersistedRecordBytes{0};
+static std::atomic<bool> odysseyPersistedRecordLoaded{false};
+
+static void odysseyLoadPersistedRecordFailure() {
+  if (odysseyPersistedRecordLoaded.exchange(true)) return;
+  Preferences prefs;
+  if (!prefs.begin("sd-recdiag",true)) return;
+  uint32_t record[3]{};
+  if (prefs.getBytesLength("last")==sizeof(record) &&
+      prefs.getBytes("last",record,sizeof(record))==sizeof(record) && record[0]==1u) {
+    odysseyPersistedRecordStage=uint8_t(record[1]&255u);
+    odysseyPersistedRecordBytes=record[2];
+  }
+  prefs.end();
+}
+uint8_t odysseyLastRecordFailureStage() {
+  odysseyLoadPersistedRecordFailure();
+  return odysseyPersistedRecordStage.load();
+}
+uint32_t odysseyLastRecordFailureBytes() {
+  odysseyLoadPersistedRecordFailure();
+  return odysseyPersistedRecordBytes.load();
+}
+static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
+  odysseyPersistedRecordLoaded=true;
+  odysseyPersistedRecordStage=stage;
+  odysseyPersistedRecordBytes=bytes;
+  Preferences prefs;
+  if (!prefs.begin("sd-recdiag",false)) return;
+  const uint32_t record[3]={stage?1u:0u,uint32_t(stage),bytes};
+  (void)prefs.putBytes("last",record,sizeof(record));
+  prefs.end();
+}
+
+static bool odysseySustainedWriteProbe(uint8_t& failureStage) {
+  static constexpr char path[]="/odyssey-sd/synap/.synap-sustained-write.tmp";
+  uint8_t block[AUDIO_BYTES_PER_FRAME];
+  for (size_t i=0;i<sizeof(block);++i) block[i]=uint8_t((i*37u+11u)&255u);
+
+  errno=0;
+  (void)unlink(path);
+  errno=0;
+  FILE* probe=fopen(path,"wb");
+  if (!probe) { failureStage=50;return false; }
+
+  bool ok=true;
+  for (uint8_t frame=0;frame<40u;++frame) {
+    if (fwrite(block,1,sizeof(block),probe)!=sizeof(block)) {
+      failureStage=51;ok=false;break;
+    }
+  }
+  if (ok && fflush(probe)!=0) { failureStage=52;ok=false; }
+  if (fclose(probe)!=0 && ok) { failureStage=53;ok=false; }
+  if (ok) {
+    errno=0;
+    if (unlink(path)!=0 && errno!=ENOENT) { failureStage=54;ok=false; }
+  }
+  Serial.printf("[SD-DIAG] sustained write probe %s stage=%u bytes=64000\n",
+    ok?"passed":"failed",unsigned(failureStage));
+  return ok;
+}
+
 static void odysseyWavHeader(uint8_t* h,uint32_t bytes) {
   memset(h,0,44);
   memcpy(h,"RIFF",4);put32le(h+4,bytes+36);
@@ -2827,6 +2895,10 @@ static void odysseyRecordTake() {
   // never tear down the VFS beneath an open recording.
   OdysseySdGuard storage;
   if (!storage || !odysseySdReady()) { failed=true;failureStage=40; }
+
+  // Diagnostic-only isolation: prove sustained FAT writes with the microphone
+  // completely off, using the same 1600-byte frame size as the 1631 recorder.
+  if (!failed && !odysseySustainedWriteProbe(failureStage)) failed=true;
 
   if (!failed) {
     struct stat existing{};
@@ -2901,10 +2973,13 @@ static void odysseyRecordTake() {
   // Diagnostics are published only after the historical 1631 I/O sequence has
   // completed, so they cannot change the write timing being measured.
   if (failed || bytes==0) {
+    const uint8_t persistedStage=failureStage?failureStage:40;
+    odysseyPersistRecordFailure(persistedStage,bytes);
     odysseySdBootState=2;
-    odysseySdProbeStage=failureStage?failureStage:40;
+    odysseySdProbeStage=persistedStage;
     odysseyRecordFaultAt=millis();
   } else {
+    odysseyPersistRecordFailure(0,0);
     odysseySdBootState=1;
     odysseySdProbeStage=6;
   }
