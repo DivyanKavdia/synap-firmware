@@ -28,6 +28,16 @@ test('C3 production image restores the build-1631 guarded VFS recorder',()=>{
   assert.match(c3,/uint32_t\(millis\(\)-checkpointAt\)>=2000u/);
   assert.match(c3,/return fflush\(file\)==0/);
   assert.match(c3,/odysseySdRequestRecovery\(\)/);
+  // Diagnostics must not alter the historical 1631 I/O sequence; they are
+  // published only after each existing operation reports failure.
+  assert.match(c3,/failureStage=41/);
+  assert.match(c3,/failureStage=42/);
+  assert.match(c3,/failureStage=43/);
+  assert.match(c3,/failureStage=44/);
+  assert.match(c3,/failureStage=45/);
+  assert.match(c3,/failureStage=46/);
+  assert.match(c3,/failureStage=47/);
+  assert.match(c3,/odysseySdProbeStage=failureStage\?failureStage:40/);
   assert.doesNotMatch(c3,/odysseyLegacyRecordTask|file\.write\(reinterpret_cast<const uint8_t\*>\(pcm\)/);
   assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|ODYSSEY_SD_WAV_RATE/);
 });

@@ -64,7 +64,7 @@ test('C3 build-1631 offline recording keeps its original purple heartbeat and fa
   assert.match(led,/uint32_t\(now-odysseyRecordFaultAt\.load\(\)\)<6000u/);
   assert.match(led,/phase<140u \|\| \(phase>=260u && phase<400u\)/);
   assert.match(recorder,/odysseyRecordingStartedAt=millis\(\);[\s\S]*?odysseyRecording=true/);
-  assert.match(recorder,/if \(failed \|\| bytes==0\) odysseyRecordFaultAt=millis\(\)/);
+  assert.match(recorder,/if \(failed \|\| bytes==0\) \{[\s\S]*odysseyRecordFaultAt=millis\(\);[\s\S]*\}/);
   assert.match(recorder,/double tap -> SD audio START/);
 });
 
