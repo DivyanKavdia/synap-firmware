@@ -2166,6 +2166,7 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 #include "esp_vfs_fat.h"
 #include "driver/spi_master.h"
 #include "driver/sdspi_host.h"
+#include "driver/gpio.h"
 #include "sdmmc_cmd.h"
 #if !defined(ARDUINO_USB_CDC_ON_BOOT) || !ARDUINO_USB_CDC_ON_BOOT
 #error Odyssey C3 SD uses GPIO20/21: enable USB CDC On Boot to keep Serial off UART0 pins
@@ -2174,7 +2175,9 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 constexpr int ODYSSEY_SD_CS=SYNAP_SD_CS_PIN, ODYSSEY_SD_SCK=SYNAP_SD_SCK_PIN;
 constexpr int ODYSSEY_SD_MOSI=SYNAP_SD_MOSI_PIN, ODYSSEY_SD_MISO=SYNAP_SD_MISO_PIN;
 static constexpr spi_host_device_t ODYSSEY_SD_HOST=SPI2_HOST;
-static constexpr uint32_t ODYSSEY_SD_SPI_KHZ=1000u;
+static constexpr uint32_t ODYSSEY_SD_SPI_KHZ=400u;
+static constexpr uint32_t ODYSSEY_SD_WAV_RATE=8000u;
+static constexpr uint16_t ODYSSEY_SD_WAV_SAMPLES_PER_FRAME=SAMPLES_PER_FRAME/2u;
 static constexpr size_t ODYSSEY_SD_WRITE_BUFFER_BYTES=4096u;
 static constexpr size_t ODYSSEY_SD_WRITE_CHUNK_BYTES=512u;
 static constexpr uint32_t ODYSSEY_SD_FLUSH_MS=5000u;
@@ -2196,8 +2199,8 @@ static void odysseyCleanWavHeader(uint8_t* h,uint32_t pcmBytes) {
   memcpy(h+8,"WAVEfmt ",8);
   put32le(h+16,16u);
   h[20]=1;h[22]=1;
-  put32le(h+24,SAMPLE_RATE);
-  put32le(h+28,SAMPLE_RATE*2u);
+  put32le(h+24,ODYSSEY_SD_WAV_RATE);
+  put32le(h+28,ODYSSEY_SD_WAV_RATE*2u);
   h[32]=2;h[34]=16;
   memcpy(h+36,"data",4);
   put32le(h+40,pcmBytes);
@@ -2208,6 +2211,11 @@ static void odysseyNativeResetPins() {
   pinMode(ODYSSEY_SD_SCK,OUTPUT);digitalWrite(ODYSSEY_SD_SCK,LOW);
   pinMode(ODYSSEY_SD_MOSI,OUTPUT);digitalWrite(ODYSSEY_SD_MOSI,HIGH);
   pinMode(ODYSSEY_SD_MISO,INPUT);
+  // SD SPI requires pull-ups on CMD/DAT lines. External pull-ups remain
+  // preferable, but enable the C3's internal pulls as an electrical-safety aid.
+  gpio_pullup_en(static_cast<gpio_num_t>(ODYSSEY_SD_CS));
+  gpio_pullup_en(static_cast<gpio_num_t>(ODYSSEY_SD_MOSI));
+  gpio_pullup_en(static_cast<gpio_num_t>(ODYSSEY_SD_MISO));
 }
 
 static void odysseyNativeUnmount(bool clearProbe=true) {
@@ -2262,6 +2270,8 @@ static bool odysseyNativeMountForTake() {
   sdspi_device_config_t slot=SDSPI_DEVICE_CONFIG_DEFAULT();
   slot.host_id=ODYSSEY_SD_HOST;
   slot.gpio_cs=static_cast<gpio_num_t>(ODYSSEY_SD_CS);
+  // Give a marginal MISO line the maximum supported ready-high settling time.
+  slot.wait_for_miso=127;
 
   esp_vfs_fat_sdmmc_mount_config_t mount=VFS_FAT_MOUNT_DEFAULT_CONFIG();
   mount.format_if_mount_failed=false;
@@ -2397,7 +2407,7 @@ static bool odysseyCleanRecordTake() {
     if (!startMicrophone()) { ok=false;failureErrno=EIO;failureStage=6; }
     else {
       int32_t raw[SAMPLES_PER_FRAME];
-      int16_t pcm[SAMPLES_PER_FRAME];
+      int16_t pcm[ODYSSEY_SD_WAV_SAMPLES_PER_FRAME];
       while (ok && !odysseyStopRequested.load()) {
         size_t received=0;
         uint8_t emptyReads=0;
@@ -2411,7 +2421,13 @@ static bool odysseyCleanRecordTake() {
           }
         }
         if (!ok || odysseyStopRequested.load()) break;
-        for (uint16_t i=0;i<SAMPLES_PER_FRAME;++i) pcm[i]=static_cast<int16_t>(raw[i]>>16);
+        // Offline safe mode stores 8 kHz PCM16. Average adjacent 16 kHz
+        // microphone samples before downsampling to avoid a hard decimation edge.
+        for (uint16_t i=0;i<ODYSSEY_SD_WAV_SAMPLES_PER_FRAME;++i) {
+          const int32_t a=raw[2u*i]>>16;
+          const int32_t b=raw[2u*i+1u]>>16;
+          pcm[i]=static_cast<int16_t>((a+b)/2);
+        }
         if (uint64_t(pcmBytes)+buffered+sizeof(pcm)>0xffff0000ull) break;
         if (buffered+sizeof(pcm)>sizeof(odysseyCleanWriteBuffer) && !drain(false)) {
           ok=false;failureErrno=errno?errno:EIO;break;
@@ -2502,7 +2518,7 @@ void odysseyInitializeSdCardBeforeBle() {
   odysseyCaptureActive=false;
   odysseyRecording=false;
   odysseyStopRequested=false;
-  Serial.println("[SD-IDF] native C3 SDSPI recorder ready; mount deferred to offline double tap");
+  Serial.println("[SD-IDF] native C3 electrical-safe recorder ready; 400kHz/8kPCM mount deferred to offline double tap");
 }
 
 void odysseyToggleRecording() {
