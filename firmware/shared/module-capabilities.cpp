@@ -49,8 +49,9 @@ void encodeModuleCapabilities(uint8_t* p) {
 #if CONFIG_IDF_TARGET_ESP32C3
   if (OdysseyTransfer::available()) {
     p[14]=1;
-    // C3 media feature bit 2 advertises explicit destructive FAT formatting.
-    p[16]|=4;
+    // Phase 1 C3 media-v1 exposes request/response catalogue/read/delete/clear
+    // only. Leave media feature bits 0..2 clear: no notification window,
+    // direct Wi-Fi or destructive full-card format is advertised yet.
     if (odysseySdDetectionState()==1) {
       ready|=SYNAP_CAP_SD;
       if (ready&SYNAP_CAP_AUDIO) ready|=SYNAP_CAP_SDAUDIO;

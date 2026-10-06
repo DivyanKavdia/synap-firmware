@@ -55,12 +55,20 @@ test('C3 production image uses guarded append-only multi-block offline recording
   assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|ODYSSEY_SD_WAV_RATE/);
 });
 
-test('1631 recovery worker remains active but BLE media access is disabled',()=>{
+test('1631 C3 worker exposes phase-1 media-v1 without advanced media features',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/xTaskCreate\(worker,"odyssey-sd",TRANSFER_STACK_BYTES/);
   assert.match(c3,/odysseySdConsumeRecoveryRequest\(\)/);
-  assert.match(c3,/bool available\(\)\{return false;\}/);
-  assert.match(c3,/void ble\(BLEService\*\) \{[\s\S]*Intentionally disabled/);
+  assert.match(c3,/bool available\(\)\{return requests!=nullptr;\}/);
+  assert.match(c3,/createCharacteristic\("4fa12354-0000-1000-8000-00805f9b34fb"/);
+  assert.match(c3,/createCharacteristic\("4fa12355-0000-1000-8000-00805f9b34fb"/);
+  assert.match(c3,/case 7:\s*error=catalogue\(total\)/);
+  assert.match(c3,/case 4:\s*error=readSelected\(request\.path,request\.offset,total,bytes,size\)/);
+  assert.match(c3,/case 17: error=removeFile\(request\.path\)/);
+  assert.match(c3,/case 18:/);
+  assert.doesNotMatch(c3,/case 19:/,'full-card format must remain disabled in phase 1');
+  assert.match(c3,/patchVirtualWavHeader\(bytes,size,offset,total\)/);
+  assert.doesNotMatch(c3,/p\[16\]\|=4/,'phase 1 must not advertise C3 format');
 });
 
 test('release keeps Arduino 3.3.5 pinned and applies the CMD24 fix only before C3 compile',()=>{

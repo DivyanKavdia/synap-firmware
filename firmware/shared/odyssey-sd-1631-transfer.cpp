@@ -346,7 +346,7 @@ class DataCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
-bool available(){return false;} // recording-validation build: BLE media disabled
+bool available(){return requests!=nullptr;}
 
 void initialize() {
   requests=xQueueCreate(2,sizeof(Request));
@@ -359,9 +359,16 @@ void initialize() {
   Request initial{};initial.connection=connectionGeneration.load();reply(initial,OK);
 }
 
-void ble(BLEService*) {
-  // Intentionally disabled while validating the known-good 1631 recorder.
-  // The recovery worker remains active via initialize().
+void ble(BLEService* service) {
+  // Phase 1 sync enablement: expose only the proven request/response media-v1
+  // transport. Notification-window transfer, Wi-Fi and destructive format stay
+  // unadvertised until catalogue/read/delete/clear are validated on hardware.
+  auto* command=service->createCharacteristic("4fa12354-0000-1000-8000-00805f9b34fb",
+    BLECharacteristic::PROPERTY_WRITE|BLECharacteristic::PROPERTY_WRITE_NR);
+  command->setCallbacks(new CommandCallbacks());
+  auto* data=service->createCharacteristic("4fa12355-0000-1000-8000-00805f9b34fb",
+    BLECharacteristic::PROPERTY_READ);
+  data->setCallbacks(new DataCallbacks());
 }
 } // namespace OdysseyTransfer
 #endif
