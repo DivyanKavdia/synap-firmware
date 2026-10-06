@@ -15,22 +15,21 @@ test('final production S3 source retains core audio, touch, low-power and OTA co
   assert.match(s3,/publishPowerEvent\(POWER_STATE_DEEP_SLEEP\)/);
 });
 
-test('C3 clean-room recorder is write-only and owns a bounded SD session',()=>{
+test('C3 production image uses native ESP-IDF SDSPI for write-only offline WAVs',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);
-  assert.match(c3,/clean-room C3 recorder ready; mount deferred to offline double tap/);
-  assert.match(c3,/ODYSSEY_SD_SPI_HZ=1000000u/);
-  assert.match(c3,/ODYSSEY_SD_WRITE_CHUNK_BYTES=512u/);
-  assert.match(c3,/odysseyCleanPrepareHost/);
-  assert.doesNotMatch(c3,/odysseyCleanRawByte|odysseyCleanCmd0|odysseyCleanStopOldTransfer|odysseyCleanResyncBeforeMount/);
-  assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_SPI_HZ/);
+  assert.match(c3,/native C3 SDSPI recorder ready; mount deferred to offline double tap/);
+  assert.match(c3,/SDSPI_HOST_DEFAULT\(\)/);
+  assert.match(c3,/spi_bus_initialize\(ODYSSEY_SD_HOST/);
+  assert.match(c3,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT/);
+  assert.match(c3,/esp_vfs_fat_sdcard_unmount\(ODYSSEY_SD_MOUNT_POINT/);
+  assert.match(c3,/host\.max_freq_khz=ODYSSEY_SD_SPI_KHZ/);
   assert.match(c3,/open\(path,O_CREAT\|O_EXCL\|O_WRONLY,0644\)/);
   assert.match(c3,/odysseyCleanWavHeader\(header,pcmBytes\)/);
   assert.match(c3,/lseek\(file,0,SEEK_SET\)/);
-  assert.match(c3,/clean PCM capture active/);
+  assert.match(c3,/\[SD-IDF\] PCM capture active/);
   assert.match(c3,/odysseyCaptureActive=true/);
-  assert.match(c3,/clean WAV saved/);
-  assert.match(c3,/delay\(20\);\s*odysseyCleanUnmount\(\)/);
+  assert.match(c3,/\[SD-IDF\] WAV saved/);
   assert.match(c3,/bool available\(\) \{ return false; \}/);
   assert.doesNotMatch(c3,/readSelected\(/);
   assert.doesNotMatch(c3,/"@catalogue"/);
@@ -39,16 +38,18 @@ test('C3 clean-room recorder is write-only and owns a bounded SD session',()=>{
   assert.doesNotMatch(c3,/odysseyRecoverSdCard/);
 });
 
-test('clean recorder preserves pinned core and applies newer SD init only before C3 compile',()=>{
+test('C3 source branch does not compile through Arduino SD.h or SPIClass',()=>{
+  const source=fs.readFileSync(path.join(root,'firmware/shared/odyssey-sd-clean-recording.cpp'),'utf8');
+  const c3=source.slice(source.indexOf('#if CONFIG_IDF_TARGET_ESP32C3'),source.indexOf('#elif CONFIG_IDF_TARGET_ESP32S3'));
+  assert.doesNotMatch(c3,/<SD\.h>|<SPI\.h>|SPIClass|SD\.begin|SD\.end/);
+  assert.doesNotMatch(c3,/sdWriteSector|sdWriteSectors|SYNAP_C3_SD_WRITE_ACCEPTED|SYNAP_C3_SD_SINGLE_SECTOR_ONLY/);
+});
+
+test('release keeps pinned Arduino core but applies no Arduino SD source patch',()=>{
   const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
   const compileLines=workflow.split('\n').filter(line=>line.includes('arduino-cli compile'));
   assert.equal(compileLines.length,3);
   assert(compileLines.every(line=>line.includes('-DUSE_REAL_I2S_MIC=1')));
   assert.match(workflow,/arduino-cli core install esp32:esp32@3\.3\.5/);
-  assert.match(workflow,/tools\/patch-arduino-sd\.cjs/);
-  const s3=workflow.indexOf('--output-dir compiled-s3');
-  const chakshu=workflow.indexOf('--output-dir compiled-chakshu');
-  const patch=workflow.indexOf('node tools/patch-arduino-sd.cjs');
-  const c3=workflow.indexOf('--output-dir compiled-c3');
-  assert.ok(s3>0&&chakshu>s3&&patch>chakshu&&c3>patch);
+  assert.doesNotMatch(workflow,/patch-arduino-sd\.cjs|patch-c3-sd-write\.cjs|SYNAP_ARDUINO_SD_SRC/);
 });
