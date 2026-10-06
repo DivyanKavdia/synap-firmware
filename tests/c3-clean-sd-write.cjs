@@ -7,6 +7,8 @@ test('clean C3 backend rejects bad responses and decomposes FatFS writes into CM
  const fixed=patch(original);
  assert.equal(patch(fixed),fixed);assert.throws(()=>patch('unexpected SDK'),/shape changed/);
  assert.match(fixed,/SYNAP_C3_SD_SINGLE_SECTOR_ONLY/);
+ assert.match(fixed,/SYNAP_C3_SD_WRITE_ACCEPTED/);
+ assert.match(fixed,/sdWait\(pdrv, 1000\)/);
  assert.match(fixed,/for \(UINT i=0; i<count; \+\+i\)/);
  nativeTest(fs.readFileSync('tests/c3-clean-sd-write.cpp','utf8').replace('// INSERT WRITE',fixed),['-DCONFIG_IDF_TARGET_ESP32C3=1','-funsigned-char']);
 });
