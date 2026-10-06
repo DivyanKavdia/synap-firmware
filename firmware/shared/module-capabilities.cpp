@@ -31,7 +31,12 @@ void encodeModuleCapabilities(uint8_t* p) {
   p[17]=1;
   p[18]=odysseySdDetectionState();
 #if CONFIG_IDF_TARGET_ESP32C3
-  p[19]=odysseySdProbeState();
+  uint8_t odysseyLastRecordFailureStage();
+  const uint8_t lastRecordStage=odysseyLastRecordFailureStage();
+  // Preserve the first recording failure across reboot. p18 remains the live
+  // mount state; p19 reports the last recording substage until a take succeeds.
+  p[15]=lastRecordStage;
+  p[19]=lastRecordStage?lastRecordStage:odysseySdProbeState();
 #endif
 #if CONFIG_IDF_TARGET_ESP32C3
   if (OdysseyTransfer::available()) {
