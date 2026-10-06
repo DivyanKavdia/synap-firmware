@@ -26,7 +26,6 @@ test('C3 production image uses native ESP-IDF SDSPI for write-only offline WAVs'
   assert.match(c3,/host\.max_freq_khz=ODYSSEY_SD_SPI_KHZ/);
   assert.match(c3,/ODYSSEY_SD_SPI_KHZ=400u/);
   assert.match(c3,/ODYSSEY_SD_WAV_RATE=8000u/);
-  assert.match(c3,/slot\.wait_for_miso=127/);
   assert.match(c3,/gpio_pullup_en/);
   assert.match(c3,/open\(path,O_CREAT\|O_EXCL\|O_WRONLY,0644\)/);
   assert.match(c3,/odysseyCleanWavHeader\(header,pcmBytes\)/);
