@@ -13,14 +13,15 @@
 #include <vector>
 #include <string>
 constexpr uint32_t SAMPLE_RATE=16000,SAMPLES_PER_FRAME=800,ODYSSEY_SD_FLUSH_MS=5000;
+constexpr size_t ODYSSEY_SD_WRITE_CHUNK_BYTES=512;
 constexpr int pdPASS=1;
-uint8_t odysseyCleanWriteBuffer[8000];
+uint8_t odysseyCleanWriteBuffer[4096];
 std::atomic<bool> odysseyRecording{false},odysseyStopRequested{false},odysseyCaptureActive{false},odysseySdRecoveryActive{false},deviceConnected{false},streamingEnabled{false};
 std::atomic<uint32_t> odysseyRecordingStartedAt{0},odysseyRecordFaultAt{0},odysseySdSleepGuardUntil{0};
 uint32_t disconnectedAt=0,clockMs=1,randomId=0;
 bool mountOK=true,micOK=true,cancelOnMount=false,lowBattery=false,sleepPending=false,ota=false,connectDuringTake=false;
 int mounts=0,unmounts=0,micStarts=0,micStops=0,purple=0,reads=0,stopAfter=4;
-int syncs=0,failSync=0,writes=0,failWrite=0;bool failClose=false,failRename=false,shortWrites=false;
+int syncs=0,failSync=0,writes=0,failWrite=0;size_t maxWrite=0;bool failClose=false,failRename=false,shortWrites=false;
 void (*task)(void*)=nullptr;
 uint32_t millis(){return clockMs;}
 void delay(uint32_t n){clockMs+=n;}
@@ -48,7 +49,7 @@ struct Mic {
 } microphoneI2S;
 int xTaskCreate(void(*fn)(void*),const char*,int,void*,int,void*){task=fn;return pdPASS;}
 void vTaskDelete(void*){}
-ssize_t checkedWrite(int fd,const void* p,size_t n){++writes;if(writes==failWrite){errno=EIO;return -1;}return ::write(fd,p,shortWrites?std::min(n,size_t(37)):n);}
+ssize_t checkedWrite(int fd,const void* p,size_t n){++writes;maxWrite=std::max(maxWrite,n);if(writes==failWrite){errno=EIO;return -1;}return ::write(fd,p,shortWrites?std::min(n,size_t(37)):n);}
 int checkedSync(int fd){++syncs;if(syncs==failSync){errno=EIO;return -1;}return ::fsync(fd);}
 int checkedClose(int fd){int r=::close(fd);if(failClose){errno=EIO;return -1;}return r;}
 int checkedRename(const char* a,const char* b){if(failRename){errno=EIO;return -1;}return ::rename(a,b);}
@@ -66,7 +67,7 @@ void reset(){
  odysseyRecording=false;odysseyStopRequested=false;odysseyCaptureActive=false;odysseySdRecoveryActive=false;deviceConnected=false;streamingEnabled=false;
  mountOK=micOK=true;cancelOnMount=lowBattery=sleepPending=ota=connectDuringTake=false;
  mounts=unmounts=micStarts=micStops=purple=reads=syncs=writes=0;stopAfter=4;
- failSync=failWrite=0;failClose=failRename=shortWrites=false;clockMs=1;randomId=0;task=nullptr;
+ failSync=failWrite=0;maxWrite=0;failClose=failRename=shortWrites=false;clockMs=1;randomId=0;task=nullptr;
 }
 void run(){assert(task);task(nullptr);assert(!odysseyRecording&&!odysseyCaptureActive);}
 std::vector<std::string> files(const std::string& extension){
@@ -78,7 +79,7 @@ void verify(size_t frames){
  std::vector<uint8_t> bytes(44+frames*1600);assert(fread(bytes.data(),1,bytes.size(),f)==bytes.size());assert(fgetc(f)==EOF);fclose(f);
  uint8_t h[44];odysseyCleanWavHeader(h,frames*1600);assert(memcmp(bytes.data(),h,44)==0);
  for(size_t i=44;i<bytes.size();i+=2){assert(bytes[i]==0x34&&bytes[i+1]==0x12);}
- assert(micStarts==1&&micStops==1&&unmounts==1&&purple>0);
+ assert(micStarts==1&&micStops==1&&unmounts==1&&purple>0);assert(maxWrite<=512);
 }
 int main(){
  char dir[]="/tmp/sc-XXXXXX";assert(mkdtemp(dir));assert(chdir(dir)==0);
