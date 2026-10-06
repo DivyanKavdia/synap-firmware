@@ -63,11 +63,18 @@ test('1631 recovery worker remains active but BLE media access is disabled',()=>
   assert.match(c3,/void ble\(BLEService\*\) \{[\s\S]*Intentionally disabled/);
 });
 
-test('release keeps the exact build-1631 Arduino core and no SD library patch',()=>{
+test('release keeps Arduino 3.3.5 pinned and applies the CMD24 fix only before C3 compile',()=>{
   const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
   const compileLines=workflow.split('\n').filter(line=>line.includes('arduino-cli compile'));
   assert.equal(compileLines.length,3);
   assert(compileLines.every(line=>line.includes('-DUSE_REAL_I2S_MIC=1')));
   assert.match(workflow,/arduino-cli core install esp32:esp32@3\.3\.5/);
-  assert.doesNotMatch(workflow,/patch-arduino-sd\.cjs|patch-c3-sd-write\.cjs|SYNAP_ARDUINO_SD_SRC/);
+  assert.match(workflow,/node tools\/patch-arduino-sd\.cjs/);
+  assert.match(workflow,/SYNAP_SD_CMD24_BUSY_FIX/);
+  const patchAt=workflow.indexOf('node tools/patch-arduino-sd.cjs');
+  const s3At=workflow.indexOf("--output-dir compiled-s3");
+  const chakshuAt=workflow.indexOf("--output-dir compiled-chakshu");
+  const c3At=workflow.indexOf("--output-dir compiled-c3");
+  assert(s3At>=0 && chakshuAt>s3At && patchAt>chakshuAt && c3At>patchAt,
+    'SD core patch must affect C3 only, after S3 and Chakshu are compiled');
 });
