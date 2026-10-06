@@ -32,7 +32,7 @@ test('C3 storage backend is native ESP-IDF SDSPI and does not use Arduino SD.h',
  assert.match(c3,/esp_vfs_fat_sdcard_unmount\(ODYSSEY_SD_MOUNT_POINT/);
  assert.match(c3,/spi_bus_free\(ODYSSEY_SD_HOST\)/);
  assert.match(c3,/host\.max_freq_khz=ODYSSEY_SD_SPI_KHZ/);
- assert.match(c3,/ODYSSEY_SD_SPI_KHZ=1000u/);
+ assert.match(c3,/ODYSSEY_SD_SPI_KHZ=400u/);\n assert.match(c3,/ODYSSEY_SD_WAV_RATE=8000u/);\n assert.match(c3,/slot\.wait_for_miso=127/);\n assert.match(c3,/gpio_pullup_en\(static_cast<gpio_num_t>\(ODYSSEY_SD_CS\)\)/);
  assert.doesNotMatch(c3,/<SD\.h>|<SPI\.h>|SPIClass|SD\.begin|SD\.end/);
  assert.doesNotMatch(c3,/sdWriteSector|sdWriteSectors|CMD24|CMD25|odysseyCleanCmd0|odysseyCleanResync/);
 });
