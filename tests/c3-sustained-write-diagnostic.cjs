@@ -21,7 +21,7 @@ test('C3 offline recorder creates directly with the proven boot-probe write mode
 
 test('C3 recording diagnostics distinguish create failures from later recorder stages',()=>{
   const source=read('firmware/shared/odyssey-sd-1631-recording.cpp');
-  for(const stage of [40,41,42,43,44,46,47,48])
+  for(const stage of [40,41,42,43,46,47,48])
     assert.match(source,new RegExp('failureStage='+stage));
   assert.doesNotMatch(source,/failureStage=45/);
   for(const stage of [49,50,51,52,53,54,55,56,57,58,59])

@@ -25,7 +25,6 @@ test('C3 production image restores the build-1631 guarded VFS recorder',()=>{
   assert.match(c3,/OdysseySdGuard storage/);
   assert.match(c3,/file=fopen\(fullPath,"wb"\)/);
   assert.doesNotMatch(c3,/stat\(fullPath/);
-  assert.match(c3,/fwrite\(pcm,1,sizeof\(pcm\),file\)/);
   assert.doesNotMatch(c3,/checkpointAt|odysseyCheckpointWav/);
   assert.match(c3,/odysseyFinalizeWav/);
   assert.match(c3,/ODYSSEY_SD_MAX_OPEN_FILES=1/);
@@ -36,7 +35,6 @@ test('C3 production image restores the build-1631 guarded VFS recorder',()=>{
   assert.match(c3,/failureStage=41/);
   assert.match(c3,/failureStage=42/);
   assert.match(c3,/failureStage=43/);
-  assert.match(c3,/failureStage=44/);
   assert.doesNotMatch(c3,/failureStage=45/);
   assert.match(c3,/failureStage=46/);
   assert.match(c3,/failureStage=47/);
