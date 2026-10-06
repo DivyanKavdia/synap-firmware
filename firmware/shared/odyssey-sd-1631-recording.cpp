@@ -70,13 +70,13 @@ static uint8_t odysseyCreateFailureStage(int error) {
     default: return 54;
   }
 }
-static uint8_t odysseyWriteFailureStage(int error) {
+static uint8_t odysseyBatchWriteFailureStage(int error) {
   switch (error) {
-    case EIO: return 55;
-    case ENODEV: return 56;
-    case ENOSPC: return 57;
-    case EROFS: return 58;
-    default: return 59;
+    case EIO: return 66;
+    case ENODEV: return 67;
+    case ENOSPC: return 68;
+    case EROFS: return 69;
+    default: return 70;
   }
 }
 static uint8_t odysseyReserveFailureStage(int error) {
@@ -95,9 +95,12 @@ static void odysseyRecordTake() {
   char logicalPath[64]{};
   char fullPath[96]{};
   uint8_t header[44];
-  alignas(4) uint8_t sector[512]{};
-  size_t sectorUsed=0;
-  uint32_t sectorPcmBytes=0;
+  // Keep the batch out of the 8 KiB recorder task stack. A 4 KiB aligned
+  // write gives FatFs eight contiguous sectors, routing Arduino SD through
+  // CMD25 + ACMD23 instead of the fragile one-sector CMD24 loop.
+  alignas(4) static uint8_t batch[4096];
+  size_t batchUsed=0;
+  uint32_t batchPcmBytes=0;
   FILE* file=nullptr;
 
   // Hold the single storage mutex for the whole take. A recovery/remount can
@@ -136,9 +139,9 @@ static void odysseyRecordTake() {
 
   odysseyWavHeader(header,0);
   if (!failed) {
-    memcpy(sector,header,sizeof(header));
-    sectorUsed=sizeof(header);
-    sectorPcmBytes=0;
+    memcpy(batch,header,sizeof(header));
+    batchUsed=sizeof(header);
+    batchPcmBytes=0;
   }
 
 #if USE_REAL_I2S_MIC
@@ -164,36 +167,38 @@ static void odysseyRecordTake() {
       const uint8_t* input=reinterpret_cast<const uint8_t*>(pcm);
       size_t remaining=sizeof(pcm);
       const uint32_t reserveBytes=odysseySdRecordingReserveBytes();
-      if (44u+bytes+sectorPcmBytes+remaining>reserveBytes) {
+      if (44u+bytes+batchPcmBytes+remaining>reserveBytes) {
         failed=true;failureStage=65;
       }
       while (!failed && remaining) {
-        const size_t room=sizeof(sector)-sectorUsed;
+        const size_t room=sizeof(batch)-batchUsed;
         const size_t take=remaining<room?remaining:room;
-        memcpy(sector+sectorUsed,input,take);
-        sectorUsed+=take;
-        sectorPcmBytes+=uint32_t(take);
+        memcpy(batch+batchUsed,input,take);
+        batchUsed+=take;
+        batchPcmBytes+=uint32_t(take);
         input+=take;
         remaining-=take;
-        if (sectorUsed==sizeof(sector)) {
+        if (batchUsed==sizeof(batch)) {
           errno=0;
-          const size_t written=fwrite(sector,1,sizeof(sector),file);
-          if (written!=sizeof(sector)) {
+          const size_t written=fwrite(batch,1,sizeof(batch),file);
+          if (written!=sizeof(batch)) {
             const int writeError=errno;
-            failed=true;failureStage=odysseyWriteFailureStage(writeError);
-            Serial.printf("[SD] PCM sector write failed errno=%d stage=%u wrote=%u pcm=%lu\n",
+            failed=true;failureStage=odysseyBatchWriteFailureStage(writeError);
+            Serial.printf("[SD] PCM batch write failed errno=%d stage=%u wrote=%u pcm=%lu\n",
               writeError,unsigned(failureStage),unsigned(written),
               static_cast<unsigned long>(bytes));
             break;
           }
-          bytes+=sectorPcmBytes;
-          sectorUsed=0;
-          sectorPcmBytes=0;
+          bytes+=batchPcmBytes;
+          batchUsed=0;
+          batchPcmBytes=0;
         }
       }
 
-      // Capture performs only sequential 512-byte writes. No fseek, fflush or
-      // header rewrite occurs until the take is stopped.
+      // Capture performs only sequential 4 KiB writes. Because the file offset
+      // starts at zero, each full batch is sector aligned and FatFs issues a
+      // multi-sector disk_write (CMD25), matching the path the real 1631
+      // recorder exercised rather than forcing CMD24 for every 512-byte block.
     }
     stopMicrophone();
   }
@@ -202,18 +207,21 @@ static void odysseyRecordTake() {
 #endif
 
   if (file) {
-    if (!failed && sectorUsed) {
+    if (!failed && batchUsed) {
+      // Pad the final data batch so capture never falls back to the single-
+      // sector CMD24 path. odysseyFinalizeWav() immediately truncates padding.
+      memset(batch+batchUsed,0,sizeof(batch)-batchUsed);
       errno=0;
-      const size_t written=fwrite(sector,1,sectorUsed,file);
-      if (written!=sectorUsed) {
+      const size_t written=fwrite(batch,1,sizeof(batch),file);
+      if (written!=sizeof(batch)) {
         const int writeError=errno;
-        failed=true;failureStage=odysseyWriteFailureStage(writeError);
-        Serial.printf("[SD] final PCM sector failed errno=%d stage=%u wrote=%u expected=%u\n",
-          writeError,unsigned(failureStage),unsigned(written),unsigned(sectorUsed));
+        failed=true;failureStage=odysseyBatchWriteFailureStage(writeError);
+        Serial.printf("[SD] final PCM batch failed errno=%d stage=%u wrote=%u expected=%u\n",
+          writeError,unsigned(failureStage),unsigned(written),unsigned(sizeof(batch)));
       } else {
-        bytes+=sectorPcmBytes;
-        sectorUsed=0;
-        sectorPcmBytes=0;
+        bytes+=batchPcmBytes;
+        batchUsed=0;
+        batchPcmBytes=0;
       }
     }
     if (failed) {

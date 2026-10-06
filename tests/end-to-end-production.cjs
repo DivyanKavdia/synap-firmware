@@ -30,9 +30,11 @@ test('C3 production image restores the build-1631 guarded VFS recorder',()=>{
   assert.doesNotMatch(c3,/checkpointAt|odysseyCheckpointWav/);
   assert.match(c3,/odysseyFinalizeWav/);
   assert.match(c3,/ODYSSEY_SD_MAX_OPEN_FILES=1/);
-  assert.match(c3,/alignas\(4\) uint8_t sector\[512\]/);
+  assert.match(c3,/alignas\(4\) static uint8_t batch\[4096\]/);
   assert.match(c3,/setvbuf\(file,nullptr,_IONBF,0\)/);
-  assert.match(c3,/fwrite\(sector,1,sizeof\(sector\),file\)/);
+  assert.match(c3,/fwrite\(batch,1,sizeof\(batch\),file\)/);
+  assert.match(c3,/memset\(batch\+batchUsed,0,sizeof\(batch\)-batchUsed\)/);
+  assert.doesNotMatch(c3,/uint8_t sector\[512\]|fwrite\(sector/);
   assert.match(c3,/odysseySdRequestRecovery\(\)/);
   assert.match(c3,/failureStage=41/);
   assert.match(c3,/failureStage=42/);
@@ -43,12 +45,11 @@ test('C3 production image restores the build-1631 guarded VFS recorder',()=>{
   assert.match(c3,/case EIO: return 49/);
   assert.match(c3,/case ENODEV: return 50/);
   assert.match(c3,/case ENOSPC: return 52/);
-  assert.match(c3,/case EIO: return 55/);
-  assert.match(c3,/case ENODEV: return 56/);
-  assert.match(c3,/case ENOSPC: return 57/);
   assert.match(c3,/case EIO: return 60/);
   assert.match(c3,/case ENOSPC: return 62/);
   assert.match(c3,/failureStage=65/);
+  assert.match(c3,/case EIO: return 66/);
+  assert.match(c3,/case ENOSPC: return 68/);
   assert.match(c3,/const uint8_t persistedStage=failureStage\?failureStage:40/);
   assert.match(c3,/odysseyPersistRecordFailure\(persistedStage,bytes\)/);
   assert.doesNotMatch(c3,/odysseySustainedWriteProbe|\\.synap-sustained-write\\.tmp/);

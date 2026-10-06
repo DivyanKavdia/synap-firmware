@@ -3,7 +3,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 const root=path.resolve(__dirname,'..');
 const read=p=>fs.readFileSync(path.join(root,p),'utf8');
 
-test('C3 offline recorder creates directly with the proven boot-probe write mode',()=>{
+test('C3 offline recorder preallocates then writes aligned multi-sector batches',()=>{
   const source=read('firmware/shared/odyssey-sd-1631-recording.cpp');
   assert.doesNotMatch(source,/odysseySustainedWriteProbe|\.synap-sustained-write\.tmp|bytes=64000/);
   const take=source.split('static void odysseyRecordTake() {')[1];
@@ -16,9 +16,11 @@ test('C3 offline recorder creates directly with the proven boot-probe write mode
   assert(take.indexOf('file=fopen(fullPath,"r+b")')<take.indexOf('startMicrophone()'));
   assert.doesNotMatch(take,/checkpointAt|odysseyCheckpointWav/);
   assert.match(source,/odysseyFinalizeWav/);
-  assert.match(take,/alignas\(4\) uint8_t sector\[512\]/);
+  assert.match(take,/alignas\(4\) static uint8_t batch\[4096\]/);
   assert.match(take,/setvbuf\(file,nullptr,_IONBF,0\)/);
-  assert.match(take,/fwrite\(sector,1,sizeof\(sector\),file\)/);
+  assert.match(take,/fwrite\(batch,1,sizeof\(batch\),file\)/);
+  assert.match(take,/memset\(batch\+batchUsed,0,sizeof\(batch\)-batchUsed\)/);
+  assert.doesNotMatch(take,/uint8_t sector\[512\]|fwrite\(sector/);
 });
 
 test('C3 recording diagnostics distinguish create failures from later recorder stages',()=>{
@@ -26,7 +28,7 @@ test('C3 recording diagnostics distinguish create failures from later recorder s
   for(const stage of [40,41,42,43,46,47,48])
     assert.match(source,new RegExp('failureStage='+stage));
   assert.doesNotMatch(source,/failureStage=45/);
-  for(const stage of [49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64])
+  for(const stage of [49,50,51,52,53,54,60,61,62,63,64,66,67,68,69,70])
     assert.match(source,new RegExp('return '+stage));
   assert.match(source,/failureStage=65/);
   assert.match(source,/case EIO: return 49/);
@@ -36,6 +38,8 @@ test('C3 recording diagnostics distinguish create failures from later recorder s
   assert.match(source,/case EROFS: return 53/);
   assert.match(source,/case EIO: return 60/);
   assert.match(source,/case ENOSPC: return 62/);
+  assert.match(source,/case EIO: return 66/);
+  assert.match(source,/case ENOSPC: return 68/);
   assert.match(source,/odysseyPersistRecordFailure\(persistedStage,bytes\)/);
   assert.match(source,/odysseyPersistRecordFailure\(0,0\)/);
 });
