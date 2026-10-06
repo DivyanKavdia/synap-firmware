@@ -2149,7 +2149,7 @@ void transmitterTask(void* parameter) {
 // Odyssey C3 clean-room offline recorder.
 // Deliberately excludes catalogue/read/delete/sync, preallocation, journals,
 // segmentation and background recovery. One recording task owns the entire SD
-// session: resync -> mount -> create/write/finalize WAV -> unmount.
+// session: initialize -> mount -> create/write/finalize WAV -> unmount.
 #if !SYNAP_CHAKSHU
 #include <SPI.h>
 #include <SD.h>
@@ -2170,9 +2170,12 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 
 constexpr int ODYSSEY_SD_CS=SYNAP_SD_CS_PIN, ODYSSEY_SD_SCK=SYNAP_SD_SCK_PIN;
 constexpr int ODYSSEY_SD_MOSI=SYNAP_SD_MOSI_PIN, ODYSSEY_SD_MISO=SYNAP_SD_MISO_PIN;
-static constexpr uint32_t ODYSSEY_SD_SPI_HZ=400000u;
-static constexpr size_t ODYSSEY_SD_WRITE_BUFFER_BYTES=8000u;
+static constexpr uint32_t ODYSSEY_SD_SPI_HZ=1000000u;
+static constexpr size_t ODYSSEY_SD_WRITE_BUFFER_BYTES=4096u;
+static constexpr size_t ODYSSEY_SD_WRITE_CHUNK_BYTES=512u;
 static constexpr uint32_t ODYSSEY_SD_FLUSH_MS=5000u;
+static_assert((ODYSSEY_SD_WRITE_BUFFER_BYTES%ODYSSEY_SD_WRITE_CHUNK_BYTES)==0,
+  "clean C3 write buffer must contain complete SD sectors");
 static SPIClass odysseySdSpi(FSPI);
 static std::atomic<bool> odysseyCleanSdMounted{false};
 static uint8_t odysseyCleanWriteBuffer[ODYSSEY_SD_WRITE_BUFFER_BYTES];
@@ -2191,96 +2194,14 @@ static void odysseyCleanWavHeader(uint8_t* h,uint32_t pcmBytes) {
   put32le(h+40,pcmBytes);
 }
 
-static uint8_t odysseyCleanRawByte(uint8_t out) {
-  uint8_t in=0;
-  for (uint8_t bit=0;bit<8;++bit) {
-    digitalWrite(ODYSSEY_SD_MOSI,(out&0x80u)?HIGH:LOW);
-    delayMicroseconds(2);
-    digitalWrite(ODYSSEY_SD_SCK,HIGH);
-    delayMicroseconds(2);
-    in=uint8_t((in<<1)|(digitalRead(ODYSSEY_SD_MISO)==HIGH?1u:0u));
-    digitalWrite(ODYSSEY_SD_SCK,LOW);
-    delayMicroseconds(2);
-    out<<=1;
-  }
-  return in;
-}
-
-static void odysseyCleanIdleClocks(uint8_t bytes=20) {
-  digitalWrite(ODYSSEY_SD_CS,HIGH);
-  for (uint8_t i=0;i<bytes;++i) (void)odysseyCleanRawByte(0xFF);
-}
-
-static uint8_t odysseyCleanCmd0() {
-  digitalWrite(ODYSSEY_SD_CS,LOW);
-  const uint8_t frame[6]={0x40,0,0,0,0,0x95};
-  for (uint8_t b:frame) (void)odysseyCleanRawByte(b);
-  uint8_t r1=0xFF;
-  for (uint8_t i=0;i<32 && (r1&0x80u);++i) r1=odysseyCleanRawByte(0xFF);
-  digitalWrite(ODYSSEY_SD_CS,HIGH);
-  (void)odysseyCleanRawByte(0xFF);
-  return r1;
-}
-
-// A still-powered card can retain CMD18/CMD25 state across a C3 reset.
-// Use this only after ordinary CMD0 fails, with the filesystem unmounted.
-static void odysseyCleanStopOldTransfer() {
-  digitalWrite(ODYSSEY_SD_CS,LOW);
-  const uint8_t stopRead[6]={0x4C,0,0,0,0,0x61}; // CMD12 including CRC7
-  for (uint8_t byte:stopRead) (void)odysseyCleanRawByte(byte);
-  (void)odysseyCleanRawByte(0xFF); // CMD12 stuff byte
-  uint8_t idle=0;
-  uint32_t started=millis();
-  while (uint32_t(millis()-started)<250u && !odysseyStopRequested.load()) {
-    const uint8_t value=odysseyCleanRawByte(0xFF);
-    if (value==0xFF) { if (++idle>=32u) break; } else idle=0;
-  }
-  digitalWrite(ODYSSEY_SD_CS,HIGH);
-  (void)odysseyCleanRawByte(0xFF);
-  digitalWrite(ODYSSEY_SD_CS,LOW);
-  bool ready=false;
-  started=millis();
-  while (uint32_t(millis()-started)<250u && !odysseyStopRequested.load()) {
-    if (odysseyCleanRawByte(0xFF)==0xFF) { ready=true;break; }
-  }
-  if (ready && !odysseyStopRequested.load()) {
-    (void)odysseyCleanRawByte(0xFD); // terminate an abandoned CMD25 write
-    started=millis();
-    while (uint32_t(millis()-started)<250u && !odysseyStopRequested.load())
-      if (odysseyCleanRawByte(0xFF)==0xFF) break;
-  }
-  digitalWrite(ODYSSEY_SD_CS,HIGH);
-  odysseyCleanIdleClocks(20);
-}
-
-// Minimal pre-mount resynchronization only. This does not own filesystem state
-// and never runs while a WAV is open. 160+ clocks and two CMD0 opportunities
-// mirror the stronger initialization behavior in newer Arduino-ESP32 SD code.
-static void odysseyCleanResyncBeforeMount() {
+static void odysseyCleanPrepareHost() {
+  // The pinned Arduino core receives Espressif's newer SD-SPI initializer in
+  // CI for the C3 compile. Keep the application layer out of card commands.
   SD.end();
   odysseySdSpi.end();
   odysseyCleanSdMounted=false;
   pinMode(ODYSSEY_SD_CS,OUTPUT);digitalWrite(ODYSSEY_SD_CS,HIGH);
-  pinMode(ODYSSEY_SD_SCK,OUTPUT);digitalWrite(ODYSSEY_SD_SCK,LOW);
-  pinMode(ODYSSEY_SD_MOSI,OUTPUT);digitalWrite(ODYSSEY_SD_MOSI,HIGH);
-  pinMode(ODYSSEY_SD_MISO,INPUT_PULLUP);
   delay(2);
-  odysseyCleanIdleClocks(20);
-  uint8_t r1=odysseyCleanCmd0();
-  if (r1!=0x01) {
-    delay(20);
-    odysseyCleanIdleClocks(20);
-    r1=odysseyCleanCmd0();
-  }
-  if (r1!=0x01 && !odysseyStopRequested.load()) {
-    odysseyCleanStopOldTransfer();
-    delay(20);
-    r1=odysseyCleanCmd0();
-  }
-  Serial.printf("[SD] clean pre-mount resync CMD0=0x%02X\n",unsigned(r1));
-  digitalWrite(ODYSSEY_SD_CS,HIGH);
-  digitalWrite(ODYSSEY_SD_SCK,LOW);
-  digitalWrite(ODYSSEY_SD_MOSI,HIGH);
 }
 
 static void odysseyCleanUnmount() {
@@ -2297,7 +2218,7 @@ static void odysseyCleanUnmount() {
 static bool odysseyCleanMountForTake() {
   odysseySdBootState=0;
   odysseySdProbeStage=0;
-  odysseyCleanResyncBeforeMount();
+  odysseyCleanPrepareHost();
   if (odysseyStopRequested.load()) { odysseyCleanUnmount();return false; }
   if (!odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS)) {
     odysseyCleanUnmount();
@@ -2378,10 +2299,24 @@ static bool odysseyCleanRecordTake() {
   uint32_t pcmBytes=0;
   size_t buffered=0;
   uint32_t lastFlush=millis();
-  auto drain=[&]() -> bool {
-    if (!buffered) return true;
-    if (!odysseyCleanWriteAll(file,odysseyCleanWriteBuffer,buffered)) return false;
-    pcmBytes+=uint32_t(buffered);buffered=0;
+  auto drain=[&](bool finalDrain) -> bool {
+    while (buffered) {
+      const size_t fileOffset=44u+size_t(pcmBytes);
+      const size_t sectorOffset=fileOffset&(ODYSSEY_SD_WRITE_CHUNK_BYTES-1u);
+      size_t chunk=0;
+      if (sectorOffset) {
+        const size_t toBoundary=ODYSSEY_SD_WRITE_CHUNK_BYTES-sectorOffset;
+        if (!finalDrain && buffered<toBoundary) return true;
+        chunk=std::min(buffered,toBoundary);
+      } else if (buffered>=ODYSSEY_SD_WRITE_CHUNK_BYTES) {
+        // One sector per VFS write keeps normal audio off CMD25 multi-block writes.
+        chunk=ODYSSEY_SD_WRITE_CHUNK_BYTES;
+      } else if (finalDrain) chunk=buffered;
+      else return true;
+      if (!odysseyCleanWriteAll(file,odysseyCleanWriteBuffer,chunk)) return false;
+      pcmBytes+=uint32_t(chunk);buffered-=chunk;
+      if (buffered) memmove(odysseyCleanWriteBuffer,odysseyCleanWriteBuffer+chunk,buffered);
+    }
     return true;
   };
 
@@ -2405,21 +2340,22 @@ static bool odysseyCleanRecordTake() {
         for (uint16_t i=0;i<SAMPLES_PER_FRAME;++i) pcm[i]=static_cast<int16_t>(raw[i]>>16);
         // WAV RIFF length and FAT32 file size must never wrap on a long take.
         if (uint64_t(pcmBytes)+buffered+sizeof(pcm)>0xffff0000ull) break;
-        if (buffered+sizeof(pcm)>sizeof(odysseyCleanWriteBuffer) && !drain()) {
+        if (buffered+sizeof(pcm)>sizeof(odysseyCleanWriteBuffer) && !drain(false)) {
           ok=false;failureErrno=errno?errno:EIO;break;
         }
         memcpy(odysseyCleanWriteBuffer+buffered,pcm,sizeof(pcm));
         buffered+=sizeof(pcm);
+        if (!drain(false)) { ok=false;failureErrno=errno?errno:EIO;break; }
         if (!odysseyCaptureActive.load()) {
           // First real frame is written and synced before purple is asserted.
-          if (!drain() || fsync(file)!=0) { ok=false;failureErrno=errno?errno:EIO;break; }
+          if (fsync(file)!=0) { ok=false;failureErrno=errno?errno:EIO;break; }
           odysseyRecordingStartedAt=millis();
           odysseyCaptureActive=true;odysseySdRecoveryActive=false;
           updateStatusLed(true);
           Serial.printf("[SD] clean PCM capture active path=%s\n",path);
         }
         if (uint32_t(millis()-lastFlush)>=ODYSSEY_SD_FLUSH_MS) {
-          if (!drain() || fsync(file)!=0) { ok=false;failureErrno=errno?errno:EIO;break; }
+          if (!drain(false) || fsync(file)!=0) { ok=false;failureErrno=errno?errno:EIO;break; }
           lastFlush=millis();
         }
       }
@@ -2430,7 +2366,7 @@ static bool odysseyCleanRecordTake() {
   ok=false;failureErrno=ENOSYS;
 #endif
 
-  if (ok && !drain()) { ok=false;failureErrno=errno?errno:EIO; }
+  if (ok && !drain(true)) { ok=false;failureErrno=errno?errno:EIO; }
   if (ok && pcmBytes) {
     odysseyCleanWavHeader(header,pcmBytes);
     if (fsync(file)!=0 || lseek(file,0,SEEK_SET)!=0 ||
