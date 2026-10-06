@@ -66,5 +66,5 @@ test('C3 first completed record failure survives reboot without changing the liv
   assert.match(caps,/p\[18\]=odysseySdDetectionState\(\)/);
   assert.match(caps,/p\[15\]=uint8_t\(recordUnits>255u\?255u:recordUnits\)/);
   assert.match(caps,/p\[16\]\|=0x80/);
-  assert.match(caps,/p\[19\]=lastRecordStage\?lastRecordStage:odysseySdProbeState\(\)/);
+  assert.match(caps,/p\[19\]=lastRecordStage\?lastRecordStage:liveProbe/);
 });
