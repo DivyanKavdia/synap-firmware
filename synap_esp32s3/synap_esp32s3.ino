@@ -665,6 +665,7 @@ void encodeModuleCapabilities(uint8_t* p) {
   // 8 KiB units (capped at 255). Byte 19 remains the exact failure/mount stage.
   const uint32_t recordUnits=lastRecordBytes/8192u;
   p[15]=uint8_t(recordUnits>255u?255u:recordUnits);
+  p[16]|=0x80; // C3 validation marker: byte 15 is recorder progress, not voice.
   p[19]=lastRecordStage?lastRecordStage:odysseySdProbeState();
 #endif
 #if CONFIG_IDF_TARGET_ESP32C3
