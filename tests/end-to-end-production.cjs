@@ -37,7 +37,9 @@ test('C3 production image restores the build-1631 guarded VFS recorder',()=>{
   assert.match(c3,/failureStage=45/);
   assert.match(c3,/failureStage=46/);
   assert.match(c3,/failureStage=47/);
-  assert.match(c3,/odysseySdProbeStage=failureStage\?failureStage:40/);
+  assert.match(c3,/const uint8_t persistedStage=failureStage\?failureStage:40/);
+  assert.match(c3,/odysseyPersistRecordFailure\(persistedStage,bytes\)/);
+  assert.match(c3,/odysseySustainedWriteProbe\(failureStage\)/);
   assert.doesNotMatch(c3,/odysseyLegacyRecordTask|file\.write\(reinterpret_cast<const uint8_t\*>\(pcm\)/);
   assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|ODYSSEY_SD_WAV_RATE/);
 });
