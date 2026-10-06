@@ -1,16 +1,22 @@
 'use strict';
-// Arduino ESP32 3.3.5 accepts some invalid write-data responses when a later
-// CMD13 succeeds. Require the actual data-accepted token on C3 only.
+// Arduino ESP32 3.3.5 accepts some invalid single-sector write-data responses
+// when a later CMD13 succeeds. Also, FatFS can coalesce filesystem flushes and
+// call ff_sd_write(count>1), which enters CMD25 even if the application itself
+// writes only 512-byte chunks. On Odyssey C3 force those requests through
+// repeated CMD24 single-sector writes so no write path can enter CMD25.
 const fs=require('node:fs'),path=require('node:path');
+function replaceOnce(source,before,after,label){
+ if(source.split(before).length!==2)throw Error('Pinned SD write shape changed: '+label);
+ return source.replace(before,after);
+}
 function patch(source){
- if(source.includes('// SYNAP_C3_SD_WRITE_ACCEPTED'))return source;
- const before=`      } else if (token == 0x0C) {
+ if(!source.includes('// SYNAP_C3_SD_WRITE_ACCEPTED')){
+  const before=`      } else if (token == 0x0C) {
         return false;
       }
 
       unsigned int resp;`;
- if(source.split(before).length!==2)throw Error('Pinned SD write acceptance shape changed');
- return source.replace(before,`      } else if (token == 0x0C) {
+  source=replaceOnce(source,before,`      } else if (token == 0x0C) {
         return false;
       }
 #if CONFIG_IDF_TARGET_ESP32C3
@@ -18,7 +24,34 @@ function patch(source){
       if (token != 0x05) return false;
 #endif
 
-      unsigned int resp;`);
+      unsigned int resp;`,'single-sector response');
+ }
+ if(!source.includes('// SYNAP_C3_SD_SINGLE_SECTOR_ONLY')){
+  const before=`  if (count > 1) {
+    res = sdWriteSectors(pdrv, (const char *)buffer, sector, count) ? RES_OK : RES_ERROR;
+  } else {
+    res = sdWriteSector(pdrv, (const char *)buffer, sector) ? RES_OK : RES_ERROR;
+  }`;
+  source=replaceOnce(source,before,`#if CONFIG_IDF_TARGET_ESP32C3
+  // SYNAP_C3_SD_SINGLE_SECTOR_ONLY
+  // FatFS may batch dirty data/FAT/directory sectors during f_sync(). Keep the
+  // physical card protocol on CMD24 even when count > 1 so a failed sync cannot
+  // strand the still-powered card inside a CMD25 multi-block write transaction.
+  for (UINT i=0; i<count; ++i) {
+    if (!sdWriteSector(pdrv, (const char *)buffer + (size_t(i) << 9), sector + i)) {
+      res = RES_ERROR;
+      break;
+    }
+  }
+#else
+  if (count > 1) {
+    res = sdWriteSectors(pdrv, (const char *)buffer, sector, count) ? RES_OK : RES_ERROR;
+  } else {
+    res = sdWriteSector(pdrv, (const char *)buffer, sector) ? RES_OK : RES_ERROR;
+  }
+#endif`,'FatFS multi-sector write');
+ }
+ return source;
 }
 if(require.main===module){
  const file=path.join(process.argv[2],'sd_diskio.cpp');
