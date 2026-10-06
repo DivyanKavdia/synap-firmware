@@ -38,6 +38,8 @@ jobs:
           arduino-cli lib install "NimBLE-Arduino@2.3.6"
       - name: Fix pinned Arduino BLE request ownership and live reads
         run: node tools/patch-arduino-ble.cjs "$HOME/.arduino15/packages/esp32/hardware/esp32/3.3.5/libraries/BLE/src"
+      - name: Require accepted SD sector writes on C3
+        run: node tools/patch-c3-sd-write.cjs "$HOME/.arduino15/packages/esp32/hardware/esp32/3.3.5/libraries/SD/src"
       - name: Test production source, audio, OTA and hardware contracts
         run: |
           node tools/assemble-source.cjs --check
