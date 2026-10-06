@@ -53,19 +53,19 @@ test('validated C3 OTA begin gracefully seals an active SD WAV before flashing',
 });
 
 
-test('C3 offline recording has visible purple heartbeat and failed-start feedback',()=>{
+test('C3 build-1631 offline recording keeps its original purple heartbeat and fault feedback',()=>{
   const sketch=read('synap_esp32s3/synap_esp32s3.ino');
   const led=read('firmware/shared/status-led.cpp');
-  const recorder=read('firmware/shared/odyssey-sd-recording.cpp');
+  const recorder=read('firmware/shared/odyssey-sd-1631-recording.cpp');
   assert.match(sketch,/odysseyRecordingStartedAt\{0\}, odysseyRecordFaultAt\{0\}/);
+  assert.match(led,/else if \(odysseyRecording\.load\(\)\)/);
   assert.match(led,/now-odysseyRecordingStartedAt\.load\(\)\)%1800u/);
   assert.match(led,/phase<260u\) \{ r=LED_DIM\+4; b=LED_DIM\+6;/);
   assert.match(led,/uint32_t\(now-odysseyRecordFaultAt\.load\(\)\)<6000u/);
   assert.match(led,/phase<140u \|\| \(phase>=260u && phase<400u\)/);
   assert.match(recorder,/odysseyRecordingStartedAt=millis\(\);[\s\S]*?odysseyRecording=true/);
-  assert.match(recorder,/if \(failed \|\| totalBytes==0\) odysseyRecordFaultAt=millis\(\)/);
-  assert.match(led,/odysseySdRecoveryActive\.load\(\)/);
-  assert.match(recorder,/double tap -> SD recover \+ audio START/);
+  assert.match(recorder,/if \(failed \|\| bytes==0\) odysseyRecordFaultAt=millis\(\)/);
+  assert.match(recorder,/double tap -> SD audio START/);
 });
 
 
@@ -219,16 +219,13 @@ test('C3 warm boot mount retries are bounded and progressively settled',()=>{
   assert.match(detect,/Every retry starts from a full/);
 });
 
-test('C3 offline LED truth separates preparation from confirmed PCM capture',()=>{
-  const runtime=read('firmware/shared/runtime.cpp');
-  const recorder=read('firmware/shared/odyssey-sd-recording.cpp');
+test('C3 production LED semantics match the known-good build 1631 recorder',()=>{
+  const recorder=read('firmware/shared/odyssey-sd-1631-recording.cpp');
   const led=read('firmware/shared/status-led.cpp');
-  assert.match(runtime,/odysseyCaptureActive/);
-  assert.match(led,/else if \(odysseyCaptureActive\.load\(\)\)/);
-  assert.doesNotMatch(led,/else if \(odysseyRecording\.load\(\)\)/);
-  assert.match(recorder,/odysseySdRecoveryActive=true;[\s\S]*xTaskCreate/);
-  assert.match(recorder,/startMicrophone\(\)[\s\S]*odysseyCaptureActive=true;[\s\S]*odysseySdRecoveryActive=false/);
-  assert.match(recorder,/odysseyCaptureActive=false;[\s\S]*stopMicrophone\(\)/);
+  assert.match(led,/else if \(odysseyRecording\.load\(\)\)/);
+  assert.doesNotMatch(led,/else if \(odysseyCaptureActive\.load\(\)\)/);
+  assert.match(recorder,/odysseyRecordingStartedAt=millis\(\);[\s\S]*odysseyRecording=true/);
+  assert.match(recorder,/xTaskCreate\(odysseyRecordTask,"sd-audio"/);
 });
 
 test('C3 diagnostics preserve root SD failure when recovery later collapses to ENODEV',()=>{
