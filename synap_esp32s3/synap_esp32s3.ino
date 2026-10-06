@@ -2205,7 +2205,9 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 #if CONFIG_IDF_TARGET_ESP32C3
 static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
-static constexpr uint32_t ODYSSEY_SD_INIT_FREQ_HZ=400000u;
+// Arduino-ESP32 3.3.5 always initializes the card at 400 kHz internally.
+// This is the post-init runtime data clock retained by the SD driver.
+static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=2000000u;
 // Preserve the known-good build-1445 lifecycle: one mount attempt per
 // explicit action. Repeating SD.end()/SPI.end()/SD.begin() autonomously on a
 // continuously powered card is itself a state mutation and obscures the first
@@ -2217,7 +2219,7 @@ static constexpr uint8_t ODYSSEY_SD_RECOVERY_ATTEMPTS=1;
 // answer: a healthy idle card breaks out of the drain within a millisecond.
 static constexpr uint32_t ODYSSEY_SD_QUIESCE_BUDGET_MS=250u;
 // Match the last independently observed healthy build (1445) exactly.
-static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=2;
+static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=1;
 
 // Restore the exact Arduino-ESP32 3.3.5 stock SD initialization used by the
 // known-good Odyssey C3 build 1445. Runtime recording/sync continues to use
@@ -2578,7 +2580,7 @@ static uint8_t odysseySdQuiesceLocked(uint32_t budgetMs) {
 static bool odysseySdBeginLocked() {
   ++odysseySdBeginAttempts;
   odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
-  const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,
+  const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,
     ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false);
   if (mounted) markOdysseySdBatteryDividerPresent();
   else odysseySdReleaseLocked();
@@ -2673,7 +2675,7 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   pinMode(ODYSSEY_SD_CS,OUTPUT);
   Serial.printf("[SD] %s attempt %u Arduino SPI init at %lu Hz, pins CS=%d SCK=%d MOSI=%d MISO=%d\n",
-    reason,unsigned(attempt),static_cast<unsigned long>(ODYSSEY_SD_INIT_FREQ_HZ),
+    reason,unsigned(attempt),static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ),
     ODYSSEY_SD_CS,ODYSSEY_SD_SCK,ODYSSEY_SD_MOSI,ODYSSEY_SD_MISO);
 
   bool mounted=odysseySdBeginLocked();
@@ -2715,7 +2717,7 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   const char* label=type==CARD_MMC?"MMC":type==CARD_SD?"SDSC":type==CARD_SDHC?"SDHC/SDXC":"unknown";
   Serial.printf("[SD] ready via proven Arduino SPI path: %s, %llu MiB, %lu Hz\n",
     label,static_cast<unsigned long long>(SD.cardSize()/(1024ULL*1024ULL)),
-    static_cast<unsigned long>(ODYSSEY_SD_INIT_FREQ_HZ));
+    static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ));
   return true;
 }
 
@@ -2871,6 +2873,15 @@ static uint8_t odysseyCreateFailureStage(int error) {
     default: return 54;
   }
 }
+static uint8_t odysseyWriteFailureStage(int error) {
+  switch (error) {
+    case EIO: return 55;
+    case ENODEV: return 56;
+    case ENOSPC: return 57;
+    case EROFS: return 58;
+    default: return 59;
+  }
+}
 static void odysseyRecordTake() {
   bool failed=false;
   uint8_t failureStage=0;
@@ -2878,6 +2889,9 @@ static void odysseyRecordTake() {
   char logicalPath[64]{};
   char fullPath[96]{};
   uint8_t header[44];
+  alignas(4) uint8_t sector[512]{};
+  size_t sectorUsed=0;
+  uint32_t sectorPcmBytes=0;
   FILE* file=nullptr;
 
   // Hold the single storage mutex for the whole take. A recovery/remount can
@@ -2903,14 +2917,17 @@ static void odysseyRecordTake() {
         failed=true;failureStage=odysseyCreateFailureStage(openError);
         Serial.printf("[SD] WAV create failed errno=%d stage=%u path=%s\n",
           openError,unsigned(failureStage),fullPath);
+      } else if (setvbuf(file,nullptr,_IONBF,0)!=0) {
+        failed=true;failureStage=42;
       }
     }
   }
 
   odysseyWavHeader(header,0);
-  if (!failed &&
-      (fwrite(header,1,sizeof(header),file)!=sizeof(header) || fflush(file)!=0)) {
-    failed=true;failureStage=42;
+  if (!failed) {
+    memcpy(sector,header,sizeof(header));
+    sectorUsed=sizeof(header);
+    sectorPcmBytes=0;
   }
 
 #if USE_REAL_I2S_MIC
@@ -2933,12 +2950,35 @@ static void odysseyRecordTake() {
       if (failed || odysseyStopRequested.load()) break;
       for (uint16_t i=0;i<SAMPLES_PER_FRAME;++i) pcm[i]=static_cast<int16_t>(raw[i]>>16);
       if (bytes>0xffffff00u-sizeof(pcm)) break; // RIFF length is 32-bit.
-      const size_t written=fwrite(pcm,1,sizeof(pcm),file);
-      bytes+=uint32_t(written & ~size_t(1));
-      if (written!=sizeof(pcm)) { failed=true;failureStage=44; break; }
+      const uint8_t* input=reinterpret_cast<const uint8_t*>(pcm);
+      size_t remaining=sizeof(pcm);
+      while (!failed && remaining) {
+        const size_t room=sizeof(sector)-sectorUsed;
+        const size_t take=remaining<room?remaining:room;
+        memcpy(sector+sectorUsed,input,take);
+        sectorUsed+=take;
+        sectorPcmBytes+=uint32_t(take);
+        input+=take;
+        remaining-=take;
+        if (sectorUsed==sizeof(sector)) {
+          errno=0;
+          const size_t written=fwrite(sector,1,sizeof(sector),file);
+          if (written!=sizeof(sector)) {
+            const int writeError=errno;
+            failed=true;failureStage=odysseyWriteFailureStage(writeError);
+            Serial.printf("[SD] PCM sector write failed errno=%d stage=%u wrote=%u pcm=%lu\n",
+              writeError,unsigned(failureStage),unsigned(written),
+              static_cast<unsigned long>(bytes));
+            break;
+          }
+          bytes+=sectorPcmBytes;
+          sectorUsed=0;
+          sectorPcmBytes=0;
+        }
+      }
 
-      // No seek or metadata rewrite while audio is being captured.
-      // A power-interrupted file can be repaired from its final byte length.
+      // Capture performs only sequential 512-byte writes. No fseek, fflush or
+      // header rewrite occurs until the take is stopped.
     }
     stopMicrophone();
   }
@@ -2947,7 +2987,21 @@ static void odysseyRecordTake() {
 #endif
 
   if (file) {
-    if (!odysseyFinalizeWav(file,header,bytes)) {
+    if (!failed && sectorUsed) {
+      errno=0;
+      const size_t written=fwrite(sector,1,sectorUsed,file);
+      if (written!=sectorUsed) {
+        const int writeError=errno;
+        failed=true;failureStage=odysseyWriteFailureStage(writeError);
+        Serial.printf("[SD] final PCM sector failed errno=%d stage=%u wrote=%u expected=%u\n",
+          writeError,unsigned(failureStage),unsigned(written),unsigned(sectorUsed));
+      } else {
+        bytes+=sectorPcmBytes;
+        sectorUsed=0;
+        sectorPcmBytes=0;
+      }
+    }
+    if (!failed && !odysseyFinalizeWav(file,header,bytes)) {
       failed=true;
       if (!failureStage) failureStage=46;
     }

@@ -66,6 +66,15 @@ static uint8_t odysseyCreateFailureStage(int error) {
     default: return 54;
   }
 }
+static uint8_t odysseyWriteFailureStage(int error) {
+  switch (error) {
+    case EIO: return 55;
+    case ENODEV: return 56;
+    case ENOSPC: return 57;
+    case EROFS: return 58;
+    default: return 59;
+  }
+}
 static void odysseyRecordTake() {
   bool failed=false;
   uint8_t failureStage=0;
@@ -73,6 +82,9 @@ static void odysseyRecordTake() {
   char logicalPath[64]{};
   char fullPath[96]{};
   uint8_t header[44];
+  alignas(4) uint8_t sector[512]{};
+  size_t sectorUsed=0;
+  uint32_t sectorPcmBytes=0;
   FILE* file=nullptr;
 
   // Hold the single storage mutex for the whole take. A recovery/remount can
@@ -98,14 +110,17 @@ static void odysseyRecordTake() {
         failed=true;failureStage=odysseyCreateFailureStage(openError);
         Serial.printf("[SD] WAV create failed errno=%d stage=%u path=%s\n",
           openError,unsigned(failureStage),fullPath);
+      } else if (setvbuf(file,nullptr,_IONBF,0)!=0) {
+        failed=true;failureStage=42;
       }
     }
   }
 
   odysseyWavHeader(header,0);
-  if (!failed &&
-      (fwrite(header,1,sizeof(header),file)!=sizeof(header) || fflush(file)!=0)) {
-    failed=true;failureStage=42;
+  if (!failed) {
+    memcpy(sector,header,sizeof(header));
+    sectorUsed=sizeof(header);
+    sectorPcmBytes=0;
   }
 
 #if USE_REAL_I2S_MIC
@@ -128,12 +143,35 @@ static void odysseyRecordTake() {
       if (failed || odysseyStopRequested.load()) break;
       for (uint16_t i=0;i<SAMPLES_PER_FRAME;++i) pcm[i]=static_cast<int16_t>(raw[i]>>16);
       if (bytes>0xffffff00u-sizeof(pcm)) break; // RIFF length is 32-bit.
-      const size_t written=fwrite(pcm,1,sizeof(pcm),file);
-      bytes+=uint32_t(written & ~size_t(1));
-      if (written!=sizeof(pcm)) { failed=true;failureStage=44; break; }
+      const uint8_t* input=reinterpret_cast<const uint8_t*>(pcm);
+      size_t remaining=sizeof(pcm);
+      while (!failed && remaining) {
+        const size_t room=sizeof(sector)-sectorUsed;
+        const size_t take=remaining<room?remaining:room;
+        memcpy(sector+sectorUsed,input,take);
+        sectorUsed+=take;
+        sectorPcmBytes+=uint32_t(take);
+        input+=take;
+        remaining-=take;
+        if (sectorUsed==sizeof(sector)) {
+          errno=0;
+          const size_t written=fwrite(sector,1,sizeof(sector),file);
+          if (written!=sizeof(sector)) {
+            const int writeError=errno;
+            failed=true;failureStage=odysseyWriteFailureStage(writeError);
+            Serial.printf("[SD] PCM sector write failed errno=%d stage=%u wrote=%u pcm=%lu\n",
+              writeError,unsigned(failureStage),unsigned(written),
+              static_cast<unsigned long>(bytes));
+            break;
+          }
+          bytes+=sectorPcmBytes;
+          sectorUsed=0;
+          sectorPcmBytes=0;
+        }
+      }
 
-      // No seek or metadata rewrite while audio is being captured.
-      // A power-interrupted file can be repaired from its final byte length.
+      // Capture performs only sequential 512-byte writes. No fseek, fflush or
+      // header rewrite occurs until the take is stopped.
     }
     stopMicrophone();
   }
@@ -142,7 +180,21 @@ static void odysseyRecordTake() {
 #endif
 
   if (file) {
-    if (!odysseyFinalizeWav(file,header,bytes)) {
+    if (!failed && sectorUsed) {
+      errno=0;
+      const size_t written=fwrite(sector,1,sectorUsed,file);
+      if (written!=sectorUsed) {
+        const int writeError=errno;
+        failed=true;failureStage=odysseyWriteFailureStage(writeError);
+        Serial.printf("[SD] final PCM sector failed errno=%d stage=%u wrote=%u expected=%u\n",
+          writeError,unsigned(failureStage),unsigned(written),unsigned(sectorUsed));
+      } else {
+        bytes+=sectorPcmBytes;
+        sectorUsed=0;
+        sectorPcmBytes=0;
+      }
+    }
+    if (!failed && !odysseyFinalizeWav(file,header,bytes)) {
       failed=true;
       if (!failureStage) failureStage=46;
     }

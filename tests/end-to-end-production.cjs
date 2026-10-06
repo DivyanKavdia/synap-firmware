@@ -19,8 +19,8 @@ test('C3 production image restores the build-1631 guarded VFS recorder',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);
   assert.match(c3,/static SPIClass odysseySdSpi\(FSPI\)/);
-  assert.match(c3,/ODYSSEY_SD_INIT_FREQ_HZ=400000u/);
-  assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ/);
+  assert.match(c3,/ODYSSEY_SD_DATA_FREQ_HZ=2000000u/);
+  assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ/);
   assert.match(c3,/static void odysseyRecordTake\(\)/);
   assert.match(c3,/OdysseySdGuard storage/);
   assert.match(c3,/file=fopen\(fullPath,"wb"\)/);
@@ -28,7 +28,10 @@ test('C3 production image restores the build-1631 guarded VFS recorder',()=>{
   assert.match(c3,/fwrite\(pcm,1,sizeof\(pcm\),file\)/);
   assert.doesNotMatch(c3,/checkpointAt|odysseyCheckpointWav/);
   assert.match(c3,/odysseyFinalizeWav/);
-  assert.match(c3,/ODYSSEY_SD_MAX_OPEN_FILES=2/);
+  assert.match(c3,/ODYSSEY_SD_MAX_OPEN_FILES=1/);
+  assert.match(c3,/alignas\(4\) uint8_t sector\[512\]/);
+  assert.match(c3,/setvbuf\(file,nullptr,_IONBF,0\)/);
+  assert.match(c3,/fwrite\(sector,1,sizeof\(sector\),file\)/);
   assert.match(c3,/odysseySdRequestRecovery\(\)/);
   assert.match(c3,/failureStage=41/);
   assert.match(c3,/failureStage=42/);
@@ -40,6 +43,9 @@ test('C3 production image restores the build-1631 guarded VFS recorder',()=>{
   assert.match(c3,/case EIO: return 49/);
   assert.match(c3,/case ENODEV: return 50/);
   assert.match(c3,/case ENOSPC: return 52/);
+  assert.match(c3,/case EIO: return 55/);
+  assert.match(c3,/case ENODEV: return 56/);
+  assert.match(c3,/case ENOSPC: return 57/);
   assert.match(c3,/const uint8_t persistedStage=failureStage\?failureStage:40/);
   assert.match(c3,/odysseyPersistRecordFailure\(persistedStage,bytes\)/);
   assert.doesNotMatch(c3,/odysseySustainedWriteProbe|\\.synap-sustained-write\\.tmp/);

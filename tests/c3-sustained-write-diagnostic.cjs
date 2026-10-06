@@ -14,6 +14,9 @@ test('C3 offline recorder creates directly with the proven boot-probe write mode
   assert(take.indexOf('file=fopen(fullPath,"wb")')<take.indexOf('startMicrophone()'));
   assert.doesNotMatch(take,/checkpointAt|odysseyCheckpointWav/);
   assert.match(source,/odysseyFinalizeWav/);
+  assert.match(take,/alignas\(4\) uint8_t sector\[512\]/);
+  assert.match(take,/setvbuf\(file,nullptr,_IONBF,0\)/);
+  assert.match(take,/fwrite\(sector,1,sizeof\(sector\),file\)/);
 });
 
 test('C3 recording diagnostics distinguish create failures from later recorder stages',()=>{
@@ -21,7 +24,7 @@ test('C3 recording diagnostics distinguish create failures from later recorder s
   for(const stage of [40,41,42,43,44,46,47,48])
     assert.match(source,new RegExp('failureStage='+stage));
   assert.doesNotMatch(source,/failureStage=45/);
-  for(const stage of [49,50,51,52,53,54])
+  for(const stage of [49,50,51,52,53,54,55,56,57,58,59])
     assert.match(source,new RegExp('return '+stage));
   assert.match(source,/case EIO: return 49/);
   assert.match(source,/case ENODEV: return 50/);

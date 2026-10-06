@@ -56,7 +56,9 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 #if CONFIG_IDF_TARGET_ESP32C3
 static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
-static constexpr uint32_t ODYSSEY_SD_INIT_FREQ_HZ=400000u;
+// Arduino-ESP32 3.3.5 always initializes the card at 400 kHz internally.
+// This is the post-init runtime data clock retained by the SD driver.
+static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=2000000u;
 // Preserve the known-good build-1445 lifecycle: one mount attempt per
 // explicit action. Repeating SD.end()/SPI.end()/SD.begin() autonomously on a
 // continuously powered card is itself a state mutation and obscures the first
@@ -68,7 +70,7 @@ static constexpr uint8_t ODYSSEY_SD_RECOVERY_ATTEMPTS=1;
 // answer: a healthy idle card breaks out of the drain within a millisecond.
 static constexpr uint32_t ODYSSEY_SD_QUIESCE_BUDGET_MS=250u;
 // Match the last independently observed healthy build (1445) exactly.
-static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=2;
+static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=1;
 
 // Restore the exact Arduino-ESP32 3.3.5 stock SD initialization used by the
 // known-good Odyssey C3 build 1445. Runtime recording/sync continues to use
@@ -429,7 +431,7 @@ static uint8_t odysseySdQuiesceLocked(uint32_t budgetMs) {
 static bool odysseySdBeginLocked() {
   ++odysseySdBeginAttempts;
   odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
-  const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_INIT_FREQ_HZ,
+  const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,
     ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false);
   if (mounted) markOdysseySdBatteryDividerPresent();
   else odysseySdReleaseLocked();
@@ -524,7 +526,7 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   pinMode(ODYSSEY_SD_CS,OUTPUT);
   Serial.printf("[SD] %s attempt %u Arduino SPI init at %lu Hz, pins CS=%d SCK=%d MOSI=%d MISO=%d\n",
-    reason,unsigned(attempt),static_cast<unsigned long>(ODYSSEY_SD_INIT_FREQ_HZ),
+    reason,unsigned(attempt),static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ),
     ODYSSEY_SD_CS,ODYSSEY_SD_SCK,ODYSSEY_SD_MOSI,ODYSSEY_SD_MISO);
 
   bool mounted=odysseySdBeginLocked();
@@ -566,7 +568,7 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   const char* label=type==CARD_MMC?"MMC":type==CARD_SD?"SDSC":type==CARD_SDHC?"SDHC/SDXC":"unknown";
   Serial.printf("[SD] ready via proven Arduino SPI path: %s, %llu MiB, %lu Hz\n",
     label,static_cast<unsigned long long>(SD.cardSize()/(1024ULL*1024ULL)),
-    static_cast<unsigned long>(ODYSSEY_SD_INIT_FREQ_HZ));
+    static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ));
   return true;
 }
 
