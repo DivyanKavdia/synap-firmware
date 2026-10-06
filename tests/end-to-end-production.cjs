@@ -18,12 +18,15 @@ test('final production S3 source retains core audio, touch, low-power and OTA co
 test('C3 production image uses native ESP-IDF SDSPI for write-only offline WAVs',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);
-  assert.match(c3,/native C3 SDSPI recorder ready; mount deferred to offline double tap/);
+  assert.match(c3,/native C3 electrical-safe recorder ready; 400kHz\/8kPCM mount deferred to offline double tap/);
   assert.match(c3,/SDSPI_HOST_DEFAULT\(\)/);
   assert.match(c3,/spi_bus_initialize\(ODYSSEY_SD_HOST/);
   assert.match(c3,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT/);
   assert.match(c3,/esp_vfs_fat_sdcard_unmount\(ODYSSEY_SD_MOUNT_POINT/);
   assert.match(c3,/host\.max_freq_khz=ODYSSEY_SD_SPI_KHZ/);
+  assert.match(c3,/ODYSSEY_SD_SPI_KHZ=400u/);
+  assert.match(c3,/ODYSSEY_SD_WAV_RATE=8000u/);
+  assert.match(c3,/gpio_pullup_en/);
   assert.match(c3,/open\(path,O_CREAT\|O_EXCL\|O_WRONLY,0644\)/);
   assert.match(c3,/odysseyCleanWavHeader\(header,pcmBytes\)/);
   assert.match(c3,/lseek\(file,0,SEEK_SET\)/);

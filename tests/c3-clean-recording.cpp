@@ -12,7 +12,8 @@
 #include <filesystem>
 #include <vector>
 #include <string>
-constexpr uint32_t SAMPLE_RATE=16000,SAMPLES_PER_FRAME=800,ODYSSEY_SD_FLUSH_MS=5000;
+constexpr uint32_t SAMPLE_RATE=16000,SAMPLES_PER_FRAME=800,ODYSSEY_SD_FLUSH_MS=5000,ODYSSEY_SD_WAV_RATE=8000;
+constexpr uint16_t ODYSSEY_SD_WAV_SAMPLES_PER_FRAME=SAMPLES_PER_FRAME/2u;
 constexpr size_t ODYSSEY_SD_WRITE_CHUNK_BYTES=512;
 constexpr int pdPASS=1;
 using esp_err_t=int;
@@ -82,8 +83,9 @@ std::vector<std::string> files(const std::string& extension){
 void verify(size_t frames){
  auto wav=files(".wav");assert(wav.size()==1&&files(".part").empty());
  FILE* f=fopen(wav[0].c_str(),"rb");assert(f);
- std::vector<uint8_t> bytes(44+frames*1600);assert(fread(bytes.data(),1,bytes.size(),f)==bytes.size());assert(fgetc(f)==EOF);fclose(f);
- uint8_t h[44];odysseyCleanWavHeader(h,frames*1600);assert(memcmp(bytes.data(),h,44)==0);
+ const size_t pcmBytes=frames*ODYSSEY_SD_WAV_SAMPLES_PER_FRAME*2u;
+ std::vector<uint8_t> bytes(44+pcmBytes);assert(fread(bytes.data(),1,bytes.size(),f)==bytes.size());assert(fgetc(f)==EOF);fclose(f);
+ uint8_t h[44];odysseyCleanWavHeader(h,pcmBytes);assert(memcmp(bytes.data(),h,44)==0);
  for(size_t i=44;i<bytes.size();i+=2){assert(bytes[i]==0x34&&bytes[i+1]==0x12);}
  assert(micStarts==1&&micStops==1&&unmounts==1&&purple>0);assert(maxWrite<=512);
 }
