@@ -54,8 +54,7 @@ test('1631 recovery worker remains active but BLE media access is disabled',()=>
 
 test('release keeps the exact build-1631 Arduino core and no SD library patch',()=>{
   const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
-  const compileLines=workflow.split('
-').filter(line=>line.includes('arduino-cli compile'));
+  const compileLines=workflow.split('\n').filter(line=>line.includes('arduino-cli compile'));
   assert.equal(compileLines.length,3);
   assert(compileLines.every(line=>line.includes('-DUSE_REAL_I2S_MIC=1')));
   assert.match(workflow,/arduino-cli core install esp32:esp32@3\.3\.5/);
