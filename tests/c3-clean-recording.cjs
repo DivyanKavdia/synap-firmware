@@ -15,8 +15,18 @@ test('clean recorder keeps card commands in the SD library and writes at most on
  const source=fs.readFileSync('firmware/shared/odyssey-sd-clean-recording.cpp','utf8');
  assert.match(source,/ODYSSEY_SD_SPI_HZ=1000000u/);
  assert.match(source,/ODYSSEY_SD_WRITE_CHUNK_BYTES=512u/);
+ assert.match(source,/ODYSSEY_SD_FLUSH_MS=5000u/,'diagnostic build must not change flush cadence');
  assert.match(source,/chunk=ODYSSEY_SD_WRITE_CHUNK_BYTES/);
  assert.match(source,/One sector per VFS write keeps normal audio off CMD25 multi-block writes/);
  assert.doesNotMatch(source,/odysseyCleanRawByte|odysseyCleanCmd0|odysseyCleanStopOldTransfer|odysseyCleanResyncBeforeMount/);
  assert.doesNotMatch(source,/0xFD|CMD12|CMD25 stop/);
+});
+
+test('post-purple failures remain distinguishable after SD unmount',()=>{
+ const source=fs.readFileSync('firmware/shared/odyssey-sd-clean-recording.cpp','utf8');
+ assert.match(source,/failureStage=4/);
+ assert.match(source,/failureStage=5/);
+ assert.match(source,/failureStage=6/);
+ assert.match(source,/odysseySdBootState=2;odysseySdProbeStage=failureStage\?failureStage:3/);
+ assert.match(source,/stage=%u/);
 });
