@@ -26,7 +26,7 @@ struct Esp { unsigned getFlashChipSize(){return ${target.flashBytes};} unsigned 
 namespace ChakshuMedia {struct Snapshot {uint16_t ready=0,sensor=0;};Snapshot current;void copy(Snapshot& s){s=current;}}
 namespace ChakshuTransfer {bool requests=true;}
 namespace OdysseyTransfer {bool available(){return true;}}
-uint8_t sdState=0,sdProbe=0;\nuint8_t odysseySdDetectionState(){return sdState;}\nuint8_t odysseySdProbeState(){return sdProbe;}
+uint8_t sdState=0,sdProbe=0,lastRecordStage=0;\nuint8_t odysseySdDetectionState(){return sdState;}\nuint8_t odysseySdProbeState(){return sdProbe;}\nuint8_t odysseyLastRecordFailureStage(){return lastRecordStage;}
 ${encode}
 unsigned word(const uint8_t* p){return p[0]|unsigned(p[1])<<8;}
 int main(){
@@ -34,7 +34,7 @@ int main(){
  for(unsigned hardware=0;hardware<8;++hardware){
   microphoneValidated=hardware&1;batteryAvailable=hardware&4;
   ChakshuMedia::current.ready=hardware;ChakshuMedia::current.sensor=(hardware&2)?0x3660:0;
-  sdState=hardware%4;sdProbe=hardware%3;\n  encodeModuleCapabilities(p);
+  sdState=hardware%4;sdProbe=hardware%3;lastRecordStage=(hardware==7?51:0);\n  encodeModuleCapabilities(p);
   assert(p[0]==0xC7 && p[1]==1 && p[2]==${target.moduleId} && p[3]==1);
   assert(word(p+4)==${capabilityMask(target)});
   assert((word(p+6)&~word(p+4))==0);
@@ -58,12 +58,12 @@ int main(){
   assert(word(p+4)&SYNAP_CAP_SDAUDIO);
   assert(bool(word(p+6)&SYNAP_CAP_SD)==bool(sdState==1));
   assert(bool(word(p+6)&SYNAP_CAP_SDAUDIO)==bool((hardware&1) && sdState==1));
-  assert(p[14]==1 && p[15]==0 && p[16]==4);
+  assert(p[14]==1 && p[15]==lastRecordStage && p[16]==4);
 #else
   assert(!(word(p+4)&SYNAP_CAP_SD));
   assert(p[14]==0 && p[15]==0 && p[16]==0);
 #endif
-  assert(p[17]==1 && p[18]==sdState);\n#if CONFIG_IDF_TARGET_ESP32C3\n  assert(p[19]==sdProbe);\n#else\n  assert(p[19]==0);\n#endif
+  assert(p[17]==1 && p[18]==sdState);\n#if CONFIG_IDF_TARGET_ESP32C3\n  assert(p[19]==(lastRecordStage?lastRecordStage:sdProbe));\n#else\n  assert(p[19]==0);\n#endif
 #endif
  }
  puts("PASS device capabilities");
