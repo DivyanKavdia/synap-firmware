@@ -42,7 +42,9 @@ void encodeModuleCapabilities(uint8_t* p) {
   const uint32_t recordUnits=lastRecordBytes/8192u;
   p[15]=uint8_t(recordUnits>255u?255u:recordUnits);
   p[16]|=0x80; // C3 validation marker: byte 15 is recorder progress, not voice.
-  p[19]=lastRecordStage?lastRecordStage:odysseySdProbeState();
+  const uint8_t liveProbe=odysseySdProbeState();
+  p[16]|=uint8_t((liveProbe<=6u?liveProbe:7u)<<3); // bits 3..5 = live mount probe.
+  p[19]=lastRecordStage?lastRecordStage:liveProbe;
 #endif
 #if CONFIG_IDF_TARGET_ESP32C3
   if (OdysseyTransfer::available()) {

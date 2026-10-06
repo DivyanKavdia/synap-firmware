@@ -263,7 +263,33 @@ static void odysseyRecordTake() {
 // FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
 // function first so SD and microphone guards release their mutexes.
 static void odysseyRecordTask(void*) {
+  // One physical double-tap owns recovery + recording. If the previous take
+  // left storage unavailable, recover it here after leaving the touch/control
+  // task rather than forcing the user to perform a separate recovery gesture.
+  if (!odysseySdReady()) {
+    Serial.println("[SD] one-gesture offline start: recovering storage before capture");
+    if (!odysseyRecoverSdCard("touch")) {
+      odysseyRecordFaultAt=millis();
+      odysseyRecording=false;
+      odysseyStopRequested=false;
+      applyCpuPowerProfile(false);
+      updateStatusLed(true);
+      Serial.println("[SD] touch recovery failed; offline recording not started");
+      vTaskDelete(nullptr);
+      return;
+    }
+  }
+
   odysseyRecordTake();
+
+  // A disk error marks the live mount unavailable. The take's guard has
+  // unwound at this point, so perform one bounded re-arm before returning to
+  // idle. Preserve the recorder failure stage/bytes for diagnostics.
+  if (!odysseySdReady() && odysseyLastRecordFailureStage()) {
+    Serial.println("[SD] post-record failure: re-arming storage for next take");
+    (void)odysseyRecoverSdCard("rearm");
+  }
+
   odysseyRecording=false;
   odysseyStopRequested=false;
   applyCpuPowerProfile(false);
@@ -294,11 +320,7 @@ void odysseyToggleRecording() {
   }
   if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) return;
   if (!odysseySdReady()) {
-    odysseySdRequestRecovery();
-    odysseyRecordFaultAt=millis();
-    updateStatusLed(true);
-    Serial.println("[TOUCH] SD unavailable; requesting background recovery. Retry double tap after mount.");
-    return;
+    Serial.println("[TOUCH] SD unavailable; recording task will recover before capture");
   }
   odysseyStopRequested=false;
   odysseyRecordingStartedAt=millis();

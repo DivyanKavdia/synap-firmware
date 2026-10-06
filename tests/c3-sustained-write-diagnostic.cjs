@@ -44,6 +44,21 @@ test('C3 recording diagnostics distinguish create failures from later recorder s
   assert.match(source,/odysseyPersistRecordFailure\(0,0\)/);
 });
 
+test('C3 stale write failures are re-armed before boot mount and before the next take',()=>{
+  const detect=read('firmware/shared/odyssey-sd-1631-detect.cpp');
+  const recorder=read('firmware/shared/odyssey-sd-1631-recording.cpp');
+  const caps=read('firmware/shared/module-capabilities.cpp');
+  assert.match(detect,/previousRecordStage>=55u/);
+  assert.match(detect,/odysseySdBitBangRecoverLocked\("rearm"\)/);
+  assert.match(recorder,/one-gesture offline start: recovering storage before capture/);
+  assert.match(recorder,/odysseyRecoverSdCard\("touch"\)/);
+  assert.match(recorder,/post-record failure: re-arming storage for next take/);
+  assert.match(recorder,/odysseyRecoverSdCard\("rearm"\)/);
+  assert.doesNotMatch(recorder,/Retry double tap after mount/);
+  assert.match(caps,/liveProbe<=6u\?liveProbe:7u/);
+  assert.match(caps,/<<3/);
+});
+
 test('C3 first completed record failure survives reboot without changing the live mount byte',()=>{
   const recorder=read('firmware/shared/odyssey-sd-1631-recording.cpp');
   const caps=read('firmware/shared/module-capabilities.cpp');

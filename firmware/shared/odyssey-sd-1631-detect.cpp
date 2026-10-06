@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include "esp_err.h"
 #include "esp_vfs_fat.h"
+uint8_t odysseyLastRecordFailureStage();
 #endif
 
 #if CONFIG_IDF_TARGET_ESP32C3
@@ -599,10 +600,20 @@ void odysseyDetectSdCard() {
   odysseySdMountLocked("probe",1);
 }
 bool odysseyInitializeSdCardBeforeBle() {
-  // Regression diagnostic: reproduce build 1445 timing and first transaction.
-  // No startup delay and no raw command is issued before the first SD.begin().
   OdysseySdGuard guard;
   if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return false; }
+
+  // A persisted recorder write failure means the continuously-powered card may
+  // have survived the MCU reset inside a data/program state. Re-arm the SD
+  // protocol before the first Arduino SD.begin() instead of asking the same
+  // stale card state to answer a fresh host immediately.
+  const uint8_t previousRecordStage=odysseyLastRecordFailureStage();
+  if (previousRecordStage>=55u) {
+    Serial.printf("[SD] boot re-arm after recorder stage=%u\n",unsigned(previousRecordStage));
+    (void)odysseySdBitBangRecoverLocked("rearm");
+    delay(20);
+  }
+
   const bool ready=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
   Serial.printf("[SD] boot initialization complete state=%u stage=%u before BLE\n",
     unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()));

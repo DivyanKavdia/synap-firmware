@@ -666,7 +666,9 @@ void encodeModuleCapabilities(uint8_t* p) {
   const uint32_t recordUnits=lastRecordBytes/8192u;
   p[15]=uint8_t(recordUnits>255u?255u:recordUnits);
   p[16]|=0x80; // C3 validation marker: byte 15 is recorder progress, not voice.
-  p[19]=lastRecordStage?lastRecordStage:odysseySdProbeState();
+  const uint8_t liveProbe=odysseySdProbeState();
+  p[16]|=uint8_t((liveProbe<=6u?liveProbe:7u)<<3); // bits 3..5 = live mount probe.
+  p[19]=lastRecordStage?lastRecordStage:liveProbe;
 #endif
 #if CONFIG_IDF_TARGET_ESP32C3
   if (OdysseyTransfer::available()) {
@@ -2166,6 +2168,7 @@ void transmitterTask(void* parameter) {
 #include <unistd.h>
 #include "esp_err.h"
 #include "esp_vfs_fat.h"
+uint8_t odysseyLastRecordFailureStage();
 #endif
 
 #if CONFIG_IDF_TARGET_ESP32C3
@@ -2752,10 +2755,16 @@ void odysseyDetectSdCard() {
   odysseySdMountLocked("probe",1);
 }
 bool odysseyInitializeSdCardBeforeBle() {
-  // Regression diagnostic: reproduce build 1445 timing and first transaction.
-  // No startup delay and no raw command is issued before the first SD.begin().
   OdysseySdGuard guard;
   if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return false; }
+
+  const uint8_t previousRecordStage=odysseyLastRecordFailureStage();
+  if (previousRecordStage>=55u) {
+    Serial.printf("[SD] boot re-arm after recorder stage=%u\n",unsigned(previousRecordStage));
+    (void)odysseySdBitBangRecoverLocked("rearm");
+    delay(20);
+  }
+
   const bool ready=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
   Serial.printf("[SD] boot initialization complete state=%u stage=%u before BLE\n",
     unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()));
@@ -3085,7 +3094,27 @@ static void odysseyRecordTake() {
 // FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
 // function first so SD and microphone guards release their mutexes.
 static void odysseyRecordTask(void*) {
+  if (!odysseySdReady()) {
+    Serial.println("[SD] one-gesture offline start: recovering storage before capture");
+    if (!odysseyRecoverSdCard("touch")) {
+      odysseyRecordFaultAt=millis();
+      odysseyRecording=false;
+      odysseyStopRequested=false;
+      applyCpuPowerProfile(false);
+      updateStatusLed(true);
+      Serial.println("[SD] touch recovery failed; offline recording not started");
+      vTaskDelete(nullptr);
+      return;
+    }
+  }
+
   odysseyRecordTake();
+
+  if (!odysseySdReady() && odysseyLastRecordFailureStage()) {
+    Serial.println("[SD] post-record failure: re-arming storage for next take");
+    (void)odysseyRecoverSdCard("rearm");
+  }
+
   odysseyRecording=false;
   odysseyStopRequested=false;
   applyCpuPowerProfile(false);
@@ -3116,11 +3145,7 @@ void odysseyToggleRecording() {
   }
   if (deviceConnected.load() || streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) return;
   if (!odysseySdReady()) {
-    odysseySdRequestRecovery();
-    odysseyRecordFaultAt=millis();
-    updateStatusLed(true);
-    Serial.println("[TOUCH] SD unavailable; requesting background recovery. Retry double tap after mount.");
-    return;
+    Serial.println("[TOUCH] SD unavailable; recording task will recover before capture");
   }
   odysseyStopRequested=false;
   odysseyRecordingStartedAt=millis();
