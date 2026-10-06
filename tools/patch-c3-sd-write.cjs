@@ -11,20 +11,42 @@ function replaceOnce(source,before,after,label){
 }
 function patch(source){
  if(!source.includes('// SYNAP_C3_SD_WRITE_ACCEPTED')){
-  const before=`      } else if (token == 0x0C) {
+  const before=`      char token = sdWriteBytes(pdrv, buffer, 0xFE);
+      sdDeselectCard(pdrv);
+
+      if (token == 0x0A) {
+        continue;
+      } else if (token == 0x0C) {
         return false;
       }
 
       unsigned int resp;`;
-  source=replaceOnce(source,before,`      } else if (token == 0x0C) {
-        return false;
-      }
+  source=replaceOnce(source,before,`      char token = sdWriteBytes(pdrv, buffer, 0xFE);
 #if CONFIG_IDF_TARGET_ESP32C3
       // SYNAP_C3_SD_WRITE_ACCEPTED
-      if (token != 0x05) return false;
+      // A CMD24 write is not complete when the data-response token is accepted.
+      // Keep CS asserted and provide clocks until the card exits its busy
+      // programming interval, matching ESP-IDF SDSPI's write transaction order.
+      if (token != 0x05) {
+        sdDeselectCard(pdrv);
+        return false;
+      }
+      if (!sdWait(pdrv, 1000)) {
+        sdDeselectCard(pdrv);
+        return false;
+      }
+      sdDeselectCard(pdrv);
+#else
+      sdDeselectCard(pdrv);
+
+      if (token == 0x0A) {
+        continue;
+      } else if (token == 0x0C) {
+        return false;
+      }
 #endif
 
-      unsigned int resp;`,'single-sector response');
+      unsigned int resp;`,'single-sector completion');
  }
  if(!source.includes('// SYNAP_C3_SD_SINGLE_SECTOR_ONLY')){
   const before=`  if (count > 1) {
