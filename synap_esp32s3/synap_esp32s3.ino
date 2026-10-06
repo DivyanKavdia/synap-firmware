@@ -2167,7 +2167,6 @@ void transmitterTask(void* parameter) {
 #include <sys/stat.h>
 #include <unistd.h>
 #include "esp_err.h"
-#include "esp_vfs_fat.h"
 uint8_t odysseyLastRecordFailureStage();
 #endif
 
@@ -2308,17 +2307,6 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
   const int n=snprintf(full,capacity,"%s%s",ODYSSEY_SD_MOUNT_POINT,logical);
   return n>0 && size_t(n)<capacity;
 }
-static constexpr uint32_t ODYSSEY_SD_RECORD_RESERVE_BYTES=32u*1024u*1024u;
-int odysseySdReserveRecordingFile(const char* fullPath) {
-  if (!fullPath || !*fullPath) return EINVAL;
-  errno=0;
-  const esp_err_t result=esp_vfs_fat_create_contiguous_file(
-    ODYSSEY_SD_MOUNT_POINT,fullPath,ODYSSEY_SD_RECORD_RESERVE_BYTES,true);
-  if (result==ESP_OK) return 0;
-  return errno?errno:EIO;
-}
-uint32_t odysseySdRecordingReserveBytes() { return ODYSSEY_SD_RECORD_RESERVE_BYTES; }
-
 static void odysseySdReleaseLocked() {
   SD.end();
   odysseySdSpi.end();
@@ -2763,7 +2751,8 @@ bool odysseyInitializeSdCardBeforeBle() {
   // protocol before the first Arduino SD.begin() instead of asking the same
   // stale card state to answer a fresh host immediately.
   const uint8_t previousRecordStage=odysseyLastRecordFailureStage();
-  if (previousRecordStage>=55u) {
+  const bool previousStorageFault=previousRecordStage>=44u && previousRecordStage!=48u;
+  if (previousStorageFault) {
     Serial.printf("[SD] boot re-arm after recorder stage=%u\n",unsigned(previousRecordStage));
     (void)odysseySdBitBangRecoverLocked("rearm");
     delay(20);
@@ -2835,8 +2824,6 @@ void odysseyDetectSdCard() {
 #endif
 // C3 local audio owns the mounted VFS and microphone until finalization.
 // BLE connection changes never redirect a take; no local PCM enters the app queue.
-int odysseySdReserveRecordingFile(const char* fullPath);
-uint32_t odysseySdRecordingReserveBytes();
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 static std::atomic<uint8_t> odysseyPersistedRecordStage{0};
 static std::atomic<uint32_t> odysseyPersistedRecordBytes{0};
@@ -2881,17 +2868,6 @@ static void odysseyWavHeader(uint8_t* h,uint32_t bytes) {
   put32le(h+28,SAMPLE_RATE*2);h[32]=2;h[34]=16;
   memcpy(h+36,"data",4);put32le(h+40,bytes);
 }
-static bool odysseyFinalizeWav(FILE* file,uint8_t* header,uint32_t bytes) {
-  // Capture stays strictly sequential. Flush audio, shrink the preallocated
-  // extent to the actual WAV length, then rewrite the 44-byte RIFF header.
-  if (fflush(file)!=0) return false;
-  const int fd=fileno(file);
-  if (fd<0 || ftruncate(fd,off_t(44u+bytes))!=0) return false;
-  odysseyWavHeader(header,bytes);
-  if (fseek(file,0,SEEK_SET)!=0) return false;
-  if (fwrite(header,1,44,file)!=44) return false;
-  return fflush(file)==0;
-}
 static uint8_t odysseyCreateFailureStage(int error) {
   // Preserve the actual FAT/VFS create error in the existing one-byte
   // diagnostic field. These values are emitted only when fopen() fails.
@@ -2912,15 +2888,6 @@ static uint8_t odysseyBatchWriteFailureStage(int error) {
     case ENOSPC: return 68;
     case EROFS: return 69;
     default: return 70;
-  }
-}
-static uint8_t odysseyReserveFailureStage(int error) {
-  switch (error) {
-    case EIO: return 60;
-    case ENODEV: return 61;
-    case ENOSPC: return 62;
-    case EROFS: return 63;
-    default: return 64;
   }
 }
 static void odysseyRecordTake() {
@@ -2944,30 +2911,23 @@ static void odysseyRecordTake() {
   if (!storage || !odysseySdReady()) { failed=true;failureStage=40; }
 
   if (!failed) {
-    // Allocate the FAT extent before I2S starts. Runtime capture then touches
-    // already-owned data sectors only; cluster allocation cannot collide with
-    // microphone timing.
+    // Append-only recording: create a normal zero-length file and let each
+    // successful 4 KiB CMD25 batch extend it naturally. No preallocation means
+    // STOP never needs to truncate a 32 MiB logical extent.
     snprintf(logicalPath,sizeof(logicalPath),"/synap/odyssey_audio_%08lx_%08lx.wav",
       static_cast<unsigned long>(esp_random()),static_cast<unsigned long>(esp_random()));
     if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) {
       failed=true;failureStage=41;
     } else {
-      const int reserveError=odysseySdReserveRecordingFile(fullPath);
-      if (reserveError) {
-        failed=true;failureStage=odysseyReserveFailureStage(reserveError);
-        Serial.printf("[SD] WAV reserve failed errno=%d stage=%u path=%s\n",
-          reserveError,unsigned(failureStage),fullPath);
-      } else {
-        errno=0;
-        file=fopen(fullPath,"r+b");
-        if (!file) {
-          const int openError=errno;
-          failed=true;failureStage=odysseyCreateFailureStage(openError);
-          Serial.printf("[SD] WAV reopen failed errno=%d stage=%u path=%s\n",
-            openError,unsigned(failureStage),fullPath);
-        } else if (setvbuf(file,nullptr,_IONBF,0)!=0) {
-          failed=true;failureStage=42;
-        }
+      errno=0;
+      file=fopen(fullPath,"wb");
+      if (!file) {
+        const int openError=errno;
+        failed=true;failureStage=odysseyCreateFailureStage(openError);
+        Serial.printf("[SD] WAV create failed errno=%d stage=%u path=%s\n",
+          openError,unsigned(failureStage),fullPath);
+      } else if (setvbuf(file,nullptr,_IONBF,0)!=0) {
+        failed=true;failureStage=42;
       }
     }
   }
@@ -3001,10 +2961,6 @@ static void odysseyRecordTake() {
       if (bytes>0xffffff00u-sizeof(pcm)) break; // RIFF length is 32-bit.
       const uint8_t* input=reinterpret_cast<const uint8_t*>(pcm);
       size_t remaining=sizeof(pcm);
-      const uint32_t reserveBytes=odysseySdRecordingReserveBytes();
-      if (44u+bytes+batchPcmBytes+remaining>reserveBytes) {
-        failed=true;failureStage=65;
-      }
       while (!failed && remaining) {
         const size_t room=sizeof(batch)-batchUsed;
         const size_t take=remaining<room?remaining:room;
@@ -3030,10 +2986,10 @@ static void odysseyRecordTake() {
         }
       }
 
-      // Capture performs only sequential 4 KiB writes. Because the file offset
-      // starts at zero, each full batch is sector aligned and FatFs issues a
-      // multi-sector disk_write (CMD25), matching the path the real 1631
-      // recorder exercised rather than forcing CMD24 for every 512-byte block.
+      // Capture performs only sequential 4 KiB writes. Each full batch is
+      // sector aligned and FatFs issues a multi-sector disk_write (CMD25).
+      // The first batch carries a provisional WAV header; no random rewrite
+      // is attempted while the card is in this recording session.
     }
     stopMicrophone();
   }
@@ -3043,8 +2999,9 @@ static void odysseyRecordTake() {
 
   if (file) {
     if (!failed && batchUsed) {
-      // Pad the final data batch so capture never falls back to the single-
-      // sector CMD24 path. odysseyFinalizeWav() immediately truncates padding.
+      // Preserve the multi-block path through STOP: pad the tail to one full
+      // 4 KiB batch. This adds at most 128 ms of trailing silence and avoids a
+      // final single-sector CMD24 write.
       memset(batch+batchUsed,0,sizeof(batch)-batchUsed);
       errno=0;
       const size_t written=fwrite(batch,1,sizeof(batch),file);
@@ -3059,17 +3016,10 @@ static void odysseyRecordTake() {
         batchPcmBytes=0;
       }
     }
-    if (failed) {
-      // Best-effort shrink of the reserved extent. Preserve the original
-      // failure stage if cleanup cannot touch the card.
-      (void)fflush(file);
-      const int fd=fileno(file);
-      if (fd>=0) (void)ftruncate(fd,off_t(44u+bytes));
-    }
-    if (!failed && !odysseyFinalizeWav(file,header,bytes)) {
-      failed=true;
-      if (!failureStage) failureStage=46;
-    }
+
+    // STOP is deliberately append-only. fclose() is the only filesystem
+    // finalization operation. The on-card header remains provisional; the
+    // transfer path synthesizes the correct 44-byte WAV header from file size.
     if (fclose(file)!=0) {
       failed=true;
       if (!failureStage) failureStage=47;
@@ -3078,9 +3028,9 @@ static void odysseyRecordTake() {
   }
 
   if (!failed && bytes==0) failureStage=48;
-  Serial.printf("[SD] local audio %s: %s, %lu PCM bytes stage=%u%s\n",
+  Serial.printf("[SD] local audio %s: %s, %lu committed PCM bytes stage=%u%s\n",
     failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),
-    unsigned(failureStage),failed?" (mount retained for explicit recovery)":"");
+    unsigned(failureStage),failed?" (mount retained for recovery)":"");
   // Diagnostics are published only after the historical 1631 I/O sequence has
   // completed, so they cannot change the write timing being measured.
   if (failed || bytes==0) {
@@ -3218,6 +3168,23 @@ static bool fullPath(const char* logical,char* full,size_t capacity) {
   return safeWavPath(logical) && odysseySdPath(logical,full,capacity);
 }
 
+static void virtualWavHeader(uint8_t* h,uint32_t totalBytes) {
+  memset(h,0,44);
+  const uint32_t pcmBytes=totalBytes>44u?totalBytes-44u:0u;
+  memcpy(h,"RIFF",4);put32le(h+4,pcmBytes+36u);
+  memcpy(h+8,"WAVEfmt ",8);put32le(h+16,16u);
+  h[20]=1;h[22]=1;put32le(h+24,SAMPLE_RATE);
+  put32le(h+28,SAMPLE_RATE*2u);h[32]=2;h[34]=16;
+  memcpy(h+36,"data",4);put32le(h+40,pcmBytes);
+}
+static void patchVirtualWavHeader(uint8_t* bytes,size_t size,uint32_t offset,uint32_t totalBytes) {
+  if (!bytes || !size || totalBytes<44u || offset>=44u) return;
+  uint8_t header[44];
+  virtualWavHeader(header,totalBytes);
+  const size_t count=std::min(size_t(44u-offset),size);
+  memcpy(bytes,header+offset,count);
+}
+
 static void reply(const Request& request,uint8_t error,uint32_t total=0,uint32_t offset=0,
                   const uint8_t* bytes=nullptr,size_t size=0) {
   uint8_t value[496]{};
@@ -3276,6 +3243,7 @@ static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& 
     if (!file) return FILE_UNAVAILABLE;
     const bool ok=fseek(file,long(offset),SEEK_SET)==0 && fread(bytes,1,size,file)==size;
     fclose(file);
+    if (ok) patchVirtualWavHeader(bytes,size,offset,total);
     return ok?OK:IO_ERROR;
   }
 
@@ -3303,6 +3271,7 @@ static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& 
   if (!file) return FILE_UNAVAILABLE;
   const bool ok=fseek(file,long(offset),SEEK_SET)==0 && fread(bytes,1,size,file)==size;
   fclose(file);
+  if (ok) patchVirtualWavHeader(bytes,size,offset,total);
   return ok?OK:IO_ERROR;
 }
 

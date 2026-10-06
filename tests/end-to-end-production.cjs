@@ -15,7 +15,7 @@ test('final production S3 source retains core audio, touch, low-power and OTA co
   assert.match(s3,/publishPowerEvent\(POWER_STATE_DEEP_SLEEP\)/);
 });
 
-test('C3 production image restores the build-1631 guarded VFS recorder',()=>{
+test('C3 production image uses guarded append-only multi-block offline recording',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);
   assert.match(c3,/static SPIClass odysseySdSpi\(FSPI\)/);
@@ -23,36 +23,34 @@ test('C3 production image restores the build-1631 guarded VFS recorder',()=>{
   assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ/);
   assert.match(c3,/static void odysseyRecordTake\(\)/);
   assert.match(c3,/OdysseySdGuard storage/);
-  assert.match(c3,/esp_vfs_fat_create_contiguous_file/);
-  assert.match(c3,/ODYSSEY_SD_RECORD_RESERVE_BYTES=32u\*1024u\*1024u/);
-  assert.match(c3,/file=fopen\(fullPath,"r\+b"\)/);
+  assert.match(c3,/file=fopen\(fullPath,"wb"\)/);
+  assert.doesNotMatch(c3,/esp_vfs_fat_create_contiguous_file|ODYSSEY_SD_RECORD_RESERVE_BYTES|ftruncate\(|odysseyFinalizeWav|fseek\(file,0/);
   assert.doesNotMatch(c3,/stat\(fullPath/);
   assert.doesNotMatch(c3,/checkpointAt|odysseyCheckpointWav/);
-  assert.match(c3,/odysseyFinalizeWav/);
   assert.match(c3,/ODYSSEY_SD_MAX_OPEN_FILES=1/);
   assert.match(c3,/alignas\(4\) static uint8_t batch\[4096\]/);
   assert.match(c3,/setvbuf\(file,nullptr,_IONBF,0\)/);
   assert.match(c3,/fwrite\(batch,1,sizeof\(batch\),file\)/);
   assert.match(c3,/memset\(batch\+batchUsed,0,sizeof\(batch\)-batchUsed\)/);
+  assert.match(c3,/fclose\(file\)/);
   assert.doesNotMatch(c3,/uint8_t sector\[512\]|fwrite\(sector/);
-  assert.match(c3,/odysseySdRequestRecovery\(\)/);
   assert.match(c3,/failureStage=41/);
   assert.match(c3,/failureStage=42/);
   assert.match(c3,/failureStage=43/);
-  assert.doesNotMatch(c3,/failureStage=45/);
-  assert.match(c3,/failureStage=46/);
+  assert.doesNotMatch(c3,/failureStage=45|failureStage=46|failureStage=65/);
   assert.match(c3,/failureStage=47/);
   assert.match(c3,/case EIO: return 49/);
   assert.match(c3,/case ENODEV: return 50/);
   assert.match(c3,/case ENOSPC: return 52/);
-  assert.match(c3,/case EIO: return 60/);
-  assert.match(c3,/case ENOSPC: return 62/);
-  assert.match(c3,/failureStage=65/);
   assert.match(c3,/case EIO: return 66/);
   assert.match(c3,/case ENOSPC: return 68/);
   assert.match(c3,/const uint8_t persistedStage=failureStage\?failureStage:40/);
   assert.match(c3,/odysseyPersistRecordFailure\(persistedStage,bytes\)/);
-  assert.doesNotMatch(c3,/odysseySustainedWriteProbe|\\.synap-sustained-write\\.tmp/);
+  assert.match(c3,/previousRecordStage>=44u/);
+  assert.match(c3,/previousRecordStage!=48u/);
+  assert.match(c3,/static void virtualWavHeader/);
+  assert.match(c3,/patchVirtualWavHeader\(bytes,size,offset,total\)/);
+  assert.doesNotMatch(c3,/odysseySustainedWriteProbe|\.synap-sustained-write\.tmp/);
   assert.doesNotMatch(c3,/odysseyLegacyRecordTask|file\.write\(reinterpret_cast<const uint8_t\*>\(pcm\)/);
   assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|ODYSSEY_SD_WAV_RATE/);
 });

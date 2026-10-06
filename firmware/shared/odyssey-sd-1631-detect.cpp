@@ -12,7 +12,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "esp_err.h"
-#include "esp_vfs_fat.h"
 uint8_t odysseyLastRecordFailureStage();
 #endif
 
@@ -153,17 +152,6 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
   const int n=snprintf(full,capacity,"%s%s",ODYSSEY_SD_MOUNT_POINT,logical);
   return n>0 && size_t(n)<capacity;
 }
-static constexpr uint32_t ODYSSEY_SD_RECORD_RESERVE_BYTES=32u*1024u*1024u;
-int odysseySdReserveRecordingFile(const char* fullPath) {
-  if (!fullPath || !*fullPath) return EINVAL;
-  errno=0;
-  const esp_err_t result=esp_vfs_fat_create_contiguous_file(
-    ODYSSEY_SD_MOUNT_POINT,fullPath,ODYSSEY_SD_RECORD_RESERVE_BYTES,true);
-  if (result==ESP_OK) return 0;
-  return errno?errno:EIO;
-}
-uint32_t odysseySdRecordingReserveBytes() { return ODYSSEY_SD_RECORD_RESERVE_BYTES; }
-
 static void odysseySdReleaseLocked() {
   SD.end();
   odysseySdSpi.end();
@@ -608,7 +596,8 @@ bool odysseyInitializeSdCardBeforeBle() {
   // protocol before the first Arduino SD.begin() instead of asking the same
   // stale card state to answer a fresh host immediately.
   const uint8_t previousRecordStage=odysseyLastRecordFailureStage();
-  if (previousRecordStage>=55u) {
+  const bool previousStorageFault=previousRecordStage>=44u && previousRecordStage!=48u;
+  if (previousStorageFault) {
     Serial.printf("[SD] boot re-arm after recorder stage=%u\n",unsigned(previousRecordStage));
     (void)odysseySdBitBangRecoverLocked("rearm");
     delay(20);

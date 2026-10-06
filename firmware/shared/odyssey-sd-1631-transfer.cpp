@@ -41,6 +41,23 @@ static bool fullPath(const char* logical,char* full,size_t capacity) {
   return safeWavPath(logical) && odysseySdPath(logical,full,capacity);
 }
 
+static void virtualWavHeader(uint8_t* h,uint32_t totalBytes) {
+  memset(h,0,44);
+  const uint32_t pcmBytes=totalBytes>44u?totalBytes-44u:0u;
+  memcpy(h,"RIFF",4);put32le(h+4,pcmBytes+36u);
+  memcpy(h+8,"WAVEfmt ",8);put32le(h+16,16u);
+  h[20]=1;h[22]=1;put32le(h+24,SAMPLE_RATE);
+  put32le(h+28,SAMPLE_RATE*2u);h[32]=2;h[34]=16;
+  memcpy(h+36,"data",4);put32le(h+40,pcmBytes);
+}
+static void patchVirtualWavHeader(uint8_t* bytes,size_t size,uint32_t offset,uint32_t totalBytes) {
+  if (!bytes || !size || totalBytes<44u || offset>=44u) return;
+  uint8_t header[44];
+  virtualWavHeader(header,totalBytes);
+  const size_t count=std::min(size_t(44u-offset),size);
+  memcpy(bytes,header+offset,count);
+}
+
 static void reply(const Request& request,uint8_t error,uint32_t total=0,uint32_t offset=0,
                   const uint8_t* bytes=nullptr,size_t size=0) {
   uint8_t value[496]{};
@@ -99,6 +116,7 @@ static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& 
     if (!file) return FILE_UNAVAILABLE;
     const bool ok=fseek(file,long(offset),SEEK_SET)==0 && fread(bytes,1,size,file)==size;
     fclose(file);
+    if (ok) patchVirtualWavHeader(bytes,size,offset,total);
     return ok?OK:IO_ERROR;
   }
 
@@ -126,6 +144,7 @@ static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& 
   if (!file) return FILE_UNAVAILABLE;
   const bool ok=fseek(file,long(offset),SEEK_SET)==0 && fread(bytes,1,size,file)==size;
   fclose(file);
+  if (ok) patchVirtualWavHeader(bytes,size,offset,total);
   return ok?OK:IO_ERROR;
 }
 

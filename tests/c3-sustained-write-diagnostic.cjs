@@ -3,41 +3,38 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 const root=path.resolve(__dirname,'..');
 const read=p=>fs.readFileSync(path.join(root,p),'utf8');
 
-test('C3 offline recorder preallocates then writes aligned multi-sector batches',()=>{
+test('C3 offline recorder is append-only and writes aligned multi-sector batches',()=>{
   const source=read('firmware/shared/odyssey-sd-1631-recording.cpp');
   assert.doesNotMatch(source,/odysseySustainedWriteProbe|\.synap-sustained-write\.tmp|bytes=64000/);
   const take=source.split('static void odysseyRecordTake() {')[1];
   assert.match(take,/OdysseySdGuard storage/);
-  assert.match(take,/odysseySdReserveRecordingFile\(fullPath\)/);
-  assert.match(take,/file=fopen\(fullPath,"r\+b"\)/);
+  assert.match(take,/file=fopen\(fullPath,"wb"\)/);
+  assert.doesNotMatch(take,/odysseySdReserveRecordingFile|esp_vfs_fat_create_contiguous_file|ftruncate\(|odysseyFinalizeWav|fseek\(file,0/);
   assert.doesNotMatch(take,/stat\(fullPath/);
   assert.match(take,/startMicrophone\(\)/);
-  assert(take.indexOf('odysseySdReserveRecordingFile(fullPath)')<take.indexOf('startMicrophone()'));
-  assert(take.indexOf('file=fopen(fullPath,"r+b")')<take.indexOf('startMicrophone()'));
+  assert(take.indexOf('file=fopen(fullPath,"wb")')<take.indexOf('startMicrophone()'));
   assert.doesNotMatch(take,/checkpointAt|odysseyCheckpointWav/);
-  assert.match(source,/odysseyFinalizeWav/);
   assert.match(take,/alignas\(4\) static uint8_t batch\[4096\]/);
   assert.match(take,/setvbuf\(file,nullptr,_IONBF,0\)/);
   assert.match(take,/fwrite\(batch,1,sizeof\(batch\),file\)/);
   assert.match(take,/memset\(batch\+batchUsed,0,sizeof\(batch\)-batchUsed\)/);
+  assert.match(take,/fclose\(file\)/);
   assert.doesNotMatch(take,/uint8_t sector\[512\]|fwrite\(sector/);
 });
 
-test('C3 recording diagnostics distinguish create failures from later recorder stages',()=>{
+test('C3 recording diagnostics distinguish create, batch-write, close and zero-audio failures',()=>{
   const source=read('firmware/shared/odyssey-sd-1631-recording.cpp');
-  for(const stage of [40,41,42,43,46,47,48])
+  for(const stage of [40,41,42,43,47,48])
     assert.match(source,new RegExp('failureStage='+stage));
-  assert.doesNotMatch(source,/failureStage=45/);
-  for(const stage of [49,50,51,52,53,54,60,61,62,63,64,66,67,68,69,70])
+  for(const stage of [45,46,60,61,62,63,64,65])
+    assert.doesNotMatch(source,new RegExp('failureStage='+stage+'|return '+stage));
+  for(const stage of [49,50,51,52,53,54,66,67,68,69,70])
     assert.match(source,new RegExp('return '+stage));
-  assert.match(source,/failureStage=65/);
   assert.match(source,/case EIO: return 49/);
   assert.match(source,/case ENODEV: return 50/);
   assert.match(source,/case EMFILE:[\s\S]*case ENFILE: return 51/);
   assert.match(source,/case ENOSPC: return 52/);
   assert.match(source,/case EROFS: return 53/);
-  assert.match(source,/case EIO: return 60/);
-  assert.match(source,/case ENOSPC: return 62/);
   assert.match(source,/case EIO: return 66/);
   assert.match(source,/case ENOSPC: return 68/);
   assert.match(source,/odysseyPersistRecordFailure\(persistedStage,bytes\)/);
@@ -48,7 +45,8 @@ test('C3 stale write failures are re-armed before boot mount and before the next
   const detect=read('firmware/shared/odyssey-sd-1631-detect.cpp');
   const recorder=read('firmware/shared/odyssey-sd-1631-recording.cpp');
   const caps=read('firmware/shared/module-capabilities.cpp');
-  assert.match(detect,/previousRecordStage>=55u/);
+  assert.match(detect,/previousRecordStage>=44u/);
+  assert.match(detect,/previousRecordStage!=48u/);
   assert.match(detect,/odysseySdBitBangRecoverLocked\("rearm"\)/);
   assert.match(recorder,/one-gesture offline start: recovering storage before capture/);
   assert.match(recorder,/odysseyRecoverSdCard\("touch"\)/);
@@ -67,4 +65,12 @@ test('C3 first completed record failure survives reboot without changing the liv
   assert.match(caps,/p\[15\]=uint8_t\(recordUnits>255u\?255u:recordUnits\)/);
   assert.match(caps,/p\[16\]\|=0x80/);
   assert.match(caps,/p\[19\]=lastRecordStage\?lastRecordStage:liveProbe/);
+});
+
+
+test('C3 transfer synthesizes a valid virtual WAV header for append-only files',()=>{
+  const transfer=read('firmware/shared/odyssey-sd-1631-transfer.cpp');
+  assert.match(transfer,/static void virtualWavHeader/);
+  assert.match(transfer,/pcmBytes=totalBytes>44u\?totalBytes-44u:0u/);
+  assert.match(transfer,/patchVirtualWavHeader\(bytes,size,offset,total\)/);
 });
