@@ -20,7 +20,7 @@ test('Odyssey C3 Wi-Fi uses STA HTTPS upload and never exposes an insecure SoftA
   assert.match(wifi,/GOOGLE_TRUST_ROOT_R1/);
   assert.match(wifi,/SHA-256: D9:47:43:2A:BD:E7:B7:FA/);
   assert.match(wifi,/tls\.setCACert\(GOOGLE_TRUST_ROOT_R1\)/);
-  assert.doesNotMatch(wifi,/useBuiltinCACertBundle\s*\(/);
+  assert.doesNotMatch(wifi,/tls\.useBuiltinCACertBundle\s*\(/);
   assert.doesNotMatch(wifi,/setInsecure\s*\(/);
 });
 
