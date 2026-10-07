@@ -8,6 +8,7 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <limits.h>
+#include <time.h>
 
 namespace OdysseyWifi {
 
@@ -51,6 +52,8 @@ bP6MvPJwNQzcmRk13NfIRmPVNnGuV/u3gm3c
 )PEM";
 
 static constexpr uint32_t WIFI_CONNECT_MS=20000u;
+static constexpr uint32_t TIME_SYNC_MS=12000u;
+static constexpr time_t TLS_MIN_UNIX_TIME=1704067200; // 2024-01-01 UTC
 static constexpr uint32_t HTTP_TIMEOUT_MS=30000u;
 static constexpr uint32_t SEGMENT_MS=120000u;
 static constexpr uint32_t PCM_BYTES_PER_MS=32u; // 16 kHz * mono * 16 bit / 1000.
@@ -339,6 +342,18 @@ static bool connectWifi() {
   return true;
 }
 
+static bool syncClock() {
+  if (time(nullptr)>=TLS_MIN_UNIX_TIME) return true;
+  setStatus(CONNECTING,true,0,0,0,"Securing Wi-Fi connection…");
+  configTime(0,0,"time.google.com","time.cloudflare.com","pool.ntp.org");
+  const uint32_t started=millis();
+  while (time(nullptr)<TLS_MIN_UNIX_TIME && uint32_t(millis()-started)<TIME_SYNC_MS) {
+    if (otaBusy() || sleepPending || batteryCritical() || WiFi.status()!=WL_CONNECTED) return false;
+    delay(100);
+  }
+  return time(nullptr)>=TLS_MIN_UNIX_TIME;
+}
+
 static void stopWifi() {
   WiFi.disconnect(true,false);
   WiFi.mode(WIFI_OFF);
@@ -356,6 +371,14 @@ static void uploadTask(void*) {
 
   if (!connectWifi()) {
     setStatus(FAILED,false,0,0,0,"Could not join the saved Wi-Fi/hotspot.");
+    uploadBusy=false;
+    applyCpuPowerProfile(false);
+    vTaskDelete(nullptr);
+    return;
+  }
+  if (!syncClock()) {
+    stopWifi();
+    setStatus(FAILED,false,0,0,0,"Wi-Fi connected, but secure time sync failed.");
     uploadBusy=false;
     applyCpuPowerProfile(false);
     vTaskDelete(nullptr);
