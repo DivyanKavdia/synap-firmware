@@ -48,7 +48,7 @@ test('C3 Wi-Fi upload virtualizes WAV segments and finalizes through scoped clou
   assert.match(wifi,/http\.sendRequest\("PUT",&stream,size_t\(pcmBytes\)\+44u\)/);
   assert.match(wifi,/\/finalize"/);
   assert.match(wifi,/http\.POST\(body\)/);
-  assert.match(wifi,/Authorization","Bearer "/);
+  assert.match(wifi,/Authorization","SynapDevice "/);
   assert.doesNotMatch(wifi,/\bunlink\s*\(|removeFile|clearRecordings/,'Wi-Fi upload must never delete the SD source');
 });
 

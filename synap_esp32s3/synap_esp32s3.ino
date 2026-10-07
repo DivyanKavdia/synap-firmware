@@ -3427,7 +3427,7 @@ static bool httpBegin(HTTPClient& http,WiFiClientSecure& tls,const String& url) 
 }
 
 static void bearer(HTTPClient& http) {
-  http.addHeader("Authorization","Bearer "+String(uploadSpec.token));
+  http.addHeader("Authorization","SynapDevice "+String(uploadSpec.token));
   http.addHeader("Cache-Control","no-store");
 }
 
