@@ -60,6 +60,7 @@ std::atomic<uint32_t> streamGeneration{1};
 void queueEvent(EventType,uint8_t cmd,uint8_t,uint32_t){commands.push_back(cmd);}
 void drain(){for(auto cmd:commands)processCommand(cmd,PROTOCOL_VERSION);commands.clear();}
 namespace ChakshuVoice { bool touchAudioToggle(){return false;} }
+namespace OdysseyWifi { bool busy(){return false;} }
 // INSERT WAKE
 // INSERT POLL
 void advance(uint32_t duration,bool level,bool consumeCommands=true){
