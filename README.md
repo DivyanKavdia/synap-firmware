@@ -1,13 +1,14 @@
 # Synap Firmware
 
-**Four functional firmware variants — reviewed 1 October 2026**
+**Four functional firmware variants — reviewed 7 October 2026**
 
 This repository owns production firmware for the Synap wearable family.
 
 ## Release and source status
 
-- **Published OTA release at this review:** Synap OS build **1546** for all three target binaries; check the `ota-releases` manifests for newer releases.
-- **Published build-1546 source:** `21bb5488ecdf7b128e560d59b30b583bcd634feb`.
+- **Published Odyssey C3 OTA baseline at this review:** Synap OS build **1838**; check the `ota-releases` manifests for newer releases and for the independently published S3/Chakshu target builds.
+- **Published C3 build-1838 source:** `978b44a8cc8b4c4b270fd15c396c1ab740d92008`.
+- **Physically validated C3 SD recorder baseline:** build **1836**; build 1838 re-enables phase-one media-v1 catalogue/read/delete/clear without changing that proven recorder.
 - **Current development baseline:** `main`.
 - **Release channel:** `ota-releases`.
 - **Product variants:** Odyssey S3, standard Odyssey C3 (without SD), Odyssey C3 + SD, and Chakshu. These are **four functional variants on three compiled/OTA targets**.
@@ -40,9 +41,23 @@ The checked-in/generated target sketches are derived from the owned source compo
 
 ## Odyssey C3 with and without SD
 
-The **standard C3** uses BLE audio normally even when no SD card is fitted or mounted. The **C3 + SD** is the same firmware image with a usable card: boot initializes native ESP-IDF SDSPI/FAT before BLE; disconnected double tap starts/stops a 16 kHz WAV and pulses purple (connected PWA recording pulses green). A BLE reconnect does not silently redirect an active SD take; a later PWA START first finalizes it and transfers microphone ownership or fails safely.
+The **standard C3** uses BLE audio normally even when no SD card is fitted or mounted. The **C3 + SD** is the same firmware image with a usable card.
 
-The PWA can list pending C3 WAV files when BLE is connected. Media-v1 chunks identify the file path on every read, and SD originals are deleted only after verified durable PWA import. No-card or failed SD mounts must not disable normal BLE audio. See [C3 SD audio](docs/ODYSSEY_C3_SD_AUDIO.md) and [Firmware variants](docs/FIRMWARE_VARIANTS.md).
+The working C3 SD stack is intentionally conservative and is now a protected production contract:
+
+- Arduino-ESP32 **3.3.5** SD/SPI mount path;
+- runtime SD clock **1 MHz**;
+- active source modules `odyssey-sd-1631-{detect,recording,transfer}.cpp`;
+- disconnected double tap starts/stops 16 kHz mono PCM16 WAV capture with a purple pulse;
+- PCM is written in aligned **4 KiB** batches so FatFs uses multi-sector writes;
+- STOP is append-only: no preallocation, seek, truncate or in-place WAV-header rewrite;
+- the BLE transfer layer synthesizes the final WAV header from file length;
+- the C3 build alone receives `tools/patch-arduino-sd.cjs`, which fixes single-sector CMD24 completion by waiting for the card's programming-busy period before deselect;
+- boot/touch recovery can re-arm a continuously powered card left in an unfinished CMD18/CMD25 state.
+
+Build 1836 physically validated the recorder and close path; build 1838 re-enabled phase-one media-v1 catalogue/read/delete/clear without changing that recorder.
+
+The PWA verifies durable import before marking an SD source synced. A synced SD copy may be retained, is shown as already synced, and is deleted only after an explicit user choice. No-card or failed SD mounts must not disable normal BLE audio. See [C3 SD audio](docs/ODYSSEY_C3_SD_AUDIO.md), [C3 recording I/O](docs/odyssey-c3-sd-recording.md) and [Firmware variants](docs/FIRMWARE_VARIANTS.md).
 
 ## Audio and BLE baseline
 
@@ -188,9 +203,10 @@ The companion PWA owns:
 - all new audio/photo/video capture while BLE is connected; connected captures save directly to the PWA,
 - observing Hey Snap status/results over a single notification subscription without periodic polling,
 - SD catalogue discovery after reconnect,
-- Library representation of unsynced SD-only audio, photo and video,
-- explicit **Sync to app** for one item or all pending offline captures,
-- byte/digest verification before deleting the SD original,
+- Library representation of unsynced and already-synced-but-retained SD media,
+- explicit **Sync to Memories** for one item or all pending offline captures,
+- durable import verification plus a persisted sync receipt,
+- explicit **Delete from SD** before or after sync; successful sync does not silently delete the SD original,
 - imported-audio transcription,
 - memory creation and downstream inference.
 
@@ -253,10 +269,10 @@ The current hardware acceptance list is:
 - long/offline SD audio recording,
 - SD I/O recovery at conservative clocks,
 - FIFO space reclamation,
-- Sync to app followed by verified source deletion,
+- Sync to Memories followed by explicit keep/delete choice for the verified SD source,
 - complete device → PWA → transcript → memory flow.
 
-At this review the published feed reports **build 1546** for each of the three targets. Physical testing should record the installed target and build explicitly. A later `main` commit is not installed behavior until the matching OTA release is published and applied.
+At this review the C3 production feed reports **build 1838**. Physical testing should record the installed target and build explicitly and should always read each target's current manifest before quoting a current version. A later `main` commit is not installed behavior until the matching OTA release is published and applied.
 
 ## Live-source cleanup policy
 

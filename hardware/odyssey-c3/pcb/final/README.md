@@ -24,6 +24,12 @@ The original local fabrication ZIP used during validation had SHA-256:
 xz -d Synap_Odyssey_C3_Carrier_RevK_FINAL.brd.xz
 ```
 
+## Firmware contract
+
+The production C3 SD implementation is documented in [`docs/ODYSSEY_C3_SD_AUDIO.md`](../../../docs/ODYSSEY_C3_SD_AUDIO.md). Rev K's SD wiring is CS GPIO0, SCK GPIO10, MOSI GPIO21 and MISO GPIO20.
+
+The validated firmware path is C3-specific: Arduino-ESP32 3.3.5 SD/SPI at 1 MHz runtime, 4 KiB multi-sector PCM writes, append-only STOP behavior and a C3-only CMD24 completion patch. Do not substitute Chakshu/XIAO ESP32-S3 SD assumptions or pin assignments.
+
 ## Rev K
 Rev K adds top-silkscreen pin labels. Copper, footprints, drill geometry, RF setback, component placement, and electrical routing are unchanged from the audited Rev J electrical baseline.
 

@@ -1,6 +1,6 @@
 # Synap firmware codebase guide
 
-**Reviewed: 1 October 2026**
+**Reviewed: 7 October 2026**
 
 ## Production source graph
 
@@ -72,11 +72,11 @@ node tools/assemble-source.cjs --check
 node --test tests/*.cjs
 ```
 
-Production CI additionally installs the pinned ESP32 toolchain/libraries, applies the required Arduino BLE patch, materializes all three targets, compiles them with one build number and verifies published OTA artifacts/provenance.
+Production CI additionally installs the pinned ESP32 toolchain/libraries, applies required compatibility patches, materializes all three targets, compiles them with one build number and verifies published OTA artifacts/provenance. For C3 specifically, `tools/patch-arduino-sd.cjs` is applied only after Odyssey S3 and Chakshu compile, so the CMD24 busy-completion fix affects the C3 binary alone.
 
 ## Release truth
 
-The authoritative installable version is the `ota-releases` feed. As checked on 1 October 2026, it reports **build 1546** for all three compiled targets, source commit `21bb5488ecdf7b128e560d59b30b583bcd634feb`.
+The authoritative installable version is the `ota-releases` feed. As checked on 7 October 2026, the Odyssey C3 manifest reports **build 1838**, source commit `978b44a8cc8b4c4b270fd15c396c1ab740d92008`. Read each target manifest before quoting current S3/Chakshu versions.
 
 A later `main` commit is development source until a successful publish updates that feed.
 
@@ -107,10 +107,20 @@ Git history is the rollback store; do not keep retired production implementation
 
 ### Odyssey C3 optional SD lifecycle (current)
 
-The standard C3 and C3 + SD run the same compiled firmware. The C3 initializes native ESP-IDF SDSPI/FAT at probing speed **400 kHz** before BLE, then validates promotion to **4 MHz** after a successful FAT/VFS mount. The wired pins are CS GPIO0, SCK GPIO10, MOSI GPIO21 and MISO GPIO20; USB CDC on boot keeps UART0 off GPIO20/21.
+The standard C3 and C3 + SD run the same compiled firmware. The wired pins are CS GPIO0, SCK GPIO10, MOSI GPIO21 and MISO GPIO20; USB CDC on boot keeps UART0 off GPIO20/21.
 
-Mounted SD readiness gates offline local recording. Disconnected double tap toggles a WAV recording and purple NeoPixel pulse; a failed/absent card does not disable ordinary BLE audio. BLE reconnect does not silently change an active SD take's destination, while a subsequent PWA START first finalizes any active SD take.
+The active C3 storage graph is deliberately the restored 1631-family implementation selected by `firmware/shared/sources.json`:
 
-The media-v1 SD API supplies an explicit path on every operation-4 chunk read and `@catalogue` for catalogue bytes. Normal reads are non-remounting; operation 14 is explicit recovery. The PWA owns verified source import followed by deletion, never deletion before verification. See [C3 SD audio](ODYSSEY_C3_SD_AUDIO.md) and [Firmware variants](FIRMWARE_VARIANTS.md).
+- `odyssey-sd-1631-detect.cpp`
+- `odyssey-sd-1631-recording.cpp`
+- `odyssey-sd-1631-transfer.cpp`
 
-The Odyssey module-descriptor startup probe extension (version at byte 17, result at byte 18) is diagnostic information, not a fourth target ID and not a substitute for live SD capability/readiness checks. S3's optional SD check remains detection-only.
+It uses the Arduino-ESP32 3.3.5 SD/SPI mount path with a retained **1 MHz** runtime data clock, one-open-file policy, guarded VFS validation and bounded protocol re-arm. Do not replace these active modules with similarly named retired SD files without a deliberate architecture change.
+
+Mounted SD readiness gates offline local recording. Disconnected double tap toggles a 16 kHz PCM16 WAV and purple NeoPixel pulse. Capture uses aligned **4 KiB** writes to keep FatFs on its multi-sector path. STOP remains append-only: no preallocation, seek, truncate or in-place WAV-header rewrite. The transfer layer synthesizes the valid WAV header from file length.
+
+The production workflow applies `tools/patch-arduino-sd.cjs` **only before the C3 compile**. That patch fixes Arduino 3.3.5 single-sector CMD24 completion by keeping CS asserted while the card is program-busy and waiting up to 5 seconds before deselect. This is required for reliable FAT/directory metadata commit on `fclose()`.
+
+The media-v1 SD API supplies an explicit path on every operation-4 chunk read and `@catalogue` for catalogue bytes. Normal reads are non-remounting; operation 14 is explicit recovery. The PWA verifies durable import, persists a sync receipt, and treats SD deletion as a separate explicit user choice. A retained source must show as already synced rather than being imported twice.
+
+The Odyssey module descriptor keeps historical recorder evidence separate from live mount state: `sdProbeState`, `sdLiveProbeState` and `lastRecordKiB` must be interpreted together. See [C3 SD audio](ODYSSEY_C3_SD_AUDIO.md), [C3 recording I/O](odyssey-c3-sd-recording.md) and [Firmware variants](FIRMWARE_VARIANTS.md).

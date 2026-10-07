@@ -1,6 +1,6 @@
 # Synap firmware variants and build targets
 
-**Reviewed: 1 October 2026.** This is the functional-product mapping. The authoritative build identities and pin contracts are in `devices/catalog.json`; the authoritative installable build for each target is in the `ota-releases` feed. A firmware source commit is not proof that a physical device has been updated.
+**Reviewed: 7 October 2026.** This is the functional-product mapping. The authoritative build identities and pin contracts are in `devices/catalog.json`; the authoritative installable build for each target is in the `ota-releases` feed. A firmware source commit is not proof that a physical device has been updated.
 
 ## Four functional variants; three production OTA targets
 
@@ -17,7 +17,7 @@
 
 - **Odyssey S3 / standard C3:** connected double tap starts/stops PWA audio. Disconnected recording is unavailable without a supported local recorder.
 - **C3 + SD:** disconnected double tap starts an SD WAV; another double tap requests stop/finalization and extinguishes the purple pulse. BLE reconnect alone must not switch the destination of an in-progress take. PWA START must first finalize the offline take, or fail safely if microphone ownership cannot be released within the bounded deadline. Connected recording uses the existing green pulse.
-- **C3 + SD synchronization:** SD catalogue appears in the PWA after BLE connection; media-v1 operation 4 includes the requested file path on *every* file chunk (`@catalogue` for catalogue bytes). Catalogue refresh must not replace a foreground file selection. The PWA durably imports and verifies a source before requesting deletion; failed transfers retain the SD original. Normal reads do not remount; explicit operation 14 is recovery.
+- **C3 + SD synchronization:** SD catalogue appears in the PWA after BLE connection; media-v1 operation 4 includes the requested file path on *every* file chunk (`@catalogue` for catalogue bytes). Catalogue refresh must not replace a foreground file selection. The PWA durably imports and verifies a source, persists a receipt, and marks a retained SD copy as already synced. Deletion is a separate explicit user choice before or after sync; failed transfers retain the SD original. Normal reads do not remount; explicit operation 14 is recovery.
 - **Chakshu:** Hey Snap is an independent source and saves to SD while BLE is disconnected or connected *and PWA capture is idle*. A PWA-initiated audio/video START suspends the voice listener and owns conflicting resources. Touch is audio-only: connected to PWA, disconnected to SD. Photo/video via Hey Snap are SD captures.
 - **All targets:** active recording/media work, OTA and sleep transitions must not race. No OTA binary may be installed on a different target, even if the products have a similar name.
 
@@ -29,11 +29,11 @@
 | Standard C3 and C3 + SD | I2S BCLK/WS/DATA GPIO4/5/6; touch GPIO3; battery GPIO1; NeoPixel GPIO8. Optional SD: CS GPIO0, SCK GPIO10, MOSI GPIO21, MISO GPIO20. Enable USB CDC on boot to keep UART0 off the SD pins. |
 | Chakshu | Onboard PDM clock/data GPIO42/41; touch GPIO1/D0; battery GPIO2/D1; NeoPixel GPIO5/D4; Sense SD CS GPIO21. Camera, SD and TinyML implementation live in `firmware/xiao-sense/`. |
 
-C3 SD code lives in `firmware/shared/odyssey-sd-detect.cpp`, `odyssey-sd-recording.cpp` and `odyssey-sd-transfer.cpp`. Its SD lifecycle uses native ESP-IDF SDSPI/FAT and VFS, boot-time initialization before BLE and explicit recovery. The Rev K carrier PCB source, gerber archive, pin contract, BOM and case interface live in `hardware/odyssey-c3/pcb/final/`.
+C3 SD production code lives in `firmware/shared/odyssey-sd-1631-detect.cpp`, `odyssey-sd-1631-recording.cpp` and `odyssey-sd-1631-transfer.cpp`. It uses Arduino-ESP32 3.3.5 SD/SPI + FatFs/VFS at a retained 1 MHz runtime clock, aligned 4 KiB multi-sector audio writes, append-only STOP behavior, virtual WAV-header synthesis on transfer, and a C3-only Arduino CMD24 completion patch applied by CI. The Rev K carrier PCB source, gerber archive, pin contract, BOM and case interface live in `hardware/odyssey-c3/pcb/final/`.
 
 ## Production/release model
 
-The production workflow materializes and compiles **three** targets (S3, C3, Chakshu), publishes their separate OTA manifests, and attests the binaries. As checked on 1 October 2026, the `ota-releases` manifests publish **build 1546** from firmware source commit `21bb5488ecdf7b128e560d59b30b583bcd634feb` for all three. Always read the current feed before quoting a *current* version; an installed physical device may still be on an older build.
+The production workflow materializes and compiles **three** targets (S3, C3, Chakshu), publishes their separate OTA manifests, and attests the binaries. As checked on 7 October 2026, the C3 `ota-releases` manifest publishes **build 1838** from firmware source commit `978b44a8cc8b4c4b270fd15c396c1ab740d92008`. Always read each target manifest before quoting the current S3 or Chakshu build. Always read the current feed before quoting a *current* version; an installed physical device may still be on an older build.
 
 - [S3 manifest](https://github.com/DivyanKavdia/synap-firmware/blob/ota-releases/latest.json)
 - [C3 manifest](https://github.com/DivyanKavdia/synap-firmware/blob/ota-releases/targets/esp32c3-supermini-4m/latest.json)
@@ -41,4 +41,4 @@ The production workflow materializes and compiles **three** targets (S3, C3, Cha
 
 ## Minimum physical acceptance matrix
 
-Check standard C3 *without a card* and C3 + SD *with a healthy card* separately. In particular: no-card BLE startup/recording; C3 cold SD mount and retry diagnostics; offline start and second-double-tap stop; purple-off after stop; reconnect during an SD take; PWA START handoff; catalogue amid chunked foreground sync; verified import before delete; failed import leaving originals; restart/OTA only when idle. Chakshu camera and TinyML acceptance must be recorded separately from C3 SD results. A passing CI workflow does not establish physical-device acceptance.
+Check standard C3 *without a card* and C3 + SD *with a healthy card* separately. In particular: no-card BLE startup/recording; C3 cold SD mount and retry diagnostics; offline start and second-double-tap stop; purple-off after stop; reconnect during an SD take; PWA START handoff; catalogue amid chunked foreground sync; verified import and retained-copy state; explicit delete after sync; failed import leaving originals; restart/OTA only when idle. Chakshu camera and TinyML acceptance must be recorded separately from C3 SD results. A passing CI workflow does not establish physical-device acceptance.

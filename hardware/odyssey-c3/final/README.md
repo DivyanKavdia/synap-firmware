@@ -18,6 +18,14 @@ Design pin contract was validated against firmware commit `21872010fc7c8c414284a
 - GPIO1 — battery ADC divider
 - GPIO8 — NeoPixel DIN via 330R
 
+## Firmware SD implementation reference
+
+The physical pin contract above is unchanged, but the production SD reliability implementation was substantially hardened on 7 October 2026.
+
+For future firmware work, treat [`docs/ODYSSEY_C3_SD_AUDIO.md`](../../../docs/ODYSSEY_C3_SD_AUDIO.md) as the canonical software reference. The validated C3 path uses Arduino-ESP32 3.3.5 SD/SPI at a retained 1 MHz runtime clock, 4 KiB multi-sector audio writes, append-only recording finalization, virtual WAV-header synthesis during BLE transfer, and a C3-only CMD24 busy-completion patch in CI.
+
+Do not copy SD assumptions from Chakshu/XIAO ESP32-S3 Sense into this carrier: its SD pins, bus behavior and source implementation are different.
+
 ## Rev K status
 Rev K supersedes Rev J and adds top-silkscreen pin labels. Electrical routing, footprints, drills, RF setback and component placement are unchanged from validated Rev J.
 

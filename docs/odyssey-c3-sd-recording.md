@@ -1,78 +1,161 @@
-# Odyssey C3 recording I/O
+# Odyssey C3 SD recording I/O — implementation notes
 
-The C3 uses the mounted ESP-IDF SDSPI/FatFs VFS at 1 MHz. Hardware pins and the
-media-v1 BLE wire format are unchanged. S3/Chakshu storage is unchanged.
+**Reviewed: 7 October 2026.** This is the low-level companion to [ODYSSEY_C3_SD_AUDIO.md](ODYSSEY_C3_SD_AUDIO.md). If the two ever disagree, the canonical architecture document and current production source win.
 
-## Recording
+## Current production path
 
-- Reserve a unique filename exclusively, then preallocate a contiguous five-minute
-  WAV extent (9,600,044 bytes at 16 kHz mono PCM16).
-- Write sequential PCM through a checked POSIX descriptor in sector-aware chunks
-  up to 4096 bytes, with an 8192-byte application buffer. Retry EINTR and positive
-  short writes; zero progress and other errors stop the take.
-- Every 15 seconds, sync PCM and then update an alternate 512-byte sector in the
-  fixed 1024-byte `.wav.jrn` sidecar. Each record contains magic/version, sequence,
-  committed PCM length, path identity CRC, sample rate, the first 468 PCM bytes,
-  and a CRC32 over bytes 0..507. The first audio bytes back up the sector shared
-  with the normal 44-byte WAV header.
-- On stop or rollover, drain PCM, commit the final journal record, seek/write the WAV
-  header, sync, truncate unused preallocation, sync, and check both close results.
-  Remove the journal only after successful sealing. Advance to the next numbered
-  WAV automatically for a longer take.
-- After a storage error, do not resume writing the failed file object. Keep the
-  journal for recovery. Never format or remount automatically during a take.
+The active C3 SD implementation is:
 
-## Recovery and transfer
+- `firmware/shared/odyssey-sd-1631-detect.cpp`
+- `firmware/shared/odyssey-sd-1631-recording.cpp`
+- `firmware/shared/odyssey-sd-1631-transfer.cpp`
+- `tools/patch-arduino-sd.cjs`
 
-Mount recovery selects the newest CRC-valid journal record with a matching path
-identity. It repairs the first WAV sector and truncates to the committed byte
-count before removing the journal. An invalid journal is retained with the WAV
-for diagnosis; that file is not offered for sync. Old segmented WAV files without
-journals retain recovery through their RIFF committed length. Empty valid parts
-are removed. Data after the last successful checkpoint can be lost on reset.
+The recorder uses the mounted Arduino-ESP32 3.3.5 SD/FatFs VFS at a retained runtime clock of **1 MHz**.
 
-Transfer uses pread with one cached descriptor scoped to path and BLE connection
-generation. Retries can request any offset. EOF, disconnect, inactivity, new
-path/connection, recording, deletion, format, remount and power transition close
-that descriptor under the storage mutex. Direct path reads validate completed
-segments, just as catalogue reads do. PWA verified import/delete semantics stay
-unchanged; completed files remain conventional 44-byte-header WAVs.
+## File creation
 
-## Validation and limits
+A disconnected double tap starts a new file under `/synap/`.
 
-Native sanitizer tests cover exact PCM/segment sizes, rollover, stop, checkpoint
-CRC fallback, torn first-sector repair, invalid/truncated journals, sync failure,
-short writes/EINTR, repeated recovery, cached reads, offset retries and unfinished
-file rejection. They do not emulate SD NAND, FAT metadata torn writes, or rail
-brownout. Two journal sectors are logically separate but an SD controller can
-still lose or damage both during power failure.
+The recorder:
 
-The recorder currently services I2S and storage synchronously. Preallocation and
-sync latency can exceed I2S buffering. Automatic segmentation is implemented;
-gapless capture across worst-case card stalls remains a hardware validation gate.
-A separate capture task/ring buffer should be sized using measured worst-case
-stall latency if those tests reveal dropped samples.
+1. acquires the SD storage guard;
+2. creates a unique path;
+3. opens it with `fopen(...,"wb")`;
+4. disables stdio buffering with `setvbuf(...,_IONBF,...)`;
+5. stages a provisional 44-byte WAV header in the first 4 KiB batch;
+6. starts I2S only after the file is open and ready.
 
-Before sealed-device acceptance: run 100 cold-boot/start/stop/reconnect/verified
-sync/delete cycles, ten 30-minute takes, one eight-hour take, and at least 50
-random power interruptions (including checkpoint and rollover). Require readable
-FAT throughout, correct WAV sizes/sample ordering, no deleted unsynced recording,
-recovery of the latest valid checkpoint, and no audio gaps on a known test signal.
-Measure 3.3 V at the SD socket during writes and log reset reason, recording stage,
-SD state, write/sync latency and DMA overflow. Formatting is not a repair test.
+There is no contiguous preallocation and no journal sidecar in the current production design.
 
-## Follow-up after build 1723
+## Audio writes
 
-The C3 data clock is reduced to 1 MHz for hardware qualification. Contiguous
-preallocation is optional on allocation denial only if the reserved file remains
-empty. Real I/O errors stop recording. Header/journal writes use checked
-seek/write under the storage mutex to avoid the IDF 5.5 FatFs pwrite zero-write
-ENOSPC path that leaks the VFS lock. Success restores the original cursor.
+PCM is captured as 16 kHz mono PCM16.
 
-A failed take saves its first stage/errno, bytes and firmware build as one NVS
-blob, loaded before the next mount. Catalogue error responses include these
-lastRecord fields separately from current boot state. This records completed
-failure handling, not abrupt loss of power before the NVS write. Stages 30 and
-32–35 distinguish initial preallocation, journal creation, header write, seek
-and initial checkpoint. PWA discovery requests one catalogue even on mount
-failure, exposing this information without an SD-ready UI requirement.
+The write accumulator is:
+
+```cpp
+alignas(4) static uint8_t batch[4096];
+```
+
+PCM is copied into this batch and every full batch is written with:
+
+```cpp
+fwrite(batch, 1, sizeof(batch), file);
+```
+
+This deliberately gives FatFs eight contiguous 512-byte sectors and keeps the Arduino SD layer on its multi-block path.
+
+Do not replace this with a loop of 512-byte writes. Physical testing showed that forcing `count == 1` repeatedly changed the SD transaction behavior and failed reproducibly around the same data volume.
+
+## Stop path
+
+STOP remains sequential.
+
+If the final batch is partial, the unwritten tail is zero-filled and the whole 4 KiB batch is written. The file is then closed.
+
+The current recorder does **not**:
+
+- seek back to offset zero;
+- rewrite the 44-byte header;
+- truncate a preallocated extent;
+- write a journal;
+- perform a periodic WAV checkpoint.
+
+That is intentional. Earlier validation proved sustained audio could be written successfully while small random writes/finalization operations still failed.
+
+## WAV validity
+
+The on-card file keeps a provisional header.
+
+During BLE media read, `odyssey-sd-1631-transfer.cpp` derives the real PCM length from the file size and overlays a correct 44-byte WAV header into the outgoing byte stream.
+
+The SD source remains append-only; the PWA receives a conventional WAV.
+
+Any future transfer implementation must preserve this property unless the SD card is requalified for in-place random header updates.
+
+## Single-sector metadata writes
+
+FatFs still performs single-sector metadata operations when creating/closing/updating directory state.
+
+The C3 production build therefore patches Arduino-ESP32 3.3.5 `sdWriteSector()` before compiling the C3 target.
+
+`tools/patch-arduino-sd.cjs` changes the CMD24 completion sequence so that:
+
+- `0x05` is required as the accepted data-response token;
+- CS remains asserted while the card is program-busy;
+- firmware waits up to 5 seconds for ready;
+- the card is deselected only after that busy period clears;
+- status is checked after completion.
+
+This was the difference required to move from stage 47 on `fclose()` to a healthy completed take.
+
+The patch is C3-only in CI. Odyssey S3 and Chakshu compile before it is applied.
+
+## Mount recovery
+
+The mount path is guarded by one SD mutex and one-open-file policy.
+
+If a previous storage failure suggests the continuously powered card may still be in a data/program state, the recovery code can:
+
+- drain/stop an unfinished CMD18 read;
+- send the stop token for an unfinished CMD25 write;
+- return the card to SPI idle;
+- retry the normal Arduino mount once.
+
+Do not remount underneath an open file or active recording.
+
+## Failure persistence
+
+The recorder stores the first completed failure stage and the number of successfully committed PCM bytes.
+
+The PWA exposes that as:
+
+- historical `sdProbeState`;
+- current `sdLiveProbeState`;
+- `lastRecordKiB`.
+
+This is diagnostic persistence, not proof the current card is still unhealthy.
+
+## Sync
+
+Phase-one media-v1 on C3 exposes request/response catalogue and file reads.
+
+The transfer path supports:
+
+- catalogue;
+- explicit path reads;
+- per-file delete;
+- Clear SD for Synap-owned captures;
+- explicit recovery.
+
+The PWA verifies durable import before it calls a delete operation. A successful sync is recorded in the PWA even when the SD original is intentionally retained.
+
+## Validation evidence
+
+The physically useful progression was:
+
+- 512-byte capture writes: repeated stage-55 EIO;
+- preallocation did not change that failure point;
+- 4 KiB capture writes moved the failure to post-record finalization;
+- append-only STOP moved the remaining failure to `fclose()`;
+- the CMD24 busy-completion patch removed that final metadata failure;
+- fresh build-1836 record/stop cycles returned `sdDetectionState=1`, `sdProbeState=6`, `sdLiveProbeState=6`, `lastRecordKiB=0`;
+- build 1838 re-enabled the media-v1 sync surface without changing the proven recorder.
+
+## Rules for future changes
+
+A change to any of these should trigger actual-device SD qualification:
+
+- Arduino core version;
+- SD driver patch;
+- SPI clock;
+- batch size;
+- stdio buffering;
+- file open mode;
+- STOP/finalization behavior;
+- mount/recovery order;
+- one-open-file policy;
+- BLE transfer read semantics.
+
+Do not infer that a filesystem/unit test reproduces the SD controller's real busy/program timing. The final acceptance gate is always physical hardware.
