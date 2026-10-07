@@ -110,6 +110,7 @@ void setup() {
   // Reproduce the last independently observed healthy lifecycle (build 1445 /
   // 1481): create the transfer worker first, then perform one mount before BLE.
   // The worker cannot touch storage until BLE submits a request.
+  OdysseyWifi::initialize();
   OdysseyTransfer::initialize();
   odysseyInitializeSdCardBeforeBle();
   // The first battery sample precedes SD probing. Re-sample only when SD

@@ -253,7 +253,7 @@ static void worker(void*) {
       // A physical disconnected double-tap is an explicit recovery request,
       // just like PWA operation 14, and may safely run while storage is idle.
       const bool idleEnough=!odysseyRecording.load() && !streamingEnabled.load() &&
-        !otaBusy() && !sleepPending;
+        !OdysseyWifi::busy() && !otaBusy() && !sleepPending;
       if (odysseySdConsumeRecoveryRequest()) {
         if (idleEnough) {
           Serial.println("[SD] physical touch requested software recovery");
@@ -267,7 +267,15 @@ static void worker(void*) {
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load()) continue;
     // Connected remote standby only idles the microphone/CPU; SD media must
     // remain readable for verified sync and recovery without a forced wake.
-    if (odysseyRecording.load() || streamingEnabled.load() || otaBusy() || sleepPending) {
+    // Wi-Fi status must remain readable over BLE while the uploader owns SD.
+    if (request.operation==25) {
+      char detail[480];
+      const size_t n=OdysseyWifi::encode(detail,sizeof(detail));
+      reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),n);
+      continue;
+    }
+    if (odysseyRecording.load() || streamingEnabled.load() || OdysseyWifi::busy() ||
+        otaBusy() || sleepPending) {
       reply(request,BUSY);continue;
     }
     uint8_t error=OK;uint32_t total=0;size_t size=0;
@@ -293,6 +301,21 @@ static void worker(void*) {
       case 18:
         selectedPath[0]=0;catalogueBuffer="";
         if(!storageReady())error=NO_SD;else total=clearRecordings();
+        break;
+      // C3 direct Wi-Fi sync control. Configuration is staged in <=60-byte BLE
+      // chunks so credentials and short-lived cloud tickets never need a new
+      // characteristic or protocol version.
+      case 23: {
+        const uint32_t next=OdysseyWifi::configChunk(request.offset,request.path);
+        if (next==UINT32_MAX) error=BAD_COMMAND; else total=next;
+        break;
+      }
+      case 24:
+        if (request.offset!=1u && request.offset!=2u) error=BAD_COMMAND;
+        else error=OdysseyWifi::applyConfig(request.offset)?OK:BUSY;
+        break;
+      case 26:
+        error=OdysseyWifi::forget()?OK:BUSY;
         break;
       default:error=BAD_COMMAND;break;
     }
@@ -360,9 +383,9 @@ void initialize() {
 }
 
 void ble(BLEService* service) {
-  // Phase 1 sync enablement: expose only the proven request/response media-v1
-  // transport. Notification-window transfer, Wi-Fi and destructive format stay
-  // unadvertised until catalogue/read/delete/clear are validated on hardware.
+  // Phase 2 keeps the proven request/response media-v1 transport and adds
+  // BLE-controlled C3 Wi-Fi cloud upload. Notification-window transfer and
+  // destructive full-card format remain unadvertised.
   auto* command=service->createCharacteristic("4fa12354-0000-1000-8000-00805f9b34fb",
     BLECharacteristic::PROPERTY_WRITE|BLECharacteristic::PROPERTY_WRITE_NR);
   command->setCallbacks(new CommandCallbacks());

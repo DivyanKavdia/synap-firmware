@@ -49,9 +49,10 @@ void encodeModuleCapabilities(uint8_t* p) {
 #if CONFIG_IDF_TARGET_ESP32C3
   if (OdysseyTransfer::available()) {
     p[14]=1;
-    // Phase 1 C3 media-v1 exposes request/response catalogue/read/delete/clear
-    // only. Leave media feature bits 0..2 clear: no notification window,
-    // direct Wi-Fi or destructive full-card format is advertised yet.
+    // media feature bit 1 advertises BLE-controlled direct Wi-Fi upload.
+    // Bit 0 notification-window transfer and bit 2 destructive full-card
+    // format remain disabled on C3.
+    if (OdysseyWifi::available()) p[16]|=2;
     if (odysseySdDetectionState()==1) {
       ready|=SYNAP_CAP_SD;
       if (ready&SYNAP_CAP_AUDIO) ready|=SYNAP_CAP_SDAUDIO;

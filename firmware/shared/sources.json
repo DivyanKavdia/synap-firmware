@@ -13,6 +13,7 @@
   "audio-transport.cpp",
   "odyssey-sd-1631-detect.cpp",
   "odyssey-sd-1631-recording.cpp",
+  "odyssey-c3-wifi.cpp",
   "odyssey-sd-1631-transfer.cpp",
   "boot.cpp"
 ]

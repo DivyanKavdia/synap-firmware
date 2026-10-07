@@ -6,7 +6,7 @@ void setDeviceState(DeviceState state, ErrorCode error) {
 
 void applyCpuPowerProfile(bool active) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  active=active || odysseyRecording.load();
+  active=active || odysseyRecording.load() || OdysseyWifi::busy();
 #endif
   static uint32_t appliedMHz = 0;
   const uint32_t targetMHz = active ? ACTIVE_CPU_MHZ : IDLE_CPU_MHZ;

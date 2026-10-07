@@ -215,6 +215,15 @@ std::atomic<uint32_t> odysseySdSleepGuardUntil{0};
 void odysseyToggleRecording();
 bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs);
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs);
+namespace OdysseyWifi {
+void initialize();
+bool available();
+bool busy();
+uint32_t configChunk(uint32_t offset,const char* text);
+bool applyConfig(uint32_t mode);
+bool forget();
+size_t encode(char* output,size_t capacity);
+}
 namespace OdysseyTransfer {
 void initialize();
 void ble(BLEService* service);

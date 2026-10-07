@@ -134,7 +134,7 @@ bool exitRemoteStandby() {
 
 void enterRemoteStandby() {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  if (odysseyRecording.load()) return;
+  if (odysseyRecording.load() || OdysseyWifi::busy()) return;
 #endif
   if (sleepPending) return;
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
@@ -156,7 +156,7 @@ void enterRemoteStandby() {
 
 void enterDeepSleep(const char* reason) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  if (odysseyRecording.load()) return;
+  if (odysseyRecording.load() || OdysseyWifi::busy()) return;
   const uint32_t sdGuardUntil=odysseySdSleepGuardUntil.load();
   if (sdGuardUntil && static_cast<int32_t>(millis()-sdGuardUntil)<0) {
     Serial.println("[POWER] deep sleep deferred: C3 SD post-record settle");
@@ -264,6 +264,7 @@ void powerTick() {
     if (batteryCritical()) odysseyStopRequested=true;
     return;
   }
+  if (OdysseyWifi::busy()) return;
   const uint32_t sdGuardUntil=odysseySdSleepGuardUntil.load();
   if (sdGuardUntil && static_cast<int32_t>(millis()-sdGuardUntil)<0) return;
 #endif
@@ -305,7 +306,7 @@ void pollTouchControl() {
 
   if (deepSleepAfterStop && !streaming && !raw && !otaBusy()
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-      && !odysseyRecording.load()
+      && !odysseyRecording.load() && !OdysseyWifi::busy()
 #endif
   ) {
     deepSleepAfterStop=false;
@@ -371,6 +372,10 @@ void pollTouchControl() {
       if (odysseyRecording.load()) {
         odysseyStopRequested=true;
         deepSleepAfterStop=true;
+        return;
+      }
+      if (OdysseyWifi::busy()) {
+        Serial.println("[POWER] deep sleep deferred: C3 Wi-Fi upload active");
         return;
       }
 #endif
