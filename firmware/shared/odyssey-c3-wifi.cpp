@@ -559,7 +559,7 @@ bool applyConfig(uint32_t) { return false; }
 bool forget() { return false; }
 size_t encode(char* output,size_t capacity) {
   static constexpr char unavailable[] =
-      "{\\"configured\\":false,\\"active\\":false,\\"phase\\":0,\\"total\\":0,\\"uploaded\\":0,\\"http\\":0,\\"message\\":\\"Wi-Fi sync requires a size-optimized firmware update.\\"}";
+      R"JSON({"configured":false,"active":false,"phase":0,"total":0,"uploaded":0,"http":0,"message":"Wi-Fi sync requires a size-optimized firmware update."})JSON";
   if (!output || capacity<=sizeof(unavailable)-1u) return 0;
   memcpy(output,unavailable,sizeof(unavailable));
   return sizeof(unavailable)-1u;
