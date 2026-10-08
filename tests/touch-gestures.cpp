@@ -22,6 +22,7 @@ bool remoteStandby=false,sleepPending=false,busy=false;
 std::atomic<uint32_t> touchTransitions{0},touchActions{0};
 std::atomic<uint16_t> touchLastHoldMs{0};
 std::atomic<bool> odysseyRecording{false},odysseyStopRequested{false};
+std::atomic<uint32_t> odysseySdSleepGuardUntil{0};
 int localToggles=0;
 void odysseyToggleRecording(){++localToggles; if(odysseyRecording)odysseyStopRequested=true;else odysseyRecording=true;}
 std::atomic<bool> deviceConnected{true},streamingEnabled{false};
@@ -132,7 +133,11 @@ int main(){
   const int beforeLocalSleep=sleeps;
   settle();advance(4100,true);advance(100,false);
   assert(odysseyStopRequested && sleeps==beforeLocalSleep);
-  odysseyRecording=false;advance(5,false);assert(sleeps==beforeLocalSleep+1);
+  // Simulate the recorder's close+metadata completion and SD settling.
+  // A pending four-second hold must not bypass the five-second guard.
+  odysseySdSleepGuardUntil=millis()+5000u;
+  odysseyRecording=false;advance(5,false);assert(sleeps==beforeLocalSleep);
+  advance(5000,false);assert(sleeps==beforeLocalSleep+1);
   sleepPending=false;odysseyStopRequested=false;settle();
   tap();tap();assert(starts==previousStarts+1);
 #endif
