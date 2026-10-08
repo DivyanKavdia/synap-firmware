@@ -2252,6 +2252,12 @@ static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
 static std::atomic<uint32_t> odysseySdBeginAttempts{0};
 static std::atomic<uint8_t> odysseySdLastMountReason{0}; // 1=boot,2=op14,3=touch,4=probe
+// VFS stages: 0=not run; 1=root; 2=directory setup; 3=directory type;
+// 4=opendir; 5=closedir; 6=probe open; 7=probe write/flush;
+// 8=probe close; 9=probe unlink; 10=ready; 11=runtime catalogue/read.
+// Diagnostic only: these fields must not change the proven SD mount path.
+static std::atomic<uint8_t> odysseySdVfsStep{0};
+static std::atomic<int32_t> odysseySdVfsErrno{0};
 static std::atomic<int16_t> odysseySdBitBangCsHigh{-2};
 static std::atomic<int16_t> odysseySdBitBangCsLow{-2};
 static std::atomic<uint8_t> odysseySdBitBangStopState{0}; // 1=released,2=still-busy,3=no-ready
@@ -2273,6 +2279,8 @@ int32_t odysseySdLastError() { return odysseySdLastMountError.load(); }
 uint32_t odysseySdAttemptCount() { return odysseySdMountAttempts.load(); }
 uint32_t odysseySdBeginAttemptCount() { return odysseySdBeginAttempts.load(); }
 uint8_t odysseySdLastMountReasonCode() { return odysseySdLastMountReason.load(); }
+uint8_t odysseySdVfsStepValue() { return odysseySdVfsStep.load(); }
+int32_t odysseySdVfsErrnoValue() { return odysseySdVfsErrno.load(); }
 int16_t odysseySdBitBangCsHighState() { return odysseySdBitBangCsHigh.load(); }
 int16_t odysseySdBitBangCsLowState() { return odysseySdBitBangCsLow.load(); }
 uint8_t odysseySdBitBangStopStateValue() { return odysseySdBitBangStopState.load(); }
@@ -2292,6 +2300,7 @@ void odysseySdMarkVfsFailure() {
   // Observation only. Catalogue/read errors must never schedule a destructive
   // remount behind the user's back. Explicit PWA Check SD (op14) or a physical
   // disconnected double-tap may request recovery.
+  odysseySdVfsStep=11;odysseySdVfsErrno=errno?errno:EIO;
   odysseySdBootState=2;odysseySdProbeStage=4;
   odysseySdLastMountError=ESP_FAIL;
 }
@@ -2610,8 +2619,10 @@ static bool odysseySdBeginLocked() {
 }
 
 static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
+  odysseySdVfsStep=0;odysseySdVfsErrno=0;
   struct stat root{};
   if (stat(ODYSSEY_SD_MOUNT_POINT,&root)!=0 || !S_ISDIR(root.st_mode)) {
+    odysseySdVfsStep=1;odysseySdVfsErrno=errno?errno:ENOTDIR;
     odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=4;
     Serial.printf("[SD] %s attempt %u VFS root unavailable errno=%d\n",reason,unsigned(attempt),errno);
@@ -2620,6 +2631,7 @@ static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
   struct stat recordings{};
   if (stat(ODYSSEY_SD_RECORDING_DIR,&recordings)!=0) {
     if (errno!=ENOENT || mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) {
+      odysseySdVfsStep=2;odysseySdVfsErrno=errno?errno:EIO;
       odysseySdLastMountError=ESP_FAIL;
       odysseySdBootState=2;odysseySdProbeStage=4;
       Serial.printf("[SD] %s attempt %u recording directory unavailable errno=%d\n",
@@ -2627,6 +2639,7 @@ static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
       return false;
     }
   } else if (!S_ISDIR(recordings.st_mode)) {
+    odysseySdVfsStep=3;odysseySdVfsErrno=ENOTDIR;
     odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=4;
     Serial.printf("[SD] %s attempt %u /synap is not a directory\n",reason,unsigned(attempt));
@@ -2636,6 +2649,7 @@ static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
   DIR* verified=opendir(ODYSSEY_SD_RECORDING_DIR);
   if (!verified) {
     const int saved=errno;
+    odysseySdVfsStep=4;odysseySdVfsErrno=saved;
     odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=4;
     Serial.printf("[SD] %s attempt %u recordings opendir failed errno=%d\n",
@@ -2644,6 +2658,7 @@ static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
   }
   if (closedir(verified)!=0) {
     const int saved=errno;
+    odysseySdVfsStep=5;odysseySdVfsErrno=saved;
     odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=4;
     Serial.printf("[SD] %s attempt %u recordings closedir failed errno=%d\n",
@@ -2655,23 +2670,33 @@ static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
   FILE* probe=fopen(probePath,"wb");
   if (!probe) {
     const int saved=errno;
+    odysseySdVfsStep=6;odysseySdVfsErrno=saved;
     odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=4;
     Serial.printf("[SD] %s attempt %u recordings not writable errno=%d\n",
       reason,unsigned(attempt),saved);
     return false;
   }
+  errno=0;
   const bool writeOk=fputc('S',probe)!=EOF && fflush(probe)==0;
-  const int writeErrno=errno;
+  const int writeErrno=writeOk?0:errno;
+  errno=0;
   const bool closeOk=fclose(probe)==0;
+  const int closeErrno=closeOk?0:errno;
+  errno=0;
   const bool removeOk=unlink(probePath)==0;
+  const int removeErrno=removeOk?0:errno;
   if (!writeOk || !closeOk || !removeOk) {
+    const uint8_t failedStep=!writeOk?7:!closeOk?8:9;
+    const int failedErrno=!writeOk?writeErrno:!closeOk?closeErrno:removeErrno;
+    odysseySdVfsStep=failedStep;odysseySdVfsErrno=failedErrno?failedErrno:EIO;
     odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=4;
     Serial.printf("[SD] %s attempt %u write/readiness probe failed errno=%d\n",
-      reason,unsigned(attempt),writeOk?errno:writeErrno);
+      reason,unsigned(attempt),int(odysseySdVfsErrno.load()));
     return false;
   }
+  odysseySdVfsStep=10;odysseySdVfsErrno=0;
   return true;
 }
 
@@ -2688,6 +2713,7 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   odysseySdProbeStage=0;
   odysseySdLastMountReason=odysseySdMountReasonCode(reason);
   ++odysseySdMountAttempts;
+  odysseySdVfsStep=0;odysseySdVfsErrno=0;
   odysseySdReleaseLocked();
 
   // digitalWrite BEFORE pinMode, which is the order build 1445 used. The
@@ -3148,6 +3174,15 @@ void odysseyToggleRecording() {
 // then streams the append-only SD WAV directly to Synap Cloud over HTTPS.
 // The SD source is never deleted here; retention stays a separate PWA choice.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+// The direct HTTPS Wi-Fi implementation currently exceeds the immutable
+// 1,310,720-byte C3 OTA slot. Keep its implementation for optimization, but
+// ship a diagnostic-safe build with the feature explicitly disabled; otherwise
+// the OTA pipeline cannot publish fixes for the existing SD recorder.
+// Never enlarge the OTA partition without a separate migration design.
+#ifndef SYNAP_C3_WIFI_UPLOAD_ENABLED
+#define SYNAP_C3_WIFI_UPLOAD_ENABLED 0
+#endif
+#if SYNAP_C3_WIFI_UPLOAD_ENABLED
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <limits.h>
@@ -3682,7 +3717,27 @@ void initialize() {
 }
 
 } // namespace OdysseyWifi
-#endif
+#else
+// No Wi-Fi upload is advertised until the C3 TLS image fits the deployed OTA
+// partition. Media-v1 BLE catalogue/read/delete and offline SD recording stay
+// available exactly as in the proven recorder baseline.
+namespace OdysseyWifi {
+bool available() { return false; }
+bool busy() { return false; }
+uint32_t configChunk(uint32_t,const char*) { return UINT32_MAX; }
+bool applyConfig(uint32_t) { return false; }
+bool forget() { return false; }
+size_t encode(char* output,size_t capacity) {
+  static constexpr char unavailable[] =
+      "{\\"configured\\":false,\\"active\\":false,\\"phase\\":0,\\"total\\":0,\\"uploaded\\":0,\\"http\\":0,\\"message\\":\\"Wi-Fi sync requires a size-optimized firmware update.\\"}";
+  if (!output || capacity<=sizeof(unavailable)-1u) return 0;
+  memcpy(output,unavailable,sizeof(unavailable));
+  return sizeof(unavailable)-1u;
+}
+void initialize() {}
+} // namespace OdysseyWifi
+#endif // SYNAP_C3_WIFI_UPLOAD_ENABLED
+#endif // Odyssey C3
 // Odyssey C3 SD media-v1: catalogue/read/delete for locally recorded WAV files.
 // C3 storage is mounted through the stock Arduino SD SPI path and accessed through FAT/VFS.
 // Files are deleted only after the PWA has imported and verified them.
@@ -4007,10 +4062,11 @@ static void worker(void*) {
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
       char detail[480];
       const int n=snprintf(detail,sizeof(detail),
-        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"mountWhy\":%u,\"bbHigh\":%d,\"bbLow\":%d,\"raw0\":%u,\"rawFF\":%u,\"rawFE\":%u,\"rawOther\":%u,\"rawMaxFF\":%u,\"bbCmd12Candidate\":%d,\"bbReadIdle\":%u,\"bbDrain\":%lu,\"bbStop\":%u,\"bbCmd0\":%d,\"bbCmd8\":%d,\"bbR7\":%lu}",
+        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"mountWhy\":%u,\"vfsStep\":%u,\"vfsErrno\":%ld,\"bbHigh\":%d,\"bbLow\":%d,\"raw0\":%u,\"rawFF\":%u,\"rawFE\":%u,\"rawOther\":%u,\"rawMaxFF\":%u,\"bbCmd12Candidate\":%d,\"bbReadIdle\":%u,\"bbDrain\":%lu,\"bbStop\":%u,\"bbCmd0\":%d,\"bbCmd8\":%d,\"bbR7\":%lu}",
         catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
         static_cast<long>(odysseySdLastError()),static_cast<unsigned long>(odysseySdAttemptCount()),
         static_cast<unsigned long>(odysseySdBeginAttemptCount()),unsigned(odysseySdLastMountReasonCode()),
+        unsigned(odysseySdVfsStepValue()),static_cast<long>(odysseySdVfsErrnoValue()),
         int(odysseySdBitBangCsHighState()),int(odysseySdBitBangCsLowState()),
         unsigned(odysseySdRawZeroCount()),unsigned(odysseySdRawFFCount()),
         unsigned(odysseySdRawFECount()),unsigned(odysseySdRawOtherCount()),
