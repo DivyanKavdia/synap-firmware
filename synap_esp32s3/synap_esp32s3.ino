@@ -3150,7 +3150,6 @@ void odysseyToggleRecording() {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
-#include <HTTPClient.h>
 #include <limits.h>
 #include <time.h>
 
@@ -3370,100 +3369,151 @@ static void wavHeader(uint8_t* h,uint32_t pcmBytes) {
   memcpy(h+36,"data",4);put32le(h+40,pcmBytes);
 }
 
-class SegmentStream : public Stream {
- public:
-  SegmentStream(FILE* file,uint32_t pcmOffset,uint32_t pcmBytes)
-    : file_(file),pcmBytes_(pcmBytes),remaining_(pcmBytes+44u),position_(0) {
-    wavHeader(header_,pcmBytes_);
-    if (file_) {
-      if (fseek(file_,long(44u+pcmOffset),SEEK_SET)!=0) failed_=true;
-    } else failed_=true;
-    setTimeout(5000);
-  }
-  int available() override {
-    if (failed_ || !remaining_) return 0;
-    return remaining_>uint32_t(INT_MAX)?INT_MAX:int(remaining_);
-  }
-  int read() override {
-    uint8_t byte=0;
-    return readBytes(&byte,1)==1?int(byte):-1;
-  }
-  int peek() override { return -1; }
-  void flush() override {}
-  size_t write(uint8_t) override { return 0; }
-  size_t readBytes(char* buffer,size_t length) override {
-    return readBytes(reinterpret_cast<uint8_t*>(buffer),length);
-  }
-  size_t readBytes(uint8_t* buffer,size_t length) override {
-    if (!buffer || !length || failed_ || !remaining_) return 0;
-    size_t wanted=length;
-    if (wanted>remaining_) wanted=remaining_;
-    size_t done=0;
-    if (position_<44u && wanted) {
-      const size_t headerRemaining=44u-position_;
-      const size_t take=wanted<headerRemaining?wanted:headerRemaining;
-      memcpy(buffer,header_+position_,take);
-      buffer+=take;wanted-=take;done+=take;position_+=take;remaining_-=take;
-    }
-    if (wanted) {
-      const size_t got=fread(buffer,1,wanted,file_);
-      done+=got;position_+=got;remaining_-=got;
-      if (got!=wanted) failed_=true;
-    }
-    return done;
-  }
-  bool good() const { return !failed_ && remaining_==0; }
- private:
-  FILE* file_=nullptr;
-  uint32_t pcmBytes_=0,remaining_=0,position_=0;
-  uint8_t header_[44]{};
-  bool failed_=false;
-};
+static uint8_t httpBuffer[2048];
 
-static bool httpBegin(HTTPClient& http,WiFiClientSecure& tls,const String& url) {
-  tls.setCACert(GOOGLE_TRUST_ROOT_R1);
-  tls.setHandshakeTimeout(15);
-  http.setConnectTimeout(15000);
-  http.setTimeout(HTTP_TIMEOUT_MS);
-  http.setReuse(false);
-  return http.begin(tls,url);
+static bool endpoint(char* host,size_t hostCapacity,uint16_t& port) {
+  const char* value=uploadSpec.endpoint;
+  if (!value || strncmp(value,"https://",8)!=0) return false;
+  value+=8;
+  if (!*value || strchr(value,'/')) return false;
+  const char* colon=strrchr(value,':');
+  size_t hostLength=colon?size_t(colon-value):strlen(value);
+  if (!hostLength || hostLength>=hostCapacity) return false;
+  memcpy(host,value,hostLength);host[hostLength]=0;
+  port=443;
+  if (colon) {
+    unsigned parsed=0;
+    const char* p=colon+1;
+    if (!*p) return false;
+    while (*p) {
+      if (*p<'0' || *p>'9') return false;
+      parsed=parsed*10u+unsigned(*p-'0');
+      if (parsed>65535u) return false;
+      ++p;
+    }
+    if (!parsed) return false;
+    port=uint16_t(parsed);
+  }
+  return true;
 }
 
-static void bearer(HTTPClient& http) {
-  http.addHeader("Authorization","SynapDevice "+String(uploadSpec.token));
-  http.addHeader("Cache-Control","no-store");
+static bool writeAll(WiFiClientSecure& tls,const uint8_t* data,size_t size) {
+  const uint32_t started=millis();
+  size_t sent=0;
+  while (sent<size && tls.connected() && uint32_t(millis()-started)<HTTP_TIMEOUT_MS) {
+    const size_t written=tls.write(data+sent,size-sent);
+    if (written) sent+=written;
+    else delay(1);
+  }
+  return sent==size;
+}
+static bool writeAll(WiFiClientSecure& tls,const char* text) {
+  return text && writeAll(tls,reinterpret_cast<const uint8_t*>(text),strlen(text));
+}
+
+static int readHttpStatus(WiFiClientSecure& tls) {
+  char line[64]{};
+  size_t used=0;
+  const uint32_t started=millis();
+  while (uint32_t(millis()-started)<HTTP_TIMEOUT_MS && used+1<sizeof(line)) {
+    if (!tls.available()) {
+      if (!tls.connected()) break;
+      delay(1);continue;
+    }
+    const int c=tls.read();
+    if (c<0) continue;
+    if (c=='\n') break;
+    if (c!='\r') line[used++]=char(c);
+  }
+  line[used]=0;
+  if (strncmp(line,"HTTP/",5)!=0) return -1;
+  const char* space=strchr(line,' ');
+  if (!space || space[1]<'0'||space[1]>'9'||space[2]<'0'||space[2]>'9'||space[3]<'0'||space[3]>'9')
+    return -1;
+  return (space[1]-'0')*100+(space[2]-'0')*10+(space[3]-'0');
+}
+
+static bool openHttps(WiFiClientSecure& tls,char* host,size_t hostCapacity) {
+  uint16_t port=443;
+  if (!endpoint(host,hostCapacity,port)) return false;
+  tls.setCACert(GOOGLE_TRUST_ROOT_R1);
+  tls.setHandshakeTimeout(15);
+  return tls.connect(host,port,15000)==1;
 }
 
 static bool uploadSegment(FILE* file,uint32_t index,uint32_t pcmOffset,uint32_t pcmBytes,int& httpCode) {
+  if (!file || fseek(file,long(44u+pcmOffset),SEEK_SET)!=0) { httpCode=-1;return false; }
+  char host[128]{};
   WiFiClientSecure tls;
-  HTTPClient http;
-  const String url=String(uploadSpec.endpoint)+"/v1/device-uploads/"+uploadSpec.recordingId+
-    "/segments/"+String(index);
-  if (!httpBegin(http,tls,url)) { httpCode=-1;return false; }
-  bearer(http);
-  http.addHeader("Content-Type","audio/wav");
-  http.addHeader("x-synap-start-ms",String(pcmOffset/PCM_BYTES_PER_MS));
-  http.addHeader("x-synap-end-ms",String((pcmOffset+pcmBytes)/PCM_BYTES_PER_MS));
-  SegmentStream stream(file,pcmOffset,pcmBytes);
-  httpCode=http.sendRequest("PUT",&stream,size_t(pcmBytes)+44u);
-  const bool ok=(httpCode==200 || httpCode==202) && stream.good();
-  http.end();
-  return ok;
+  if (!openHttps(tls,host,sizeof(host))) { httpCode=-1;return false; }
+
+  char header[1536];
+  const int headerSize=snprintf(header,sizeof(header),
+    "PUT /v1/device-uploads/%s/segments/%lu HTTP/1.1\r\n"
+    "Host: %s\r\n"
+    "Authorization: SynapDevice %s\r\n"
+    "Content-Type: audio/wav\r\n"
+    "Content-Length: %lu\r\n"
+    "x-synap-start-ms: %lu\r\n"
+    "x-synap-end-ms: %lu\r\n"
+    "Cache-Control: no-store\r\n"
+    "Connection: close\r\n\r\n",
+    uploadSpec.recordingId,static_cast<unsigned long>(index),host,uploadSpec.token,
+    static_cast<unsigned long>(pcmBytes+44u),
+    static_cast<unsigned long>(pcmOffset/PCM_BYTES_PER_MS),
+    static_cast<unsigned long>((pcmOffset+pcmBytes)/PCM_BYTES_PER_MS));
+  if (headerSize<=0 || size_t(headerSize)>=sizeof(header) || !writeAll(tls,header)) {
+    tls.stop();httpCode=-1;return false;
+  }
+
+  uint8_t wav[44];
+  wavHeader(wav,pcmBytes);
+  if (!writeAll(tls,wav,sizeof(wav))) { tls.stop();httpCode=-1;return false; }
+
+  uint32_t remaining=pcmBytes;
+  while (remaining) {
+    const size_t wanted=remaining<sizeof(httpBuffer)?size_t(remaining):sizeof(httpBuffer);
+    const size_t got=fread(httpBuffer,1,wanted,file);
+    if (got!=wanted || !writeAll(tls,httpBuffer,got)) {
+      tls.stop();httpCode=-1;return false;
+    }
+    remaining-=uint32_t(got);
+  }
+
+  httpCode=readHttpStatus(tls);
+  tls.stop();
+  return httpCode==200 || httpCode==202;
 }
 
 static bool finalizeUpload(uint32_t durationMs,uint32_t segmentCount,int& httpCode) {
+  char host[128]{};
   WiFiClientSecure tls;
-  HTTPClient http;
-  const String url=String(uploadSpec.endpoint)+"/v1/device-uploads/"+uploadSpec.recordingId+"/finalize";
-  if (!httpBegin(http,tls,url)) { httpCode=-1;return false; }
-  bearer(http);
-  http.addHeader("Content-Type","application/json");
-  const String body=String("{\"duration_ms\":")+String(durationMs)+
-    ",\"segment_count\":"+String(segmentCount)+"}";
-  httpCode=http.POST(body);
-  const bool ok=httpCode==200 || httpCode==202;
-  http.end();
-  return ok;
+  if (!openHttps(tls,host,sizeof(host))) { httpCode=-1;return false; }
+
+  char body[112];
+  const int bodySize=snprintf(body,sizeof(body),
+    "{\"duration_ms\":%lu,\"segment_count\":%lu}",
+    static_cast<unsigned long>(durationMs),static_cast<unsigned long>(segmentCount));
+  if (bodySize<=0 || size_t(bodySize)>=sizeof(body)) { tls.stop();httpCode=-1;return false; }
+
+  char header[1536];
+  const int headerSize=snprintf(header,sizeof(header),
+    "POST /v1/device-uploads/%s/finalize HTTP/1.1\r\n"
+    "Host: %s\r\n"
+    "Authorization: SynapDevice %s\r\n"
+    "Content-Type: application/json\r\n"
+    "Content-Length: %u\r\n"
+    "Cache-Control: no-store\r\n"
+    "Connection: close\r\n\r\n",
+    uploadSpec.recordingId,host,uploadSpec.token,unsigned(bodySize));
+  if (headerSize<=0 || size_t(headerSize)>=sizeof(header) ||
+      !writeAll(tls,header) || !writeAll(tls,reinterpret_cast<const uint8_t*>(body),size_t(bodySize))) {
+    tls.stop();httpCode=-1;return false;
+  }
+
+  httpCode=readHttpStatus(tls);
+  tls.stop();
+  return httpCode==200 || httpCode==202;
 }
 
 static bool connectWifi() {

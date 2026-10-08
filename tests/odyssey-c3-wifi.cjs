@@ -40,17 +40,18 @@ test('C3 Wi-Fi credentials are provisioned over BLE and persisted without exposi
   assert.doesNotMatch(wifi,/\"password\"/);
 });
 
-test('C3 Wi-Fi upload virtualizes WAV segments and finalizes through scoped cloud device-upload API',()=>{
+test('C3 Wi-Fi upload uses minimal verified HTTP over TLS and finalizes through scoped cloud device-upload API',()=>{
   assert.match(wifi,/SEGMENT_MS=120000u/);
   assert.match(wifi,/PCM_BYTES_PER_MS=32u/);
-  assert.match(wifi,/class SegmentStream : public Stream/);
-  assert.match(wifi,/wavHeader\(header_,pcmBytes_\)/);
-  assert.match(wifi,/fseek\(file_,long\(44u\+pcmOffset\),SEEK_SET\)/);
-  assert.match(wifi,/\/segments\/\"\+String\(index\)/);
-  assert.match(wifi,/http\.sendRequest\("PUT",&stream,size_t\(pcmBytes\)\+44u\)/);
-  assert.match(wifi,/\/finalize"/);
-  assert.match(wifi,/http\.POST\(body\)/);
-  assert.match(wifi,/Authorization","SynapDevice "/);
+  assert.match(wifi,/fseek\(file,long\(44u\+pcmOffset\),SEEK_SET\)/);
+  assert.match(wifi,/WiFiClientSecure tls/);
+  assert.match(wifi,/tls\.connect\(host,port,15000\)/);
+  assert.match(wifi,/PUT \/v1\/device-uploads\/%s\/segments\/%lu HTTP\/1\.1/);
+  assert.match(wifi,/POST \/v1\/device-uploads\/%s\/finalize HTTP\/1\.1/);
+  assert.match(wifi,/Authorization: SynapDevice %s/);
+  assert.match(wifi,/wavHeader\(wav,pcmBytes\)/);
+  assert.match(wifi,/readHttpStatus\(tls\)/);
+  assert.doesNotMatch(wifi,/#include <HTTPClient\.h>|\bHTTPClient\b/,'C3 must not link the heavyweight Arduino HTTPClient wrapper');
   assert.doesNotMatch(wifi,/\bunlink\s*\(|removeFile|clearRecordings/,'Wi-Fi upload must never delete the SD source');
 });
 
