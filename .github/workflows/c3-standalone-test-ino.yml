@@ -1,0 +1,95 @@
+name: Package standalone Odyssey C3 Wi-Fi test INO (not released)
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/c3-standalone-test-ino.yml'
+      - 'firmware/**'
+      - 'tools/**'
+      - 'synap_esp32s3/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  standalone-sketch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create target-specific standalone INO
+        run: |
+          node tools/assemble-source.cjs --check
+          mkdir -p "test-package/Synap_C3_WiFi_Experimental"
+          node tools/materialize-target.cjs esp32c3-supermini-4m synap_esp32s3/synap_esp32s3.ino test-package/Synap_C3_WiFi_Experimental/Synap_C3_WiFi_Experimental.ino
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("test-package/Synap_C3_WiFi_Experimental/Synap_C3_WiFi_Experimental.ino")
+          data = path.read_text()
+          title = """// Synap Odyssey C3 Wi-Fi + SD experimental standalone sketch.
+          // NOT FOR SHIPPED DEVICES: this source currently builds to ~1,440,000 bytes
+          // and EXCEEDS the fixed 1,310,720-byte production OTA slot.
+          // Use only on accessible development hardware with suitable test partitions.
+          // Native NimBLE, verified HTTPS upload, external SD and existing BLE protocol.
+          // This is NOT the custom sdkconfig-optimized ESP-IDF build.
+          #define SYNAP_C3_WIFI_UPLOAD_ENABLED 1
+          """
+          title = "\n".join(line.lstrip() for line in title.splitlines())+"\n"
+          assert data.startswith("#include <Arduino.h>"), "Unexpected compiled source header"
+          data = title + data
+          assert "SYNAP-ESP32C3-OTA-ID-V3" in data
+          assert '#include <NimBLEDevice.h>' in data
+          assert '#include <WiFiClientSecure.h>' in data
+          assert '#define SYNAP_C3_WIFI_UPLOAD_ENABLED 1' in data
+          assert 'ChakshuVoice::' not in data
+          path.write_text(data)
+          print("Standalone INO generated:",len(data),"characters")
+          PY
+          cp tools/patch-arduino-sd.cjs test-package/patch-arduino-sd.cjs
+          cat > test-package/TEST-README.txt <<'EOF'
+          SYNAP ODYSSEY C3 Wi-Fi + SD EXPERIMENTAL STANDALONE INO
+          =======================================================
+          Sketch:
+            Synap_C3_WiFi_Experimental/Synap_C3_WiFi_Experimental.ino
+
+          Target: ESP32-C3 SuperMini 4 MB flash ONLY (not Odyssey S3 or Chakshu).
+          Arduino-ESP32: pinned 3.3.5
+          Libraries: NimBLE-Arduino 2.3.6; Adafruit NeoPixel 1.15.2.
+
+          IMPORTANT: THIS FIRMWARE DOES NOT FIT EXISTING 1.25 MiB OTA SLOTS.
+          Prototype source currently uses about 1,440,000 bytes with size flags,
+          versus the fixed 1,310,720 byte OTA slot. Standalone sketch is
+          provided to inspect, test and profile on ACCESSIBLE development
+          hardware only. Do not OTA-flash it on any shipped sealed Synap C3.
+          Do not enlarge/change partitions on shipped devices.
+
+          Source was materialized from the C3-only branch; it includes the
+          verified HTTPS cloud uploader and native NimBLE adapter, but has NOT
+          been validated against real C3 BLE/Wi-Fi coexistence and SD behavior.
+
+          The pinned production SD driver fix is EXTERNAL to the INO and MUST
+          be applied to Arduino-ESP32 3.3.5 SD/src/sd_diskio.cpp before testing
+          offline SD recording. The helper patch script is included. Follow
+          the original source repository's tools/patch-arduino-sd.cjs docs.
+
+          For a meaningful firmware size comparison, build using -Oz and
+          -ffunction-sections -fdata-sections; disable unwind tables and use
+          --gc-sections, exactly as in the source GitHub CI workflow.
+
+          Wi-Fi requires credentials provisioned by the Synap PWA; it connects
+          as a Wi-Fi station to a 2.4 GHz AP/hotspot and uploads over HTTPS.
+          It does not create a SoftAP or provide a local HTTP file server.
+
+          This standalone Arduino sketch cannot by itself set ESP-IDF
+          sdkconfig/Kconfig options or remove precompiled library features.
+          A further Arduino-as-ESP-IDF-component project is needed to shrink
+          the Wi-Fi+TLS firmware below the existing OTA slot.
+
+          GitHub: DivyanKavdia/synap-firmware, draft PR #153.
+          Production on shipped devices remains build 1859.
+          EOF
+          test -s test-package/Synap_C3_WiFi_Experimental/Synap_C3_WiFi_Experimental.ino
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Synap-Odyssey-C3-WiFi-Standalone-INO-Experimental
+          path: test-package/
+          if-no-files-found: error
+          retention-days: 30
