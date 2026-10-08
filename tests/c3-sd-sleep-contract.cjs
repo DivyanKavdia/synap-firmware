@@ -17,7 +17,9 @@ test('C3 cannot enter deep sleep or reboot on a non-idle SD bus',()=>{
  assert.match(prepare,/if \(!guard\) \{[\s\S]*?return false;/);
  assert.match(prepare,/if \(odysseyRecording\.load\(\)\) \{[\s\S]*?return false;/);
  assert.match(prepare,/odysseySdQuiesceLocked\(ODYSSEY_SD_QUIESCE_BUDGET_MS\)/);
- assert.match(prepare,/return idle==1;/);
+ assert.match(prepare,/if \(odysseySdUnsafeToSleep\.load\(\)\)/);
+ assert.match(prepare,/if \(idle!=1\) \{[\s\S]*?odysseySdUnsafeToSleep=true;[\s\S]*?return false;\s*\}/);
+ assert.match(detect,/odysseySdUnsafeToSleep=false;/);
  assert.doesNotMatch(prepare,/quiesced=%u[^\n]*\n\s*return true;/);
  const deep=power.split('void enterDeepSleep(const char* reason) {')[1].split('void powerTick() {')[0];
  assert.match(deep,/if \(odysseyRecording\.load\(\) \|\| OdysseyWifi::busy\(\)\) return;/);
@@ -43,6 +45,8 @@ test('C3 SD recorder keeps sleep veto through final batch, fclose, persistent di
  assert(failedRecovery.indexOf('odysseySdSleepGuardUntil=finalizedAt+5000u;') <
    failedRecovery.indexOf('odysseyRecording=false;'));
  assert.match(runtime,/std::atomic<uint32_t> odysseySdSleepGuardUntil\{0\}/);
+ assert.match(runtime,/std::atomic<bool> odysseySdUnsafeToSleep\{false\}/);
+ assert.match(worker,/if \(!odysseySdReady\(\) && lastFault>=44u && lastFault!=48u\) \{[\s\S]*?odysseySdUnsafeToSleep=true;/);
 });
 
 test('all automatic and touch-triggered sleep entries defer until recording finalized and SD settled',()=>{
