@@ -72,10 +72,10 @@ jobs:
           node tools/patch-arduino-sd.cjs "$sd_driver"
           grep -q 'SYNAP_SD_CMD24_BUSY_FIX' "$sd_driver"
           grep -q 'sdWait(pdrv, 5000)' "$sd_driver"
-          # C3 Wi-Fi/TLS must still fit the existing 1.25 MiB OTA slots. Apply
-          # size-only compiler/linker flags; do not change the deployed partition table.
-          arduino-cli compile --fqbn 'esp32:esp32:esp32c3:FlashSize=4M,PartitionScheme=default,CDCOnBoot=cdc' --build-property "compiler.optimization_flags=-Oz -ffunction-sections -fdata-sections" --build-property "compiler.c.extra_flags=-fno-unwind-tables -fno-asynchronous-unwind-tables" --build-property "compiler.cpp.extra_flags=-fno-unwind-tables -fno-asynchronous-unwind-tables -DSYNAP_BUILD=$build -DUSE_REAL_I2S_MIC=1" --build-property "compiler.c.elf.extra_flags=-Wl,--gc-sections" --output-dir compiled-c3 prepared/synap_esp32c3
-          test "$(stat -c%s compiled-c3/synap_esp32c3.ino.bin)" -le 1310720
+          # Validation candidate: C3 external SD makes the internal SPIFFS partition unused.
+          # Reclaim it as two 0x1F0000 OTA slots so Wi-Fi/TLS fits while retaining A/B OTA.
+          arduino-cli compile --fqbn 'esp32:esp32:esp32c3:FlashSize=4M,PartitionScheme=no_fs,CDCOnBoot=cdc' --build-property "compiler.optimization_flags=-Oz -ffunction-sections -fdata-sections" --build-property "compiler.c.extra_flags=-fno-unwind-tables -fno-asynchronous-unwind-tables" --build-property "compiler.cpp.extra_flags=-fno-unwind-tables -fno-asynchronous-unwind-tables -DSYNAP_BUILD=$build -DUSE_REAL_I2S_MIC=1" --build-property "compiler.c.elf.extra_flags=-Wl,--gc-sections" --output-dir compiled-c3 prepared/synap_esp32c3
+          test "$(stat -c%s compiled-c3/synap_esp32c3.ino.bin)" -le 2031616
           test "$(stat -c%s compiled-chakshu/synap_chakshu.ino.bin)" -le 3342336
           node tools/release.cjs compiled-chakshu/synap_chakshu.ino.bin "$build" "$GITHUB_SHA" bundle/xiao-esp32s3-sense-8m "$SYNAP_RELEASE_BRANCH" prepared/synap_chakshu/synap_chakshu.ino xiao-esp32s3-sense-8m
           node tools/release.cjs compiled-s3/synap_esp32s3.ino.bin "$build" "$GITHUB_SHA" bundle/esp32s3-fh4r2-qspi-4m "$SYNAP_RELEASE_BRANCH" prepared/synap_esp32s3/synap_esp32s3.ino esp32s3-fh4r2-qspi-4m

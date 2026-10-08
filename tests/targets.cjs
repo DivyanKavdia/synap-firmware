@@ -17,6 +17,8 @@ test('target catalog keeps S3 SuperMini as primary',()=>{
   assert.equal(TARGETS['esp32c3-supermini-4m'].hardware.ledDriver,'neopixel');
   const c3sd=TARGETS['esp32c3-supermini-4m'];
   assert(c3sd.features.includes('sd') && c3sd.features.includes('sdAudio'));
+  assert.equal(c3sd.partition,'no_fs');
+  assert.equal(c3sd.slotSize,2031616);
   assert.equal(c3sd.hardware.batteryCellMv,2);
   assert.equal(c3sd.hardware.batteryAdcMv,1);
   assert.equal(c3sd.hardware.batteryFullMv,4150);
