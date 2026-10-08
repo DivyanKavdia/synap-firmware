@@ -411,6 +411,33 @@ static uint8_t odysseySdQuiesceLocked(uint32_t budgetMs) {
   const int csHigh=digitalRead(ODYSSEY_SD_MISO)==HIGH?1:0;
   for (uint8_t i=0;i<16;++i) (void)odysseySdBitBangTransfer(0xFF);
 
+  // The mounted FatFs session is closed and the storage mutex is held.
+  // On a healthy SD card, do NOT inject CMD12 into an already idle SPI bus:
+  // first require sustained 0xFF while selected AND a successful R2 status
+  // (CMD13). A pulled-up floating MISO alone is not sufficient proof.
+  uint16_t idleRun=0;
+  digitalWrite(ODYSSEY_SD_CS,LOW);
+  for (uint16_t i=0;i<256u && idleRun<64u;++i) {
+    const uint8_t response=odysseySdBitBangTransfer(0xFF);
+    if (response==0xFF) ++idleRun;
+    else idleRun=0;
+  }
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  (void)odysseySdBitBangTransfer(0xFF);
+  if (idleRun>=64u) {
+    uint8_t status=0xFF;
+    const uint8_t r1=odysseySdBitBangCommand(13u,0u,0x01u,&status,1u);
+    if (r1==0x00u && status==0x00u) {
+      digitalWrite(ODYSSEY_SD_SCK,LOW);
+      digitalWrite(ODYSSEY_SD_MOSI,HIGH);
+      Serial.printf("[SD] quiesce idle=1 via CMD13 status=%u in %lums\n",
+        unsigned(status),static_cast<unsigned long>(millis()-started));
+      return 1;
+    }
+    Serial.printf("[SD] CMD13 idle probe inconclusive r1=0x%02X status=0x%02X; using recovery quiesce\n",
+      unsigned(r1),unsigned(status));
+  }
+
   uint8_t candidate=0xFF;
   uint32_t drained=0;
   uint8_t state=odysseySdBitBangStopReadLocked(candidate,drained,budgetMs);
