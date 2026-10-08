@@ -132,6 +132,10 @@ void odysseySdMarkVfsFailure() {
   odysseySdVfsStep=11;odysseySdVfsErrno=errno?errno:EIO;
   odysseySdBootState=2;odysseySdProbeStage=4;
   odysseySdLastMountError=ESP_FAIL;
+  // A failed CMD18/read may leave an always-powered SD card streaming even
+  // though the VFS now reports "not ready". Require a validated recovery
+  // before deep sleep; do not treat a failed read as a safely absent card.
+  odysseySdUnsafeToSleep=true;
 }
 
 static void odysseySdEnsureMutex() {
