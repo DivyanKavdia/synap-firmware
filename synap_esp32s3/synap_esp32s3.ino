@@ -4219,8 +4219,14 @@ void setup() {
   touchChangedAt=millis();
   pinMode(BATTERY_ADC_PIN, INPUT);
   analogReadResolution(12);
-  // The device profile selects the divider calibration and ADC input range.
+  // C3 + SD uses a 1 MOhm / 470 kOhm battery divider (up to ~1.34 V
+  // at a full 4.2 V cell). C3 6 dB ADC attenuation only covers ~1.3 V
+  // and is unsuitable here; retain S3's historically validated 6 dB setting.
+#if CONFIG_IDF_TARGET_ESP32C3
+  analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);
+#else
   analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_6db);
+#endif
   statusLed.begin();
   statusLed.clear();
   statusLed.show();

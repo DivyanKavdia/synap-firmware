@@ -8,7 +8,16 @@ for(const [c3,disabled] of [[false,false],[true,false],[true,true]]){
   test(`battery sampling uses the actual target conversion and policy (C3=${c3}, disabled=${disabled})`,()=>{
     const code=materialize(source,c3?'esp32c3-supermini-4m':'esp32s3-fh4r2-qspi-4m');
     const battery=code.slice(code.indexOf('// SYNAP_BATTERY_RUNTIME_BEGIN'),code.indexOf('bool armTouchWakeSource() {'));
-    const attenuation=code.match(/analogSetPinAttenuation\(BATTERY_ADC_PIN, ADC_\w+\);/)[0];
+    // The shared boot uses a C3/S3 conditional: inspect both target branches,
+    // then substitute only the active branch in the native harness.
+    assert(code.includes([
+      '#if CONFIG_IDF_TARGET_ESP32C3',
+      '  analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);',
+      '#else',
+      '  analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_6db);',
+      '#endif',
+    ].join('\n')), 'C3 and S3 must retain their respective ADC settings');
+    const attenuation = `analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_${c3 ? '11db' : '6db'});`;
     const profile=require('../tools/device-profile.cjs').profileBlock(code).split('\n').filter(line=>!line.startsWith('constexpr ')).join('\n');
     const fixture=fs.readFileSync(path.join(__dirname,'battery-runtime.cpp'),'utf8');
     const flags=[`-DCONFIG_IDF_TARGET_ESP32C3=${c3?1:0}`,`-DCONFIG_IDF_TARGET_ESP32S3=${c3?0:1}`];
