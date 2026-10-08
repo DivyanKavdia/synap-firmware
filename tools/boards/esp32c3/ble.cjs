@@ -71,6 +71,8 @@ function materializeC3Ble(source){
   ].join('\n');
   out=replaceFunctionBlock(out,'class AudioCallbacks :','class DiagnosticsCallbacks :',audio,'C3 NimBLE audio callbacks');
 
+  out=out.replace('NimBLE creates CCCDs itself. BLE2902::getNotifications() is NOT a','NimBLE creates CCCDs itself. Manual descriptor notification state is NOT a');
+
   // All other value callbacks use NimBLE peer-aware signatures.
   out=out.replace(/void onRead\(BLECharacteristic\* (\w+)\) override/g,'void onRead(BLECharacteristic* $1, BLEConnInfo&) override');
   out=out.replace(/void onRead\(BLECharacteristic\*\) override/g,'void onRead(BLECharacteristic*, BLEConnInfo&) override');
