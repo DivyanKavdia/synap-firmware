@@ -108,13 +108,49 @@ void sampleBattery(bool force) {
   (void)analogRead(BATTERY_ADC_PIN);
   delayMicroseconds(1200);
   uint32_t mvTotal=0, rawTotal=0;
+#if CONFIG_IDF_TARGET_ESP32C3
+  // Preserve each factory-calibrated voltage reading so the very high-source-
+  // impedance C3+SD divider can reject isolated ADC spikes. Do not derive
+  // voltage from the nominal 12-bit raw code or alter the resistor ratio.
+  uint16_t mvSamples[16];
+#endif
   for (uint8_t i=0;i<16;++i) {
     rawTotal+=analogRead(BATTERY_ADC_PIN);
-    mvTotal+=analogReadMilliVolts(BATTERY_ADC_PIN);
+    const uint32_t measuredMv=analogReadMilliVolts(BATTERY_ADC_PIN);
+    mvTotal+=measuredMv;
+#if CONFIG_IDF_TARGET_ESP32C3
+    mvSamples[i]=uint16_t(measuredMv>65535u?65535u:measuredMv);
+#endif
     delayMicroseconds(250);
   }
-  const uint32_t adcMv=mvTotal/16u;
+  uint32_t adcMv=mvTotal/16u;
   const uint32_t adcRaw=rawTotal/16u;
+  bool adcUnstable=false;
+#if CONFIG_IDF_TARGET_ESP32C3
+  if (odysseySdBatteryDividerPresent()) {
+    // R1=1 MOhm, R2=470 kOhm, Rth~320 kOhm (C1=100 nF on Rev K).
+    // Trim two extremes on either side. A wide central spread means the
+    // voltage is not a trustworthy battery measurement; never fake 100%.
+    for (uint8_t i=1;i<16;++i) {
+      const uint16_t value=mvSamples[i];
+      uint8_t j=i;
+      while (j && mvSamples[j-1]>value) {
+        mvSamples[j]=mvSamples[j-1];
+        --j;
+      }
+      mvSamples[j]=value;
+    }
+    uint32_t centralTotal=0;
+    for (uint8_t i=2;i<14;++i) centralTotal+=mvSamples[i];
+    adcMv=(centralTotal+6u)/12u;
+    const uint16_t centralSpread=mvSamples[13]-mvSamples[2];
+    adcUnstable=centralSpread>120u;
+    if (adcUnstable) {
+      Serial.printf("[BATTERY] C3 SD ADC unstable: central range=%u..%umV\n",
+        unsigned(mvSamples[2]),unsigned(mvSamples[13]));
+    }
+  }
+#endif
   batteryAdcMillivolts=uint16_t(adcMv>65535u?65535u:adcMv);
   batteryAdcRaw=uint16_t(adcRaw>65535u?65535u:adcRaw);
 #if CONFIG_IDF_TARGET_ESP32C3
@@ -124,7 +160,7 @@ void sampleBattery(bool force) {
   }
 #endif
   const uint32_t cellMv=batteryCellMillivoltsFromAdc(adcMv);
-  if (cellMv>=2800u && cellMv<=4350u) {
+  if (!adcUnstable && cellMv>=2800u && cellMv<=4350u) {
     batteryMillivolts=uint16_t(cellMv);
     batteryPercent=batteryPercentFromMillivolts(batteryMillivolts);
     if (batteryValidSamples<255) ++batteryValidSamples;
