@@ -17,11 +17,17 @@ uint8_t batteryPercent=0,batteryValidSamples=0,batteryCriticalSamples=0;
 bool batteryAvailable=false;
 std::atomic<bool> streamingEnabled{false},deviceConnected{true};
 uint32_t adcMv=0,rawReads=0,mvReads=0,delayUs=0;
-bool varying=false;
+bool varying=false, spike=false;
 uint32_t millis(){return clockMs;}
 void delayMicroseconds(uint32_t us){delayUs+=us;}
 uint16_t analogRead(uint8_t pin){assert(pin==BATTERY_ADC_PIN);++rawReads;return 3000;}
-uint32_t analogReadMilliVolts(uint8_t pin){assert(pin==BATTERY_ADC_PIN);return adcMv+(varying?((mvReads++%2)?100:-100):0);}
+uint32_t analogReadMilliVolts(uint8_t pin){
+  assert(pin==BATTERY_ADC_PIN);
+  const uint32_t n=mvReads++;
+  if(varying)return adcMv+((n%2)?100:-100);
+  if(spike && n%16==5)return adcMv+300;
+  return adcMv;
+}
 struct Characteristic {
   std::vector<uint8_t> value;
   int notifications=0;
@@ -101,6 +107,14 @@ int main(){
   assert(batteryAvailable && batteryMillivolts==3703);
   assert(batteryPercentFromMillivolts(4199)==99);
   assert(batteryPercentFromMillivolts(4200)==100);
+  adcMv=1287;spike=true;sampleBattery(true);spike=false;
+  // C3+SD robust mean removes a 300 mV transient without falsifying the
+  // factory-calibrated 1287 mV input or the 1470/470 divider.
+  assert(batteryAvailable && batteryMillivolts==4025 && batteryPercent==87);
+  varying=true;sampleBattery(true);varying=false;
+  // Alternating +/-100 mV across the *central* 12 readings is unstable;
+  // preserve ADC telemetry but never publish a battery percentage.
+  assert(!batteryAvailable && !batteryCritical() && batteryPercent==0);
   adcMv=1287;sampleBattery(true);
   assert(batteryAvailable && batteryMillivolts==4025 && batteryPercent==87);
   // SD-equipped Odyssey C3 uses a 1 MOhm / 470 kOhm divider: Vcell=Vadc*1470/470.

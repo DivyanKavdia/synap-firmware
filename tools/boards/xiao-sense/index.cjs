@@ -55,8 +55,18 @@ function materializeChakshu(source,target) {
   replace("  } else if (deviceState == DeviceState::STREAMING) {\n    if (now%1800u<45u) g=LED_DIM+1;\n  } else {\n    if (now%1200u<70u) { r=LED_DIM; b=LED_DIM; }",
     "  } else if (deviceState == DeviceState::STREAMING) {\n    if (now%5000u<20u) g=LED_DIM;\n  } else {\n    if (now%10000u<25u) { r=LED_DIM; b=LED_DIM; }","Minimize Chakshu active and error LED duty cycle");
   replace("  } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {","  } else if (mediaBusy()) {\n    if (now%5000u<20u) g=LED_DIM;\n  } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {","Show low-duty Chakshu media activity on NeoPixel");
-  replace("  (void)analogRead(BATTERY_ADC_PIN);\n  delayMicroseconds(1200);\n  uint32_t mvTotal=0, rawTotal=0;\n  for (uint8_t i=0;i<16;++i) {","  for(uint8_t warmup=0;warmup<4;++warmup){(void)analogRead(BATTERY_ADC_PIN);delayMicroseconds(500);}\n  delayMicroseconds(3000);\n  constexpr uint8_t BATTERY_SAMPLE_COUNT=24;\n  uint32_t mvTotal=0, rawTotal=0;\n  for (uint8_t i=0;i<BATTERY_SAMPLE_COUNT;++i) {","Settle high-impedance Chakshu battery divider");
-  replace("  const uint32_t adcMv=mvTotal/16u;\n  const uint32_t adcRaw=rawTotal/16u;","  const uint32_t adcMv=mvTotal/BATTERY_SAMPLE_COUNT;\n  const uint32_t adcRaw=rawTotal/BATTERY_SAMPLE_COUNT;","Average settled Chakshu ADC samples");
+  // Preserve Chakshu's established 4 warmups / 24 samples. The generic
+  // source now has a C3-only trim buffer between the accumulator and loop,
+  // so patch the sampling pieces separately rather than using a stale block.
+  replace("  (void)analogRead(BATTERY_ADC_PIN);\n  delayMicroseconds(1200);",
+    "  for(uint8_t warmup=0;warmup<4;++warmup){(void)analogRead(BATTERY_ADC_PIN);delayMicroseconds(500);}\n  delayMicroseconds(3000);\n  constexpr uint8_t BATTERY_SAMPLE_COUNT=24;",
+    'Settle high-impedance Chakshu battery divider');
+  replace("  for (uint8_t i=0;i<16;++i) {\n    rawTotal+=analogRead(BATTERY_ADC_PIN);",
+    "  for (uint8_t i=0;i<BATTERY_SAMPLE_COUNT;++i) {\n    rawTotal+=analogRead(BATTERY_ADC_PIN);",
+    'Collect 24 Chakshu battery ADC samples');
+  replace("  uint32_t adcMv=mvTotal/16u;\n  const uint32_t adcRaw=rawTotal/16u;",
+    "  uint32_t adcMv=mvTotal/BATTERY_SAMPLE_COUNT;\n  const uint32_t adcRaw=rawTotal/BATTERY_SAMPLE_COUNT;",
+    'Average settled Chakshu ADC samples');
   replace("  if (raw!=touchRawState) { touchRawState=raw; touchChangedAt=now; }","  if (raw!=touchRawState) { touchRawState=raw; touchChangedAt=now; ++touchTransitions; Serial.printf(\"[TOUCH] gpio=%u raw=%u transitions=%lu\\\\n\",unsigned(TOUCH_INPUT_PIN),raw?1u:0u,(unsigned long)touchTransitions.load()); }","Track TTP223 transitions");
   replace("    const uint32_t held=touchPressedAt ? uint32_t(now-touchPressedAt) : 0;\n    touchPressedAt=0;","    const uint32_t held=touchPressedAt ? uint32_t(now-touchPressedAt) : 0;\n    touchLastHoldMs=uint16_t(held>65535u?65535u:held);\n    touchPressedAt=0;","Track TTP223 hold time");
   replace("      Serial.println(\"[TOUCH] long press -> DEEP SLEEP\");","      ++touchActions;\n      Serial.println(\"[TOUCH] long press -> DEEP SLEEP\");","Count long-press touch action");

@@ -25,7 +25,8 @@ test('C3 uses the proven Arduino SPI host with the locked device pins',()=>{
   assert.match(source,/odysseySdRecoverRecordingPartsLocked\(\)/);
   assert.match(source,/now<ODYSSEY_SD_STARTUP_SETTLE_MS/);
   assert.match(boot,/OdysseyTransfer::initialize\(\);[\s\S]*odysseyInitializeSdCardBeforeBle\(\);/);
-  assert.match(boot,/odysseyInitializeSdCardBeforeBle\(\);[\s\S]*if \(odysseySdBatteryDividerPresent\(\)\) sampleBattery\(true\);/);
+  assert.match(boot,/#if !CONFIG_IDF_TARGET_ESP32C3\s+sampleBattery\(true\);\s+#endif/);
+  assert.match(boot,/odysseyInitializeSdCardBeforeBle\(\);[\s\S]*sampleBattery\(true\);/);
 });
 
 test('C3 VFS has one guarded owner and an explicit Arduino host release lifecycle',()=>{
