@@ -325,9 +325,36 @@ failure also sets this latch.
 
 The guard is intentionally conservative: if quiescence cannot be proven,
 the ESP32-C3 stays awake rather than risking FAT metadata corruption.
-Do not add a forced-timeout sleep or remove this latch to improve battery
-life. Battery brownout or external power loss cannot be prevented by
-software; that case still requires filesystem recovery on the next boot.
+
+**Sleep reliability revision (9 October 2026):** The SD shutdown helper
+first looks for 64 consecutive idle bytes under asserted chip-select and
+confirms the card responds with clean CMD13/R2 status. A healthy SD card
+therefore does not receive an unnecessary CMD12 read-stop or CMD25 write-stop
+token while idle. If CMD13 cannot confirm idle, the existing bounded
+CMD12/CMD25 recovery sequence remains in place. The host is still guarded
+by the SD mutex and no offline WAV may be open.
+
+After a failed quiesce, the C3 retains `odysseySdUnsafeToSleep`. When a
+later explicit touch-hold or disconnected-timeout/critical-battery request
+calls `enterDeepSleep()`, firmware attempts one non-destructive validated
+SD recovery at most once per **30 seconds**; only a successful remount can
+clear that latch. Failure leaves the C3 awake. Failed VFS *reads*, as well
+as failed writes, now also latch unsafe-to-sleep because an unfinished
+CMD18 session is possible.
+
+A long-hold while offline recording or Wi-Fi is active remains pending
+until capture/upload finishes. After the five-second post-WAV settle, a
+failed sleep transition is retried every five seconds rather than dropping
+the original user request; a fresh touch cancels the request. A BLE
+`POWER_STATE_DEEP_SLEEP` event is published **only after** SD has reached
+confirmed safe idle, so a refused sleep does not falsely tell the PWA
+that the pendant powered off. The existing OTA partition, recorder batching,
+and WAV close sequence do not change.
+
+Do not add a forced-timeout sleep or remove the SD safety latch merely
+to improve battery life. Battery brownout or external power loss cannot
+be prevented by software; that case still requires filesystem recovery
+on the next boot.
 
 ### C3 + SD battery ADC reading and calibration
 

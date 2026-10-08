@@ -31,6 +31,7 @@ bool durableLock=false,bootSleepWasLocked=false,clearSucceeds=true;
 uint32_t synapDeepSleepMarker=0,synapSleepRequestCounter=0;
 int synapLastSleepStage=0,bootWakeCause=0,wakeCause=TOUCH_WAKE_CAUSE;
 int sleeps=0,starts=0,stops=0,clears=0;
+bool simulateFailedSleep=false;
 bool timedInput=false;
 uint32_t wakeStart=0,releaseAfter=0;
 struct Logger { void println(const char*) {} template<class... T> void printf(const char*,T...) {} } Serial;
@@ -48,7 +49,7 @@ bool writeDurableSleepLock(bool value){
 int esp_sleep_get_wakeup_cause(){return wakeCause;}
 void armTouchWakeAndSleep(){++sleeps;}
 void stopStreaming(){++stops;streamingEnabled=false;}
-void enterDeepSleep(const char*){assert(!input && !streamingEnabled && !busy);++sleeps;}
+void enterDeepSleep(const char*){assert(!input && !streamingEnabled && !busy);if(!simulateFailedSleep)++sleeps;}
 void enterRemoteStandby(){assert(!streamingEnabled);remoteStandby=true;}
 void processCommand(uint8_t cmd,uint8_t){
   assert(!busy);
@@ -137,6 +138,11 @@ int main(){
   // A pending four-second hold must not bypass the five-second guard.
   odysseySdSleepGuardUntil=millis()+5000u;
   odysseyRecording=false;advance(5,false);assert(sleeps==beforeLocalSleep);
+  // The first scheduled attempt fails (e.g. SD quiesce or durable lock).
+  // It must retain the request and retry rather than silently discarding it.
+  simulateFailedSleep=true;
+  advance(5000,false);assert(sleeps==beforeLocalSleep);
+  simulateFailedSleep=false;
   advance(5000,false);assert(sleeps==beforeLocalSleep+1);
   sleepPending=false;odysseyStopRequested=false;settle();
   tap();tap();assert(starts==previousStarts+1);

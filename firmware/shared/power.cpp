@@ -167,10 +167,6 @@ void enterRemoteStandby() {
 void enterDeepSleep(const char* reason) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   if (odysseyRecording.load() || OdysseyWifi::busy()) return;
-  if (odysseySdUnsafeToSleep.load()) {
-    Serial.println("[POWER] deep sleep denied: SD requires successful recovery");
-    return;
-  }
   const uint32_t sdGuardUntil=odysseySdSleepGuardUntil.load();
   if (sdGuardUntil && static_cast<int32_t>(millis()-sdGuardUntil)<0) {
     Serial.println("[POWER] deep sleep deferred: C3 SD post-record settle");
@@ -182,6 +178,24 @@ void enterDeepSleep(const char* reason) {
   if (mediaBusy()) return;
 #endif
   if (digitalRead(TOUCH_INPUT_PIN)==TOUCH_ACTIVE_LEVEL) return;
+
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  if (odysseySdUnsafeToSleep.load()) {
+    // A previous quiesce may have left the always-powered SD host unmounted.
+    // One bounded explicit recovery is safer than either forcing sleep or
+    // permanently leaving the C3 awake. Throttle recurring idle-timeout
+    // retries to protect the battery and preserve responsiveness.
+    static uint32_t lastSdSleepRecoveryAt=0;
+    const uint32_t now=millis();
+    if (lastSdSleepRecoveryAt && uint32_t(now-lastSdSleepRecoveryAt)<30000u) return;
+    lastSdSleepRecoveryAt=now ? now : 1u;
+    Serial.println("[POWER] retrying validated SD mount before sleep");
+    if (!odysseyRecoverSdCard("sleep")) {
+      Serial.println("[POWER] sleep deferred: SD recovery has not completed");
+      return;
+    }
+  }
+#endif
 
   const uint32_t initialReleaseAt=millis();
   while (uint32_t(millis()-initialReleaseAt)<300u) {
@@ -239,17 +253,8 @@ void enterDeepSleep(const char* reason) {
     return;
   }
 
-  // Tell the app only after the durable lock and wake source are ready. No BLE deinit
-  // is performed here; deep sleep itself tears down the radio without a reset window.
-  Serial.println("[POWER] sleep pending; BLE commands locked; wake source armed");
-  publishPowerEvent(POWER_STATE_DEEP_SLEEP);
-  if (deviceConnected.load()) delay(90);
-
-  // Any edge after wake arming is handled fail-closed by the boot gate.
-  statusLed.clear();statusLed.show();
-  synapLastSleepStage=SLEEP_STAGE_ENTERING;
-  Serial.printf("[POWER] entering deep sleep request=%u battery=%umV\n",
-    unsigned(synapSleepRequestCounter),unsigned(batteryMillivolts));
+  // Quiesce SD before notifying BLE that deep sleep is happening.
+  // A failed CMD18/CMD25 idle check must not send a false power-off event.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   if (!odysseyPrepareSdForPowerTransition(1000u)) {
     writeDurableSleepLock(false);
@@ -258,15 +263,27 @@ void enterDeepSleep(const char* reason) {
     sleepPending=false;
     Serial.println("[POWER] deep sleep cancelled: C3 SD storage did not quiesce");
     updateStatusLed(true);
+    updateStatusCharacteristic(true);
     return;
   }
 #endif
+
+  // Tell the app only after SD has finished and wake is armed. No BLE deinit
+  // is performed; deep sleep itself tears down the radio.
+  Serial.println("[POWER] sleep pending; SD idle and wake source armed");
+  publishPowerEvent(POWER_STATE_DEEP_SLEEP);
+  if (deviceConnected.load()) delay(90);
+
+  statusLed.clear();statusLed.show();
+  synapLastSleepStage=SLEEP_STAGE_ENTERING;
+  Serial.printf("[POWER] entering deep sleep request=%u battery=%umV\n",
+    unsigned(synapSleepRequestCounter),unsigned(batteryMillivolts));
   esp_deep_sleep_start();
 
   // Deep sleep should not return. If it does, retain fail-closed semantics.
   Serial.println("[POWER] deep sleep returned unexpectedly; rebooting with sleep lock retained");
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  odysseyPrepareSdForPowerTransition(500u);
+  if (!odysseyPrepareSdForPowerTransition(500u)) return;
 #endif
   delay(250);
   ESP.restart();
@@ -280,7 +297,9 @@ void powerTick() {
     return;
   }
   if (OdysseyWifi::busy()) return;
-  if (odysseySdUnsafeToSleep.load()) return;
+  // Do not permanently suppress disconnected-timeout or critical-battery
+  // sleep after a failed quiesce. enterDeepSleep() performs a bounded,
+  // throttled recovery and still refuses sleep until SD is proven idle.
   const uint32_t sdGuardUntil=odysseySdSleepGuardUntil.load();
   if (sdGuardUntil && static_cast<int32_t>(millis()-sdGuardUntil)<0) return;
 #endif
@@ -306,6 +325,9 @@ void pollTouchControl() {
   static bool lastStandbyState = false;
   static bool standbyAfterStop = false;
   static bool deepSleepAfterStop = false;
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  static uint32_t lastDeferredSleepAttemptAt=0;
+#endif
   static uint8_t tapCount = 0;
   static uint32_t lastTapAt = 0;
   const uint32_t now=millis();
@@ -327,9 +349,17 @@ void pollTouchControl() {
       // fclose, recovery and the post-write SD settle have completed.
       && (!odysseySdSleepGuardUntil.load() ||
           static_cast<int32_t>(now-odysseySdSleepGuardUntil.load())>=0)
+      && (!lastDeferredSleepAttemptAt ||
+          uint32_t(now-lastDeferredSleepAttemptAt)>=5000u)
 #endif
   ) {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+    // An aborted sleep (SD busy, failed wake arm, NVS lock) must not lose
+    // the pending long-hold request. Deep sleep never returns on success.
+    lastDeferredSleepAttemptAt=now ? now : 1u;
+#else
     deepSleepAfterStop=false;
+#endif
     enterDeepSleep("touch-hold-after-stop");
     return;
   }
@@ -359,6 +389,14 @@ void pollTouchControl() {
   if (raw!=touchStableState && uint32_t(now-touchChangedAt)>=TOUCH_DEBOUNCE_MS) {
     touchStableState=raw;
     if (touchStableState) {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      // A fresh physical gesture cancels a pending delayed sleep request.
+      if (deepSleepAfterStop) {
+        deepSleepAfterStop=false;
+        lastDeferredSleepAttemptAt=0;
+        Serial.println("[POWER] pending C3 sleep cancelled by new touch");
+      }
+#endif
       bool localSdRecording=false;
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
       localSdRecording=odysseyRecording.load();
@@ -395,7 +433,8 @@ void pollTouchControl() {
         return;
       }
       if (OdysseyWifi::busy()) {
-        Serial.println("[POWER] deep sleep deferred: C3 Wi-Fi upload active");
+        deepSleepAfterStop=true;
+        Serial.println("[POWER] deep sleep deferred until C3 Wi-Fi upload completes");
         return;
       }
 #endif

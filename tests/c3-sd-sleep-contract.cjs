@@ -23,7 +23,12 @@ test('C3 cannot enter deep sleep or reboot on a non-idle SD bus',()=>{
  assert.doesNotMatch(prepare,/quiesced=%u[^\n]*\n\s*return true;/);
  const deep=power.split('void enterDeepSleep(const char* reason) {')[1].split('void powerTick() {')[0];
  assert.match(deep,/if \(odysseyRecording\.load\(\) \|\| OdysseyWifi::busy\(\)\) return;/);
+ assert.match(deep,/odysseyRecoverSdCard\("sleep"\)/);
+ assert.match(deep,/lastSdSleepRecoveryAt[\s\S]*30000u/);
  assert.match(deep,/if \(!odysseyPrepareSdForPowerTransition\(1000u\)\) \{[\s\S]*?sleepPending=false;[\s\S]*?return;[\s\S]*?esp_deep_sleep_start\(\);/);
+ assert(deep.indexOf('odysseyPrepareSdForPowerTransition(1000u)')<
+        deep.indexOf('publishPowerEvent(POWER_STATE_DEEP_SLEEP)'),
+        'never send a false deep sleep event before SD confirms idle');
  const wake=power.split('void armTouchWakeAndSleep() {')[1].split('bool confirmTouchWakeGesture() {')[0];
  assert.equal((wake.match(/if \(!odysseyPrepareSdForPowerTransition\(500u\)\)/g)||[]).length,3);
  assert.match(ota,/if \(!odysseyPrepareSdForPowerTransition\(1000u\)\) return;\s*#endif\s*ESP\.restart\(\)/);
@@ -57,7 +62,10 @@ test('all automatic and touch-triggered sleep entries defer until recording fina
  assert.match(tick,/enterDeepSleep\("critical-battery"\)/);
  assert.match(tick,/enterDeepSleep\("disconnected-timeout"\)/);
  const hold=power.split('void pollTouchControl() {')[1];
- assert.match(hold,/if \(deepSleepAfterStop && !streaming && !raw && !otaBusy\(\)[\s\S]*?odysseySdSleepGuardUntil\.load\(\)[\s\S]*?\) \{\s*deepSleepAfterStop=false;\s*enterDeepSleep\("touch-hold-after-stop"\);/);
+ assert.match(hold,/if \(deepSleepAfterStop && !streaming && !raw && !otaBusy\(\)[\s\S]*?odysseySdSleepGuardUntil\.load\(\)[\s\S]*?lastDeferredSleepAttemptAt[\s\S]*?\) \{/);
+ assert.match(hold,/lastDeferredSleepAttemptAt=now \? now : 1u;[\s\S]*?enterDeepSleep\("touch-hold-after-stop"\);/);
+ assert.match(hold,/deepSleepAfterStop=false;[\s\S]*?pending C3 sleep cancelled by new touch/);
+ assert.match(hold,/deep sleep deferred until C3 Wi-Fi upload completes/);
  assert.match(hold,/if \(odysseyRecording\.load\(\)\) \{\s*odysseyStopRequested=true;\s*deepSleepAfterStop=true;/);
  assert.match(hold,/enterDeepSleep\("touch-hold"\)/);
 });
@@ -67,4 +75,17 @@ test('C3 SD firmware still retains append-only WAV and non-formatting SPI mount'
  assert.doesNotMatch(recorder,/fseek\(file,0|ftruncate\(/);
  assert.match(detect,/ODYSSEY_SD_DATA_FREQ_HZ=1000000u/);
  assert.match(detect,/odysseySdBeginLocked\(\)/);
+});
+
+test('healthy SD gets CMD13 idle proof before CMD12/CMD25 recovery',()=>{
+ const q=detect.split('static uint8_t odysseySdQuiesceLocked(uint32_t budgetMs) {')[1]
+   .split('static bool odysseySdBeginLocked()')[0];
+ assert.match(q,/idleRun<64u/);
+ assert.match(q,/odysseySdBitBangCommand\(13u,0u,0x01u,&status,1u\)/);
+ assert.match(q,/if \(r1==0x00u && status==0x00u\)/);
+ assert(q.indexOf('odysseySdBitBangCommand(13u')<
+        q.indexOf('odysseySdBitBangStopReadLocked('));
+ assert.match(q,/odysseySdBitBangStopWriteLocked/);
+ const vfs=detect.split('void odysseySdMarkVfsFailure() {')[1].split('static void odysseySdEnsureMutex()')[0];
+ assert.match(vfs,/odysseySdUnsafeToSleep=true;/);
 });
