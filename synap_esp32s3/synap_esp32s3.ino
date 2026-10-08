@@ -248,6 +248,9 @@ std::atomic<bool> batteryAvailable{false};
 std::atomic<bool> odysseyRecording{false}, odysseyStopRequested{false};
 std::atomic<uint32_t> odysseyRecordingStartedAt{0}, odysseyRecordFaultAt{0};
 std::atomic<uint32_t> odysseySdSleepGuardUntil{0};
+// Latches a failed SD idle/quiesce or unresolved write fault. Never permit a
+// later deep-sleep retry to mistake the now-unmounted card for an absent card.
+std::atomic<bool> odysseySdUnsafeToSleep{false};
 void odysseyToggleRecording();
 bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs);
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs);
@@ -2777,6 +2780,9 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   odysseySdLastMountError=ESP_OK;
   odysseySdBootState=1;
   odysseySdProbeStage=6;
+  // A complete mount plus writable VFS validation is the explicit recovery
+  // that makes a previously failed sleep quiesce safe to attempt again.
+  odysseySdUnsafeToSleep=false;
   const char* label=type==CARD_MMC?"MMC":type==CARD_SD?"SDSC":type==CARD_SDHC?"SDHC/SDXC":"unknown";
   Serial.printf("[SD] ready via proven Arduino SPI path: %s, %llu MiB, %lu Hz\n",
     label,static_cast<unsigned long long>(SD.cardSize()/(1024ULL*1024ULL)),
@@ -2838,6 +2844,10 @@ bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
     Serial.println("[SD] power transition deferred: local recording active");
     return false;
   }
+  if (odysseySdUnsafeToSleep.load()) {
+    Serial.println("[SD] power transition deferred: SD idle/write failure requires recovery");
+    return false;
+  }
   const bool wasReady=odysseySdReady();
   const uint8_t state=odysseySdBootState.load();
   odysseySdBootState=0;odysseySdProbeStage=0;
@@ -2857,7 +2867,13 @@ bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
   // The card may remain powered when the C3 sleeps or resets. If it did not
   // reach the SPI idle window, never cut the host out from under a possible
   // unfinished CMD18/CMD25 transaction. Caller must cancel the transition.
-  return idle==1;
+  // Latch the failure so the next auto-sleep retry cannot bypass quiescence
+  // merely because this attempt reset odysseySdBootState to "not checked".
+  if (idle!=1) {
+    odysseySdUnsafeToSleep=true;
+    return false;
+  }
+  return true;
 }
 #else
 // Odyssey S3 remains detection-only and retains the existing Arduino SD probe.
@@ -3138,6 +3154,14 @@ static void odysseyRecordTask(void*) {
   if (!odysseySdReady() && odysseyLastRecordFailureStage()) {
     Serial.println("[SD] post-record failure: re-arming storage for next take");
     (void)odysseyRecoverSdCard("rearm");
+  }
+  // An unresolved write/close failure could leave an always-powered SD card
+  // inside CMD25 programming. Never allow a later idle timeout or user hold
+  // to sleep based solely on the failed mount's "not ready" state.
+  const uint8_t lastFault=odysseyLastRecordFailureStage();
+  if (!odysseySdReady() && lastFault>=44u && lastFault!=48u) {
+    odysseySdUnsafeToSleep=true;
+    Serial.printf("[POWER] C3 SD sleep inhibited: unrecovered record stage=%u\n",unsigned(lastFault));
   }
 
   // Do not lift the sleep veto until fwrite, fclose, persistent diagnostics
