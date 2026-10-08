@@ -95,7 +95,12 @@ void setup() {
   if (!confirmTouchWakeGesture()) return;
   disconnectedAt=millis();
   setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
+  // A C3 may be fitted with the 1 MOhm/470 kOhm SD divider rather than the
+  // original 1 MOhm/1 MOhm divider. Do not publish a misleading x2 reading
+  // before the SD hardware identification has completed.
+#if !CONFIG_IDF_TARGET_ESP32C3
   sampleBattery(true);
+#endif
 #if USE_REAL_I2S_MIC
   microphoneValidated=startMicrophone();
   if (microphoneValidated) stopMicrophone();
@@ -119,9 +124,9 @@ void setup() {
   OdysseyWifi::initialize();
   OdysseyTransfer::initialize();
   odysseyInitializeSdCardBeforeBle();
-  // The first battery sample precedes SD probing. Re-sample only when SD
-  // hardware was positively observed so standard C3 behavior stays unchanged.
-  if (odysseySdBatteryDividerPresent()) sampleBattery(true);
+  // The initial C3 reading now uses the appropriate divider when SD mounts.
+  // Standard C3 without SD retains its 2:1 measurement.
+  sampleBattery(true);
 #else
   // Odyssey S3 remains a detection-only target.
   odysseyDetectSdCard();
