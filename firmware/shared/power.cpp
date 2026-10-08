@@ -167,6 +167,10 @@ void enterRemoteStandby() {
 void enterDeepSleep(const char* reason) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   if (odysseyRecording.load() || OdysseyWifi::busy()) return;
+  if (odysseySdUnsafeToSleep.load()) {
+    Serial.println("[POWER] deep sleep denied: SD requires successful recovery");
+    return;
+  }
   const uint32_t sdGuardUntil=odysseySdSleepGuardUntil.load();
   if (sdGuardUntil && static_cast<int32_t>(millis()-sdGuardUntil)<0) {
     Serial.println("[POWER] deep sleep deferred: C3 SD post-record settle");
@@ -276,6 +280,7 @@ void powerTick() {
     return;
   }
   if (OdysseyWifi::busy()) return;
+  if (odysseySdUnsafeToSleep.load()) return;
   const uint32_t sdGuardUntil=odysseySdSleepGuardUntil.load();
   if (sdGuardUntil && static_cast<int32_t>(millis()-sdGuardUntil)<0) return;
 #endif
