@@ -25,7 +25,7 @@ function materializeC3Nimble(source) {
   change('identity->setValue(SYNAP_FIRMWARE_ID);',
     'identity->setValue(reinterpret_cast<const uint8_t*>(SYNAP_FIRMWARE_ID),sizeof(SYNAP_FIRMWARE_ID)-1);','Exact C3 firmware identity length');
   change('  advertising->setScanResponse(true);\n  advertising->setMinPreferred(BLE_MIN_INTERVAL);\n  advertising->setMaxPreferred(BLE_MAX_INTERVAL);',
-    '  advertising->enableScanResponse(true);\n  advertising->setName(DEVICE_NAME);\n  advertising->setPreferredParams(BLE_MIN_INTERVAL,BLE_MAX_INTERVAL);\n  advertising->setMinInterval(32);\n  advertising->setMaxInterval(32);','C3 native advertising policy');
+    '  advertising->enableScanResponse(true);\n  advertising->setName(DEVICE_NAME);\n  advertising->setPreferredParams(BLE_MIN_INTERVAL,BLE_MAX_INTERVAL);\n  advertising->setMinInterval(48);\n  advertising->setMaxInterval(48);','C3 native advertising policy');
   change('    OtaMessage message{};\n    const size_t size=characteristic->getLength();',
     '    OtaMessage message{};\n    const auto written=characteristic->getValue();\n    const size_t size=written.size();','C3 OTA write snapshot');
   change('!characteristic->getData()','!written.data()','C3 OTA buffer guard');
