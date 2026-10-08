@@ -329,6 +329,44 @@ Do not add a forced-timeout sleep or remove this latch to improve battery
 life. Battery brownout or external power loss cannot be prevented by
 software; that case still requires filesystem recovery on the next boot.
 
+### C3 + SD battery ADC reading and calibration
+
+The assembled C3+SD test board uses a **1 MΩ high-side R1** from switched
+battery positive to **GPIO1 (BAT_ADC)** and a **470 kΩ low-side R2** to
+GND. Its **100 nF C1** capacitor is across GPIO1 and GND. The canonical Rev K
+repository BOM still lists both R1 and R2 as 470 kΩ, so verify the actual
+assembled resistor values rather than inferring them from the BOM.
+
+The divider reconstruction is exactly
+`cellMv = round(adcMv * 1470 / 470)`. The *standard C3 without SD* is
+1 MΩ / 1 MΩ (2:1), while S3 uses its independent calibrated conversion.
+The C3 ADC stays on 11 dB attenuation with factory calibration from
+`analogReadMilliVolts()`; do **not** apply an arbitrary scale factor to
+force a reported 4.457 V down to 4.200 V.
+
+Boot now identifies SD/divider hardware **before** the first C3 battery
+reading is published. The C3 + SD reading takes 16 calibrated readings,
+discards two extremes at each end, and averages the middle 12. A wide
+central spread (>120 mV) invalidates the percent rather than displaying
+a false battery voltage; raw ADC diagnostics are still sent. S3 and the
+standard C3 retain their prior mean sampling.
+
+Field readings on a nominally fully charged cell:
+- USB connected: `adcMv=1607`, reconstructed `cellMv=5026`
+- USB disconnected: `adcMv=1425`, reconstructed `cellMv=4457`
+- Expected at a verified 4.200 V cell: GPIO1 ≈1343 mV
+
+A consistent 82 mV discrepancy at the ADC pin cannot be safely corrected
+from software or from the words "fully charged" alone. Before a
+device-specific gain/offset can be fitted, measure **BAT+ to GND** and
+**GPIO1 to GND** with a high-impedance multimeter on an accessible
+prototype. Check with USB disconnected first. Stop using a charger if
+the actual LiPo voltage exceeds its rated full-charge value.
+
+The 1 MΩ/470 kΩ divider has ≈320 kΩ Thevenin source impedance and
+≈32 ms RC time constant with C1. Retain C1 and the factory-calibrated ADC
+function; do not change voltage cutoffs or bypass invalid readings.
+
 ## 11. Production tests that protect this implementation
 
 Relevant firmware contracts include:
