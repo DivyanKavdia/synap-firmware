@@ -21,7 +21,7 @@ test('shared production modules are listed exactly once while retired SD impleme
 });
 test('target C++ templates have live adapters',()=>{
   const owner={
-    esp32c3:read('tools/boards/esp32c3/index.cjs'),
+    esp32c3:read('tools/boards/esp32c3/index.cjs')+read('tools/boards/esp32c3/nimble.cjs'),
     'xiao-sense':read('tools/boards/xiao-sense/index.cjs')+'\n'+read('tools/boards/xiao-sense/ble.cjs')
   };
   for(const [board,code] of Object.entries(owner))
