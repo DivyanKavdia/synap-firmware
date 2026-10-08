@@ -4,6 +4,15 @@
 // then streams the append-only SD WAV directly to Synap Cloud over HTTPS.
 // The SD source is never deleted here; retention stays a separate PWA choice.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+// The direct HTTPS Wi-Fi implementation currently exceeds the immutable
+// 1,310,720-byte C3 OTA slot. Keep its implementation for optimization, but
+// ship a diagnostic-safe build with the feature explicitly disabled; otherwise
+// the OTA pipeline cannot publish fixes for the existing SD recorder.
+// Never enlarge the OTA partition without a separate migration design.
+#ifndef SYNAP_C3_WIFI_UPLOAD_ENABLED
+#define SYNAP_C3_WIFI_UPLOAD_ENABLED 0
+#endif
+#if SYNAP_C3_WIFI_UPLOAD_ENABLED
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <limits.h>
@@ -538,4 +547,24 @@ void initialize() {
 }
 
 } // namespace OdysseyWifi
-#endif
+#else
+// No Wi-Fi upload is advertised until the C3 TLS image fits the deployed OTA
+// partition. Media-v1 BLE catalogue/read/delete and offline SD recording stay
+// available exactly as in the proven recorder baseline.
+namespace OdysseyWifi {
+bool available() { return false; }
+bool busy() { return false; }
+uint32_t configChunk(uint32_t,const char*) { return UINT32_MAX; }
+bool applyConfig(uint32_t) { return false; }
+bool forget() { return false; }
+size_t encode(char* output,size_t capacity) {
+  static constexpr char unavailable[] =
+      "{\\"configured\\":false,\\"active\\":false,\\"phase\\":0,\\"total\\":0,\\"uploaded\\":0,\\"http\\":0,\\"message\\":\\"Wi-Fi sync requires a size-optimized firmware update.\\"}";
+  if (!output || capacity<=sizeof(unavailable)-1u) return 0;
+  memcpy(output,unavailable,sizeof(unavailable));
+  return sizeof(unavailable)-1u;
+}
+void initialize() {}
+} // namespace OdysseyWifi
+#endif // SYNAP_C3_WIFI_UPLOAD_ENABLED
+#endif // Odyssey C3
