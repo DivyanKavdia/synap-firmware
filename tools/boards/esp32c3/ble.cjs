@@ -113,7 +113,7 @@ function materializeC3Ble(source){
   replace(startGate,'  if (!odysseyAudioSubscribed.load()) { stopStreaming(ErrorCode::AUDIO_NOT_SUBSCRIBED); return; }\n'+startGate,'C3 NimBLE START subscription gate');
 
   replace('  advertising->setScanResponse(true);\n  advertising->setMinPreferred(BLE_MIN_INTERVAL);\n  advertising->setMaxPreferred(BLE_MAX_INTERVAL);',
-    '  advertising->enableScanResponse(true);\n  advertising->setName(DEVICE_NAME);\n  advertising->setPreferredParams(BLE_MIN_INTERVAL,BLE_MAX_INTERVAL);\n  advertising->setMinInterval(32);\n  advertising->setMaxInterval(32);',
+    '  advertising->enableScanResponse(true);\n  advertising->setName(DEVICE_NAME);\n  advertising->setPreferredParams(BLE_MIN_INTERVAL,BLE_MAX_INTERVAL);',
     'C3 NimBLE advertising');
   replace('#if defined(CONFIG_NIMBLE_ENABLED)\n  bleServer->advertiseOnDisconnect(true);\n#endif','  bleServer->advertiseOnDisconnect(true);','C3 NimBLE reconnect advertising');
 
