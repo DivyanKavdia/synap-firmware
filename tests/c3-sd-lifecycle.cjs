@@ -144,7 +144,10 @@ test('C3 releases the Arduino SD host before OTA reboot, app restart and deep sl
   assert.doesNotMatch(detect,/esp_vfs_fat_sdcard_unmount|spi_bus_free/);
   assert.match(ota,/otaSession\.state==Synap::COMMITTED[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*ESP\.restart\(\)/);
   assert.match(ble,/CMD_RESTART:[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*ESP\.restart\(\)/);
-  assert.match(power,/entering deep sleep request=[\s\S]*odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*esp_deep_sleep_start\(\)/);
+  assert.match(power,/odysseyPrepareSdForPowerTransition\(1000u\)[\s\S]*entering deep sleep request=[\s\S]*esp_deep_sleep_start\(\)/);
+  assert(power.indexOf('odysseyPrepareSdForPowerTransition(1000u)')<
+         power.indexOf('publishPowerEvent(POWER_STATE_DEEP_SLEEP)'),
+         'C3 must verify SD is idle before reporting deep sleep to the app');
 });
 
 test('C3 runtime VFS failure retains Arduino host ownership until explicit release',()=>{
