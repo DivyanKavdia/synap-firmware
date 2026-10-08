@@ -668,7 +668,10 @@ bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
   const uint8_t idle=odysseySdQuiesceLocked(ODYSSEY_SD_QUIESCE_BUDGET_MS);
   odysseySdReleaseLocked();
   Serial.printf("[SD] power transition prepared ready=1 quiesced=%u\n",idle==1?1u:0u);
-  return true;
+  // The card may remain powered when the C3 sleeps or resets. If it did not
+  // reach the SPI idle window, never cut the host out from under a possible
+  // unfinished CMD18/CMD25 transaction. Caller must cancel the transition.
+  return idle==1;
 }
 #else
 // Odyssey S3 remains detection-only and retains the existing Arduino SD probe.
