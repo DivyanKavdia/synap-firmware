@@ -292,6 +292,43 @@ Deleting an SD copy must never delete the corresponding Memory.
 - Recovery/remount is bounded and explicit; do not add autonomous remount loops during an open recording.
 - No recovery path formats the card.
 
+### C3 deep-sleep and SD durability contract (8 October 2026)
+
+The C3 SD card may remain powered when the ESP32-C3 enters deep sleep or
+restarts. A successful WAV `fwrite` is **not** enough to release the
+sleep veto: the last padded 4 KiB write, `fclose`/FAT metadata commit,
+recording diagnostics, and any bounded SD recovery must all finish.
+
+| Trigger | C3 + SD behavior |
+| --- | --- |
+| Disconnected inactivity (>5 min) | Refuse sleep while local recording, Wi-Fi, SD settlement, OTA, or an unsafe SD bus exists |
+| Critical battery | Request local recording STOP first; only consider sleep after finalization and the guard |
+| Four-second physical touch hold | During local SD recording, request STOP and remember the pending sleep gesture; wait for the full 5-second post-write guard |
+| Connected double-tap | Stop BLE capture and enter remote standby, not SD deep sleep |
+| App/OTA restart | Reuse the same guarded SD shutdown; refuse restart if SD is busy or quiesce fails |
+| Sleep-locked wake gate | Require the same SD shutdown check before re-entering sleep after an invalid wake/reset |
+| No SD installed | Preserve standard C3 sleep behavior; no-card mount does not act as an unresolved write fault |
+
+A normal C3 + SD offline recording keeps `odysseyRecording=true` from
+task launch through `fclose`, diagnostic persistence and bounded recovery.
+Only after completion does the worker clear the recording flag, set
+`odysseySdSleepGuardUntil=millis()+5000`, and reset `disconnectedAt`
+to prevent an immediate timeout on long disconnected sessions.
+
+All sleep/restart transitions must acquire the SD mutex and call
+`odysseyPrepareSdForPowerTransition()`. A quiesce result other than
+confirmed SPI idle (1) **must veto the transition**. The persistent-in-uptime
+`odysseySdUnsafeToSleep` latch prevents the next idle-timeout attempt
+from treating the now-unmounted card as safely absent. A validated
+explicit SD remount clears the latch. An unrecovered SD write/close
+failure also sets this latch.
+
+The guard is intentionally conservative: if quiescence cannot be proven,
+the ESP32-C3 stays awake rather than risking FAT metadata corruption.
+Do not add a forced-timeout sleep or remove this latch to improve battery
+life. Battery brownout or external power loss cannot be prevented by
+software; that case still requires filesystem recovery on the next boot.
+
 ## 11. Production tests that protect this implementation
 
 Relevant firmware contracts include:

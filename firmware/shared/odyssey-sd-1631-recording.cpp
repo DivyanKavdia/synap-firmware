@@ -231,6 +231,11 @@ static void odysseyRecordTask(void*) {
     Serial.println("[SD] one-gesture offline start: recovering storage before capture");
     if (!odysseyRecoverSdCard("touch")) {
       odysseyRecordFaultAt=millis();
+      // Keep the C3 awake through recovery teardown and a short SD settle.
+      // The record-active flag is the sleep veto until cleanup has finished.
+      const uint32_t finalizedAt=millis();
+      odysseySdSleepGuardUntil=finalizedAt+5000u;
+      disconnectedAt=finalizedAt;
       odysseyRecording=false;
       odysseyStopRequested=false;
       applyCpuPowerProfile(false);
@@ -250,7 +255,20 @@ static void odysseyRecordTask(void*) {
     Serial.println("[SD] post-record failure: re-arming storage for next take");
     (void)odysseyRecoverSdCard("rearm");
   }
+  // An unresolved write/close failure could leave an always-powered SD card
+  // inside CMD25 programming. Never allow a later idle timeout or user hold
+  // to sleep based solely on the failed mount's "not ready" state.
+  const uint8_t lastFault=odysseyLastRecordFailureStage();
+  if (!odysseySdReady() && lastFault>=44u && lastFault!=48u) {
+    odysseySdUnsafeToSleep=true;
+    Serial.printf("[POWER] C3 SD sleep inhibited: unrecovered record stage=%u\n",unsigned(lastFault));
+  }
 
+  // Do not lift the sleep veto until fwrite, fclose, persistent diagnostics
+  // and any bounded storage re-arm have returned and SD locks were released.
+  const uint32_t finalizedAt=millis();
+  odysseySdSleepGuardUntil=finalizedAt+5000u;
+  disconnectedAt=finalizedAt;
   odysseyRecording=false;
   odysseyStopRequested=false;
   applyCpuPowerProfile(false);

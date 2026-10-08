@@ -212,6 +212,9 @@ std::atomic<bool> batteryAvailable{false};
 std::atomic<bool> odysseyRecording{false}, odysseyStopRequested{false};
 std::atomic<uint32_t> odysseyRecordingStartedAt{0}, odysseyRecordFaultAt{0};
 std::atomic<uint32_t> odysseySdSleepGuardUntil{0};
+// Latches a failed SD idle/quiesce or unresolved write fault. Never permit a
+// later deep-sleep retry to mistake the now-unmounted card for an absent card.
+std::atomic<bool> odysseySdUnsafeToSleep{false};
 void odysseyToggleRecording();
 bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs);
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs);
