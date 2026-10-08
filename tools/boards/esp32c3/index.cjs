@@ -1,6 +1,7 @@
 'use strict';
 const {PRIMARY_TARGET}=require('../../targets.cjs');
 const {replaceOnce}=require('../../target-source.cjs');
+const {materializeC3Ble}=require('./ble.cjs');
 function materializeC3(source,target){
   let out=replaceOnce(source,'p[21]!=9 || p[22]!=0',`p[21]!=${target.chip} || p[22]!=0`,'ESP image chip ID');
   out=replaceOnce(out,'analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_6db);',
@@ -29,7 +30,7 @@ function materializeC3(source,target){
   if(!out.includes('esp_deep_sleep_enable_gpio_wakeup'))throw Error('C3 GPIO deep-sleep wake is unavailable');
   if(!out.includes('long press -> DEEP SLEEP'))throw Error('C3 long-press power gesture was not materialized');
   if(!out.includes('double tap -> START'))throw Error('C3 double-tap recording gesture was not materialized');
-  return out;
+  return materializeC3Ble(out);
 }
 
 module.exports={materializeC3};
