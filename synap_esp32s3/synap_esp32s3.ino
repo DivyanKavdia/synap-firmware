@@ -267,6 +267,7 @@ namespace OdysseyTransfer {
 void initialize();
 void ble(BLEService* service);
 bool available();
+bool busy(); // in-flight SD BLE transfer plus a brief completion grace.
 }
 #endif
 
@@ -1032,16 +1033,17 @@ void armTouchWakeAndSleep() {
   sleepPending=true;
   if (!armTouchWakeSource()) {
     synapLastSleepStage=SLEEP_STAGE_ABORTED;
-    Serial.println("[POWER] fail-closed wake arm failed; rebooting with sleep lock retained");
+    Serial.println("[POWER] touch wake source could not be armed");
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-    if (!odysseyPrepareSdForPowerTransition(500u)) {
-      Serial.println("[POWER] wake-arm reset deferred: C3 SD is not idle");
-      return;
-    }
-#endif
+    // Before BLE init a failed sleep must return to an awake recovery boot,
+    // not leave the pendant inert with its durable sleep lock still set.
+    sleepPending=false;
+    return;
+#else
     delay(250);
     ESP.restart();
     return;
+#endif
   }
   synapLastSleepStage=SLEEP_STAGE_ENTERING;
   Serial.printf("[POWER] deep sleep now request=%u gpio=%u\n",
@@ -1050,19 +1052,36 @@ void armTouchWakeAndSleep() {
   if (!odysseyPrepareSdForPowerTransition(500u)) {
     synapLastSleepStage=SLEEP_STAGE_ABORTED;
     Serial.println("[POWER] wake-gate sleep deferred: C3 SD is not idle");
+    sleepPending=false;
     return;
   }
 #endif
   esp_deep_sleep_start();
-  Serial.println("[POWER] deep sleep returned unexpectedly; rebooting fail-closed");
+  Serial.println("[POWER] deep sleep returned unexpectedly");
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  if (!odysseyPrepareSdForPowerTransition(500u)) {
-    Serial.println("[POWER] unexpected sleep-return reset deferred: C3 SD is not idle");
-    return;
-  }
-#endif
+  sleepPending=false;
+  return;
+#else
   delay(250);
   ESP.restart();
+#endif
+}
+
+// A failed early return-to-sleep must not trap the C3 before BLE starts.
+static bool resumeC3BootAfterFailedSleep(const char* reason) {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  if (!writeDurableSleepLock(false))
+    Serial.println("[POWER] wake-sleep fallback: NVS unlock failed");
+  synapDeepSleepMarker=0;
+  sleepPending=false;
+  bootSleepWasLocked=false;
+  synapLastSleepStage=SLEEP_STAGE_ABORTED;
+  Serial.printf("[POWER] continuing awake BLE boot after failed sleep: %s\n",reason?reason:"unknown");
+  return true;
+#else
+  (void)reason;
+  return false;
+#endif
 }
 
 bool confirmTouchWakeGesture() {
@@ -1075,6 +1094,13 @@ bool confirmTouchWakeGesture() {
     unsigned(cause),durableLock?1u:0u,
     synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER?1u:0u,
     unsigned(synapLastSleepStage),unsigned(synapSleepRequestCounter));
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  if (bootResetReason==ESP_RST_POWERON) {
+    synapDeepSleepMarker=0;
+    sleepPending=false;
+    return true;
+  }
+#endif
   if (!sleepResume) return true;
 
   bool touchWake=false;
@@ -1088,7 +1114,8 @@ bool confirmTouchWakeGesture() {
     synapDeepSleepMarker=SYNAP_DEEP_SLEEP_MARKER;
     sleepPending=true;
     Serial.println("[POWER] sleep lock survived a non-touch reset; returning to deep sleep before BLE");
-    delay(30);armTouchWakeAndSleep();return false;
+    delay(30);armTouchWakeAndSleep();
+    return resumeC3BootAfterFailedSleep("non-touch reset");
   }
 
   // Both boards confirm a deliberate hold after hardware wake. The TTP223
@@ -1102,7 +1129,8 @@ bool confirmTouchWakeGesture() {
 
   if (uint32_t(millis()-pressedAt)<TOUCH_WAKE_HOLD_MS) {
     Serial.println("[TOUCH] wake press too short; returning to deep sleep");
-    delay(30);armTouchWakeAndSleep();return false;
+    delay(30);armTouchWakeAndSleep();
+    return resumeC3BootAfterFailedSleep("short wake press");
   }
 
   // Do not continue into normal touch handling until the wake press is released.
@@ -1113,7 +1141,8 @@ bool confirmTouchWakeGesture() {
   }
   if (!writeDurableSleepLock(false)) {
     Serial.println("[POWER] could not clear durable sleep lock; refusing BLE boot");
-    delay(30);armTouchWakeAndSleep();return false;
+    delay(30);armTouchWakeAndSleep();
+    return resumeC3BootAfterFailedSleep("NVS wake lock");
   }
   synapDeepSleepMarker=0;
   sleepPending=false;
@@ -1172,6 +1201,10 @@ void enterRemoteStandby() {
 void enterDeepSleep(const char* reason) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   if (odysseyRecording.load() || OdysseyWifi::busy()) return;
+  if (OdysseyTransfer::busy()) {
+    Serial.println("[POWER] deep sleep deferred: C3 SD transfer active");
+    return;
+  }
   const uint32_t sdGuardUntil=odysseySdSleepGuardUntil.load();
   if (sdGuardUntil && static_cast<int32_t>(millis()-sdGuardUntil)<0) {
     Serial.println("[POWER] deep sleep deferred: C3 SD post-record settle");
@@ -1301,7 +1334,7 @@ void powerTick() {
     if (batteryCritical()) odysseyStopRequested=true;
     return;
   }
-  if (OdysseyWifi::busy()) return;
+  if (OdysseyWifi::busy() || OdysseyTransfer::busy()) return;
   // Do not permanently suppress disconnected-timeout or critical-battery
   // sleep after a failed quiesce. enterDeepSleep() performs a bounded,
   // throttled recovery and still refuses sleep until SD is proven idle.
@@ -3922,6 +3955,14 @@ struct Request {
   char path[64]{};
 };
 static QueueHandle_t requests=nullptr;
+// Keep SD reads protected while BLE is transferring and briefly afterward.
+static std::atomic<bool> sdBleTransferInFlight{false};
+static std::atomic<uint32_t> sdBleLastTransferAt{0};
+bool busy() {
+  if (sdBleTransferInFlight.load()) return true;
+  const uint32_t last=sdBleLastTransferAt.load();
+  return last && uint32_t(millis()-last)<15000u;
+}
 // Six paced notifications per request avoid thousands of GATT read round trips.
 static BLECharacteristic* streamCharacteristic=nullptr;
 static constexpr uint32_t TRANSFER_STACK_BYTES=8192;
@@ -4240,6 +4281,8 @@ static void worker(void*) {
       continue;
     }
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load()) continue;
+    sdBleTransferInFlight=true;
+    sdBleLastTransferAt=millis();
     // Connected remote standby only idles the microphone/CPU; SD media must
     // remain readable for verified sync and recovery without a forced wake.
     // Wi-Fi status must remain readable over BLE while the uploader owns SD.
@@ -4247,16 +4290,25 @@ static void worker(void*) {
       char detail[480];
       const size_t n=OdysseyWifi::encode(detail,sizeof(detail));
       reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),n);
+      sdBleLastTransferAt=millis();
+      sdBleTransferInFlight=false;
       continue;
     }
     if (odysseyRecording.load() || streamingEnabled.load() || OdysseyWifi::busy() ||
         otaBusy() || sleepPending) {
-      reply(request,BUSY);continue;
+      reply(request,BUSY);
+      sdBleLastTransferAt=millis();
+      sdBleTransferInFlight=false;
+      continue;
     }
     uint8_t error=OK;uint32_t total=0;size_t size=0;
     switch (request.operation) {
       case 3: error=selectFile(request.path,total); break;
-      case 12: streamSdWindow(request); continue;
+      case 12:
+        streamSdWindow(request);
+        sdBleLastTransferAt=millis();
+        sdBleTransferInFlight=false;
+        continue;
       case 16: error=OK; break;
       case 4:
         error=readSelected(request.path,request.offset,total,bytes,size);
@@ -4314,6 +4366,8 @@ static void worker(void*) {
       reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),
         n>0?std::min(size_t(n),sizeof(detail)-1):0);
     } else reply(request,error,total,request.offset,bytes,size);
+    sdBleLastTransferAt=millis();
+    sdBleTransferInFlight=false;
   }
 }
 
