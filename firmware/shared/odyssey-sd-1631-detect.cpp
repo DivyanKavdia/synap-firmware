@@ -642,6 +642,16 @@ static bool odysseySdMountLocked(const char* reason,uint8_t attempts) {
   if (odysseySdReady()) return true;
   for (uint8_t attempt=1;attempt<=attempts;++attempt) {
     if (odysseySdMountOnceLocked(reason,attempt)) return true;
+    // After a brownout, an all-zero response even with CS HIGH indicates a
+    // held-low bus. Repeating CMD12/CMD0 before advertising only delays BLE
+    // and can leave the battery exposed to repeated power spikes. Preserve
+    // fault diagnostics and offer explicit recovery after connectivity.
+    if (reason && !strcmp(reason,"boot") &&
+        odysseySdBitBangCsHigh.load()==0 && odysseySdRawZero.load()>=900u) {
+      odysseySdUnsafeToSleep=true;
+      Serial.println("[SD] boot: SD MISO held LOW; deferring more probes until recovery");
+      break;
+    }
   }
   Serial.printf("[SD] %s failed after %u attempt(s), state=%u stage=%u\n",
     reason,unsigned(attempts),unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()));
