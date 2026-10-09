@@ -475,3 +475,35 @@ Do not change any of the following without repeating physical SD acceptance:
 - sync receipt / explicit-delete semantics.
 
 If a future change appears to make the implementation “cleaner” by returning to 512-byte writes, in-place WAV finalization, direct native-SDSPI mounting, automatic remount loops, or automatic source deletion after sync, treat that as an architecture change requiring hardware requalification—not as a refactor.
+
+### Power-on / BLE / SD / deep-sleep lifecycle contract (9 October 2026)
+
+This applies **only** to Odyssey ESP32-C3 with SD; do not reuse the C3 pin
+mapping, recording behavior or touch wake semantics on S3/Chakshu.
+
+| Transition | Required behavior |
+| --- | --- |
+| External power switch OFF -> ON (ESP_RST_POWERON) | Cold physical power-on overrides a previous NVS sleep lock; initializes SD once before BLE and then starts advertising. |
+| Normal deep-sleep GPIO touch wake | Hold the TTP223 touch for 4 seconds to wake intentionally. A short tap remains asleep. |
+| Retained sleep lock + non-touch MCU reset | Return to sleep when safe, but a persisted failed SD write instead boots awake for validated recovery. If arming deep sleep fails, recover into BLE advertising rather than strand setup before BLE init. |
+| Boot SD bus held LOW even while CS HIGH | A definitive all-zero probe ends futile repeated boot mounts, preserves the unsafe-sleep veto and brings up BLE for explicit card recovery; it does not claim SD is healthy. |
+| Connected BLE SD transfer | Transfer worker holds an in-flight lock and a 15-second post-request grace. Long-touch sleep is deferred until the transfer finishes and the grace has elapsed. |
+| Accidental BLE disconnect | Restart advertising; normal disconnected auto-sleep remains 5 minutes, not immediate. |
+| Deep sleep | Do not announce sleep or stop radio until after SD has been quiesced and the touch wake source is armed. |
+| Brownout | Physical supply drop can reset BLE and leave the continuously-powered SD card stuck. Software safeguards cannot guarantee transfer survival or recover an electrically held-low MISO bus. |
+
+**Battery/power validation remains mandatory.** The 1 MOhm/470 kOhm
+battery ADC circuit has reported implausible ~0.3-6.3 V reconstructed values.
+Do not calibrate by changing the resistor ratio to hide unstable readings.
+Validate LiPo terminal voltage, GPIO1 divider midpoint, common ground,
+regulator/SD 3.3 V rail under load, and the ADC input capacitor with a
+multimeter or oscilloscope. Do not disable the hardware brownout detector.
+
+**Acceptance tests:** Cold-switch power-on with an old sleep lock; SD mounted
+and missing; 4-second touch wake from deliberate deep sleep; 3-minute offline
+WAV finalized before sleep; at least two SD-to-PWA transfers without touching
+power, including one forced BLE disconnect and reconnect; no SD deletion until
+journal verification and receipt completion; and brownout/fault simulation.
+Check boot reset reason, SD live probe, BLE last-disconnect cause, mount stage,
+and source checksum for each transition. Build and hardware tests are required
+before considering the lifecycle production-validated.
