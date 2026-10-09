@@ -60,7 +60,7 @@ test('Wi-Fi upload owns SD and blocks recording OTA sleep and CPU downclock',()=
   assert.match(recorder,/OdysseyWifi::busy\(\)/);
   assert.match(transfer,/OdysseyWifi::busy\(\)/);
   assert.match(power,/odysseyRecording\.load\(\) \|\| OdysseyWifi::busy\(\)/);
-  assert.match(power,/if \(OdysseyWifi::busy\(\)\) return/);
+  assert.match(power,/if \(OdysseyWifi::busy\(\) \|\| OdysseyTransfer::busy\(\)\) return/);
   assert.match(cpu,/active=active \|\| odysseyRecording\.load\(\) \|\| OdysseyWifi::busy\(\)/);
   assert.match(ota,/odysseyRecording\.load\(\) \|\| OdysseyWifi::busy\(\)/);
 });
