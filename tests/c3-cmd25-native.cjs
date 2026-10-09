@@ -44,7 +44,7 @@ bool sdWait(uint8_t,int timeout){
   return waitCount!=failWaitAt;
 }
 char sdWriteBytes(uint8_t,const char*,char token){
-  assert(token==0xFC);
+  assert(static_cast<uint8_t>(token)==0xFCu);
   ++acceptedBlocks;
   events.push_back("data");
   return acceptedBlocks==rejectedBlock?0x0B:0x05;
