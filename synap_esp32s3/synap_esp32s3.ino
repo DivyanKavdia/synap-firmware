@@ -765,7 +765,16 @@ void setDeviceState(DeviceState state, ErrorCode error) {
 
 void applyCpuPowerProfile(bool active) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  active=active || odysseyRecording.load() || OdysseyWifi::busy();
+  // The 80 MHz idle profile was also selected while Bluefy was establishing
+  // GATT subscriptions or running connected-idle. Avoid changing CPU clocks
+  // underneath the single-core NimBLE host and the C3 SD/Wi-Fi tasks.
+  // Give a recently dropped link a brief 12 s recovery window at 160 MHz,
+  // then return to 80 MHz while advertising to protect battery life.
+  const uint32_t lastDisconnect=lastDisconnectAt.load();
+  const bool reconnectWindow=lastDisconnect &&
+    uint32_t(millis()-lastDisconnect)<12000u;
+  active=active || deviceConnected.load() || reconnectWindow ||
+    odysseyRecording.load() || OdysseyWifi::busy() || OdysseyTransfer::busy();
 #endif
   static uint32_t appliedMHz = 0;
   const uint32_t targetMHz = active ? ACTIVE_CPU_MHZ : IDLE_CPU_MHZ;
@@ -1911,10 +1920,20 @@ class ServerCallbacks : public BLEServerCallbacks {
   }
 #elif defined(CONFIG_NIMBLE_ENABLED)
   void onConnect(BLEServer* server, ble_gap_conn_desc* desc) override {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+    // With Bluefy/iOS, the phone is the connection central. Avoid firing a
+    // peripheral connection-parameter update in the middle of native service
+    // discovery and CCCD writes. C3 live audio now needs only one ADPCM
+    // notification per frame, so the central's negotiated interval suffices.
+    (void)server;
+    (void)desc;
+#else
     if(desc)server->updateConnParams(desc->conn_handle, BLE_MIN_INTERVAL,
       BLE_MAX_INTERVAL, BLE_SLAVE_LATENCY, BLE_SUPERVISION_TIMEOUT);
+#endif
   }
-  // This Arduino NimBLE callback omits the reason; retain 0xFFFF (unavailable).
+  // Arduino BLE 3.3.5's NimBLE callback omits event->disconnect.reason;
+  // 0xFFFF still explicitly means "not exposed by the library".
 #endif
 };
 class ControlCallbacks : public BLECharacteristicCallbacks {
