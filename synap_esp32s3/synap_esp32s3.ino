@@ -1109,6 +1109,16 @@ bool confirmTouchWakeGesture() {
 #elif CONFIG_IDF_TARGET_ESP32C3
   touchWake=(cause==ESP_SLEEP_WAKEUP_GPIO);
 #endif
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  if (!touchWake) {
+    // Even an old retained sleep request may coincide with an unfinished
+    // recorder write across a brownout/reset. Recover at normal boot before
+    // permitting deep sleep; never quiesce an uninitialized SD host blindly.
+    const uint8_t retainedStage=odysseyLastRecordFailureStage();
+    if (retainedStage>=44u && retainedStage!=48u)
+      return resumeC3BootAfterFailedSleep("retained SD write fault needs validated mount");
+  }
+#endif
   if (!touchWake) {
     synapLastSleepStage=SLEEP_STAGE_RESET_RECOVERY;
     synapDeepSleepMarker=SYNAP_DEEP_SLEEP_MARKER;
