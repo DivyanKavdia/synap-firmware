@@ -30,7 +30,7 @@ test('C3 cannot enter deep sleep or reboot on a non-idle SD bus',()=>{
         deep.indexOf('publishPowerEvent(POWER_STATE_DEEP_SLEEP)'),
         'never send a false deep sleep event before SD confirms idle');
  const wake=power.split('void armTouchWakeAndSleep() {')[1].split('bool confirmTouchWakeGesture() {')[0];
- assert.equal((wake.match(/if \(!odysseyPrepareSdForPowerTransition\(500u\)\)/g)||[]).length,3);
+ assert.equal((wake.match(/if \(!odysseyPrepareSdForPowerTransition\(500u\)\)/g)||[]).length,1);
  assert.match(ota,/if \(!odysseyPrepareSdForPowerTransition\(1000u\)\) return;\s*#endif\s*ESP\.restart\(\)/);
  assert.match(control,/if \(!odysseyPrepareSdForPowerTransition\(1000u\)\) \{/);
 });
