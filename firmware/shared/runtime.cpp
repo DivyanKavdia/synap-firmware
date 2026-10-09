@@ -231,6 +231,7 @@ namespace OdysseyTransfer {
 void initialize();
 void ble(BLEService* service);
 bool available();
+bool busy(); // in-flight SD BLE transfer plus a brief completion grace.
 }
 #endif
 
