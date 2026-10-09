@@ -3169,10 +3169,24 @@ static void odysseyLoadPersistedRecordFailure() {
     odysseyPersistedRecordStage=uint8_t(record[1]&255u);
     odysseyPersistedRecordBytes=record[2];
     if (version2) {
+      // Read the temporary seven-word journal produced during development.
       odysseyPersistedWriteErrno=record[3];
       odysseyPersistedWriteReturned=record[4];
       odysseyPersistedWriteExpected=record[5];
       odysseyPersistedWriteFerror=record[6];
+    } else {
+      // Keep "last" in its original three-word form so an OTA rollback
+      // still sees an unresolved stage-70 failure and retains sleep safety.
+      // Extra fields live in a separate stage/byte-paired journal.
+      uint32_t detail[6]{};
+      if (prefs.getBytesLength("write")==sizeof(detail) &&
+          prefs.getBytes("write",detail,sizeof(detail))==sizeof(detail) &&
+          detail[0]==record[1] && detail[1]==record[2]) {
+        odysseyPersistedWriteErrno=detail[2];
+        odysseyPersistedWriteReturned=detail[3];
+        odysseyPersistedWriteExpected=detail[4];
+        odysseyPersistedWriteFerror=detail[5];
+      }
     }
   }
   prefs.end();
@@ -3201,10 +3215,15 @@ static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   }
   Preferences prefs;
   if (!prefs.begin("sd-recdiag",false)) return;
-  // Accept 3-word legacy records on read; emit full 7-word diagnostics now.
-  const uint32_t record[7]={stage?2u:0u,uint32_t(stage),bytes,
-    odysseyPersistedWriteErrno.load(),odysseyPersistedWriteReturned.load(),
-    odysseyPersistedWriteExpected.load(),odysseyPersistedWriteFerror.load()};
+  // Preserve the original on-flash ABI for older OTA rollback builds.
+  // Write optional detail first; last/3-word remains the authoritative stage.
+  if (stage) {
+    const uint32_t detail[6]={uint32_t(stage),bytes,
+      odysseyPersistedWriteErrno.load(),odysseyPersistedWriteReturned.load(),
+      odysseyPersistedWriteExpected.load(),odysseyPersistedWriteFerror.load()};
+    (void)prefs.putBytes("write",detail,sizeof(detail));
+  }
+  const uint32_t record[3]={stage?1u:0u,uint32_t(stage),bytes};
   (void)prefs.putBytes("last",record,sizeof(record));
   prefs.end();
 }
