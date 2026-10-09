@@ -320,6 +320,45 @@ Physical BAT+/GND and GPIO1/GND measurements are required for voltage
 calibration, especially during charging. Do not force the percentage to
 100 or lower the actual cell voltage without a reference instrument.
 
+### C3 BLE connection stability and reconnect policy (October 2026)
+
+After the 1897 ADPCM update, the remaining connection symptoms are distinct
+from media congestion: Bluefy sometimes takes multiple attempts to discover
+GATT services, an established link may later disconnect, and iOS may suspend
+or disconnect the native BLE link when the PWA is backgrounded. The latter
+is a Bluefy/iOS lifecycle constraint; firmware cannot force an iOS browser
+to keep an active connection in the background.
+
+For ESP32-C3 targets only, `applyCpuPowerProfile()` now holds the active
+160 MHz CPU clock while BLE is connected, during SD transfers, and for a
+bounded 12-second recovery window after a link loss. Previously C3 switched
+to 80 MHz as soon as audio/OTA activity stopped, even during connected idle
+and GATT discovery. When disconnected and idle beyond the recovery window
+it returns to 80 MHz, protecting battery life; active offline SD capture
+and Wi-Fi keep their existing full-speed requirements. **Tradeoff:** the
+connected-idle current is higher.
+
+The pinned Arduino NimBLE C3 GAP connect callback no longer immediately
+calls `updateConnParams()`. The iPhone is the BLE central and can negotiate
+suitable parameters; the existing C3 ADPCM live transport sends only one
+404-byte packet per 50 ms at MTU 517. S3's existing connection negotiation
+is unchanged. Keep `advertiseOnDisconnect(true)` so the pinned library
+restarts connectable advertising after an unintentional link drop.
+
+Firmware `lastDisconnectReason=65535` still means that the pinned NimBLE
+Arduino callback does not expose the GAP disconnection reason. PWA logs
+must distinguish user/app-initiated disconnect from browser/peripheral loss.
+Do not label generic Bluefy native code 2 as a definite peripheral bug;
+permission-wrapper failures may need manual reselection.
+
+Hardware validation: leave the PWA foregrounded for 3 minutes connected
+and idle, then record 2 minutes over ADPCM, deliberately disconnect and
+reconnect, then repeat after deep sleep. Log `firmwareBuild`, `GATT
+disconnected` (including `visibility` and `origin`), `Connection
+setup` stages, `Audio delivery stalled`, `notifyRejects`, and
+`Battery`. Check offline SD recording separately. These software changes
+cannot rule out cell-voltage instability or iOS radio-layer limitations.
+
 ## 10. Ownership and concurrency rules
 
 - C3 standard/no-card operation must retain normal BLE audio even if SD is absent or unhealthy.
