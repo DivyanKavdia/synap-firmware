@@ -2865,6 +2865,12 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
       mounted=odysseySdBeginLocked();
     }
     if (!mounted) {
+      // MISO driven LOW even with CS HIGH is an unsafe bus, not proven absence.
+      // Keep sleep veto through reset/retry until a verified mount succeeds.
+      if (odysseySdBitBangCsHigh.load()==0 && odysseySdRawZero.load()>=900u) {
+        odysseySdUnsafeToSleep=true;
+        Serial.println("[SD] unsafe-to-sleep: MISO driven low after failed mount");
+      }
       odysseySdLastMountError=ESP_FAIL;
       odysseySdBootState=2;odysseySdProbeStage=2;
       Serial.printf("[SD] %s attempt %u exact-1445 SD.begin failed; GPIO CMD0=0x%02X\n",
@@ -2927,6 +2933,9 @@ bool odysseyInitializeSdCardBeforeBle() {
   const uint8_t previousRecordStage=odysseyLastRecordFailureStage();
   const bool previousStorageFault=previousRecordStage>=44u && previousRecordStage!=48u;
   if (previousStorageFault) {
+    // Retained write/close faults survive reboot, unlike this in-RAM veto.
+    // Only successful VFS-validated remount may clear unsafe-to-sleep.
+    odysseySdUnsafeToSleep=true;
     Serial.printf("[SD] boot re-arm after recorder stage=%u\n",unsigned(previousRecordStage));
     (void)odysseySdBitBangRecoverLocked("rearm");
     delay(20);
