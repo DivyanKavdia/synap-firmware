@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 constexpr uint16_t PCM_MIN_MTU=185,MIN_REQUIRED_MTU=32,MAX_AUDIO_PAYLOAD_BYTES=500;
 constexpr uint8_t AUDIO_HEADER_BYTES=8,MAX_CHUNKS_PER_FRAME=20;
 constexpr uint16_t AUDIO_BYTES_PER_FRAME=1600,ADPCM_BYTES_PER_FRAME=404;
