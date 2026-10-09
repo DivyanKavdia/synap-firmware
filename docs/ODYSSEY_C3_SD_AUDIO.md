@@ -582,3 +582,40 @@ journal verification and receipt completion; and brownout/fault simulation.
 Check boot reset reason, SD live probe, BLE last-disconnect cause, mount stage,
 and source checksum for each transition. Build and hardware tests are required
 before considering the lifecycle production-validated.
+
+### C3 held-LOW MISO / stage-70 field diagnosis (9 October 2026)
+
+A connected field unit on build 1901 reported a successful ~2,040 KiB offline PCM
+write followed by `lastRecordStage=70`, `sdDetectionState=2`, and
+`sdLiveProbeState=2`. The catalogue response then had
+`bbHigh=0, raw0=1023/1024, rawFF=0, bbDrain=8192, bbStop=3`, indicating a
+strongly held-LOW MISO/DO bus despite deselecting the card. This **does not**
+by itself distinguish SD-module power integrity, wiring, a card controller
+stuck busy, or a broken/unrecoverable card. The contemporaneous C3 battery ADC
+is also invalid and must not be used as proof of a safe supply.
+
+The guarded follow-up keeps the proven Arduino SD mount, append-only 4 KiB
+recorder, and 1.25 MiB OTA partition unchanged. It adds:
+
+- A **v2 NVS recording-failure record** that continues to read the original
+  three-word `sd-recdiag/last` journal and persists 4 additional fields on a
+  failed write: actual `errno`, returned `fwrite` bytes, requested 4096 bytes,
+  and `ferror(FILE*)`. Success clears all failure details.
+- Compact SD catalogue failure diagnostics `wrE`, `wrN`, `wrX`, `wrF`
+  carrying those four persisted values, alongside the pre-existing bus probes.
+  A value `wrE=0` is **unknown/unset errno**, not proof of a successful write.
+- If a **failed** SD mount has measured CS-high MISO LOW and ≥900 zero bytes in
+  the 1024-byte raw bus sample, disconnected idle-timeout automatic sleep
+  recovery **stops repeatedly remounting** the same non-power-cycled SD card.
+  SD unsafe-to-sleep protection stays asserted. Explicit BLE SD retry (op 14),
+  disconnected double-tap, and a *genuine SD power cycle* remain possible.
+
+This is a **diagnostic and recovery-loop containment fix**, not a validated SD
+repair. Do not format or delete a card with untransferred recordings. Because
+SD is wired to the always-on C3 3V3 rail on Rev K, ESP deep sleep/reset does
+not reliably power-cycle the card. Confirm real rail removal and measure 3.3 V
+under sustained SD-write load if stage 70 recurs.
+
+Before declaring stable on the sealed device: test 10 offline start/stop cycles,
+a ≥5-minute offline take, unexpected BLE disconnect during catalogue/read,
+the real power switch's effect on SD 3V3, and retained WAV sync after recovery.

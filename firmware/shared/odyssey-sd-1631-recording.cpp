@@ -4,16 +4,31 @@
 static std::atomic<uint8_t> odysseyPersistedRecordStage{0};
 static std::atomic<uint32_t> odysseyPersistedRecordBytes{0};
 static std::atomic<bool> odysseyPersistedRecordLoaded{false};
+// V2 of the existing diagnostic journal retains the precise short write.
+static std::atomic<uint32_t> odysseyPersistedWriteErrno{0};
+static std::atomic<uint32_t> odysseyPersistedWriteReturned{0};
+static std::atomic<uint32_t> odysseyPersistedWriteExpected{0};
+static std::atomic<uint32_t> odysseyPersistedWriteFerror{0};
 
 static void odysseyLoadPersistedRecordFailure() {
   if (odysseyPersistedRecordLoaded.exchange(true)) return;
   Preferences prefs;
   if (!prefs.begin("sd-recdiag",true)) return;
-  uint32_t record[3]{};
-  if (prefs.getBytesLength("last")==sizeof(record) &&
-      prefs.getBytes("last",record,sizeof(record))==sizeof(record) && record[0]==1u) {
+  uint32_t record[7]{};
+  const size_t savedBytes=prefs.getBytesLength("last");
+  const bool legacy=savedBytes==3u*sizeof(uint32_t);
+  const bool version2=savedBytes==sizeof(record);
+  if ((legacy || version2) &&
+      prefs.getBytes("last",record,savedBytes)==savedBytes &&
+      (legacy?record[0]==1u:record[0]==2u)) {
     odysseyPersistedRecordStage=uint8_t(record[1]&255u);
     odysseyPersistedRecordBytes=record[2];
+    if (version2) {
+      odysseyPersistedWriteErrno=record[3];
+      odysseyPersistedWriteReturned=record[4];
+      odysseyPersistedWriteExpected=record[5];
+      odysseyPersistedWriteFerror=record[6];
+    }
   }
   prefs.end();
 }
@@ -25,13 +40,26 @@ uint32_t odysseyLastRecordFailureBytes() {
   odysseyLoadPersistedRecordFailure();
   return odysseyPersistedRecordBytes.load();
 }
+uint32_t odysseyLastWriteErrno() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteErrno.load(); }
+uint32_t odysseyLastWriteReturned() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteReturned.load(); }
+uint32_t odysseyLastWriteExpected() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteExpected.load(); }
+uint32_t odysseyLastWriteFerror() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteFerror.load(); }
 static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   odysseyPersistedRecordLoaded=true;
   odysseyPersistedRecordStage=stage;
   odysseyPersistedRecordBytes=bytes;
+  if (!stage) {
+    odysseyPersistedWriteErrno=0;
+    odysseyPersistedWriteReturned=0;
+    odysseyPersistedWriteExpected=0;
+    odysseyPersistedWriteFerror=0;
+  }
   Preferences prefs;
   if (!prefs.begin("sd-recdiag",false)) return;
-  const uint32_t record[3]={stage?1u:0u,uint32_t(stage),bytes};
+  // Accept 3-word legacy records on read; emit full 7-word diagnostics now.
+  const uint32_t record[7]={stage?2u:0u,uint32_t(stage),bytes,
+    odysseyPersistedWriteErrno.load(),odysseyPersistedWriteReturned.load(),
+    odysseyPersistedWriteExpected.load(),odysseyPersistedWriteFerror.load()};
   (void)prefs.putBytes("last",record,sizeof(record));
   prefs.end();
 }
@@ -67,6 +95,10 @@ static uint8_t odysseyBatchWriteFailureStage(int error) {
   }
 }
 static void odysseyRecordTake() {
+  odysseyPersistedWriteErrno=0;
+  odysseyPersistedWriteReturned=0;
+  odysseyPersistedWriteExpected=0;
+  odysseyPersistedWriteFerror=0;
   bool failed=false;
   uint8_t failureStage=0;
   uint32_t bytes=0;
@@ -150,6 +182,10 @@ static void odysseyRecordTake() {
           const size_t written=fwrite(batch,1,sizeof(batch),file);
           if (written!=sizeof(batch)) {
             const int writeError=errno;
+            odysseyPersistedWriteErrno=writeError>0?uint32_t(writeError):0u;
+            odysseyPersistedWriteReturned=uint32_t(written);
+            odysseyPersistedWriteExpected=sizeof(batch);
+            odysseyPersistedWriteFerror=ferror(file)?1u:0u;
             failed=true;failureStage=odysseyBatchWriteFailureStage(writeError);
             Serial.printf("[SD] PCM batch write failed errno=%d stage=%u wrote=%u pcm=%lu\n",
               writeError,unsigned(failureStage),unsigned(written),
@@ -183,6 +219,10 @@ static void odysseyRecordTake() {
       const size_t written=fwrite(batch,1,sizeof(batch),file);
       if (written!=sizeof(batch)) {
         const int writeError=errno;
+        odysseyPersistedWriteErrno=writeError>0?uint32_t(writeError):0u;
+        odysseyPersistedWriteReturned=uint32_t(written);
+        odysseyPersistedWriteExpected=sizeof(batch);
+        odysseyPersistedWriteFerror=ferror(file)?1u:0u;
         failed=true;failureStage=odysseyBatchWriteFailureStage(writeError);
         Serial.printf("[SD] final PCM batch failed errno=%d stage=%u wrote=%u expected=%u\n",
           writeError,unsigned(failureStage),unsigned(written),unsigned(sizeof(batch)));
