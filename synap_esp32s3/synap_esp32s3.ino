@@ -1238,6 +1238,10 @@ void enterDeepSleep(const char* reason) {
 
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   if (odysseySdUnsafeToSleep.load()) {
+    // Do not autonomously repeat destructive reinitialization on a proven
+    // held-LOW SD bus. Explicit op14 or a disconnected double-tap can retry;
+    // a verified mount is still required before entering deep sleep.
+    if (odysseySdBusStuckLow()) return;
     // A previous quiesce may have left the always-powered SD host unmounted.
     // One bounded explicit recovery is safer than either forcing sleep or
     // permanently leaving the C3 awake. Throttle recurring idle-timeout
@@ -2490,6 +2494,12 @@ int16_t odysseySdBitBangCmd12Response() { return odysseySdBitBangCmd12.load(); }
 uint8_t odysseySdBitBangCmd12ReadyState() { return odysseySdBitBangCmd12Ready.load(); }
 uint32_t odysseySdBitBangDrainByteCount() { return odysseySdBitBangDrainBytes.load(); }
 uint16_t odysseySdRawZeroCount() { return odysseySdRawZero.load(); }
+// A card that still drives MISO LOW while deselected cannot be recovered
+// by repeatedly restarting the ESP32 SPI peripheral. Keep explicit recovery.
+bool odysseySdBusStuckLow() {
+  return odysseySdBootState.load()!=1 &&
+    odysseySdBitBangCsHigh.load()==0 && odysseySdRawZero.load()>=900u;
+}
 uint16_t odysseySdRawFFCount() { return odysseySdRawFF.load(); }
 uint16_t odysseySdRawFECount() { return odysseySdRawFE.load(); }
 uint16_t odysseySdRawOtherCount() { return odysseySdRawOther.load(); }
@@ -3138,16 +3148,31 @@ void odysseyDetectSdCard() {
 static std::atomic<uint8_t> odysseyPersistedRecordStage{0};
 static std::atomic<uint32_t> odysseyPersistedRecordBytes{0};
 static std::atomic<bool> odysseyPersistedRecordLoaded{false};
+// V2 of the existing diagnostic journal retains the precise short write.
+static std::atomic<uint32_t> odysseyPersistedWriteErrno{0};
+static std::atomic<uint32_t> odysseyPersistedWriteReturned{0};
+static std::atomic<uint32_t> odysseyPersistedWriteExpected{0};
+static std::atomic<uint32_t> odysseyPersistedWriteFerror{0};
 
 static void odysseyLoadPersistedRecordFailure() {
   if (odysseyPersistedRecordLoaded.exchange(true)) return;
   Preferences prefs;
   if (!prefs.begin("sd-recdiag",true)) return;
-  uint32_t record[3]{};
-  if (prefs.getBytesLength("last")==sizeof(record) &&
-      prefs.getBytes("last",record,sizeof(record))==sizeof(record) && record[0]==1u) {
+  uint32_t record[7]{};
+  const size_t savedBytes=prefs.getBytesLength("last");
+  const bool legacy=savedBytes==3u*sizeof(uint32_t);
+  const bool version2=savedBytes==sizeof(record);
+  if ((legacy || version2) &&
+      prefs.getBytes("last",record,savedBytes)==savedBytes &&
+      (legacy?record[0]==1u:record[0]==2u)) {
     odysseyPersistedRecordStage=uint8_t(record[1]&255u);
     odysseyPersistedRecordBytes=record[2];
+    if (version2) {
+      odysseyPersistedWriteErrno=record[3];
+      odysseyPersistedWriteReturned=record[4];
+      odysseyPersistedWriteExpected=record[5];
+      odysseyPersistedWriteFerror=record[6];
+    }
   }
   prefs.end();
 }
@@ -3159,13 +3184,26 @@ uint32_t odysseyLastRecordFailureBytes() {
   odysseyLoadPersistedRecordFailure();
   return odysseyPersistedRecordBytes.load();
 }
+uint32_t odysseyLastWriteErrno() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteErrno.load(); }
+uint32_t odysseyLastWriteReturned() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteReturned.load(); }
+uint32_t odysseyLastWriteExpected() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteExpected.load(); }
+uint32_t odysseyLastWriteFerror() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteFerror.load(); }
 static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   odysseyPersistedRecordLoaded=true;
   odysseyPersistedRecordStage=stage;
   odysseyPersistedRecordBytes=bytes;
+  if (!stage) {
+    odysseyPersistedWriteErrno=0;
+    odysseyPersistedWriteReturned=0;
+    odysseyPersistedWriteExpected=0;
+    odysseyPersistedWriteFerror=0;
+  }
   Preferences prefs;
   if (!prefs.begin("sd-recdiag",false)) return;
-  const uint32_t record[3]={stage?1u:0u,uint32_t(stage),bytes};
+  // Accept 3-word legacy records on read; emit full 7-word diagnostics now.
+  const uint32_t record[7]={stage?2u:0u,uint32_t(stage),bytes,
+    odysseyPersistedWriteErrno.load(),odysseyPersistedWriteReturned.load(),
+    odysseyPersistedWriteExpected.load(),odysseyPersistedWriteFerror.load()};
   (void)prefs.putBytes("last",record,sizeof(record));
   prefs.end();
 }
@@ -3201,6 +3239,10 @@ static uint8_t odysseyBatchWriteFailureStage(int error) {
   }
 }
 static void odysseyRecordTake() {
+  odysseyPersistedWriteErrno=0;
+  odysseyPersistedWriteReturned=0;
+  odysseyPersistedWriteExpected=0;
+  odysseyPersistedWriteFerror=0;
   bool failed=false;
   uint8_t failureStage=0;
   uint32_t bytes=0;
@@ -3284,6 +3326,10 @@ static void odysseyRecordTake() {
           const size_t written=fwrite(batch,1,sizeof(batch),file);
           if (written!=sizeof(batch)) {
             const int writeError=errno;
+            odysseyPersistedWriteErrno=writeError>0?uint32_t(writeError):0u;
+            odysseyPersistedWriteReturned=uint32_t(written);
+            odysseyPersistedWriteExpected=sizeof(batch);
+            odysseyPersistedWriteFerror=ferror(file)?1u:0u;
             failed=true;failureStage=odysseyBatchWriteFailureStage(writeError);
             Serial.printf("[SD] PCM batch write failed errno=%d stage=%u wrote=%u pcm=%lu\n",
               writeError,unsigned(failureStage),unsigned(written),
@@ -3317,6 +3363,10 @@ static void odysseyRecordTake() {
       const size_t written=fwrite(batch,1,sizeof(batch),file);
       if (written!=sizeof(batch)) {
         const int writeError=errno;
+        odysseyPersistedWriteErrno=writeError>0?uint32_t(writeError):0u;
+        odysseyPersistedWriteReturned=uint32_t(written);
+        odysseyPersistedWriteExpected=sizeof(batch);
+        odysseyPersistedWriteFerror=ferror(file)?1u:0u;
         failed=true;failureStage=odysseyBatchWriteFailureStage(writeError);
         Serial.printf("[SD] final PCM batch failed errno=%d stage=%u wrote=%u expected=%u\n",
           writeError,unsigned(failureStage),unsigned(written),unsigned(sizeof(batch)));
@@ -4431,7 +4481,7 @@ static void worker(void*) {
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
       char detail[480];
       const int n=snprintf(detail,sizeof(detail),
-        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"mountWhy\":%u,\"vfsStep\":%u,\"vfsErrno\":%ld,\"bbHigh\":%d,\"bbLow\":%d,\"raw0\":%u,\"rawFF\":%u,\"rawFE\":%u,\"rawOther\":%u,\"rawMaxFF\":%u,\"bbCmd12Candidate\":%d,\"bbReadIdle\":%u,\"bbDrain\":%lu,\"bbStop\":%u,\"bbCmd0\":%d,\"bbCmd8\":%d,\"bbR7\":%lu}",
+        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"mountWhy\":%u,\"vfsStep\":%u,\"vfsErrno\":%ld,\"bbHigh\":%d,\"bbLow\":%d,\"raw0\":%u,\"rawFF\":%u,\"rawFE\":%u,\"rawOther\":%u,\"rawMaxFF\":%u,\"bbCmd12Candidate\":%d,\"bbReadIdle\":%u,\"bbDrain\":%lu,\"bbStop\":%u,\"bbCmd0\":%d,\"bbCmd8\":%d,\"bbR7\":%lu,\"wrE\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu}",
         catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
         static_cast<long>(odysseySdLastError()),static_cast<unsigned long>(odysseySdAttemptCount()),
         static_cast<unsigned long>(odysseySdBeginAttemptCount()),unsigned(odysseySdLastMountReasonCode()),
@@ -4442,7 +4492,11 @@ static void worker(void*) {
         unsigned(odysseySdRawMaxFFRunCount()),int(odysseySdBitBangCmd12Response()),
         unsigned(odysseySdBitBangCmd12ReadyState()),static_cast<unsigned long>(odysseySdBitBangDrainByteCount()),
         unsigned(odysseySdBitBangStopStateValue()),int(odysseySdBitBangCmd0Response()),
-        int(odysseySdBitBangCmd8Response()),static_cast<unsigned long>(odysseySdBitBangR7Response()));
+        int(odysseySdBitBangCmd8Response()),static_cast<unsigned long>(odysseySdBitBangR7Response()),
+        static_cast<unsigned long>(odysseyLastWriteErrno()),
+        static_cast<unsigned long>(odysseyLastWriteReturned()),
+        static_cast<unsigned long>(odysseyLastWriteExpected()),
+        static_cast<unsigned long>(odysseyLastWriteFerror()));
       reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),
         n>0?std::min(size_t(n),sizeof(detail)-1):0);
     } else reply(request,error,total,request.offset,bytes,size);
