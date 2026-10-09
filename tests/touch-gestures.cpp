@@ -10,9 +10,10 @@
 constexpr int TOUCH_INPUT_PIN=SYNAP_TOUCH_TEST_PIN, TOUCH_ACTIVE_LEVEL=1;
 constexpr uint32_t TOUCH_DEBOUNCE_MS=35, SYNAP_DEEP_SLEEP_MARKER=123;
 constexpr uint8_t CMD_START=1,CMD_STOP=2,PROTOCOL_VERSION=2;
-constexpr int SLEEP_STAGE_RESET_RECOVERY=1,SLEEP_STAGE_WAKE_VALIDATING=2,SLEEP_STAGE_WAKE_CONFIRMED=3;
+constexpr int SLEEP_STAGE_RESET_RECOVERY=1,SLEEP_STAGE_WAKE_VALIDATING=2,SLEEP_STAGE_WAKE_CONFIRMED=3,SLEEP_STAGE_ABORTED=9;
 constexpr int ESP_SLEEP_WAKEUP_GPIO=7;
 constexpr int ESP_SLEEP_WAKEUP_EXT0=2;
+constexpr int ESP_RST_POWERON=1;
 constexpr int TOUCH_WAKE_CAUSE=CONFIG_IDF_TARGET_ESP32C3?ESP_SLEEP_WAKEUP_GPIO:ESP_SLEEP_WAKEUP_EXT0;
 constexpr int WRONG_TOUCH_WAKE_CAUSE=CONFIG_IDF_TARGET_ESP32C3?ESP_SLEEP_WAKEUP_EXT0:ESP_SLEEP_WAKEUP_GPIO;
 using esp_sleep_wakeup_cause_t=int;
@@ -30,6 +31,8 @@ std::atomic<uint32_t> connectionGeneration{1};
 bool durableLock=false,bootSleepWasLocked=false,clearSucceeds=true;
 uint32_t synapDeepSleepMarker=0,synapSleepRequestCounter=0;
 int synapLastSleepStage=0,bootWakeCause=0,wakeCause=TOUCH_WAKE_CAUSE;
+int bootResetReason=0;
+uint8_t odysseyLastRecordFailureStage(){return 0;}
 int sleeps=0,starts=0,stops=0,clears=0;
 bool simulateFailedSleep=false;
 bool timedInput=false;
@@ -47,7 +50,8 @@ bool writeDurableSleepLock(bool value){
   return true;
 }
 int esp_sleep_get_wakeup_cause(){return wakeCause;}
-void armTouchWakeAndSleep(){++sleeps;}
+struct SleepWasEntered final {};
+void armTouchWakeAndSleep(){++sleeps;throw SleepWasEntered{};}
 void stopStreaming(){++stops;streamingEnabled=false;}
 void enterDeepSleep(const char*){assert(!input && !streamingEnabled && !busy);if(!simulateFailedSleep)++sleeps;}
 void enterRemoteStandby(){assert(!streamingEnabled);remoteStandby=true;}
@@ -63,6 +67,7 @@ void queueEvent(EventType,uint8_t cmd,uint8_t,uint32_t){commands.push_back(cmd);
 void drain(){for(auto cmd:commands)processCommand(cmd,PROTOCOL_VERSION);commands.clear();}
 namespace ChakshuVoice { bool touchAudioToggle(){return false;} }
 namespace OdysseyWifi { bool busy(){return false;} }
+namespace OdysseyTransfer { bool busy(){return false;} }
 // INSERT WAKE
 // INSERT POLL
 void advance(uint32_t duration,bool level,bool consumeCommands=true){
@@ -76,7 +81,12 @@ void checkWake(uint32_t duration,bool expected,bool lock=true,int cause=TOUCH_WA
   durableLock=lock;bootSleepWasLocked=false;synapDeepSleepMarker=0;sleepPending=false;
   wakeCause=cause;timedInput=true;wakeStart=clockMs;releaseAfter=duration;
   const int beforeSleeps=sleeps,beforeClears=clears,beforeStarts=starts;
-  const bool result=confirmTouchWakeGesture();
+  // In hardware a successful deep-sleep entry never returns. Model that as
+  // a non-returning transition; if arming sleep fails, the firmware is free
+  // to fall back to an awake BLE boot and its separate tests cover that.
+  bool result=false;
+  try { result=confirmTouchWakeGesture(); }
+  catch(const SleepWasEntered&) { result=false; }
   assert(result==expected);
   if(!expected){assert(sleeps==beforeSleeps+1);assert(durableLock);assert(clears==beforeClears);}
   else if(lock){assert(!durableLock && !sleepPending);assert(clears==beforeClears+1);}
