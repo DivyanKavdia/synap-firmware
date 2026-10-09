@@ -21,6 +21,7 @@ constexpr int SET_WR_BLK_ERASE_COUNT=23;
 constexpr int WRITE_BLOCK_MULTIPLE=25;
 constexpr int SEND_STATUS=13;
 struct Card { uint8_t type=CARD_SDHC; };
+using ardu_sdcard_t=Card;
 Card card;
 Card* s_cards[1]={&card};
 vector<string> events;
