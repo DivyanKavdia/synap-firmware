@@ -597,10 +597,12 @@ is also invalid and must not be used as proof of a safe supply.
 The guarded follow-up keeps the proven Arduino SD mount, append-only 4 KiB
 recorder, and 1.25 MiB OTA partition unchanged. It adds:
 
-- A **v2 NVS recording-failure record** that continues to read the original
-  three-word `sd-recdiag/last` journal and persists 4 additional fields on a
-  failed write: actual `errno`, returned `fwrite` bytes, requested 4096 bytes,
-  and `ferror(FILE*)`. Success clears all failure details.
+- A **rollback-compatible NVS recording-failure journal** retaining the
+  original three-word `sd-recdiag/last` value so older OTA builds still see
+  unsafe SD failures. A separate stage/bytes-matched `sd-recdiag/write`
+  record captures `errno`, returned `fwrite` bytes, requested 4096 bytes,
+  and `ferror(FILE*)`. Success clears the failure marker; new firmware also
+  reads the interim seven-word format if encountered.
 - Compact SD catalogue failure diagnostics `wrE`, `wrN`, `wrX`, `wrF`
   carrying those four persisted values, alongside the pre-existing bus probes.
   A value `wrE=0` is **unknown/unset errno**, not proof of a successful write.
