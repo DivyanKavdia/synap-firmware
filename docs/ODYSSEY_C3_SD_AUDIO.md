@@ -247,11 +247,13 @@ Enabled:
 - Clear SD for Synap-owned recordings,
 - explicit recovery.
 
-Intentionally not advertised in this phase:
+Current optional C3 media-v1 transport (9 October 2026):
 
-- notification-window/high-speed transfer,
-- direct Wi-Fi transfer,
-- destructive full-card format.
+- **Feature bit 0:** fast BLE notification windows on characteristic `4fa1235a-0000-1000-8000-00805f9b34fb`. A request (op 12) names the WAV and offset. The worker sends up to six paced 480-byte chunks with explicit offsets, then an end-of-window marker. The browser accepts only contiguous chunks, and can resume from the first missing byte. Small MTU connections return an empty completion and fall back to the original op 4 request/response path; cancellation op 16 remains supported.
+- **Feature bit 1:** direct Wi-Fi upload via BLE control, only advertised if the optional Wi-Fi component is available. Wi-Fi is a separate user-selected transfer route, not an automatic replacement for BLE sync.
+- **Feature bit 2:** full-card format remains disabled.
+
+This changes only *transfer*, not the validated 4 KiB offline recorder, appended WAV bytes, SD power guards, OTA partition layout, or delete-after-verification policy. Notification delivery is not treated as proof of durability; the PWA verifies the complete transfer before importing Memories. Physical iPhone/Bluefy throughput and integrity tests are still required before making performance claims.
 
 The transfer layer virtualizes the WAV header on reads so the PWA receives a conventional playable WAV even though the on-card recorder remains append-only.
 
