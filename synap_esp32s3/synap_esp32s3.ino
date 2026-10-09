@@ -4526,7 +4526,25 @@ void setup() {
 #endif
   bootResetReason=esp_reset_reason();
   bootWakeCause=esp_sleep_get_wakeup_cause();
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  // A physical power-switch ON is a new user power-on request. NVS survives
+  // battery removal but must not strand a cold-booted C3 in a former OFF state.
+  // Deep-sleep GPIO wakes are ESP_RST_DEEPSLEEP and retain the 4-second hold.
+  if (bootResetReason==ESP_RST_POWERON) {
+    const bool staleLock=readDurableSleepLock();
+    synapDeepSleepMarker=0;
+    if (staleLock && !writeDurableSleepLock(false))
+      Serial.println("[POWER] cold boot: could not clear old NVS sleep lock");
+    if (staleLock)
+      Serial.println("[POWER] cold power-on overrides retained deep-sleep lock");
+  }
+#endif
   bootSleepWasLocked=readDurableSleepLock() || (synapDeepSleepMarker==SYNAP_DEEP_SLEEP_MARKER);
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  // Even on a transient NVS write failure, the physical power-on must be
+  // allowed to complete. Next cold boot will retry clearing the old lock.
+  if (bootResetReason==ESP_RST_POWERON) bootSleepWasLocked=false;
+#endif
   if (bootSleepWasLocked) delay(20);
   else delay(400);
 #if CONFIG_IDF_TARGET_ESP32S3
