@@ -621,3 +621,40 @@ under sustained SD-write load if stage 70 recurs.
 Before declaring stable on the sealed device: test 10 offline start/stop cycles,
 a ≥5-minute offline take, unexpected BLE disconnect during catalogue/read,
 the real power switch's effect on SD 3V3, and retained WAV sync after recovery.
+
+### C3-only CMD25 stop/busy completion fix (10 October 2026)
+
+The pinned Arduino-ESP32 **3.3.5** SD/SPI driver previously used a 500 ms
+busy wait before a multi-sector `CMD25` write STOP token, sent `0xFD`,
+**then immediately raised chip-select without waiting for the card to finish
+programming**. In its partial-write failure path, it attempted
+`CMD12` (the read-multiple STOP command) instead of a multi-write STOP token.
+Both are bad states for a continuously powered microSD device.
+
+The C3 build-time core patch in `tools/patch-arduino-sd.cjs` now:
+
+- Keeps the 4 KiB (8-sector) append-only PCM recorder, FAT filesystem,
+  1 MHz SPI clock, and existing partition/OTA layout unchanged.
+- Waits for card-ready, with a **bounded 5,000 ms timeout**, before each
+  `CMD25` data block and before sending the multi-write `0xFD` stop token.
+- Waits again **after** `0xFD` for final programming completion while CS is
+  still asserted; only then deselects and checks `CMD13` status.
+- On a rejected data token, attempts the proper multi-write stop once when
+  the card becomes ready, then **returns a write error**. It does not
+  continue with `CMD12` or blindly retry partially accepted blocks.
+- Returns failure without issuing additional write/stop commands if the card
+  stays busy through the deadline. No software patch can repair a card held
+  LOW electrically or after a persistent voltage fault.
+
+The change is fail-closed and limited to C3: the pinned source must match
+exactly, and the patcher is idempotent. Unit and native-C++ state simulations
+cover stop-token ordering, blocked programming, rejected tokens, and timeouts.
+S3/Chakshu compile before the driver patch.
+
+**Important:** Stage 70 / `wrE=9` on build 1908 does not prove the
+`CMD25` stop timing is the sole root cause. Those are persisted diagnostics
+from a failed `fwrite`; a power-rail issue, faulty SD module, or card may
+produce the same symptom. OTA cannot revive an already hung, still-powered
+SD card. Confirm a genuine SD 3V3 power cycle and sync existing recordings
+before acceptance testing. Qualification still requires real-device long
+offline recordings, repeated start/stop cycles, recovery, and BLE sync.
