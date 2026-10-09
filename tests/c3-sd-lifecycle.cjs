@@ -21,7 +21,8 @@ test('C3 keeps connected reads observational while offline double-tap owns bound
   const recorder=read('firmware/shared/odyssey-sd-recording.cpp');
   const detect=read('firmware/shared/odyssey-sd-detect.cpp');
   assert.doesNotMatch(transfer,/automaticRetries|ODYSSEY_SD_REARM_STEPS|scheduled re-arm/);
-  assert.match(detect,/odysseySdMountLocked\("boot",3\)/);
+  assert.match(detect,/ODYSSEY_SD_BOOT_ATTEMPTS=1/);
+  assert.match(detect,/odysseySdMountLocked\("boot",ODYSSEY_SD_BOOT_ATTEMPTS\)/);
   assert.match(detect,/const uint8_t attempts=\(!strcmp\(why,"touch"\) \|\| !strcmp\(why,"post-record"\)\)\?2u:1u/);
   assert.match(recorder,/one-gesture offline start: recovering storage before capture/);
   assert.match(recorder,/odysseyRecoverSdCard\("touch"\)/);
@@ -217,7 +218,8 @@ test('C3 offline V2 guards free space and persists per-WAV session integrity met
 
 test('C3 warm boot mount retries are bounded and progressively settled',()=>{
   const detect=read('firmware/shared/odyssey-sd-detect.cpp');
-  assert.match(detect,/odysseySdMountLocked\("boot",3\)/);
+  assert.match(detect,/ODYSSEY_SD_BOOT_ATTEMPTS=1/);
+  assert.match(detect,/odysseySdMountLocked\("boot",ODYSSEY_SD_BOOT_ATTEMPTS\)/);
   assert.match(detect,/retryDelayMs=250u\*uint32_t\(attempt\)\*uint32_t\(attempt\)/);
   assert.match(detect,/Every retry starts from a full/);
 });
