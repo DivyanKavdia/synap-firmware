@@ -57,7 +57,7 @@ test('C3 SD recorder keeps sleep veto through final batch, fclose, persistent di
 test('all automatic and touch-triggered sleep entries defer until recording finalized and SD settled',()=>{
  const tick=power.split('void powerTick() {')[1].split('void pollTouchControl() {')[0];
  assert.match(tick,/if \(odysseyRecording\.load\(\)\) \{\s*if \(batteryCritical\(\)\) odysseyStopRequested=true;\s*return;/);
- assert.match(tick,/if \(OdysseyWifi::busy\(\)\) return;/);
+ assert.match(tick,/if \(OdysseyWifi::busy\(\) \|\| OdysseyTransfer::busy\(\)\) return;/);
  assert.match(tick,/odysseySdSleepGuardUntil\.load\(\)/);
  assert.match(tick,/enterDeepSleep\("critical-battery"\)/);
  assert.match(tick,/enterDeepSleep\("disconnected-timeout"\)/);
