@@ -11,9 +11,10 @@ test('C3 CMD25 waits for stop programming; returns error on partial blocks or ti
 #include <string>
 #include <vector>
 #include <iostream>
+#include <cstdio>
 using std::string;
 using std::vector;
-#define log_e(...) ((void)0)
+#define log_e(...) do { char logBuffer[128]; std::snprintf(logBuffer,sizeof(logBuffer),__VA_ARGS__); } while(false)
 constexpr uint8_t CARD_MMC=1;
 constexpr uint8_t CARD_SDHC=3;
 constexpr int SET_WR_BLK_ERASE_COUNT=23;
