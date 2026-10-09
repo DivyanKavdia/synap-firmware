@@ -59,10 +59,15 @@ test('Recorder, OTA identity, SD pin mapping and generated firmware sketch stay 
   assert.equal(c3.slotSize,1310720);
   assert.equal(c3.productMarker,'SYNAP-ESP32C3-OTA-ID-V3');
   assert.deepEqual(c3.hardware.sdDetection,{cs:0,sck:10,mosi:21,miso:20});
-  for(const p of ['boot.cpp','power.cpp','runtime.cpp','odyssey-sd-1631-detect.cpp','odyssey-sd-1631-transfer.cpp']){
+  // The assembler rewrites boot/profile declarations, so assert the exact
+  // reusable function fragments and targeted boot/runtime behaviors instead.
+  for(const p of ['power.cpp','odyssey-sd-1631-detect.cpp','odyssey-sd-1631-transfer.cpp']){
     const original=read('firmware/shared/'+p).trim();
     assert(ino.includes(original),'generated sketch must match '+p);
   }
+  assert.match(ino,/bootResetReason==ESP_RST_POWERON/);
+  assert.match(ino,/if \(bootResetReason==ESP_RST_POWERON\) bootSleepWasLocked=false/);
+  assert.match(ino,/bool busy\(\); \/\/ in-flight SD BLE transfer/);
   assert.match(ino,/alignas\(4\) static uint8_t batch\[4096\]/);
   assert.match(ino,/ODYSSEY_SD_DATA_FREQ_HZ=1000000u/);
   assert.doesNotMatch(sd,/esp_vfs_fat_sdspi_mount|format_if_empty/);
