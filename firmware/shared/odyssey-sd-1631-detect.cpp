@@ -117,6 +117,12 @@ int16_t odysseySdBitBangCmd12Response() { return odysseySdBitBangCmd12.load(); }
 uint8_t odysseySdBitBangCmd12ReadyState() { return odysseySdBitBangCmd12Ready.load(); }
 uint32_t odysseySdBitBangDrainByteCount() { return odysseySdBitBangDrainBytes.load(); }
 uint16_t odysseySdRawZeroCount() { return odysseySdRawZero.load(); }
+// A card that still drives MISO LOW while deselected cannot be recovered
+// by repeatedly restarting the ESP32 SPI peripheral. Keep explicit recovery.
+bool odysseySdBusStuckLow() {
+  return odysseySdBootState.load()!=1 &&
+    odysseySdBitBangCsHigh.load()==0 && odysseySdRawZero.load()>=900u;
+}
 uint16_t odysseySdRawFFCount() { return odysseySdRawFF.load(); }
 uint16_t odysseySdRawFECount() { return odysseySdRawFE.load(); }
 uint16_t odysseySdRawOtherCount() { return odysseySdRawOther.load(); }

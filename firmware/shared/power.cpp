@@ -223,6 +223,10 @@ void enterDeepSleep(const char* reason) {
 
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   if (odysseySdUnsafeToSleep.load()) {
+    // Do not autonomously repeat destructive reinitialization on a proven
+    // held-LOW SD bus. Explicit op14 or a disconnected double-tap can retry;
+    // a verified mount is still required before entering deep sleep.
+    if (odysseySdBusStuckLow()) return;
     // A previous quiesce may have left the always-powered SD host unmounted.
     // One bounded explicit recovery is safer than either forcing sleep or
     // permanently leaving the C3 awake. Throttle recurring idle-timeout
