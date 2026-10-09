@@ -9,6 +9,14 @@ struct Request {
   char path[64]{};
 };
 static QueueHandle_t requests=nullptr;
+// Keep SD reads protected while BLE is transferring and briefly afterward.
+static std::atomic<bool> sdBleTransferInFlight{false};
+static std::atomic<uint32_t> sdBleLastTransferAt{0};
+bool busy() {
+  if (sdBleTransferInFlight.load()) return true;
+  const uint32_t last=sdBleLastTransferAt.load();
+  return last && uint32_t(millis()-last)<15000u;
+}
 // Six paced notifications per request avoid thousands of GATT read round trips.
 static BLECharacteristic* streamCharacteristic=nullptr;
 static constexpr uint32_t TRANSFER_STACK_BYTES=8192;
@@ -327,6 +335,8 @@ static void worker(void*) {
       continue;
     }
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load()) continue;
+    sdBleTransferInFlight=true;
+    sdBleLastTransferAt=millis();
     // Connected remote standby only idles the microphone/CPU; SD media must
     // remain readable for verified sync and recovery without a forced wake.
     // Wi-Fi status must remain readable over BLE while the uploader owns SD.
@@ -334,16 +344,25 @@ static void worker(void*) {
       char detail[480];
       const size_t n=OdysseyWifi::encode(detail,sizeof(detail));
       reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),n);
+      sdBleLastTransferAt=millis();
+      sdBleTransferInFlight=false;
       continue;
     }
     if (odysseyRecording.load() || streamingEnabled.load() || OdysseyWifi::busy() ||
         otaBusy() || sleepPending) {
-      reply(request,BUSY);continue;
+      reply(request,BUSY);
+      sdBleLastTransferAt=millis();
+      sdBleTransferInFlight=false;
+      continue;
     }
     uint8_t error=OK;uint32_t total=0;size_t size=0;
     switch (request.operation) {
       case 3: error=selectFile(request.path,total); break;
-      case 12: streamSdWindow(request); continue;
+      case 12:
+        streamSdWindow(request);
+        sdBleLastTransferAt=millis();
+        sdBleTransferInFlight=false;
+        continue;
       case 16: error=OK; break;
       case 4:
         error=readSelected(request.path,request.offset,total,bytes,size);
@@ -401,6 +420,8 @@ static void worker(void*) {
       reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),
         n>0?std::min(size_t(n),sizeof(detail)-1):0);
     } else reply(request,error,total,request.offset,bytes,size);
+    sdBleLastTransferAt=millis();
+    sdBleTransferInFlight=false;
   }
 }
 
