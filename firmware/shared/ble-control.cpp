@@ -55,10 +55,20 @@ class ServerCallbacks : public BLEServerCallbacks {
   }
 #elif defined(CONFIG_NIMBLE_ENABLED)
   void onConnect(BLEServer* server, ble_gap_conn_desc* desc) override {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+    // With Bluefy/iOS, the phone is the connection central. Avoid firing a
+    // peripheral connection-parameter update in the middle of native service
+    // discovery and CCCD writes. C3 live audio now needs only one ADPCM
+    // notification per frame, so the central's negotiated interval suffices.
+    (void)server;
+    (void)desc;
+#else
     if(desc)server->updateConnParams(desc->conn_handle, BLE_MIN_INTERVAL,
       BLE_MAX_INTERVAL, BLE_SLAVE_LATENCY, BLE_SUPERVISION_TIMEOUT);
+#endif
   }
-  // This Arduino NimBLE callback omits the reason; retain 0xFFFF (unavailable).
+  // Arduino BLE 3.3.5's NimBLE callback omits event->disconnect.reason;
+  // 0xFFFF still explicitly means "not exposed by the library".
 #endif
 };
 class ControlCallbacks : public BLECharacteristicCallbacks {
