@@ -7,7 +7,7 @@ const read=p=>fs.readFileSync(path.join(root,p),'utf8');
 const cpu=read('firmware/shared/cpu-power.cpp');
 const ble=read('firmware/shared/ble-control.cpp');
 const boot=read('firmware/shared/boot.cpp');
-const fixture=read('tests/c3-ble-connection.cpp').replace('// INSERT CPU',cpu);
+const fixture=read('tests/c3-ble-connection.cpp').replace('// INSERT CPU',cpu.slice(cpu.indexOf('void applyCpuPowerProfile(bool active) {')));
 for(const [target,flags] of [['c3',['-DCONFIG_IDF_TARGET_ESP32C3=1','-DSYNAP_CHAKSHU=0']],['s3',['-DCONFIG_IDF_TARGET_ESP32C3=0','-DSYNAP_CHAKSHU=0']]]) {
  test(`connection-aware CPU profile and 12-second reconnect window (${target})`,()=>{
   assert.match(nativeTest(fixture,flags),/PASS C3 BLE connection/);
