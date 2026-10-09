@@ -22,16 +22,19 @@ test('C3 persisted stage 70 diagnostics migrate from legacy NVS and survive soft
 #include <vector>
 #include <cstdio>
 #include <iostream>
-static std::vector<uint8_t> saved;
+static std::vector<uint8_t> saved, extra;
 struct Preferences {
   bool begin(const char*,bool){return true;}
-  size_t getBytesLength(const char*){return saved.size();}
-  size_t getBytes(const char*,void* out,size_t n){
-    if(n>saved.size()) return 0;
-    std::memcpy(out,saved.data(),n);return n;
+  std::vector<uint8_t>& bucket(const char* k){
+    return std::strcmp(k,"write")==0?extra:saved;
   }
-  size_t putBytes(const char*,const void* p,size_t n){
-    const auto* b=static_cast<const uint8_t*>(p); saved.assign(b,b+n);return n;
+  size_t getBytesLength(const char* k){return bucket(k).size();}
+  size_t getBytes(const char* k,void* out,size_t n){
+    auto& value=bucket(k);if(n>value.size())return 0;
+    std::memcpy(out,value.data(),n);return n;
+  }
+  size_t putBytes(const char* k,const void* p,size_t n){
+    const auto* b=static_cast<const uint8_t*>(p);bucket(k).assign(b,b+n);return n;
   }
   void end(){}
 };
@@ -55,7 +58,11 @@ int main(){
   odysseyPersistedWriteExpected=4096;
   odysseyPersistedWriteFerror=1;
   odysseyPersistRecordFailure(70,2040u*1024u);
-  assert(saved.size()==7u*sizeof(uint32_t));
+  // Legacy firmware still reads the original three-word "last" record.
+  assert(saved.size()==3u*sizeof(uint32_t));
+  assert(extra.size()==6u*sizeof(uint32_t));
+  uint32_t retained[3]{};std::memcpy(retained,saved.data(),sizeof(retained));
+  assert(retained[0]==1&&retained[1]==70&&retained[2]==2040u*1024u);
   resetLoaded();
   assert(odysseyLastRecordFailureStage()==70);
   assert(odysseyLastRecordFailureBytes()==2040u*1024u);
@@ -80,7 +87,9 @@ test('failed 4 KiB writes record errno, returned byte count and ferror before cl
   assert.match(recorder,/const int writeError=errno;\s+odysseyPersistedWriteErrno=/);
   assert.match(recorder,/odysseyPersistRecordFailure\(persistedStage,bytes\)/);
   assert.match(recorder,/odysseyPersistRecordFailure\(0,0\)/);
-  assert.match(recorder,/stage\?2u:0u/);
+  assert.match(recorder,/stage\?1u:0u/);
+  assert.match(recorder,/prefs\.putBytes\("write",detail,sizeof\(detail\)\)/);
+  assert.match(recorder,/prefs\.putBytes\("last",record,sizeof\(record\)\)/);
   assert.match(recorder,/legacy\?record\[0\]==1u:record\[0\]==2u/);
   assert.doesNotMatch(recorder,/fseek\(file,0|ftruncate\(/);
 });
