@@ -14,7 +14,7 @@ test('C3 persisted stage 70 diagnostics migrate from legacy NVS and survive soft
   const end=recorder.indexOf('static void odysseyWavHeader(uint8_t* h',start);
   assert(start>=0&&end>start,'extract active production diagnostic code');
   const source=recorder.slice(start,end);
-  const output=nativeTest(`
+  const output=nativeTest(String.raw`
 #include <cassert>
 #include <cstdint>
 #include <cstring>
