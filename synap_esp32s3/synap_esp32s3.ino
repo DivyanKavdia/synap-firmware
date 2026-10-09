@@ -254,6 +254,7 @@ std::atomic<bool> odysseySdUnsafeToSleep{false};
 void odysseyToggleRecording();
 bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs);
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs);
+bool odysseySdBusStuckLow(); // confirmed deselected MISO held LOW after failed mount
 namespace OdysseyWifi {
 void initialize();
 bool available();
