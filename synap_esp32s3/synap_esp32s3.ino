@@ -3921,6 +3921,8 @@ struct Request {
   char path[64]{};
 };
 static QueueHandle_t requests=nullptr;
+// Six paced notifications per request avoid thousands of GATT read round trips.
+static BLECharacteristic* streamCharacteristic=nullptr;
 static constexpr uint32_t TRANSFER_STACK_BYTES=8192;
 static portMUX_TYPE responseMux=portMUX_INITIALIZER_UNLOCKED;
 static uint8_t response[496]{};
@@ -4156,6 +4158,66 @@ static uint16_t clearRecordings() {
   return removed;
 }
 
+// Fast media-v1 window, using the same per-chunk, explicit-path FAT read as
+// fallback op4. A bounded window never owns the SD mutex across BLE waits.
+static void notifySdWindow(const Request& request,uint8_t kind,uint8_t error,
+    uint32_t total,uint32_t offset,const uint8_t* payload=nullptr,size_t length=0) {
+  if (!streamCharacteristic || request.connection!=connectionGeneration.load() ||
+      !deviceConnected.load()) return;
+  uint8_t packet[496]{};
+  packet[0]=0xCC;packet[1]=1;packet[2]=kind;packet[3]=error;
+  put32le(packet+4,request.id);put32le(packet+8,total);put32le(packet+12,offset);
+  length=std::min(length,size_t(480));
+  if (payload && length) memcpy(packet+16,payload,length);
+  streamCharacteristic->setValue(packet,16+length);
+  streamCharacteristic->notify();
+}
+
+static void streamSdWindow(const Request& request) {
+  // Older/small-MTU Bluefy connections fall back to op4 without overlong BLE
+  // notifications. A 16-byte empty-window completion tells the PWA to fall back.
+  const uint16_t capacity=attValueCapacity.load();
+  if (capacity<192u || !streamCharacteristic || !request.path[0]) {
+    notifySdWindow(request,2,0,0,request.offset);
+    return;
+  }
+  const size_t chunkCapacity=std::min(size_t(480),size_t(capacity-16u));
+  uint8_t chunk[480]{};
+  uint32_t offset=request.offset,fullSize=0;
+  uint8_t error=OK;
+  // PWA retains at most 8 chunks; 6-chunk windows leave headroom on iOS.
+  for (uint8_t n=0;n<6;++n) {
+    if (request.connection!=connectionGeneration.load() || !deviceConnected.load() ||
+        streamingEnabled.load() || odysseyRecording.load() || OdysseyWifi::busy() ||
+        otaBusy() || sleepPending) return;
+    uint32_t total=0;
+    size_t length=0;
+    error=readSelected(request.path,offset,total,chunk,length);
+    if (error!=OK || !length || length>chunkCapacity) {
+      if (error==IO_ERROR) odysseySdMarkVfsFailure();
+      if (error==OK) error=BAD_COMMAND;
+      notifySdWindow(request,2,error,fullSize,offset);
+      return;
+    }
+    if (fullSize && total!=fullSize) {
+      notifySdWindow(request,2,FILE_UNAVAILABLE,fullSize,offset);
+      return;
+    }
+    fullSize=total;
+    // An ATT notification is not an ACK. The receiver checks offsets, can
+    // resume missing windows, and verifies the final file before import.
+    notifySdWindow(request,1,OK,fullSize,offset,chunk,length);
+    offset+=uint32_t(length);
+    if (offset>=fullSize) break;
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+  // End packet closes the credit window. Never delete/modify the SD source.
+  if (request.connection==connectionGeneration.load() && deviceConnected.load()) {
+    vTaskDelay(pdMS_TO_TICKS(20));
+    notifySdWindow(request,2,OK,fullSize,offset);
+  }
+}
+
 static void worker(void*) {
   Request request;
   uint8_t bytes[480];
@@ -4193,6 +4255,8 @@ static void worker(void*) {
     uint8_t error=OK;uint32_t total=0;size_t size=0;
     switch (request.operation) {
       case 3: error=selectFile(request.path,total); break;
+      case 12: streamSdWindow(request); continue;
+      case 16: error=OK; break;
       case 4:
         error=readSelected(request.path,request.offset,total,bytes,size);
         if (error==IO_ERROR) odysseySdMarkVfsFailure();
@@ -4305,6 +4369,11 @@ void ble(BLEService* service) {
   auto* data=service->createCharacteristic("4fa12355-0000-1000-8000-00805f9b34fb",
     BLECharacteristic::PROPERTY_READ);
   data->setCallbacks(new DataCallbacks());
+  streamCharacteristic=service->createCharacteristic("4fa1235a-0000-1000-8000-00805f9b34fb",
+    BLECharacteristic::PROPERTY_NOTIFY);
+#if defined(CONFIG_BLUEDROID_ENABLED)
+  streamCharacteristic->addDescriptor(new BLE2902());
+#endif
 }
 } // namespace OdysseyTransfer
 #endif
