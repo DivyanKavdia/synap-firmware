@@ -89,3 +89,24 @@ test('healthy SD gets CMD13 idle proof before CMD12/CMD25 recovery',()=>{
  const vfs=detect.split('void odysseySdMarkVfsFailure() {')[1].split('static void odysseySdEnsureMutex()')[0];
  assert.match(vfs,/odysseySdUnsafeToSleep=true;/);
 });
+
+test('C3 restores the SD sleep veto from retained recorder write failure',()=>{
+ const start=detect.split('bool odysseyInitializeSdCardBeforeBle() {')[1].split('bool odysseyRecoverSdCard(')[0];
+ assert.match(start,/previousRecordStage>=44u && previousRecordStage!=48u/);
+ const latch=start.indexOf('odysseySdUnsafeToSleep=true;');
+ const recovery=start.indexOf('odysseySdBitBangRecoverLocked("rearm")');
+ const mount=start.indexOf('odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS)');
+ assert(latch>=0 && latch<recovery && recovery<mount);
+ const block=detect.split('static bool odysseySdMountOnceLocked(')[1].split('static bool odysseySdMountLocked(')[0];
+ assert(block.indexOf('odysseySdValidateVfsLocked(reason,attempt)')<
+        block.indexOf('odysseySdUnsafeToSleep=false;'));
+});
+
+test('C3 driven-low SD bus cannot sleep as if the card were absent',()=>{
+ const block=detect.split('static bool odysseySdMountOnceLocked(')[1].split('static bool odysseySdMountLocked(')[0];
+ assert.match(block,/odysseySdBitBangCsHigh\\.load\\(\\)==0 && odysseySdRawZero\\.load\\(\\)>=900u/);
+ assert.match(block,/odysseySdUnsafeToSleep=true;/);
+ const prepare=detect.split('bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {')[1];
+ assert(prepare.indexOf('if (odysseySdUnsafeToSleep.load())')<
+        prepare.indexOf('if (!wasReady)'));
+});
