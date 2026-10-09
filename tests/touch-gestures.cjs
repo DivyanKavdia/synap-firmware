@@ -11,7 +11,9 @@ for (const {target,c3,pin} of [
 ]) {
   test(`${target} validates immediate double taps and four-second sleep/wake holds`,()=>{
     const code=materialize(source,target);
-    const wake=code.slice(code.indexOf('bool confirmTouchWakeGesture() {'),code.indexOf('void publishPowerEvent('));
+    // The awake recovery helper is a genuine part of wake control; include it in
+    // the native simulation instead of extracting the middle of that unit.
+    const wake=code.slice(code.indexOf('static bool resumeC3BootAfterFailedSleep('),code.indexOf('void publishPowerEvent('));
     const poll=code.slice(code.indexOf('void pollTouchControl() {'),code.indexOf('void updateStatusCharacteristic(bool notify) {'));
     const fixture=fs.readFileSync(path.join(__dirname,'touch-gestures.cpp'),'utf8');
     const flags=[`-DCONFIG_IDF_TARGET_ESP32C3=${c3?1:0}`,`-DCONFIG_IDF_TARGET_ESP32S3=${c3?0:1}`,`-DSYNAP_TOUCH_TEST_PIN=${pin}`];
