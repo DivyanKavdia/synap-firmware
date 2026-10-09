@@ -265,7 +265,7 @@ static void streamSdWindow(const Request& request) {
   // Older/small-MTU Bluefy connections fall back to op4 without overlong BLE
   // notifications. A 16-byte empty-window completion tells the PWA to fall back.
   const uint16_t capacity=attValueCapacity.load();
-  if (capacity<192u || !streamCharacteristic || !request.path[0]) {
+  if (capacity<496u || !streamCharacteristic || !request.path[0]) {
     notifySdWindow(request,2,0,0,request.offset);
     return;
   }
