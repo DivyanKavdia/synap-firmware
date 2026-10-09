@@ -356,6 +356,25 @@ to improve battery life. Battery brownout or external power loss cannot
 be prevented by software; that case still requires filesystem recovery
 on the next boot.
 
+### Failed-SD sleep veto across boot (9 October 2026)
+
+At normal C3 boot, a persisted recorder failure stage >=44 (except stage 48,
+empty audio) restores the in-memory unsafe-to-sleep latch before any SD
+recovery or mount attempt. A successful card mount and VFS validation clears
+the latch. A failed mount leaves it set. The old recorder diagnostic may
+remain visible after recovery; current live status remains authoritative.
+
+If initialization fails and MISO is driven LOW even while CS is HIGH, with
+at least 900 of 1024 sampled bytes equal to zero, the bus is treated as
+unsafe rather than safely absent. This vetoes deep sleep until validated
+recovery, even without a previous recorder failure. A standard no-SD C3
+with pulled-up, undriven MISO keeps its normal no-card sleep behavior.
+
+Observed incident: historical stage 70 at approximately 2040 KiB with
+raw0=1023, bbHigh=0 and live probe 2. Removing, formatting and replacing
+the card later produced live probe 6 and ready=381. Do not confuse the
+historical stage-70 record with a current write failure.
+
 ### C3 + SD battery ADC reading and calibration
 
 The assembled C3+SD test board uses a **1 MΩ high-side R1** from switched
