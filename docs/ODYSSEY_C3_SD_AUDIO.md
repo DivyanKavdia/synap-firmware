@@ -284,6 +284,42 @@ The user may:
 
 Deleting an SD copy must never delete the corresponding Memory.
 
+## C3 + SD BLE audio: high-MTU congestion protection (9 October 2026)
+
+Firmware build 1894 and Bluefy shell195 revealed live audio after successful
+PCM16 START could exhaust the NimBLE transmit mbuf pool:
+`notifyStatus=4` (ERROR_GATT), `notifyError=6` (ENOMEM),
+`notifyRejects=173`, `captureDrops=28`, plus a 12-second foreground stall.
+With `MTU=517`, PCM16 16 kHz mono requires 1600 bytes every 50 ms
+(four 400-byte notifications, 80/sec, 32 KB/sec). MTU capacity by itself is
+**not** proof that the controller or a given iOS BLE browser can sustain
+that amount of notification traffic.
+
+The C3 live BLE profile now uses the already-supported independent-frame
+IMA-ADPCM v3 format: 404 bytes every 50 ms (one notification at MTU=517,
+20/sec, approximately 8.08 KB/sec). The Synap PWA's
+`audio-codec-v3.js` decompresses every complete ADPCM frame to the
+original 16 kHz / 800-sample PCM *shape* for recording and transcription.
+ADPCM is **lossy**: BLE live audio is lower bitrate, not bit-for-bit
+identical to raw microphone PCM. This tradeoff applies to C3 live BLE only.
+The **offline SD recorder continues to save uncompressed PCM16** in its
+append-only WAV capture path, with identical 1 MHz SPI and 4 KiB writes.
+
+S3 and Chakshu retain the existing high-MTU PCM-first protocol. C3's
+transport selection is fixed at START/RESUME and included in the status
+characteristic; do not change encoding mid-frame or mid-session. When even
+C3 ADPCM repeatedly encounters transmit allocation errors for four
+consecutive frames, firmware emits a stream error and stops capture rather
+than recording indefinitely with zero delivered audio. A new recording
+resets that congestion counter.
+
+Battery telemetry error `cellMv=5561` with `adcMv=1778` is **separate**
+from NimBLE exhaustion: 1 MΩ/470 kΩ reconstruction correctly produces that
+implausible value, and firmware must continue marking it unavailable.
+Physical BAT+/GND and GPIO1/GND measurements are required for voltage
+calibration, especially during charging. Do not force the percentage to
+100 or lower the actual cell voltage without a reference instrument.
+
 ## 10. Ownership and concurrency rules
 
 - C3 standard/no-card operation must retain normal BLE audio even if SD is absent or unhealthy.

@@ -122,6 +122,10 @@ bool sendAudioFrame(const AudioFrame& frame) {
 void transmitterTask(void* parameter) {
   (void)parameter;
   AudioFrame frame;
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  uint32_t congestionGeneration=0;
+  uint8_t consecutiveRejectedFrames=0;
+#endif
   for (;;) {
     const bool queued=xQueueReceive(audioFrameQueue, &frame, recoveryCanSend()?0:(recoveryEnabled.load() && streamingEnabled.load()?pdMS_TO_TICKS(20):portMAX_DELAY))==pdTRUE;
     if(recoveryEnabled.load()) {
@@ -135,14 +139,34 @@ void transmitterTask(void* parameter) {
     // Claim activity before checking the session so STOP cannot miss a pending send.
     transmitterActive.store(true);
     if (streamingEnabled.load() && frame.generation == streamGeneration.load()) {
-      const uint32_t rejectedBefore=notifyRejected.load();
-      if (!sendAudioFrame(frame) &&
-          deviceConnected.load() && streamingEnabled.load() && frame.generation == streamGeneration.load()) {
-        // Legacy sessions lack a recovery ring: account for the lost frame but
-        // keep recording through transient queue pressure.
-        if(notifyRejected.load()!=rejectedBefore)++captureDrops;
-        else requestStreamError(ErrorCode::TRANSPORT_CHANGED, frame.generation);
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      if (congestionGeneration!=frame.generation) {
+        congestionGeneration=frame.generation;
+        consecutiveRejectedFrames=0;
       }
+#endif
+      const uint32_t rejectedBefore=notifyRejected.load();
+      const bool sent=sendAudioFrame(frame);
+      if (!sent &&
+          deviceConnected.load() && streamingEnabled.load() && frame.generation == streamGeneration.load()) {
+        // Report dropped frames without silently treating a failed notification
+        // as delivered. The S3 legacy behavior remains unchanged.
+        if(notifyRejected.load()!=rejectedBefore) {
+          ++captureDrops;
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+          // If even the 8 KB/s fallback cannot obtain NimBLE mbufs, fail
+          // promptly rather than letting an unresponsive BLE link run through
+          // an entire second take with zero journaled audio.
+          if (++consecutiveRejectedFrames>=4u) {
+            Serial.println("[BLE] C3 sustained notification ENOMEM; stopping broken stream");
+            requestStreamError(ErrorCode::TRANSPORT_CHANGED, frame.generation);
+          }
+#endif
+        } else requestStreamError(ErrorCode::TRANSPORT_CHANGED, frame.generation);
+      }
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      else if (sent) consecutiveRejectedFrames=0;
+#endif
     }
     transmitterActive.store(false);
   }

@@ -262,9 +262,21 @@ bool configureTransportFromPeerMtu() {
   if (peerMtu < MIN_REQUIRED_MTU) return false;
   const uint16_t available = attValueCapacity - AUDIO_HEADER_BYTES;
   uint16_t bounded = available < MAX_AUDIO_PAYLOAD_BYTES ? available : MAX_AUDIO_PAYLOAD_BYTES;
+  // MTU alone does not guarantee throughput: the C3's single-core NimBLE
+  // link in Bluefy ran out of controller buffers (status=ERROR_GATT, code=6)
+  // after repeatedly queueing four 400-byte PCM notifications every 50 ms.
+  // C3 therefore uses the existing per-frame IMA-ADPCM v3 transport, which
+  // the PWA already decodes to PCM before journaling. One 404-byte payload
+  // at MTU 517 uses only one notification per 50 ms instead of four.
+  // This changes BLE bandwidth only: offline SD WAV capture stays PCM16.
+  // S3/Chakshu keep their existing lossless PCM-first negotiation.
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  pcmTransport=false;
+#else
   // Packet-size eligibility is not a throughput guarantee; drop/reject counters
   // remain visible. Keep the selected format stable until START or RESUME.
   pcmTransport=peerMtu>=PCM_MIN_MTU;
+#endif
   if(pcmTransport.load())bounded&=~1u;
   const uint16_t frameBytes=pcmTransport.load()?AUDIO_BYTES_PER_FRAME:ADPCM_BYTES_PER_FRAME;
   chunksPerFrame = (frameBytes + bounded - 1) / bounded;

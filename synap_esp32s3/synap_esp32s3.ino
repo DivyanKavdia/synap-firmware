@@ -1795,9 +1795,21 @@ bool configureTransportFromPeerMtu() {
   if (peerMtu < MIN_REQUIRED_MTU) return false;
   const uint16_t available = attValueCapacity - AUDIO_HEADER_BYTES;
   uint16_t bounded = available < MAX_AUDIO_PAYLOAD_BYTES ? available : MAX_AUDIO_PAYLOAD_BYTES;
+  // MTU alone does not guarantee throughput: the C3's single-core NimBLE
+  // link in Bluefy ran out of controller buffers (status=ERROR_GATT, code=6)
+  // after repeatedly queueing four 400-byte PCM notifications every 50 ms.
+  // C3 therefore uses the existing per-frame IMA-ADPCM v3 transport, which
+  // the PWA already decodes to PCM before journaling. One 404-byte payload
+  // at MTU 517 uses only one notification per 50 ms instead of four.
+  // This changes BLE bandwidth only: offline SD WAV capture stays PCM16.
+  // S3/Chakshu keep their existing lossless PCM-first negotiation.
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  pcmTransport=false;
+#else
   // Packet-size eligibility is not a throughput guarantee; drop/reject counters
   // remain visible. Keep the selected format stable until START or RESUME.
   pcmTransport=peerMtu>=PCM_MIN_MTU;
+#endif
   if(pcmTransport.load())bounded&=~1u;
   const uint16_t frameBytes=pcmTransport.load()?AUDIO_BYTES_PER_FRAME:ADPCM_BYTES_PER_FRAME;
   chunksPerFrame = (frameBytes + bounded - 1) / bounded;
@@ -2290,6 +2302,10 @@ bool sendAudioFrame(const AudioFrame& frame) {
 void transmitterTask(void* parameter) {
   (void)parameter;
   AudioFrame frame;
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  uint32_t congestionGeneration=0;
+  uint8_t consecutiveRejectedFrames=0;
+#endif
   for (;;) {
     const bool queued=xQueueReceive(audioFrameQueue, &frame, recoveryCanSend()?0:(recoveryEnabled.load() && streamingEnabled.load()?pdMS_TO_TICKS(20):portMAX_DELAY))==pdTRUE;
     if(recoveryEnabled.load()) {
@@ -2303,14 +2319,34 @@ void transmitterTask(void* parameter) {
     // Claim activity before checking the session so STOP cannot miss a pending send.
     transmitterActive.store(true);
     if (streamingEnabled.load() && frame.generation == streamGeneration.load()) {
-      const uint32_t rejectedBefore=notifyRejected.load();
-      if (!sendAudioFrame(frame) &&
-          deviceConnected.load() && streamingEnabled.load() && frame.generation == streamGeneration.load()) {
-        // Legacy sessions lack a recovery ring: account for the lost frame but
-        // keep recording through transient queue pressure.
-        if(notifyRejected.load()!=rejectedBefore)++captureDrops;
-        else requestStreamError(ErrorCode::TRANSPORT_CHANGED, frame.generation);
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      if (congestionGeneration!=frame.generation) {
+        congestionGeneration=frame.generation;
+        consecutiveRejectedFrames=0;
       }
+#endif
+      const uint32_t rejectedBefore=notifyRejected.load();
+      const bool sent=sendAudioFrame(frame);
+      if (!sent &&
+          deviceConnected.load() && streamingEnabled.load() && frame.generation == streamGeneration.load()) {
+        // Report dropped frames without silently treating a failed notification
+        // as delivered. The S3 legacy behavior remains unchanged.
+        if(notifyRejected.load()!=rejectedBefore) {
+          ++captureDrops;
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+          // If even the 8 KB/s fallback cannot obtain NimBLE mbufs, fail
+          // promptly rather than letting an unresponsive BLE link run through
+          // an entire second take with zero journaled audio.
+          if (++consecutiveRejectedFrames>=4u) {
+            Serial.println("[BLE] C3 sustained notification ENOMEM; stopping broken stream");
+            requestStreamError(ErrorCode::TRANSPORT_CHANGED, frame.generation);
+          }
+#endif
+        } else requestStreamError(ErrorCode::TRANSPORT_CHANGED, frame.generation);
+      }
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      else if (sent) consecutiveRejectedFrames=0;
+#endif
     }
     transmitterActive.store(false);
   }
