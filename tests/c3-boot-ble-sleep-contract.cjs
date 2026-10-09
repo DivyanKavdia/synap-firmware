@@ -58,7 +58,7 @@ test('A definitely held-low SD bus skips futile repeated boot probes but remains
 test('Recorder, OTA identity, SD pin mapping and generated firmware sketch stay unchanged',()=>{
   assert.equal(c3.slotSize,1310720);
   assert.equal(c3.productMarker,'SYNAP-ESP32C3-OTA-ID-V3');
-  assert.deepEqual(c3.pins.sd,{cs:0,sck:10,mosi:21,miso:20});
+  assert.deepEqual(c3.hardware.sdDetection,{cs:0,sck:10,mosi:21,miso:20});
   for(const p of ['boot.cpp','power.cpp','runtime.cpp','odyssey-sd-1631-detect.cpp','odyssey-sd-1631-transfer.cpp']){
     const original=read('firmware/shared/'+p).trim();
     assert(ino.includes(original),'generated sketch must match '+p);
