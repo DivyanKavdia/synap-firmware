@@ -104,7 +104,7 @@ test('C3 restores the SD sleep veto from retained recorder write failure',()=>{
 
 test('C3 driven-low SD bus cannot sleep as if the card were absent',()=>{
  const block=detect.split('static bool odysseySdMountOnceLocked(')[1].split('static bool odysseySdMountLocked(')[0];
- assert.match(block,/odysseySdBitBangCsHigh\\.load\\(\\)==0 && odysseySdRawZero\\.load\\(\\)>=900u/);
+ assert.match(block,/odysseySdBitBangCsHigh\.load\(\)==0 && odysseySdRawZero\.load\(\)>=900u/);
  assert.match(block,/odysseySdUnsafeToSleep=true;/);
  const prepare=detect.split('bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {')[1];
  assert(prepare.indexOf('if (odysseySdUnsafeToSleep.load())')<
