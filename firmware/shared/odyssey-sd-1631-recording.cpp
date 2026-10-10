@@ -9,6 +9,9 @@ static std::atomic<uint32_t> odysseyPersistedWriteErrno{0};
 static std::atomic<uint32_t> odysseyPersistedWriteReturned{0};
 static std::atomic<uint32_t> odysseyPersistedWriteExpected{0};
 static std::atomic<uint32_t> odysseyPersistedWriteFerror{0};
+static std::atomic<uint32_t> odysseyPersistedDriverFault{0};
+extern "C" uint32_t synapSdWriteFaultCode();
+extern "C" void synapSdClearWriteFaultCode();
 
 static void odysseyLoadPersistedRecordFailure() {
   if (odysseyPersistedRecordLoaded.exchange(true)) return;
@@ -33,14 +36,16 @@ static void odysseyLoadPersistedRecordFailure() {
       // Keep "last" in its original three-word form so an OTA rollback
       // still sees an unresolved stage-70 failure and retains sleep safety.
       // Extra fields live in a separate stage/byte-paired journal.
-      uint32_t detail[6]{};
-      if (prefs.getBytesLength("write")==sizeof(detail) &&
-          prefs.getBytes("write",detail,sizeof(detail))==sizeof(detail) &&
+      uint32_t detail[7]{};
+      const size_t detailLength=prefs.getBytesLength("write");
+      if ((detailLength==6u*sizeof(uint32_t) || detailLength==sizeof(detail)) &&
+          prefs.getBytes("write",detail,detailLength)==detailLength &&
           detail[0]==record[1] && detail[1]==record[2]) {
         odysseyPersistedWriteErrno=detail[2];
         odysseyPersistedWriteReturned=detail[3];
         odysseyPersistedWriteExpected=detail[4];
         odysseyPersistedWriteFerror=detail[5];
+        if (detailLength==sizeof(detail)) odysseyPersistedDriverFault=detail[6];
       }
     }
   }
@@ -58,6 +63,7 @@ uint32_t odysseyLastWriteErrno() { odysseyLoadPersistedRecordFailure(); return o
 uint32_t odysseyLastWriteReturned() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteReturned.load(); }
 uint32_t odysseyLastWriteExpected() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteExpected.load(); }
 uint32_t odysseyLastWriteFerror() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteFerror.load(); }
+uint32_t odysseyLastDriverWriteFault() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedDriverFault.load(); }
 static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   odysseyPersistedRecordLoaded=true;
   odysseyPersistedRecordStage=stage;
@@ -67,15 +73,17 @@ static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
     odysseyPersistedWriteReturned=0;
     odysseyPersistedWriteExpected=0;
     odysseyPersistedWriteFerror=0;
+    odysseyPersistedDriverFault=0;
   }
   Preferences prefs;
   if (!prefs.begin("sd-recdiag",false)) return;
   // Preserve the original on-flash ABI for older OTA rollback builds.
   // Write optional detail first; last/3-word remains the authoritative stage.
   if (stage) {
-    const uint32_t detail[6]={uint32_t(stage),bytes,
+    const uint32_t detail[7]={uint32_t(stage),bytes,
       odysseyPersistedWriteErrno.load(),odysseyPersistedWriteReturned.load(),
-      odysseyPersistedWriteExpected.load(),odysseyPersistedWriteFerror.load()};
+      odysseyPersistedWriteExpected.load(),odysseyPersistedWriteFerror.load(),
+      odysseyPersistedDriverFault.load()};
     (void)prefs.putBytes("write",detail,sizeof(detail));
   }
   const uint32_t record[3]={stage?1u:0u,uint32_t(stage),bytes};
@@ -114,6 +122,8 @@ static uint8_t odysseyBatchWriteFailureStage(int error) {
   }
 }
 static void odysseyRecordTake() {
+  synapSdClearWriteFaultCode();
+  odysseyPersistedDriverFault=0;
   odysseyPersistedWriteErrno=0;
   odysseyPersistedWriteReturned=0;
   odysseyPersistedWriteExpected=0;
@@ -205,6 +215,7 @@ static void odysseyRecordTake() {
             odysseyPersistedWriteReturned=uint32_t(written);
             odysseyPersistedWriteExpected=sizeof(batch);
             odysseyPersistedWriteFerror=ferror(file)?1u:0u;
+            odysseyPersistedDriverFault=synapSdWriteFaultCode();
             failed=true;failureStage=odysseyBatchWriteFailureStage(writeError);
             Serial.printf("[SD] PCM batch write failed errno=%d stage=%u wrote=%u pcm=%lu\n",
               writeError,unsigned(failureStage),unsigned(written),
@@ -242,6 +253,7 @@ static void odysseyRecordTake() {
         odysseyPersistedWriteReturned=uint32_t(written);
         odysseyPersistedWriteExpected=sizeof(batch);
         odysseyPersistedWriteFerror=ferror(file)?1u:0u;
+            odysseyPersistedDriverFault=synapSdWriteFaultCode();
         failed=true;failureStage=odysseyBatchWriteFailureStage(writeError);
         Serial.printf("[SD] final PCM batch failed errno=%d stage=%u wrote=%u expected=%u\n",
           writeError,unsigned(failureStage),unsigned(written),unsigned(sizeof(batch)));

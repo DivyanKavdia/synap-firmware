@@ -44,6 +44,7 @@ static void resetLoaded(){
   odysseyPersistedRecordStage=0;odysseyPersistedRecordBytes=0;
   odysseyPersistedWriteErrno=0;odysseyPersistedWriteReturned=0;
   odysseyPersistedWriteExpected=0;odysseyPersistedWriteFerror=0;
+  odysseyPersistedDriverFault=0;
 }
 int main(){
   uint32_t old[3]={1,70,2040u*1024u};
@@ -57,10 +58,11 @@ int main(){
   odysseyPersistedWriteReturned=0;
   odysseyPersistedWriteExpected=4096;
   odysseyPersistedWriteFerror=1;
+  odysseyPersistedDriverFault=(25u<<24)|(5u<<16)|(2u<<8)|0x0Bu;
   odysseyPersistRecordFailure(70,2040u*1024u);
   // Legacy firmware still reads the original three-word "last" record.
   assert(saved.size()==3u*sizeof(uint32_t));
-  assert(extra.size()==6u*sizeof(uint32_t));
+  assert(extra.size()==7u*sizeof(uint32_t));
   uint32_t retained[3]{};std::memcpy(retained,saved.data(),sizeof(retained));
   assert(retained[0]==1&&retained[1]==70&&retained[2]==2040u*1024u);
   resetLoaded();
@@ -70,11 +72,13 @@ int main(){
   assert(odysseyLastWriteReturned()==0);
   assert(odysseyLastWriteExpected()==4096);
   assert(odysseyLastWriteFerror()==1);
+  assert(odysseyLastDriverWriteFault()==((25u<<24)|(5u<<16)|(2u<<8)|0x0Bu));
 
   odysseyPersistRecordFailure(0,0);
   resetLoaded();
   assert(odysseyLastRecordFailureStage()==0);
   assert(odysseyLastWriteExpected()==0);
+  assert(odysseyLastDriverWriteFault()==0);
   std::cout<<"PASS C3 SD write diagnostics\n";
 }
 `);
@@ -89,6 +93,8 @@ test('failed 4 KiB writes record errno, returned byte count and ferror before cl
   assert.match(recorder,/odysseyPersistRecordFailure\(0,0\)/);
   assert.match(recorder,/stage\?1u:0u/);
   assert.match(recorder,/prefs\.putBytes\("write",detail,sizeof\(detail\)\)/);
+  assert.match(recorder,/synapSdClearWriteFaultCode\(\)/);
+  assert.equal((recorder.match(/odysseyPersistedDriverFault=synapSdWriteFaultCode\(\)/g)||[]).length,2);
   assert.match(recorder,/prefs\.putBytes\("last",record,sizeof\(record\)\)/);
   assert.match(recorder,/legacy\?record\[0\]==1u:record\[0\]==2u/);
   assert.doesNotMatch(recorder,/fseek\(file,0|ftruncate\(/);
@@ -109,10 +115,10 @@ test('stuck-low MISO only halts AUTOMATIC sleep recovery, never explicit card re
 });
 
 test('catalogue failure report exposes short-write details with older diagnostics',()=>{
-  for (const key of ['wrE','wrN','wrX','wrF','bbHigh','raw0','bbCmd0','bbR7'])
+  for (const key of ['wrE','wrN','wrX','wrF','wrD','bbHigh','raw0','bbCmd0','bbR7'])
     assert(transfer.includes(String.raw`\"`+key+String.raw`\"`),key+' present');
   for (const name of ['odysseyLastWriteErrno','odysseyLastWriteReturned',
-    'odysseyLastWriteExpected','odysseyLastWriteFerror'])
+    'odysseyLastWriteExpected','odysseyLastWriteFerror','odysseyLastDriverWriteFault'])
     assert(transfer.includes(name+'()'),name);
   assert.match(transfer,/char detail\[480\]/);
 });

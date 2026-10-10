@@ -844,22 +844,10 @@ void stopMicrophone() {
 static std::atomic<bool> odysseySdBatteryDividerObserved{false};
 void markOdysseySdBatteryDividerPresent() { odysseySdBatteryDividerObserved=true; }
 bool odysseySdBatteryDividerPresent() { return odysseySdBatteryDividerObserved.load(); }
-#if SYNAP_BATTERY_MONITOR_ENABLE
-static bool detectOdysseySdBatteryDividerFromAdc(uint32_t adcMv) {
-  if (odysseySdBatteryDividerObserved.load()) return true;
-  const uint32_t standardMv=(adcMv*SYNAP_BATTERY_SCALE_NUMERATOR + SYNAP_BATTERY_SCALE_DENOMINATOR/2u)/SYNAP_BATTERY_SCALE_DENOMINATOR;
-  const uint32_t sdMv=(adcMv*SYNAP_SD_BATTERY_SCALE_NUMERATOR + SYNAP_SD_BATTERY_SCALE_DENOMINATOR/2u)/SYNAP_SD_BATTERY_SCALE_DENOMINATOR;
-  // A healthy LiPo cannot sustain the C3 below 2.8 V. If the legacy 2:1
-  // reconstruction is therefore impossible while the 1 MOhm/470 kOhm
-  // reconstruction lands in the normal LiPo window, the divider itself is
-  // sufficient evidence of the SD-equipped hardware even when SD init fails.
-  if (standardMv<2800u && sdMv>=3300u && sdMv<=4350u) {
-    odysseySdBatteryDividerObserved=true;
-    return true;
-  }
-  return false;
-}
-#endif
+// Rev K R1/R2 are both 470 kOhm per the released BOM and PCB netlist.
+// Both standard and SD C3 therefore reconstruct cell voltage at x2.
+// Keep the SD-present flag for the 4200 mV full-scale policy, not ratio inference.
+// A plausible single ADC reading cannot identify physically identical dividers.
 #else
 void markOdysseySdBatteryDividerPresent() {}
 bool odysseySdBatteryDividerPresent() { return false; }
@@ -886,7 +874,7 @@ uint32_t batteryCellMillivoltsFromAdc(uint32_t adcMv) {
 
 uint8_t batteryPercentFromMillivolts(uint16_t mv) {
   // Standard C3 keeps its historical 2:1 calibration. Once SD hardware is
-  // positively observed, the SD-equipped C3 uses its 1 MOhm / 470 kOhm divider.
+  // positively observed, the SD-equipped C3 uses its 470 kOhm / 470 kOhm divider.
   const uint16_t fullMv=batteryFullMillivolts();
   if (mv>=fullMv) return 100;
   if (mv>=4050) return 90 + uint32_t(mv-4050)*10/(fullMv-4050);
@@ -969,7 +957,7 @@ void sampleBattery(bool force) {
   bool adcUnstable=false;
 #if CONFIG_IDF_TARGET_ESP32C3
   if (odysseySdBatteryDividerPresent()) {
-    // R1=1 MOhm, R2=470 kOhm, Rth~320 kOhm (C1=100 nF on Rev K).
+    // R1=R2=470 kOhm, Rth~235 kOhm (C1=100 nF on Rev K).
     // Trim two extremes on either side. A wide central spread means the
     // voltage is not a trustworthy battery measurement; never fake 100%.
     for (uint8_t i=1;i<16;++i) {
@@ -994,12 +982,7 @@ void sampleBattery(bool force) {
 #endif
   batteryAdcMillivolts=uint16_t(adcMv>65535u?65535u:adcMv);
   batteryAdcRaw=uint16_t(adcRaw>65535u?65535u:adcRaw);
-#if CONFIG_IDF_TARGET_ESP32C3
-  const bool dividerWasObserved=odysseySdBatteryDividerPresent();
-  if (!dividerWasObserved && detectOdysseySdBatteryDividerFromAdc(adcMv)) {
-    Serial.printf("[BATTERY] inferred SD divider from adc=%lumV\n",static_cast<unsigned long>(adcMv));
-  }
-#endif
+// Divider is documented as x2 on Rev K. It is not inferred from voltage.
   const uint32_t cellMv=batteryCellMillivoltsFromAdc(adcMv);
   if (!adcUnstable && cellMv>=2800u && cellMv<=4350u) {
     batteryMillivolts=uint16_t(cellMv);
@@ -3200,6 +3183,9 @@ static std::atomic<uint32_t> odysseyPersistedWriteErrno{0};
 static std::atomic<uint32_t> odysseyPersistedWriteReturned{0};
 static std::atomic<uint32_t> odysseyPersistedWriteExpected{0};
 static std::atomic<uint32_t> odysseyPersistedWriteFerror{0};
+static std::atomic<uint32_t> odysseyPersistedDriverFault{0};
+extern "C" uint32_t synapSdWriteFaultCode();
+extern "C" void synapSdClearWriteFaultCode();
 
 static void odysseyLoadPersistedRecordFailure() {
   if (odysseyPersistedRecordLoaded.exchange(true)) return;
@@ -3224,14 +3210,16 @@ static void odysseyLoadPersistedRecordFailure() {
       // Keep "last" in its original three-word form so an OTA rollback
       // still sees an unresolved stage-70 failure and retains sleep safety.
       // Extra fields live in a separate stage/byte-paired journal.
-      uint32_t detail[6]{};
-      if (prefs.getBytesLength("write")==sizeof(detail) &&
-          prefs.getBytes("write",detail,sizeof(detail))==sizeof(detail) &&
+      uint32_t detail[7]{};
+      const size_t detailLength=prefs.getBytesLength("write");
+      if ((detailLength==6u*sizeof(uint32_t) || detailLength==sizeof(detail)) &&
+          prefs.getBytes("write",detail,detailLength)==detailLength &&
           detail[0]==record[1] && detail[1]==record[2]) {
         odysseyPersistedWriteErrno=detail[2];
         odysseyPersistedWriteReturned=detail[3];
         odysseyPersistedWriteExpected=detail[4];
         odysseyPersistedWriteFerror=detail[5];
+        if (detailLength==sizeof(detail)) odysseyPersistedDriverFault=detail[6];
       }
     }
   }
@@ -3249,6 +3237,7 @@ uint32_t odysseyLastWriteErrno() { odysseyLoadPersistedRecordFailure(); return o
 uint32_t odysseyLastWriteReturned() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteReturned.load(); }
 uint32_t odysseyLastWriteExpected() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteExpected.load(); }
 uint32_t odysseyLastWriteFerror() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteFerror.load(); }
+uint32_t odysseyLastDriverWriteFault() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedDriverFault.load(); }
 static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   odysseyPersistedRecordLoaded=true;
   odysseyPersistedRecordStage=stage;
@@ -3258,15 +3247,17 @@ static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
     odysseyPersistedWriteReturned=0;
     odysseyPersistedWriteExpected=0;
     odysseyPersistedWriteFerror=0;
+    odysseyPersistedDriverFault=0;
   }
   Preferences prefs;
   if (!prefs.begin("sd-recdiag",false)) return;
   // Preserve the original on-flash ABI for older OTA rollback builds.
   // Write optional detail first; last/3-word remains the authoritative stage.
   if (stage) {
-    const uint32_t detail[6]={uint32_t(stage),bytes,
+    const uint32_t detail[7]={uint32_t(stage),bytes,
       odysseyPersistedWriteErrno.load(),odysseyPersistedWriteReturned.load(),
-      odysseyPersistedWriteExpected.load(),odysseyPersistedWriteFerror.load()};
+      odysseyPersistedWriteExpected.load(),odysseyPersistedWriteFerror.load(),
+      odysseyPersistedDriverFault.load()};
     (void)prefs.putBytes("write",detail,sizeof(detail));
   }
   const uint32_t record[3]={stage?1u:0u,uint32_t(stage),bytes};
@@ -3305,6 +3296,8 @@ static uint8_t odysseyBatchWriteFailureStage(int error) {
   }
 }
 static void odysseyRecordTake() {
+  synapSdClearWriteFaultCode();
+  odysseyPersistedDriverFault=0;
   odysseyPersistedWriteErrno=0;
   odysseyPersistedWriteReturned=0;
   odysseyPersistedWriteExpected=0;
@@ -3396,6 +3389,7 @@ static void odysseyRecordTake() {
             odysseyPersistedWriteReturned=uint32_t(written);
             odysseyPersistedWriteExpected=sizeof(batch);
             odysseyPersistedWriteFerror=ferror(file)?1u:0u;
+            odysseyPersistedDriverFault=synapSdWriteFaultCode();
             failed=true;failureStage=odysseyBatchWriteFailureStage(writeError);
             Serial.printf("[SD] PCM batch write failed errno=%d stage=%u wrote=%u pcm=%lu\n",
               writeError,unsigned(failureStage),unsigned(written),
@@ -3433,6 +3427,7 @@ static void odysseyRecordTake() {
         odysseyPersistedWriteReturned=uint32_t(written);
         odysseyPersistedWriteExpected=sizeof(batch);
         odysseyPersistedWriteFerror=ferror(file)?1u:0u;
+            odysseyPersistedDriverFault=synapSdWriteFaultCode();
         failed=true;failureStage=odysseyBatchWriteFailureStage(writeError);
         Serial.printf("[SD] final PCM batch failed errno=%d stage=%u wrote=%u expected=%u\n",
           writeError,unsigned(failureStage),unsigned(written),unsigned(sizeof(batch)));
@@ -4547,7 +4542,7 @@ static void worker(void*) {
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
       char detail[480];
       const int n=snprintf(detail,sizeof(detail),
-        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"mountWhy\":%u,\"vfsStep\":%u,\"vfsErrno\":%ld,\"bbHigh\":%d,\"bbLow\":%d,\"raw0\":%u,\"rawFF\":%u,\"rawFE\":%u,\"rawOther\":%u,\"rawMaxFF\":%u,\"bbCmd12Candidate\":%d,\"bbReadIdle\":%u,\"bbDrain\":%lu,\"bbStop\":%u,\"bbCmd0\":%d,\"bbCmd8\":%d,\"bbR7\":%lu,\"wrE\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu}",
+        "{\"stage\":\"catalogue\",\"errno\":%d,\"sdState\":%u,\"sdProbe\":%u,\"espErr\":%ld,\"mountAttempts\":%lu,\"beginAttempts\":%lu,\"mountWhy\":%u,\"vfsStep\":%u,\"vfsErrno\":%ld,\"bbHigh\":%d,\"bbLow\":%d,\"raw0\":%u,\"rawFF\":%u,\"rawFE\":%u,\"rawOther\":%u,\"rawMaxFF\":%u,\"bbCmd12Candidate\":%d,\"bbReadIdle\":%u,\"bbDrain\":%lu,\"bbStop\":%u,\"bbCmd0\":%d,\"bbCmd8\":%d,\"bbR7\":%lu,\"wrE\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu,\"wrD\":%lu}",
         catalogueErrno,unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
         static_cast<long>(odysseySdLastError()),static_cast<unsigned long>(odysseySdAttemptCount()),
         static_cast<unsigned long>(odysseySdBeginAttemptCount()),unsigned(odysseySdLastMountReasonCode()),
@@ -4562,7 +4557,8 @@ static void worker(void*) {
         static_cast<unsigned long>(odysseyLastWriteErrno()),
         static_cast<unsigned long>(odysseyLastWriteReturned()),
         static_cast<unsigned long>(odysseyLastWriteExpected()),
-        static_cast<unsigned long>(odysseyLastWriteFerror()));
+        static_cast<unsigned long>(odysseyLastWriteFerror()),
+        static_cast<unsigned long>(odysseyLastDriverWriteFault()));
       reply(request,error,total,request.offset,reinterpret_cast<const uint8_t*>(detail),
         n>0?std::min(size_t(n),sizeof(detail)-1):0);
     } else reply(request,error,total,request.offset,bytes,size);
