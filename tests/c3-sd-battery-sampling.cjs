@@ -8,7 +8,7 @@ const battery=read('firmware/shared/battery.cpp');
 const devices=require('../devices/catalog.json').devices;
 
 test('C3 battery is sampled before low-power SD mount and again after discovery',()=>{
- const before=boot.split('  // Rev K C3 and the standard C3')[1].split('#if USE_REAL_I2S_MIC')[0];
+ const before=boot.split('  // Initial C3 sample is provisional x2.')[1].split('#if USE_REAL_I2S_MIC')[0];
  assert.match(before,/#if !CONFIG_IDF_TARGET_ESP32C3\s+sampleBattery\(true\);\s+#endif/);
  const beforeMount=boot.split('  OdysseyTransfer::initialize();')[1].split('  odysseyInitializeSdCardBeforeBle();')[0];
  assert.match(beforeMount,/sampleBattery\(true\);/);
