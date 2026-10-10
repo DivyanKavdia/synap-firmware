@@ -27,6 +27,10 @@ Card* s_cards[1]={&card};
 vector<string> events;
 int waitCount=0, stopCount=0, acceptedBlocks=0, rejectedBlock=0, failWaitAt=0;
 int statusCount=0;
+uint32_t fault=0;
+void synapRecordSdWriteFault(uint8_t op,uint8_t phase,uint8_t block,uint8_t token) {
+  if(!fault)fault=(uint32_t(op)<<24)|(uint32_t(phase)<<16)|(uint32_t(block)<<8)|token;
+}
 bool sdSelectCard(uint8_t){ events.push_back("select");return true; }
 void sdDeselectCard(uint8_t){events.push_back("deselect");}
 char sdTransaction(uint8_t,char cmd,unsigned int,unsigned int* resp){
@@ -54,7 +58,7 @@ ${multiAfter}
 
 static void reset(){
   events.clear();waitCount=0;stopCount=0;acceptedBlocks=0;
-  rejectedBlock=0;failWaitAt=0;statusCount=0;
+  rejectedBlock=0;failWaitAt=0;statusCount=0;fault=0;
 }
 static int pos(const string& target){
   for(size_t i=0;i<events.size();++i) if(events[i]==target)return (int)i;
@@ -72,16 +76,19 @@ int main(){
   reset();failWaitAt=10;
   assert(!sdWriteSectors(0,buffer,44,8));
   assert(stopCount==1 && statusCount==0 && waitCount==10);
+  assert(fault==(uint32_t(25)<<24 | uint32_t(7)<<16));
   assert(events.at(events.size()-2)=="ready" && events.back()=="deselect");
   // Reject a partial data stream WITHOUT a CMD12 read-stop or replay.
   reset();rejectedBlock=3;
   assert(!sdWriteSectors(0,buffer,44,8));
   assert(stopCount==1 && statusCount==0 && acceptedBlocks==3);
   assert(waitCount==5);
+  assert(fault==(uint32_t(25)<<24 | uint32_t(5)<<16 | uint32_t(2)<<8 | 0x0Bu));
   // Fail-safe when a card never goes ready, without sending a premature stop.
   reset();failWaitAt=3;
   assert(!sdWriteSectors(0,buffer,44,8));
   assert(stopCount==0 && statusCount==0 && acceptedBlocks==2);
+  assert(fault==(uint32_t(25)<<24 | uint32_t(4)<<16 | uint32_t(2)<<8));
   std::cout<<"PASS C3 CMD25 stop and failure behaviors\n";
 }
 `);
