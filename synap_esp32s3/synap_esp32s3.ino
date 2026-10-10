@@ -3530,10 +3530,14 @@ static void odysseyRecordTake() {
           batchPcmBytes=0;
           // This is an explicit SD write test: trust the actual complete
           // 4KiB batch result, not uncalibrated battery ADC readings.
-          // Only checkpoint on a complete batch. FAT's file length is not
-          // guaranteed durable until f_sync; a power cut may lose all data
-          // since the previous successful checkpoint.
-          if (uint32_t(millis()-lastCheckpointAt)>=ODYSSEY_SD_CHECKPOINT_INTERVAL_MS) {
+          // One early directory/file-length checkpoint makes the take visible
+          // after interruption. Repeating f_sync every ten seconds repeatedly
+          // writes a FAT sector; the field device failed after ~2 minutes on
+          // CMD25 STOP for that metadata sector. Keep sequential 4KiB audio
+          // writes and defer further metadata until the user's STOP/fclose.
+          // A sudden power loss may lose PCM appended after this checkpoint.
+          if (checkpointedPcmBytes==0u &&
+              uint32_t(millis()-lastCheckpointAt)>=ODYSSEY_SD_CHECKPOINT_INTERVAL_MS) {
             int checkpointErrno=0;
             const uint8_t checkpointStage=odysseyCheckpointWav(file,checkpointErrno);
             if (checkpointStage) {
@@ -3592,8 +3596,9 @@ static void odysseyRecordTake() {
       }
     }
 
-    // STOP is append-only. Periodic f_sync checkpoints plus fclose() make
-    // directory size and data recoverable when the filesystem remains readable.
+    // STOP is append-only. One early f_sync, then fclose() on STOP minimizes
+    // metadata programming during active capture. After power loss only the
+    // early checkpointed prefix is guaranteed to be discoverable.
     // The on-card header stays provisional; transfer synthesizes the true WAV
     // header from file size after a clean stop OR interrupted power cycle.
     errno=0;
