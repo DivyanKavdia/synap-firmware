@@ -76,7 +76,7 @@ int main(){
   reset();failWaitAt=10;
   assert(!sdWriteSectors(0,buffer,44,8));
   assert(stopCount==1 && statusCount==0 && waitCount==10);
-  assert(fault==(uint32_t(25)<<24 | uint32_t(7)<<16));
+  assert(fault==(uint32_t(25)<<24 | uint32_t(7)<<16 | uint32_t(8)<<8));
   assert(events.at(events.size()-2)=="ready" && events.back()=="deselect");
   // Reject a partial data stream WITHOUT a CMD12 read-stop or replay.
   reset();rejectedBlock=3;
