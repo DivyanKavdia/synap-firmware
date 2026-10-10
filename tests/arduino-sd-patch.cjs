@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {patch,before,after,multiBefore,multiAfter,faultHeader,byteBefore,byteAfter}=require('../tools/patch-arduino-sd.cjs');
+const {patchOld:patch,before,after,multiBefore,multiAfter,faultHeader,byteBefore,byteAfter}=require('../tools/patch-arduino-sd.cjs');
 
 test('pinned Arduino 3.3.5 CMD24 patch waits for programming before deselect',()=>{
   const source='prefix\n'+byteBefore+'\n'+before+'\n'+multiBefore+'\nsuffix';
