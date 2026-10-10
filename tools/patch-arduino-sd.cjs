@@ -105,6 +105,7 @@ const byteBefore = `char sdWriteBytes(uint8_t pdrv, const char *buffer, char tok
   if (!sdWait(pdrv, 500)) {
     return 0;
   }
+
   card->spi->write(token);
   card->spi->writeBytes((uint8_t *)buffer, 512);
   card->spi->write16(crc);
