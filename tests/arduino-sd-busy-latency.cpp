@@ -2,14 +2,21 @@
 #include <cstdint>
 #include <deque>
 #include <algorithm>
+#include <vector>
+#include <cstring>
 
 static uint32_t ticks=0;
 static uint32_t millis() { return ticks++; }
 static bool selected=false, delayed=true, busyForever=false, stopForever=false;
 static bool timeoutObserved=false, reject=false;
 static unsigned blocks=0, stops=0, statusChecks=0;
+static int writeCommand=0;
+static unsigned commandCount=0;
+static unsigned long long writeAddress=0;
+static bool failCommand=false,failStatus=false;
 struct SPIClass {
   std::deque<uint8_t> input;
+  std::vector<uint8_t> payload;
   bool stuck=false;
   uint8_t transfer(uint8_t) {
     assert(selected);
@@ -32,7 +39,9 @@ struct SPIClass {
     if (token==0xfd) { ++stops;programming(stopForever); }
     else { assert(token==0xfe || token==0xfc);++blocks; }
   }
-  void writeBytes(uint8_t*, int size) { assert(size==512); }
+  void writeBytes(uint8_t* data, int size) {
+    assert(size==512);payload.insert(payload.end(),data,data+size);
+  }
   void write16(unsigned short) {
     input.push_back(reject?0x0d:0x05);
     if (!reject) programming(busyForever);
@@ -61,12 +70,14 @@ static void sdDeselectCard(uint8_t) {
   assert(timeoutObserved || !spi.pendingBusy());
   selected=false;
 }
-static char sdCommand(uint8_t,int,unsigned long long,void*) {
-  assert(selected && !spi.pendingBusy());return 0;
+static char sdCommand(uint8_t,int cmd,unsigned long long address,void*) {
+  assert(selected && !spi.pendingBusy());
+  writeCommand=cmd;writeAddress=address;++commandCount;
+  return failCommand?4:0;
 }
 static char sdTransaction(uint8_t,int cmd,int,unsigned int* response) {
   assert(!selected && !spi.pendingBusy());
-  if (cmd==SEND_STATUS) { ++statusChecks;*response=0; }
+  if (cmd==SEND_STATUS) { ++statusChecks;*response=failStatus?1:0; }
   return 0;
 }
 
@@ -76,13 +87,16 @@ static void reset(bool latency=true) {
   spi.input.clear();spi.stuck=false;ticks=0;selected=false;delayed=latency;
   busyForever=false;stopForever=false;timeoutObserved=false;reject=false;
   blocks=stops=statusChecks=0;synapSdClearWriteFaultCode();
+  writeCommand=0;writeAddress=0;commandCount=0;
+  failCommand=failStatus=false;spi.payload.clear();card.type=CARD_SDHC;
 }
 int main() {
   char data[4096]{};
   for (bool latency : {false,true}) {
     reset(latency);
     assert(sdWriteSector(0,data,17));
-    assert(blocks==1 && stops==0 && statusChecks==1 && !selected);
+    assert(blocks==1 && stops==1 && statusChecks==1 && !selected);
+    assert(writeCommand==25 && commandCount==1 && writeAddress==17);
     assert(!synapSdWriteFaultCode());
     reset(latency);
     assert(sdWriteSectors(0,data,17,8));
@@ -91,7 +105,7 @@ int main() {
   }
   reset();busyForever=true;
   assert(!sdWriteSector(0,data,17));
-  assert(synapSdWriteFaultCode()==0x18040000u);
+  assert(synapSdWriteFaultCode()==0x19060100u);
   assert(statusChecks==0 && timeoutObserved && ticks<5010);
   reset();busyForever=true;
   assert(!sdWriteSectors(0,data,17,8));
@@ -103,10 +117,39 @@ int main() {
   assert(blocks==8 && stops==1 && statusChecks==0 && ticks<5100);
   reset();reject=true;
   assert(!sdWriteSector(0,data,17));
-  assert(synapSdWriteFaultCode()==0x1803000du);
+  assert(synapSdWriteFaultCode()==0x1905000du);
   assert(blocks==1 && statusChecks==0);
   reset();reject=true;
   assert(!sdWriteSectors(0,data,17,8));
   assert(synapSdWriteFaultCode()==0x1905000du);
   assert(blocks==1 && stops==1 && statusChecks==0);
+
+  // Metadata must transmit exactly the requested sector, not pad/overwrite
+  // neighbouring FAT entries; SDSC retains byte addressing, SDHC block addressing.
+  for (int type : {2,int(CARD_SDHC)}) {
+    reset();card.type=type;
+    for (unsigned i=0;i<sizeof(data);++i) data[i]=char(i*37u);
+    assert(sdWriteSector(0,data+512,123));
+    assert(spi.payload.size()==512 && !memcmp(spi.payload.data(),data+512,512));
+    assert(writeAddress==(type==CARD_SDHC?123u:123u*512u));
+    assert(writeCommand==25 && commandCount==1 && stops==1);
+  }
+  reset();stopForever=true;
+  assert(!sdWriteSector(0,data,17));
+  assert(synapSdWriteFaultCode()==0x19070100u && commandCount==1);
+  reset();failCommand=true;
+  assert(!sdWriteSector(0,data,17));
+  assert(commandCount==1 && blocks==0 && stops==0 && statusChecks==0);
+  reset();failStatus=true;
+  assert(!sdWriteSector(0,data,17));
+  assert(synapSdWriteFaultCode()==0x19080001u && commandCount==1);
+  reset();
+  assert(!sdWriteSectors(0,data,17,0));
+  assert(commandCount==0 && blocks==0);
+  reset();card.type=CARD_MMC;
+  assert(sdWriteSector(0,data,17));
+  assert(writeCommand==24 && blocks==1 && stops==0);
+  reset();card.type=CARD_MMC;busyForever=true;
+  assert(!sdWriteSector(0,data,17));
+  assert(synapSdWriteFaultCode()==0x18040000u);
 }

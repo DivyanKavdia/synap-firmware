@@ -30,7 +30,7 @@ test('both pinned C3 write patches are idempotent and fail closed on core drift'
 
 test('C3 CMD25 completes programming before raising CS, does not send CMD12 on write error',()=>{
   const out=patch(before+'\n'+multiBefore);
-  const multi=out.split('bool sdWriteSectors(uint8_t pdrv')[1].split('\nunsigned long sdGetSectorsCount')[0];
+  const multi=out.slice(out.lastIndexOf('bool sdWriteSectors(uint8_t pdrv')).split('\nunsigned long sdGetSectorsCount')[0];
   assert.match(multi,/SYNAP_SD_CMD25_BUSY_FIX/);
   assert.doesNotMatch(multi,/STOP_TRANSMISSION|sdCommand\(pdrv,\s*12/);
   assert.match(multi,/sdWriteBytes\(pdrv, currentBuffer, 0xFC\)/);

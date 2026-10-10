@@ -1031,3 +1031,34 @@ check recording start, sustained writes, STOP, catalogue/readback and a
 second recording, retaining operation-27 diagnostics on any failure.
 The change does not format media or alter the filesystem, pinout, recorder
 batch size, clock, power policy or OTA partition layout.
+
+### Build 1957 follow-up: metadata through one-block CMD25
+
+The 18:10 IST field test still fails before capture: stage 76, errno 5,
+`wrD=0x18040000` (accepted CMD24 sector, five-second programming timeout).
+The boot probe succeeded with `/synap` absent (`vfsStep=13`, ENOENT).
+Its idle-high raw samples are cached boot/recovery observations, not a
+post-failure bus test. The earlier response-latency fix did not resolve
+the device's write failure.
+
+For SD/SDSC/SDHC cards the C3 core patch now routes single-sector writes
+through CMD25 with count=1, the same bounded implementation used for audio.
+This applies to mkdir, file creation, FAT updates and close, without
+changing the logical sector or its 512 data bytes. CMD25 transfers blocks
+until the SPI Stop Tran token; a one-block transaction requires no padding
+or neighbouring-sector rewrite (SD Physical Layer Simplified Specification,
+section 7.2.4, SPI Data Write). MMC retains the previous CMD24 path.
+
+The transaction sends one data block, waits for programming, sends 0xFD,
+waits for STOP completion, then checks CMD13. A failure returns immediately
+without CMD24 fallback or replay of uncertain metadata. Existing bounded
+busy-failure recovery/sleep vetoes cover CMD25 phases 4, 6 and 7.
+New single-sector timeouts report `0x19060100` (data programming) or
+`0x19070100` (STOP programming), rather than CMD24 phase 4.
+
+Executable tests verify one-sector payload equality, SDSC byte vs SDHC
+block addressing, command rejection, data rejection, data/STOP timeout,
+status errors, zero-count rejection, MMC compatibility, and eight-sector
+audio writes. This is a protocol compatibility remedy for the observed
+CMD24 failure, not proof that the card or power rail is healthy. Real-device
+mkdir, recording, STOP and transfer verification remain necessary.
