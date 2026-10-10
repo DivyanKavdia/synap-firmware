@@ -479,8 +479,12 @@ static bool odysseySdBeginLocked() {
   odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
   const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,
     ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false);
-  if (mounted) markOdysseySdBatteryDividerPresent();
-  else odysseySdReleaseLocked();
+  if (mounted) {
+    markOdysseySdBatteryDividerPresent();
+    // Re-sample under the field C3+SD 1M/470k profile before any VFS FAT
+    // write probe. Implausible ADC measurements remain read-only.
+    sampleBattery(true);
+  } else odysseySdReleaseLocked();
   return mounted;
 }
 

@@ -105,28 +105,31 @@ int main(){
   assert(!odysseySdBatteryDividerPresent());
   assert(batteryAvailable && batteryMillivolts==4102);
   markOdysseySdBatteryDividerPresent();
-  adcMv=1852;sampleBattery(true);
+  adcMv=1184;sampleBattery(true);
   assert(odysseySdBatteryDividerPresent());
-  assert(batteryAvailable && batteryMillivolts==3704);
+  assert(batteryAvailable && batteryMillivolts==3703);
   assert(batteryPercentFromMillivolts(4199)==99);
   assert(batteryPercentFromMillivolts(4200)==100);
-  adcMv=2012;spike=true;sampleBattery(true);spike=false;
+  adcMv=1286;spike=true;sampleBattery(true);spike=false;
   // C3+SD robust mean removes a 300 mV transient without falsifying the
-  // factory-calibrated 2012 mV input or the Rev K x2 divider.
-  assert(batteryAvailable && batteryMillivolts==4024 && batteryPercent==87);
+  // factory-calibrated 1286 mV input or the field 1470/470 divider.
+  assert(batteryAvailable && batteryMillivolts==4022 && batteryPercent==87);
   varying=true;sampleBattery(true);varying=false;
   // Alternating +/-100 mV across the *central* 12 readings is unstable;
   // preserve ADC telemetry but never publish a battery percentage.
   assert(!batteryAvailable && !batteryCritical() && batteryPercent==0);
-  adcMv=2012;sampleBattery(true);
-  assert(batteryAvailable && batteryMillivolts==4024 && batteryPercent==87);
+  adcMv=1286;sampleBattery(true);
+  assert(batteryAvailable && batteryMillivolts==4022 && batteryPercent==87);
   // Charging plateau uses actual Rev K resistor ratio.
-  for (const uint32_t chargingMv : {2100u,2101u,2120u}) {
+  for (const uint32_t chargingMv : {1343u,1344u,1350u}) {
     adcMv=chargingMv;sampleBattery(true);
-    const uint32_t expected=chargingMv*2u;
+    const uint32_t expected=(chargingMv*1470u+235u)/470u;
     assert(batteryAvailable && batteryMillivolts==expected);
     assert(batteryPercent==100 && event.value[2]==100 && (event.value[3]&1));
   }
+  // ADC=1.6V reconstructs ~5.0V on the field divider: reject SD writes.
+  adcMv=1600;sampleBattery(true);
+  assert(!batteryAvailable && batteryPercent==0 && batteryMillivolts==5004);
 #endif
 #endif
   std::puts("PASS battery conversion, telemetry, range, cadence and target-specific critical policy");

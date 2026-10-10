@@ -854,10 +854,11 @@ void stopMicrophone() {
 static std::atomic<bool> odysseySdBatteryDividerObserved{false};
 void markOdysseySdBatteryDividerPresent() { odysseySdBatteryDividerObserved=true; }
 bool odysseySdBatteryDividerPresent() { return odysseySdBatteryDividerObserved.load(); }
-// Rev K R1/R2 are both 470 kOhm per the released BOM and PCB netlist.
-// Both standard and SD C3 therefore reconstruct cell voltage at x2.
-// Keep the SD-present flag for the 4200 mV full-scale policy, not ratio inference.
-// A plausible single ADC reading cannot identify physically identical dividers.
+// Field Odyssey C3+SD is assembled with R1=1 MOhm from SW_BAT
+// to GPIO1 and R2=470 kOhm from GPIO1 to GND (1470/470 ratio).
+// Standard C3 remains x2. Rev K's archived BOM differs (470k/470k);
+// SD detection selects the field profile, not a resistor measurement.
+// Do not compensate untrusted ADC readings with a guessed gain.
 #else
 void markOdysseySdBatteryDividerPresent() {}
 bool odysseySdBatteryDividerPresent() { return false; }
@@ -883,8 +884,7 @@ uint32_t batteryCellMillivoltsFromAdc(uint32_t adcMv) {
 }
 
 uint8_t batteryPercentFromMillivolts(uint16_t mv) {
-  // Standard C3 keeps its historical 2:1 calibration. Once SD hardware is
-  // positively observed, the SD-equipped C3 uses its 470 kOhm / 470 kOhm divider.
+  // Standard C3 remains 2:1; assembled C3+SD uses 1M/470k.
   const uint16_t fullMv=batteryFullMillivolts();
   if (mv>=fullMv) return 100;
   if (mv>=4050) return 90 + uint32_t(mv-4050)*10/(fullMv-4050);
@@ -967,7 +967,7 @@ void sampleBattery(bool force) {
   bool adcUnstable=false;
 #if CONFIG_IDF_TARGET_ESP32C3
   if (odysseySdBatteryDividerPresent()) {
-    // R1=R2=470 kOhm, Rth~235 kOhm (C1=100 nF on Rev K).
+    // Assembled C3+SD R1=1 MOhm, R2=470 kOhm, Rth~320 kOhm; C1=100 nF.
     // Trim two extremes on either side. A wide central spread means the
     // voltage is not a trustworthy battery measurement; never fake 100%.
     for (uint8_t i=1;i<16;++i) {
@@ -2861,8 +2861,12 @@ static bool odysseySdBeginLocked() {
   odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
   const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,
     ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false);
-  if (mounted) markOdysseySdBatteryDividerPresent();
-  else odysseySdReleaseLocked();
+  if (mounted) {
+    markOdysseySdBatteryDividerPresent();
+    // Re-sample under the field C3+SD 1M/470k profile before any VFS FAT
+    // write probe. Implausible ADC measurements remain read-only.
+    sampleBattery(true);
+  } else odysseySdReleaseLocked();
   return mounted;
 }
 
@@ -4882,9 +4886,8 @@ void setup() {
   touchChangedAt=millis();
   pinMode(BATTERY_ADC_PIN, INPUT);
   analogReadResolution(12);
-  // Rev K C3 uses a 470 kOhm / 470 kOhm battery divider (2:1).
-  // The ADC therefore sees ~2.1 V at a fully charged cell. Keep C3
-  // attenuation at 11 dB; retain S3's separate validated 6 dB setting.
+  // Standard C3 uses x2; assembled field C3+SD uses 1 MOhm/470 kOhm
+  // (~1.343V at a 4.2V cell). C3 stays at 11 dB and S3 at 6 dB.
 #if CONFIG_IDF_TARGET_ESP32C3
   analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);
 #else
@@ -4896,8 +4899,8 @@ void setup() {
   if (!confirmTouchWakeGesture()) return;
   disconnectedAt=millis();
   setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
-  // Rev K C3 and the standard C3 both use 2:1. Initial C3 sampling occurs
-  // immediately before SD initialization so low-power probing stays read-only.
+  // Initial C3 sample is provisional x2. On SD.begin the field C3+SD
+  // profile changes to 1470/470 and resamples before any FAT write probe.
 #if !CONFIG_IDF_TARGET_ESP32C3
   sampleBattery(true);
 #endif
@@ -4933,12 +4936,11 @@ void setup() {
   // The worker cannot touch storage until BLE submits a request.
   OdysseyWifi::initialize();
   OdysseyTransfer::initialize();
-  // Battery divider is x2 on Rev K, irrespective of SD detection. Establish
-  // write safety before mount validation can create a probe file.
+  // Conservative initial x2 sample. After SD.begin, assembled C3+SD
+  // switches to 1470/470 and resamples before FAT write-probe admission.
   sampleBattery(true);
   odysseyInitializeSdCardBeforeBle();
-  // The initial C3 reading now uses the appropriate divider when SD mounts.
-  // Standard C3 without SD retains its 2:1 measurement.
+  // Refresh telemetry after SD detection; standard C3 without SD stays x2.
   sampleBattery(true);
 #else
   // Odyssey S3 remains a detection-only target.
