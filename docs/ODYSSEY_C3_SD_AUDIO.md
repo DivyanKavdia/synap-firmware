@@ -689,3 +689,47 @@ PWA shell198 recognizes OTA state 5 and stops offering a second transfer.
 A device with invalid battery voltage telemetry, media I/O failures or
 possible power instability still needs physical validation. Do not erase SD
 recordings to repair the OTA flow.
+
+### Rev K battery hardware and root-cause SD write telemetry (10 October 2026)
+
+**Hardware correction:** `hardware/odyssey-c3/pcb/final/BOM.csv` explicitly
+specifies **R1/R2 = 470 kΩ / 470 kΩ**. The Rev K netlist confirms R1 connects
+`SW_BAT` to `BAT_ADC` and R2 connects `BAT_ADC` to GND, with C1=100 nF
+from `BAT_ADC` to GND. The firmware's earlier *1 MΩ / 470 kΩ* calibration
+was an incorrect assumption and produced impossible `cellMv` values ~6.4 V
+from otherwise plausible ~2.05 V ADC readings. The updated Rev K profile
+uses **2:1**. Existing ADC readings that intermittently dip to ~0.7 V are
+still not proven accurate; actual battery and SD 3V3 supplies must be
+measured independently. Do not treat an invalid ADC as evidence of >6 V
+at the cell. The ADC's 235 kΩ Thevenin source impedance and 100 nF input
+capacitor warrant physical sampling validation.
+
+**SD write failure localization:** the C3-only pinned Arduino core patch
+now retains one compact, first-error 32-bit value `wrD` in the existing
+SD catalogue error JSON. It persists alongside the legacy-compatible NVS
+`sd-recdiag/last` and the additional `sd-recdiag/write` fields. Decode:
+`op=(wrD>>24)&255`, `phase=(wrD>>16)&255`, `block=(wrD>>8)&255`,
+`response=wrD&255`. A value of zero means that the error did not pass
+the instrumented low-level SD write paths, or no trace was captured.
+
+| Operation | Phase | Failure |
+| --- | --- | --- |
+| 24 | 1/2/3/4/5 | select/CMD24/data-token/post-write busy/CMD13 status |
+| 25 | 1/2/3/4/5/6/7/8/9 | ACMD23/select/CMD25/per-sector busy/data-token/pre-stop busy/post-stop busy/CMD13/invalid count |
+
+The trace is captured at `fwrite` failure **before `fclose`** so a
+subsequent FAT metadata write cannot replace the original evidence.
+The C3 core's inner `sdWriteBytes` busy timeout also now matches its
+outer 5,000 ms bounded wait (previously it still used 500 ms). As before,
+an unsuccessful write is not replayed automatically, SD recordings are
+never auto-formatted or deleted, and the only physical source of an SD
+controller power-cycle on the shipped Rev K carrier is a genuine rail-off
+transition (power switch OFF and USB absent).
+
+**Qualification required:** test an actual Rev K assembled board for
+(1) battery voltage against multimeter on battery pads, (2) 3V3 sag at
+SD1 VCC/GND at the first offline write, (3) 10 short offline captures,
+(4) 5/15-minute takes, (5) read/verified sync before user-confirmed
+deletion, (6) real power-switch and USB backfeed behavior. If `wrD`
+indicates driver failure or MISO remains stuck LOW, adding OTA
+retries cannot prove recovery.
