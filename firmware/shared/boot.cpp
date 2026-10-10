@@ -99,9 +99,9 @@ void setup() {
   touchChangedAt=millis();
   pinMode(BATTERY_ADC_PIN, INPUT);
   analogReadResolution(12);
-  // C3 + SD uses a 1 MOhm / 470 kOhm battery divider (up to ~1.34 V
-  // at a full 4.2 V cell). C3 6 dB ADC attenuation only covers ~1.3 V
-  // and is unsuitable here; retain S3's historically validated 6 dB setting.
+  // Rev K C3 uses a 470 kOhm / 470 kOhm battery divider (2:1).
+  // The ADC therefore sees ~2.1 V at a fully charged cell. Keep C3
+  // attenuation at 11 dB; retain S3's separate validated 6 dB setting.
 #if CONFIG_IDF_TARGET_ESP32C3
   analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);
 #else
@@ -113,9 +113,8 @@ void setup() {
   if (!confirmTouchWakeGesture()) return;
   disconnectedAt=millis();
   setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
-  // A C3 may be fitted with the 1 MOhm/470 kOhm SD divider rather than the
-  // original 1 MOhm/1 MOhm divider. Do not publish a misleading x2 reading
-  // before the SD hardware identification has completed.
+  // Rev K C3 and the standard C3 both use 2:1. Initial C3 sampling occurs
+  // immediately before SD initialization so low-power probing stays read-only.
 #if !CONFIG_IDF_TARGET_ESP32C3
   sampleBattery(true);
 #endif
@@ -151,6 +150,9 @@ void setup() {
   // The worker cannot touch storage until BLE submits a request.
   OdysseyWifi::initialize();
   OdysseyTransfer::initialize();
+  // Battery divider is x2 on Rev K, irrespective of SD detection. Establish
+  // write safety before mount validation can create a probe file.
+  sampleBattery(true);
   odysseyInitializeSdCardBeforeBle();
   // The initial C3 reading now uses the appropriate divider when SD mounts.
   // Standard C3 without SD retains its 2:1 measurement.
