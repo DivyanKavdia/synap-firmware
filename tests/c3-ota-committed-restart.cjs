@@ -31,7 +31,7 @@ test('partition state is traced on boot and commit without bypassing ESP-IDF ima
   assert.match(boot,/esp_ota_get_state_partition\(runningOta,&otaImageState\)/);
   assert.match(ota,/esp_ota_set_boot_partition\(target\)/);
   assert.match(ota,/\[OTA\] commit result=/);
-  assert.match(ota,/\[OTA\] boot /);
+  assert.match(boot,/\[OTA\] boot /);
 });
 
 test('SD mount validation distinguishes fputc failure from fflush failure',()=>{
