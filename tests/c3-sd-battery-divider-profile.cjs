@@ -22,7 +22,7 @@ static bool persisted=false,allowNvs=true;
 static int writes=0;
 struct FakeSerial { void println(const char*){} } Serial;
 struct Preferences {
-  bool begin(const char* ns,bool ro) { assert(!strcmp(ns,"synap-c3-sd")); return allowNvs; }
+  bool begin(const char* ns,bool ro) { (void)ro;assert(!strcmp(ns,"synap-c3-sd")); return allowNvs; }
   bool getBool(const char* key,bool value) { assert(!strcmp(key,"adc-div")); (void)value; return persisted; }
   size_t putBool(const char* key,bool value) { assert(!strcmp(key,"adc-div"));persisted=value;++writes;return 1; }
   void end(){}
