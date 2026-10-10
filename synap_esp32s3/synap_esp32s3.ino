@@ -2168,7 +2168,8 @@ void controlTask(void* parameter) {
     }
 #endif
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-    // C3 physical STOP runs independently of BLE control and media I/O.
+    // C3 double-tap STOP is polled by an independent priority-4 task;
+    // BLE callbacks, command handling or media requests must not delay it.
 #else
     pollTouchControl();
 #endif
@@ -2181,8 +2182,12 @@ void controlTask(void* parameter) {
     updateStatusLed();
   }
 }
+
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-// SYNAP_C3_INDEPENDENT_TOUCH_STOP: one priority-4 touch state owner.
+// SYNAP_C3_INDEPENDENT_TOUCH_STOP: one owner for all touch-state variables.
+// Higher priority than the SD recorder (2) and BLE control (3), so a slow
+// FAT fopen/fclose or an active BLE request cannot starve physical STOP.
+// The STOP signal is cooperative: it never unmounts/aborts an in-flight sector.
 void odysseyTouchTask(void*) {
   for (;;) {
     pollTouchControl();
