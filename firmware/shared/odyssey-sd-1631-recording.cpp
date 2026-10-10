@@ -397,6 +397,22 @@ static void odysseyRecordTask(void*) {
   // One physical double-tap owns recovery + recording. If the previous take
   // left storage unavailable, recover it here after leaving the touch/control
   // task rather than forcing the user to perform a separate recovery gesture.
+  if (!odysseySdReady() && odysseySdBusStuckLow()) {
+    // A card that drives MISO LOW with CS high cannot recover through
+    // repeated CMD0/CMD12 remount attempts on the same powered SD rail.
+    // Do not let one double-tap restart an already-known stuck-low card.
+    const uint32_t finalizedAt=millis();
+    odysseyRecordFaultAt=finalizedAt;
+    odysseySdSleepGuardUntil=finalizedAt+5000u;
+    disconnectedAt=finalizedAt;
+    odysseyRecording=false;
+    odysseyStopRequested=false;
+    applyCpuPowerProfile(false);
+    updateStatusLed(true);
+    Serial.println("[SD] offline start blocked: MISO stuck LOW; full card power-cycle required");
+    vTaskDelete(nullptr);
+    return;
+  }
   if (!odysseySdReady()) {
     Serial.println("[SD] one-gesture offline start: recovering storage before capture");
     if (!odysseyRecoverSdCard("touch")) {
