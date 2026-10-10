@@ -17,6 +17,8 @@ test('metadata CMD25 upgrade accepts the complete build-1957 patched driver',()=
   assert.equal(patch(old),fresh);
   assert.match(fresh,/return sdWriteSectors\(pdrv, buffer, sector, 1\)/);
   assert.match(fresh,/if \(count <= 0\)/);
+  assert.match(fresh,/SYNAP_SD_STABLE_BUSY_POLL/);
+  assert.match(fresh,/synapSdWaitStable\(pdrv, 5000\)/);
 });
 
 test('busy latency patch upgrades previous 5-second patch and rejects source drift',()=>{
