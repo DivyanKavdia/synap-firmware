@@ -20,6 +20,17 @@ uint32_t adcMv=0,rawReads=0,mvReads=0,delayUs=0;
 bool varying=false, spike=false;
 uint32_t millis(){return clockMs;}
 void delayMicroseconds(uint32_t us){delayUs+=us;}
+#if CONFIG_IDF_TARGET_ESP32C3
+using gpio_num_t=int;
+constexpr int GPIO_FLOATING=0,ESP_OK=0;
+uint32_t adcPadClears=0,adcSettleMs=0;
+int gpio_set_pull_mode(gpio_num_t gpio,int mode){
+  assert(gpio==BATTERY_ADC_PIN && mode==GPIO_FLOATING);
+  ++adcPadClears;
+  return ESP_OK;
+}
+void delay(uint32_t ms){adcSettleMs+=ms;}
+#endif
 uint16_t analogRead(uint8_t pin){assert(pin==BATTERY_ADC_PIN);++rawReads;return 3000;}
 uint32_t analogReadMilliVolts(uint8_t pin){
   assert(pin==BATTERY_ADC_PIN);
@@ -106,6 +117,7 @@ int main(){
   assert(batteryAvailable && batteryMillivolts==4102);
   markOdysseySdBatteryDividerPresent();
   adcMv=1184;sampleBattery(true);
+  assert(adcPadClears>0 && adcSettleMs>=175);
   assert(odysseySdBatteryDividerPresent());
   assert(batteryAvailable && batteryMillivolts==3703);
   assert(batteryPercentFromMillivolts(4199)==99);

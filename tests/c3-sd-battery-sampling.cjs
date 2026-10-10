@@ -26,7 +26,7 @@ test('C3+SD battery sampling removes spikes but not a systematic overvoltage',()
  assert.match(battery,/uint16_t mvSamples\[16\];/);
  assert.match(battery,/for \(uint8_t i=2;i<14;\+\+i\) centralTotal\+=mvSamples\[i\];/);
  assert.match(battery,/adcMv=\(centralTotal\+6u\)\/12u;/);
- assert.match(battery,/adcUnstable=centralSpread>120u;/);
+ assert.match(battery,/adcUnstable=!adcPadFloating \|\| centralSpread>120u \|\| adcRaw>=4090u;/);
  assert.match(battery,/if \(!adcUnstable && cellMv>=2800u && cellMv<=4350u\)/);
  assert.match(battery,/batteryCellMillivoltsFromAdc\(adcMv\)/);
  assert.doesNotMatch(battery,/4200u\*adcMv\/1425|adcMv\*1343u\/1425u/);
@@ -44,4 +44,13 @@ test('Fresh post-SD mount battery sample precedes FAT write validation',()=>{
  const sd=read('firmware/shared/odyssey-sd-1631-detect.cpp');
  assert.match(sd,/if \(mounted\) \{\s*markOdysseySdBatteryDividerPresent\(\);[\s\S]*?sampleBattery\(true\);/);
  assert(sd.indexOf('sampleBattery(true);')<sd.indexOf('static bool odysseySdValidateVfsLocked'));
+});
+
+test('C3+SD ADC clears internal pad pulls and waits five input RC time constants',()=>{
+ assert.match(battery,/gpio_set_pull_mode\(adcPin,GPIO_FLOATING\)==ESP_OK/);
+ assert.match(battery,/if \(odysseySdBatteryDividerPresent\(\)\) \{[\s\S]*?delay\(175\);/);
+ assert.match(battery,/adcRaw>=4090u/);
+ assert.match(battery,/adcUnstable=!adcPadFloating \|\| centralSpread>120u \|\| adcRaw>=4090u/);
+ assert.match(battery,/if \(!adcUnstable && cellMv>=2800u && cellMv<=4350u\)/);
+ assert.doesNotMatch(battery,/cellMv\s*=\s*4200;/);
 });

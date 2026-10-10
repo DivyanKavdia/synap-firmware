@@ -1,4 +1,7 @@
 #include <Arduino.h>
+#if CONFIG_IDF_TARGET_ESP32C3
+#include <driver/gpio.h> // GPIO_FLOATING: do not bias the high-Z battery ADC source
+#endif
 // SYNAP_DEVICE_PROFILE
 #include <BLEDevice.h>
 #include <esp_mac.h>
