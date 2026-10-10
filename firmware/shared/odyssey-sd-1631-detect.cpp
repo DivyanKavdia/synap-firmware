@@ -667,12 +667,20 @@ bool odysseyInitializeSdCardBeforeBle() {
   const uint8_t previousRecordStage=odysseyLastRecordFailureStage();
   const bool previousStorageFault=previousRecordStage>=44u && previousRecordStage!=48u;
   if (previousStorageFault) {
-    // Retained write/close faults survive reboot, unlike this in-RAM veto.
-    // Only successful VFS-validated remount may clear unsafe-to-sleep.
+    // Historical EIO survives MCU resets. Never clear it until a new mount
+    // succeeds. Cold power-on first tries ordinary SD.begin; an SD card whose
+    // rail actually cycled should already have reset. Warm/OTA boots perform
+    // one bounded, non-formatting protocol re-arm for a potentially powered
+    // card left mid-command. A normal mount failure still triggers recovery.
     odysseySdUnsafeToSleep=true;
-    Serial.printf("[SD] boot re-arm after recorder stage=%u\n",unsigned(previousRecordStage));
-    (void)odysseySdBitBangRecoverLocked("rearm");
-    delay(20);
+    if (bootResetReason!=ESP_RST_POWERON) {
+      Serial.printf("[SD] warm boot re-arm after recorder stage=%u\\n",unsigned(previousRecordStage));
+      (void)odysseySdBitBangRecoverLocked("rearm");
+      delay(20);
+    } else {
+      Serial.printf("[SD] cold boot first tries fresh SD.begin after old stage=%u\\n",
+        unsigned(previousRecordStage));
+    }
   }
 
   const bool ready=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
