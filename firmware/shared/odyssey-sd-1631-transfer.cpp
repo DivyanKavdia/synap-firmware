@@ -87,7 +87,6 @@ static void reply(const Request& request,uint8_t error,uint32_t total=0,uint32_t
 static uint8_t selectFile(const char* path,uint32_t& total) {
   selectedPath[0]=0;
   if (!safeWavPath(path)) return BAD_COMMAND;
-  if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) return BUSY;
   OdysseySdGuard guard;
   if (!guard || !storageReady()) return NO_SD;
   char full[96];
@@ -215,6 +214,7 @@ static uint8_t catalogue(uint32_t& total) {
 static uint8_t removeFile(const char* path) {
   selectedPath[0]=0;
   if (!safeWavPath(path)) return BAD_COMMAND;
+  if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) return BUSY;
   OdysseySdGuard guard;
   if (!guard || !storageReady()) return NO_SD;
   char full[96];
