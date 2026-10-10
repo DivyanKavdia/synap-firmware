@@ -773,3 +773,60 @@ by interrupting power after different checkpoints, remounting, verifying
 WAV readability/content and checking that no existing recordings are
 deleted. Test battery and USB supply separately because Rev K routes
 the single-cell battery through an SS14 diode to the SuperMini 5V input.
+
+### C3 low-voltage write admission and read-only SD rescue (10 October 2026)
+
+**Evidence motivating mitigation:** production build 1922 revealed
+`wrD=0x18040000` = `CMD24 / phase 4 / post-write busy timeout` after an
+accepted data token; `wrE=5`, followed by unresponsive SD MISO. The
+contemporaneous calibrated battery was ~3.49–3.51 V, 14–15%. This
+supports, but does **not prove**, instability of the Rev K
+LiPo → Schottky → SuperMini 5V/VIN → 3V3 power path. The SD supply has
+not been measured directly. A card/controller defect remains possible.
+
+This patch follows the safety pattern of read-only recovery and
+conservative power-admission common in battery-operated data loggers:
+
+* **Boot:** sample calibrated battery before SD initialization. If weak
+  or untrustworthy, mount and validate the existing /synap directory
+  **read-only** rather than creating, flushing and deleting the temporary
+  FAT write-probe file. The VFS diagnostic `vfsStep=11` means “write
+  probe deliberately skipped”; it is **not** a mount error.
+  Existing recordings can still be listed and downloaded for recovery.
+  If /synap does not exist, firmware refuses to create it on weak power.
+* **Offline START:** require two fresh, valid battery samples at least
+  **3900 mV** each, separated by 80 ms, before any card recovery or
+  filename/file creation. This is a conservative, experimental limit,
+  not a verified SD VCC power-good threshold.
+* **While recording:** sample every ~5 s after a completed 4 KiB batch;
+  two consecutive measurements below **3800 mV** or untrustworthy
+  readings request ordinary STOP/close/checkpoint instead of another
+  uncontrolled write. Existing ten-second `fflush+fsync` checkpoints,
+  WAV header synthesis, append-only batches and SD mutex remain.
+* **Mutating media requests:** user-requested SD deletion/clear return
+  `BUSY` under the low-voltage guard rather than silently reporting
+  success; catalogue/download operations remain allowed.
+* **SD busy timeout:** after confirmed `CMD24/phase 4` or
+  `CMD25/phase 4,6,7`, skip the *automatic* rearm/reset command
+  sequence. Preserve the fault and SD sleep veto. An explicit manual
+  SD recovery, or a genuine power-off with USB absent, remains available.
+* **No format or reallocation:** data/metadata writes and electrical
+  reset cannot be guaranteed safe if an already-powered card remains
+  stuck busy. The patch does not erase files, enlarge OTA slots, or
+  change S3/Chakshu behavior.
+
+**Potential limitation:** while powered by USB, the battery voltage may
+remain below the conservative threshold even if SD 3V3 is stable.
+Because Rev K has neither a separate SD power-good sensor nor reliable
+USB-present rail sensing, the firmware intentionally remains cautious.
+This can block new offline writes/deletes until the battery is charged.
+It does **not** prove the supply is stable at 3900 mV; qualify against
+actual SD pin 3V3 under load and adjust only with measured headroom.
+A low-voltage read-only mount is still subject to FatFs mount/read errors.
+
+**Acceptance checks:** bench-test a spare Rev K board, known-good card,
+battery states 3.5/3.8/3.9/4.15 V, both with and without charger input.
+At low battery, catalogue and SD download must remain usable without
+creating a write probe or allowing deletion. At high battery, short
+and 15-minute offline recording must stop correctly and sync after
+cold restart. Capture SD1 VCC and CMD24 timing on an oscilloscope.
