@@ -260,3 +260,19 @@ test('C3 restores card protocol before retrying mount and before power loss',()=
   assert.match(transfer,/cardCmd0/);
   assert.match(transfer,/cardCmd8/);
 });
+
+test('C3 offline double-tap STOP is serviced independently of BLE and SD workers',()=>{
+  const ble=read('firmware/shared/ble-control.cpp');
+  const boot=read('firmware/shared/boot.cpp');
+  const runtime=read('firmware/shared/runtime.cpp');
+  const touch=read('firmware/shared/power.cpp');
+  const assembled=read('synap_esp32s3/synap_esp32s3.ino');
+  assert.match(boot,/#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU\s*\/\/ C3 STOP gesture/);
+  assert.match(boot,/xTaskCreate\(odysseyTouchTask,"c3-touch",4096,nullptr,4,nullptr\)/);
+  assert.match(ble,/#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU[\s\S]*?#else\s*pollTouchControl\(\);\s*#endif\s*otaTick\(\)/);
+  assert.match(ble,/void odysseyTouchTask\(void\*\) \{\s*for \(;;\) \{\s*pollTouchControl\(\);\s*vTaskDelay\(pdMS_TO_TICKS\(15\)\)/);
+  assert.match(touch,/if \(odysseyRecording.load\(\) \|\| \(!deviceConnected.load\(\) && !streamingEnabled.load\(\)\)\) \{\s*odysseyToggleRecording\(\)/);
+  assert.match(runtime,/void odysseyTouchTask\(void\* parameter\);/);
+  assert.match(assembled,/SYNAP_C3_INDEPENDENT_TOUCH_STOP/);
+  assert.doesNotMatch(ble,/odysseyStopRequested\s*=\s*true/); // BLE connect never stops local take.
+});

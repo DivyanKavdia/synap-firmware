@@ -259,6 +259,9 @@ bool batteryCritical();
 void enterDeepSleep(const char* reason);
 void powerTick();
 void pollTouchControl();
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+void odysseyTouchTask(void* parameter);
+#endif
 void updateStatusCharacteristic(bool notify);
 void updateDiagnosticsCharacteristic();
 void applyCpuPowerProfile(bool active);

@@ -295,6 +295,9 @@ bool batteryCritical();
 void enterDeepSleep(const char* reason);
 void powerTick();
 void pollTouchControl();
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+void odysseyTouchTask(void* parameter);
+#endif
 void updateStatusCharacteristic(bool notify);
 void updateDiagnosticsCharacteristic();
 void applyCpuPowerProfile(bool active);
@@ -2164,7 +2167,12 @@ void controlTask(void* parameter) {
       bleServer->startAdvertising();
     }
 #endif
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+    // C3 double-tap STOP is polled by an independent priority-4 task;
+    // BLE callbacks, command handling or media requests must not delay it.
+#else
     pollTouchControl();
+#endif
     otaTick();
 #if SYNAP_CHAKSHU
     ChakshuMedia::tick();
@@ -2174,6 +2182,19 @@ void controlTask(void* parameter) {
     updateStatusLed();
   }
 }
+
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+// SYNAP_C3_INDEPENDENT_TOUCH_STOP: one owner for all touch-state variables.
+// Higher priority than the SD recorder (2) and BLE control (3), so a slow
+// FAT fopen/fclose or an active BLE request cannot starve physical STOP.
+// The STOP signal is cooperative: it never unmounts/aborts an in-flight sector.
+void odysseyTouchTask(void*) {
+  for (;;) {
+    pollTouchControl();
+    vTaskDelay(pdMS_TO_TICKS(15));
+  }
+}
+#endif
 bool acquireAudioFrame(AudioFrame& frame) {
 #if USE_REAL_I2S_MIC
   MicrophoneGuard guard;
@@ -5045,6 +5066,11 @@ void setup() {
 #endif
   initializeBLE();
   initializeRecovery();
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  // C3 STOP gesture remains available if BLE control/media processing stalls.
+  if (xTaskCreate(odysseyTouchTask,"c3-touch",4096,nullptr,4,nullptr)!=pdPASS)
+    fatalSetup("[FATAL] C3 touch task allocation failed");
+#endif
   if (xTaskCreatePinnedToCore(controlTask, "control", 8192, nullptr, 3, nullptr, 1) != pdPASS ||
       xTaskCreatePinnedToCore(acquisitionTask, "capture", 4096, nullptr, 2, &captureTaskHandle, 0) != pdPASS ||
       xTaskCreatePinnedToCore(transmitterTask, "transmit", 8192, nullptr, 2, nullptr, 1) != pdPASS) {
