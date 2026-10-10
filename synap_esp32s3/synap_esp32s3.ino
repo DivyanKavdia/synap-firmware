@@ -261,7 +261,6 @@ bool odysseySdPowerSafe(uint16_t floorMv) {
     batteryMillivolts<=4350u;
 }
 
-
 void odysseyToggleRecording();
 bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs);
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs);
