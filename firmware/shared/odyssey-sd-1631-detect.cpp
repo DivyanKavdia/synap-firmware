@@ -666,6 +666,9 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
     return false;
   }
 
+  // Persist the field C3+SD divider only after a genuine mounted and
+  // VFS-validated SD session. This survives failed SD probes and cold boots.
+  persistOdysseySdBatteryDividerProfile();
   odysseySdLastMountError=ESP_OK;
   odysseySdBootState=1;
   odysseySdProbeStage=6;
