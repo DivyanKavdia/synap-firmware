@@ -987,3 +987,47 @@ It never triggers remount, file creation, formatting or media reset.
 The report supports comparing SD command phase against the exact pinned
 Arduino ESP32 3.3.5 driver to select a verified remedy; do not
 speculatively increase retries or change FAT content on an unproven bus.
+
+### Build 1955 driver review: delayed programming-busy handshake
+
+The published C3 build 1955 maps to source
+`df36623a16ef77621f1a6e3ded4fb9374dc77519`. Its five-second CMD24/CMD25
+waits still use Arduino's first-nonzero-byte readiness check. Immediately
+after the data-response token, the card can return an idle byte before
+asserting programming busy. Without consuming that interval, the wait can
+return early: CMD24 releases CS, or CMD25 sends the next data/STOP token,
+before observing programming completion. The same gap exists after the
+multi-block STOP token.
+
+The C3-only core patch now clocks one idle byte after the data response
+and after `0xFD`, before the existing bounded busy waits. ESP-IDF v5.5's
+`components/esp_driver_sdspi/src/sdspi_host.c` provides the reference:
+`poll_busy` waits for two nonzero observations after block data, and the
+STOP transaction explicitly sends `{0xFD, 0xFF}` before polling.
+Source: https://github.com/espressif/esp-idf/blob/v5.5/components/esp_driver_sdspi/src/sdspi_host.c
+
+The executable mock-SPI regression runs the generated CMD24 and CMD25
+driver against immediate busy and delayed `0xFF,0x00,...,0xFF` busy,
+including all eight blocks of a 4 KiB write, rejected data responses,
+permanent data busy and permanent STOP busy. It asserts that no next token,
+status command or successful deselection occurs while programming remains
+pending. Timeout and first-fault diagnostics remain intact. Applying the
+patch to the pinned upstream 3.3.5 source is idempotent.
+
+The supplied build-1955 field log verifies installation at 17:35:42 IST.
+After the offline attempt, 17:37:31 reports stage 76 (mkdir failure), zero
+PCM bytes and live mount stage 2. At 17:37:33, `wrE=5` and
+`wrD=402915328=0x18040000` identify CMD24 phase 4: a sector was accepted,
+but programming busy did not clear within five seconds. `raw0=1023`,
+`rawFF=0`, `bbHigh=0` show the subsequently held-low bus. This is distinct
+from the stage 49 history carried over immediately after OTA. The log
+also reports a POWERON reset; its physical cause is not established.
+
+This fixes a reproducible driver handshake defect in build 1955, but the
+field phase-4 timeout is NOT itself evidence of premature ready detection.
+The patch cannot promise recovery of an already held-low card, nor prove
+the card or its supply healthy. Hardware validation must
+check recording start, sustained writes, STOP, catalogue/readback and a
+second recording, retaining operation-27 diagnostics on any failure.
+The change does not format media or alter the filesystem, pinout, recorder
+batch size, clock, power policy or OTA partition layout.
