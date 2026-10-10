@@ -170,7 +170,7 @@ if (stableMultiAfter === canonicalMultiAfter) throw new Error('Expected CMD25 re
 // IDF-compatible ready polling is deliberately *not* applied to CMD24/MMC,
 // mount, read or SPI card selection.
 
-function patch(source) {
+function patchOld(source) {
   let output = source;
   if (output.includes('void sdStop(uint8_t pdrv)') && !output.includes(stopAfter)) {
     if (output.split(stopBefore).length!==2)
@@ -220,6 +220,58 @@ function patch(source) {
   return output;
 }
 
+
+const c3Single = singleAfter
+  .replace('SYNAP_SD_METADATA_CMD25: exactly one sector, then write STOP and status.',
+           'SYNAP_SD_C3_CMD24_ONLY: verified CMD24 for every FAT and audio sector.')
+  .replace('Never fall back to CMD24 after a timeout: durability is then unknown.',
+           'Never replay a sector with uncertain completion.')
+  .replace('if (s_cards[pdrv]->type == CARD_MMC)\n    return synapSdWriteMmcSector(pdrv, buffer, sector);\n  return sdWriteSectors(pdrv, buffer, sector, 1);',
+           'return synapSdWriteMmcSector(pdrv, buffer, sector);')
+  .replace('bool synapSdWriteMmcSector(uint8_t pdrv,',
+           'static bool synapSdWaitStable(uint8_t pdrv, int timeoutMs);\nbool synapSdWriteMmcSector(uint8_t pdrv,')
+  .replace('if (!sdWait(pdrv, 5000)) {','if (!synapSdWaitStable(pdrv, 5000)) {')
+  .replace('unsigned int resp;','unsigned int resp=0;')
+  .replace('if (status || resp) {\n        synapRecordSdWriteFault(24,5,0,status?uint8_t(status):uint8_t(resp));\n        return false;\n      }',
+           'if (status) {\n        synapRecordSdWriteFault(24,5,0,uint8_t(status));\n        return false;\n      }\n      if (resp) {\n        synapRecordSdWriteFault(24,6,0,uint8_t(resp));\n        return false;\n      }');
+const c3Ready = stableBusyPoll
+  .replace('SYNAP_SD_STABLE_BUSY_POLL: C3 CMD25 data and STOP programming only.',
+           'SYNAP_SD_C3_STABLE_READY: CMD24 block programming, keep CS low.')
+  .replace('uint8_t nonzero = 0;', 'uint8_t idle = 0;')
+  .replace('if (value != 0 && ++nonzero >= 2) return true;',
+           'if (value == 0xFF) { if (++idle >= 16) return true; } else idle = 0;');
+const c3Multi = `bool sdWriteSectors(uint8_t pdrv, const char *buffer, unsigned long long sector, int count) {
+  // SYNAP_SD_C3_CMD24_SECTORS: bounded CMD24 per sector, no CMD25/STOP.
+  if (count<=0) {
+    synapRecordSdWriteFault(24,9,0,0);
+    return false;
+  }
+  for (int index=0;index<count;++index) {
+    // SD sector may already be programmed on failure: do not retry.
+    if (!sdWriteSector(pdrv,buffer+size_t(index)*512u,sector+unsigned(index)))
+      return false;
+  }
+  return true;
+}`;
+
+// This wrapper leaves Arduino 3.3.5 driver matching and historic upgrades
+// unchanged, then selects the C3-only CMD24 path. No S3 target uses it.
+function patch(source) {
+  if (source.includes('SYNAP_SD_C3_CMD24_SECTORS')) return source;
+  let output=patchOld(source);
+  if (!c3Single.includes('synapSdWaitStable(pdrv, 5000)') ||
+      !c3Single.includes('SYNAP_SD_C3_CMD24_ONLY') ||
+      !c3Single.includes('synapRecordSdWriteFault(24,6') ||
+      !c3Ready.includes('idle >= 16'))
+    throw new Error('C3 CMD24 driver source rewrite mismatch');
+  if (output.split(singleAfter).length!==2 ||
+      output.split(stableBusyPoll+'\n'+stableMultiAfter).length!==2)
+    throw new Error('C3 CMD24 conversion source drift');
+  output=output.replace(singleAfter,c3Single);
+  output=output.replace(stableBusyPoll+'\n'+stableMultiAfter,c3Ready+'\n'+c3Multi);
+  return output;
+}
+
 function install(file) {
   const source = fs.readFileSync(file, 'utf8');
   const output = patch(source);
@@ -231,7 +283,7 @@ if (require.main === module) {
     throw new Error('Usage: node tools/patch-arduino-sd.cjs <esp32-3.3.5/libraries/SD/src/sd_diskio.cpp>');
   }
   install(process.argv[2]);
-  console.log('Applied pinned C3 CMD24/CMD25 write-completion fixes');
+  console.log('Applied C3-only CMD24 verified single-sector writes');
 }
 
-module.exports = { patch, install, before, after, singleAfter, multiBefore, multiAfter, faultHeader, byteBefore, byteAfter, byteTimeoutOnly, stopBefore, stopAfter };
+module.exports = { patch, patchOld, c3Single, c3Multi, c3Ready, install, before, after, singleAfter, multiBefore, multiAfter, faultHeader, byteBefore, byteAfter, byteTimeoutOnly, stopBefore, stopAfter };

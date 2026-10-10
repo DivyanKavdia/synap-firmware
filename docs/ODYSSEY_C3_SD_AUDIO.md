@@ -1113,3 +1113,45 @@ timeout and first-fault codes remain; uncertain sectors are never replayed.
 Neither change can release a card/controller physically held BUSY or fix a
 defective SD supply; physical validation of boot, 10-minute capture, STOP,
 catalogue/download and second take remains required.
+
+
+### October 10 C3-specific recovery experiment after build 1968 (PR #181)
+
+The sealed Odyssey C3 field device confirmed OTA build 1968. New, *fresh*
+offline write failures were observed in the Arduino SD SPI CMD25 path:
+
+- `wrD=0x190800FF` — CMD25 phase 8, CMD13/status response 0xFF after
+  transferring ~1,056,724 bytes of PCM (~33 seconds mono PCM16).
+- `wrD=0x19070800` — CMD25 phase 7, eight accepted sectors then STOP/busy
+  timeout, after 16,340 PCM bytes (~0.51 seconds). On a later cold boot the SD
+  successfully initialized and mounted (`sdLiveProbeState=6`) before another
+  recording failed. Captured `bbCmd0=1 bbCmd8=1 bbR7=0x1AA` values may reflect
+  boot-time recovery, **not** the post-failure card state.
+
+**C3-only remediation:** avoid CMD25 altogether: convert FatFs multi-sector
+writes to consecutive verified CMD24 writes, each 512 bytes, with card-selected
+busy completion and CMD13 before starting the next sector. 4 KiB microphone
+batches still append to the same file; no file format, SPI wiring, recorder
+checkpoint frequency or OTA partition is changed. 16 consecutive 0xFF ready
+bytes are required after each accepted block before releasing CS, to reject
+short high gaps before a later 0x00 busy period. One-sector metadata writes
+also use CMD24. On any unknown or failed sector status, return EIO immediately;
+**never replay an uncertain SD write.** Driver first-fault codes now report
+CMD24 (`0x18` high byte) with phases 3=data token rejected, 4=program busy
+timeout, 5=CMD13 R1, 6=CMD13 R2. Native tests exercise 8-sector batches and
+partial failures.
+
+The independent BLE disconnect at 21:47:18 was followed by
+`ESP_RST_POWERON` and uptime=8s on reconnect, consistent with a real reset.
+This does not prove a voltage sag, but argues for testing the switched battery
+path, EN pin and SD 3.3V regulator **in addition** to software fixes. The
+current battery-derived `cellMv` is marked unavailable, so neither a safe
+deletion voltage nor real supply voltage is established. The C3 deletion guard
+deliberately returns BUSY when the battery reading is untrusted. Do not bypass
+it or delete original recordings until physical supply is verified.
+
+PR #181 is an **untested-on-device** write-path change. Publishing a build
+confirms compilation/tests only. Before declaring the issue resolved,
+safely back up recoverable files, confirm SD mount, exercise short and
+10-minute disconnected double-tap recording, STOP/readback and a second take
+on a known-stable supply. Do not assume success from purple LEDs alone.
