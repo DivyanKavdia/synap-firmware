@@ -99,28 +99,31 @@ int main(){
 #if CONFIG_IDF_TARGET_ESP32C3
   // Standard C3 remains 2:1 while that reconstruction is physically plausible.
   assert(!odysseySdBatteryDividerPresent());
-  // The SD-equipped 1 MOhm / 470 kOhm divider produces ~1.18 V at the ADC for
-  // a healthy ~3.70 V LiPo. A 2:1 reconstruction would be an impossible 2.37 V,
-  // so firmware can identify this hardware even if the SD protocol itself fails.
-  adcMv=1184;sampleBattery(true);
+  // SD presence must be confirmed by SD.begin(), not inferred from ADC
+  // voltage: both Rev K and standard C3 are x2. This protects older builds.
+  adcMv=2051;sampleBattery(true);
+  assert(!odysseySdBatteryDividerPresent());
+  assert(batteryAvailable && batteryMillivolts==4102);
+  markOdysseySdBatteryDividerPresent();
+  adcMv=1852;sampleBattery(true);
   assert(odysseySdBatteryDividerPresent());
-  assert(batteryAvailable && batteryMillivolts==3703);
+  assert(batteryAvailable && batteryMillivolts==3704);
   assert(batteryPercentFromMillivolts(4199)==99);
   assert(batteryPercentFromMillivolts(4200)==100);
-  adcMv=1287;spike=true;sampleBattery(true);spike=false;
+  adcMv=2012;spike=true;sampleBattery(true);spike=false;
   // C3+SD robust mean removes a 300 mV transient without falsifying the
-  // factory-calibrated 1287 mV input or the 1470/470 divider.
-  assert(batteryAvailable && batteryMillivolts==4025 && batteryPercent==87);
+  // factory-calibrated 2012 mV input or the Rev K x2 divider.
+  assert(batteryAvailable && batteryMillivolts==4024 && batteryPercent==87);
   varying=true;sampleBattery(true);varying=false;
   // Alternating +/-100 mV across the *central* 12 readings is unstable;
   // preserve ADC telemetry but never publish a battery percentage.
   assert(!batteryAvailable && !batteryCritical() && batteryPercent==0);
-  adcMv=1287;sampleBattery(true);
-  assert(batteryAvailable && batteryMillivolts==4025 && batteryPercent==87);
-  // SD-equipped Odyssey C3 uses a 1 MOhm / 470 kOhm divider: Vcell=Vadc*1470/470.
-  for (const uint32_t chargingMv : {1343u,1344u,1350u,1380u}) {
+  adcMv=2012;sampleBattery(true);
+  assert(batteryAvailable && batteryMillivolts==4024 && batteryPercent==87);
+  // Charging plateau uses actual Rev K resistor ratio.
+  for (const uint32_t chargingMv : {2100u,2101u,2120u}) {
     adcMv=chargingMv;sampleBattery(true);
-    const uint32_t expected=(chargingMv*1470u+235u)/470u;
+    const uint32_t expected=chargingMv*2u;
     assert(batteryAvailable && batteryMillivolts==expected);
     assert(batteryPercent==100 && event.value[2]==100 && (event.value[3]&1));
   }
