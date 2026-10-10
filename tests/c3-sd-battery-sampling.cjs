@@ -7,9 +7,11 @@ const boot=read('firmware/shared/boot.cpp');
 const battery=read('firmware/shared/battery.cpp');
 const devices=require('../devices/catalog.json').devices;
 
-test('C3 battery is sampled after SD divider discovery, without changing S3 boot path',()=>{
- const before=boot.split('  // A C3 may be fitted with')[1].split('#if USE_REAL_I2S_MIC')[0];
+test('C3 battery is sampled before low-power SD mount and again after discovery',()=>{
+ const before=boot.split('  // Rev K C3 and the standard C3')[1].split('#if USE_REAL_I2S_MIC')[0];
  assert.match(before,/#if !CONFIG_IDF_TARGET_ESP32C3\s+sampleBattery\(true\);\s+#endif/);
+ const beforeMount=boot.split('  OdysseyTransfer::initialize();')[1].split('  odysseyInitializeSdCardBeforeBle();')[0];
+ assert.match(beforeMount,/sampleBattery\(true\);/);
  const after=boot.split('  odysseyInitializeSdCardBeforeBle();')[1].split('  initializeBLE();')[0];
  assert.match(after,/sampleBattery\(true\);/);
  const c3=devices.find(x=>x.id==='esp32c3-supermini-4m');
