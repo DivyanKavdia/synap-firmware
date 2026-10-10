@@ -84,15 +84,26 @@ test('held-busy CMD24/CMD25 failure does not trigger automatic remount',()=>{
  assert.doesNotMatch(task,/SD\.format\(|remove\(|unlink\(/);
 });
 
-test('C3 SD preserves missing recording directory after a previously failed WAV write',()=>{
- const validation=sd.split('static bool odysseySdValidateVfsLocked(')[1]
+test('C3 accepts a freshly formatted readable FAT root with missing /synap and stale recorder NVS',()=>{
+ const validate=sd.split('static bool odysseySdValidateVfsLocked(')[1]
    .split('static uint8_t odysseySdMountReasonCode')[0];
- const safeguard=validation.split('if (directoryErrno==ENOENT && odysseyLastRecordFailureBytes()>0u) {')[1]
-   .split('if (directoryErrno!=ENOENT')[0];
- assert(safeguard && safeguard.includes('odysseySdVfsStep=13'));
- assert.match(safeguard,/odysseySdVfsErrno=ENOENT/);
- assert.match(safeguard,/opendir\(ODYSSEY_SD_MOUNT_POINT\)/);
- assert.match(safeguard,/return false;/);
- assert.doesNotMatch(safeguard,/mkdir\(|unlink\(|fopen\(|SD\.format\(/);
- assert(validation.indexOf('odysseySdVfsStep=13')<validation.indexOf('mkdir(ODYSSEY_SD_RECORDING_DIR'));
+ const missing=validate.split('if (directoryErrno==ENOENT &&')[1];
+ assert(missing && missing.includes('odysseyLastRecordFailureBytes()>0u'));
+ assert.match(missing,/odysseySdVfsStep=13;odysseySdVfsErrno=ENOENT;/);
+ assert.match(missing,/return true;/);
+ assert(missing.indexOf('return true;')<missing.indexOf('mkdir(ODYSSEY_SD_RECORDING_DIR'));
+ const list=transfer.split('static uint8_t catalogue(uint32_t& total) {')[1]
+   .split('static uint8_t removeFile(')[0];
+ assert.match(list,/if \(directoryErrno==ENOENT\)/);
+ assert.match(list,/stat\(odysseySdMountPoint\(\),&root\)==0 && S_ISDIR\(root.st_mode\)/);
+ assert.match(list,/catalogueBuffer="\[\]";\s*total=2u;[\s\S]*?return OK;/);
+ assert.match(list,/catalogueErrno=directoryErrno;[\s\S]*?return IO_ERROR;/);
+ const capture=rec.split('static void odysseyRecordTake() {')[1]
+   .split('static void odysseyRecordTask(void*) {')[0];
+ assert.match(capture,/stat\(ODYSSEY_SD_RECORDING_DIR,&recordingDir\)/);
+ assert.match(capture,/!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\) \|\|\s*mkdir\(ODYSSEY_SD_RECORDING_DIR,0755\)/);
+ assert(capture.indexOf('mkdir(ODYSSEY_SD_RECORDING_DIR,0755)')<
+        capture.indexOf('file=fopen(fullPath,"wb")'));
+ const task=rec.split('static void odysseyRecordTask(void*) {')[1];
+ assert(task.indexOf('odysseySdPreflightWritePower()')<task.indexOf('odysseyRecordTake()'));
 });

@@ -2887,42 +2887,27 @@ static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
   struct stat recordings{};
   if (stat(ODYSSEY_SD_RECORDING_DIR,&recordings)!=0) {
     const int directoryErrno=errno;
-    // A previous WAV write reached the card, but the FAT directory entry
-    // may have been lost in a CMD24 metadata timeout. NEVER auto-create an
-    // apparently empty /synap over a card with known recording history.
-    // Creating a new directory would mutate FAT and obscure recovery.
-    if (directoryErrno==ENOENT && odysseyLastRecordFailureBytes()>0u) {
+    if (directoryErrno==ENOENT &&
+        (odysseyLastRecordFailureBytes()>0u ||
+         !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV))) {
+      // A FAT-formatted card is allowed to have no /synap directory.
+      // NVS recording failures belong to the MCU, not necessarily this card:
+      // the user may have replaced or reformatted it since the old failure.
+      // Keep the verified FAT root readable without any boot-time FAT write.
+      // An explicit offline recording may create /synap after power preflight.
       odysseySdVfsStep=13;odysseySdVfsErrno=ENOENT;
-      odysseySdLastMountError=ESP_FAIL;
-      odysseySdBootState=2;odysseySdProbeStage=4;
-      Serial.printf("[SD] %s /synap missing after %lu previous PCM bytes: preserve card, do not mkdir\n",
-        reason,static_cast<unsigned long>(odysseyLastRecordFailureBytes()));
-      // Read-only root inspection is diagnostic, not proof that lost FAT
-      // entries are recoverable. Limit traversal to avoid a new read storm.
-      DIR* rootEntries=opendir(ODYSSEY_SD_MOUNT_POINT);
-      if (rootEntries) {
-        for (uint8_t i=0;i<8u;++i) {
-          errno=0;
-          dirent* entry=readdir(rootEntries);
-          if (!entry) {
-            if (errno) Serial.printf("[SD] root inspect errno=%d\n",errno);
-            break;
-          }
-          Serial.printf("[SD] root entry %u: %.48s\n",unsigned(i),entry->d_name);
-        }
-        (void)closedir(rootEntries);
-      }
-      return false;
+      Serial.printf("[SD] %s FAT root readable, /synap missing; cell=%u trusted=%u oldPcmBytes=%lu; read-only empty catalogue\n",
+        reason,unsigned(batteryMillivolts),batteryAvailable.load()?1u:0u,
+        static_cast<unsigned long>(odysseyLastRecordFailureBytes()));
+      return true;
     }
     if (directoryErrno!=ENOENT || !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV) ||
         mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) {
-      const int failedErrno=directoryErrno==ENOENT && !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)
-        ? ENOENT : (errno?errno:EIO);
-      odysseySdVfsStep=2;odysseySdVfsErrno=failedErrno;
+      odysseySdVfsStep=2;odysseySdVfsErrno=errno?errno:EIO;
       odysseySdLastMountError=ESP_FAIL;
       odysseySdBootState=2;odysseySdProbeStage=4;
-      Serial.printf("[SD] %s attempt %u recording directory unavailable errno=%d\n",
-        reason,unsigned(attempt),failedErrno);
+      Serial.printf("[SD] %s attempt %u recording directory creation failed errno=%d\n",
+        reason,unsigned(attempt),int(odysseySdVfsErrno.load()));
       return false;
     }
   } else if (!S_ISDIR(recordings.st_mode)) {
@@ -3426,6 +3411,29 @@ static void odysseyRecordTake() {
   // never tear down the VFS beneath an open recording.
   OdysseySdGuard storage;
   if (!storage || !odysseySdReady()) { failed=true;failureStage=40; }
+
+  if (!failed) {
+    // Never initialize /synap at boot or during catalogue reads. A deliberate
+    // double-tap is an explicit request to record, after two safe ADC samples.
+    // This allows a freshly formatted SD to become usable without a special
+    // PWA format/setup command and keeps the SD storage mutex held.
+    struct stat recordingDir{};
+    if (stat(ODYSSEY_SD_RECORDING_DIR,&recordingDir)!=0) {
+      const int directoryErrno=errno;
+      if (directoryErrno!=ENOENT ||
+          !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV) ||
+          mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) {
+        const int savedErrno=errno?errno:EIO;
+        failed=true;failureStage=odysseyCreateFailureStage(savedErrno);
+        Serial.printf("[SD] record directory initialization failed errno=%d stage=%u\n",
+          savedErrno,unsigned(failureStage));
+      } else {
+        Serial.println("[SD] offline gesture initialized /synap directory");
+      }
+    } else if (!S_ISDIR(recordingDir.st_mode)) {
+      failed=true;failureStage=odysseyCreateFailureStage(ENOTDIR);
+    }
+  }
 
   if (!failed) {
     // Append-only recording: create a normal zero-length file and let each
@@ -4495,7 +4503,19 @@ static uint8_t catalogue(uint32_t& total) {
   }
   DIR* directory=opendir(directoryPath);
   if (!directory) {
-    catalogueErrno=errno;
+    const int directoryErrno=errno;
+    if (directoryErrno==ENOENT) {
+      // ENOENT is normal on a formatted, as-yet-uninitialized Synap card.
+      // Check the real FAT root again so mount loss is not reported as empty.
+      struct stat root{};
+      if (stat(odysseySdMountPoint(),&root)==0 && S_ISDIR(root.st_mode)) {
+        catalogueBuffer="[]";
+        total=2u;
+        Serial.println("[SD] catalogue empty: mounted FAT root, /synap not created yet");
+        return OK;
+      }
+    }
+    catalogueErrno=directoryErrno;
     Serial.printf("[SD] catalogue opendir failed errno=%d path=%s\n",catalogueErrno,directoryPath);
     return IO_ERROR;
   }

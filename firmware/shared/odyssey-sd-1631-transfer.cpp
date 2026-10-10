@@ -171,7 +171,19 @@ static uint8_t catalogue(uint32_t& total) {
   }
   DIR* directory=opendir(directoryPath);
   if (!directory) {
-    catalogueErrno=errno;
+    const int directoryErrno=errno;
+    if (directoryErrno==ENOENT) {
+      // ENOENT is normal on a formatted, as-yet-uninitialized Synap card.
+      // Check the real FAT root again so mount loss is not reported as empty.
+      struct stat root{};
+      if (stat(odysseySdMountPoint(),&root)==0 && S_ISDIR(root.st_mode)) {
+        catalogueBuffer="[]";
+        total=2u;
+        Serial.println("[SD] catalogue empty: mounted FAT root, /synap not created yet");
+        return OK;
+      }
+    }
+    catalogueErrno=directoryErrno;
     Serial.printf("[SD] catalogue opendir failed errno=%d path=%s\n",catalogueErrno,directoryPath);
     return IO_ERROR;
   }

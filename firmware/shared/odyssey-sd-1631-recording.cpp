@@ -195,6 +195,29 @@ static void odysseyRecordTake() {
   if (!storage || !odysseySdReady()) { failed=true;failureStage=40; }
 
   if (!failed) {
+    // Never initialize /synap at boot or during catalogue reads. A deliberate
+    // double-tap is an explicit request to record, after two safe ADC samples.
+    // This allows a freshly formatted SD to become usable without a special
+    // PWA format/setup command and keeps the SD storage mutex held.
+    struct stat recordingDir{};
+    if (stat(ODYSSEY_SD_RECORDING_DIR,&recordingDir)!=0) {
+      const int directoryErrno=errno;
+      if (directoryErrno!=ENOENT ||
+          !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV) ||
+          mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) {
+        const int savedErrno=errno?errno:EIO;
+        failed=true;failureStage=odysseyCreateFailureStage(savedErrno);
+        Serial.printf("[SD] record directory initialization failed errno=%d stage=%u\n",
+          savedErrno,unsigned(failureStage));
+      } else {
+        Serial.println("[SD] offline gesture initialized /synap directory");
+      }
+    } else if (!S_ISDIR(recordingDir.st_mode)) {
+      failed=true;failureStage=odysseyCreateFailureStage(ENOTDIR);
+    }
+  }
+
+  if (!failed) {
     // Append-only recording: create a normal zero-length file and let each
     // successful 4 KiB CMD25 batch extend it naturally. No preallocation means
     // STOP never needs to truncate a 32 MiB logical extent.
