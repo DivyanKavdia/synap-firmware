@@ -111,8 +111,8 @@
           "miso": 20
         },
         "sdBatteryCalibration": {
-          "batteryAdcMv": 470,
-          "batteryCellMv": 1470,
+          "batteryAdcMv": 1,
+          "batteryCellMv": 2,
           "batteryFullMv": 4200
         }
       },
