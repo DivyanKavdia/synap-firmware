@@ -87,6 +87,7 @@ static void reply(const Request& request,uint8_t error,uint32_t total=0,uint32_t
 static uint8_t selectFile(const char* path,uint32_t& total) {
   selectedPath[0]=0;
   if (!safeWavPath(path)) return BAD_COMMAND;
+  if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) return BUSY;
   OdysseySdGuard guard;
   if (!guard || !storageReady()) return NO_SD;
   char full[96];
@@ -224,6 +225,7 @@ static uint8_t removeFile(const char* path) {
 }
 
 static uint16_t clearRecordings() {
+  if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) return 0;
   OdysseySdGuard guard;
   if (!guard || !storageReady()) return 0;
   char directoryPath[96];
@@ -383,7 +385,9 @@ static void worker(void*) {
       case 17: error=removeFile(request.path); break;
       case 18:
         selectedPath[0]=0;catalogueBuffer="";
-        if(!storageReady())error=NO_SD;else total=clearRecordings();
+        if(!storageReady())error=NO_SD;
+        else if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) error=BUSY;
+        else total=clearRecordings();
         break;
       // C3 direct Wi-Fi sync control. Configuration is staged in <=60-byte BLE
       // chunks so credentials and short-lived cloud tickets never need a new
