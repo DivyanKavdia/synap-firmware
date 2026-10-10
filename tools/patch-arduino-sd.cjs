@@ -162,9 +162,7 @@ static bool synapSdWaitStable(uint8_t pdrv, int timeoutMs) {
   } while (uint32_t(millis() - started) < uint32_t(timeoutMs));
   return false;
 }`;
-const canonicalMultiAfter = multiAfter.replace(
-  'if (count <= 1) {\\n    synapRecordSdWriteFault(25,9,0,0);',
-  'if (count <= 0) {\\n    synapRecordSdWriteFault(25,9,0,0);');
+const canonicalMultiAfter = multiAfter.replace('if (count <= 1) {','if (count <= 0) {');
 const stableMultiAfter = canonicalMultiAfter.replaceAll(
   'sdWait(pdrv, 5000)', 'synapSdWaitStable(pdrv, 5000)');
 if (stableMultiAfter === canonicalMultiAfter) throw new Error('Expected CMD25 ready polls');
@@ -217,7 +215,7 @@ function patch(source) {
   if (!output.includes('SYNAP_SD_STABLE_BUSY_POLL')) {
     if (output.split(canonicalMultiAfter).length !== 2)
       throw new Error('Pinned C3 CMD25 stable-busy upgrade source drift');
-    output=output.replace(canonicalMultiAfter,stableBusyPoll+'\\n'+stableMultiAfter);
+    output=output.replace(canonicalMultiAfter,stableBusyPoll+String.fromCharCode(10)+stableMultiAfter);
   }
   return output;
 }
