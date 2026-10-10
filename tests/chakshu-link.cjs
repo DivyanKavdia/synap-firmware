@@ -128,6 +128,8 @@ test('only Chakshu extends diagnostics and uses a fixed 20 ms advertising interv
     const other=materialize(assemble(),target);
     assert.match(other,/DIAGNOSTICS_VERSION = 2/);
     assert.match(other,/uint8_t value\[48\] = \{\}/);
-    assert.doesNotMatch(other,/ChakshuLink::|setMinInterval\(32\)/);
+    assert.doesNotMatch(other,/ChakshuLink::/);
+    if(target==='esp32c3-supermini-4m')assert.match(other,/setMinInterval\(48\)/);
+    else assert.doesNotMatch(other,/setMinInterval\(32\)/);
   }
 });
