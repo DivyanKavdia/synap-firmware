@@ -111,7 +111,26 @@ const byteBefore = `char sdWriteBytes(uint8_t pdrv, const char *buffer, char tok
   card->spi->write16(crc);
   return (card->spi->transfer(0xFF) & 0x1F);
 }`;
-const byteAfter = byteBefore.replace('sdWait(pdrv, 500)', 'sdWait(pdrv, 5000)');
+const byteTimeoutOnly = byteBefore.replace('sdWait(pdrv, 500)', 'sdWait(pdrv, 5000)');
+const byteAfter = byteTimeoutOnly.replace(
+  'return (card->spi->transfer(0xFF) & 0x1F);',
+  `// SYNAP_SD_WRITE_BUSY_LATENCY: the response-to-busy interval is not
+  // programming completion. Clock its one-byte allowance before callers
+  // test ready; otherwise 0xFF,0x00,... can prematurely release CS or send
+  // the next CMD25 data token while the card is still programming.
+  const char response = card->spi->transfer(0xFF) & 0x1F;
+  card->spi->transfer(0xFF);
+  return response;`);
+
+const stopBefore = `void sdStop(uint8_t pdrv) {
+  s_cards[pdrv]->spi->write(0xFD);
+}`;
+const stopAfter = `void sdStop(uint8_t pdrv) {
+  s_cards[pdrv]->spi->write(0xFD);
+  // SYNAP_SD_STOP_BUSY_LATENCY: match ESP-IDF's {0xFD, 0xFF} stop
+  // transaction before polling busy. The first byte may still be idle.
+  s_cards[pdrv]->spi->transfer(0xFF);
+}`;
 
 // Exact pinned Arduino-ESP32 3.3.5 CMD25 source. Fail closed on core drift.
 const multiBefore = "bool sdWriteSectors(uint8_t pdrv, const char *buffer, unsigned long long sector, int count) {\n  char token;\n  const char *currentBuffer = buffer;\n  unsigned long long currentSector = sector;\n  int currentCount = count;\n  ardu_sdcard_t *card = s_cards[pdrv];\n\n  for (int f = 0; f < 3;) {\n    if (card->type != CARD_MMC) {\n      if (sdTransaction(pdrv, SET_WR_BLK_ERASE_COUNT, currentCount, NULL)) {\n        return false;\n      }\n    }\n\n    if (!sdSelectCard(pdrv)) {\n      return false;\n    }\n\n    if (!sdCommand(pdrv, WRITE_BLOCK_MULTIPLE, (card->type == CARD_SDHC) ? currentSector : currentSector << 9, NULL)) {\n      do {\n        token = sdWriteBytes(pdrv, currentBuffer, 0xFC);\n        if (token != 0x05) {\n          f++;\n          break;\n        }\n        currentBuffer += 512;\n        f = 0;\n      } while (--currentCount);\n\n      if (!sdWait(pdrv, 500)) {\n        break;\n      }\n\n      if (currentCount == 0) {\n        sdStop(pdrv);\n        sdDeselectCard(pdrv);\n\n        unsigned int resp;\n        if (sdTransaction(pdrv, SEND_STATUS, 0, &resp) || resp) {\n          return false;\n        }\n        return true;\n      } else {\n        if (sdCommand(pdrv, STOP_TRANSMISSION, 0, NULL)) {\n          break;\n        }\n\n        if (token == 0x0A) {\n          sdDeselectCard(pdrv);\n          unsigned int writtenBlocks = 0;\n          if (card->type != CARD_MMC && sdSelectCard(pdrv)) {\n            if (!sdCommand(pdrv, SEND_NUM_WR_BLOCKS, 0, NULL)) {\n              char acmdData[4];\n              if (sdReadBytes(pdrv, acmdData, 4)) {\n                writtenBlocks = acmdData[0] << 24;\n                writtenBlocks |= acmdData[1] << 16;\n                writtenBlocks |= acmdData[2] << 8;\n                writtenBlocks |= acmdData[3];\n              }\n            }\n            sdDeselectCard(pdrv);\n          }\n          currentBuffer = buffer + (writtenBlocks << 9);\n          currentSector = sector + writtenBlocks;\n          currentCount = count - writtenBlocks;\n          continue;\n        } else {\n          break;\n        }\n      }\n    } else {\n      break;\n    }\n  }\n  sdDeselectCard(pdrv);\n  return false;\n}";
@@ -119,11 +138,17 @@ const multiAfter = "bool sdWriteSectors(uint8_t pdrv, const char *buffer, unsign
 
 function patch(source) {
   let output = source;
+  if (output.includes('void sdStop(uint8_t pdrv)') && !output.includes(stopAfter)) {
+    if (output.split(stopBefore).length!==2)
+      throw new Error('Pinned Arduino SD stop token changed from 3.3.5');
+    output=output.replace(stopBefore,stopAfter);
+  }
   if (output.includes('char sdWriteBytes(uint8_t pdrv') &&
       !output.includes(byteAfter)) {
-    if (output.split(byteBefore).length!==2)
+    const previous=output.includes(byteTimeoutOnly)?byteTimeoutOnly:byteBefore;
+    if (output.split(previous).length!==2)
       throw new Error('Pinned Arduino SD data block busy timeout changed from 3.3.5');
-    output=output.replace(byteBefore,byteAfter);
+    output=output.replace(previous,byteAfter);
   }
   if (!output.includes('SYNAP_SD_CMD24_BUSY_FIX')) {
     if (output.split(before).length !== 2) {
@@ -160,4 +185,4 @@ if (require.main === module) {
   console.log('Applied pinned C3 CMD24/CMD25 write-completion fixes');
 }
 
-module.exports = { patch, install, before, after, multiBefore, multiAfter, faultHeader, byteBefore, byteAfter };
+module.exports = { patch, install, before, after, multiBefore, multiAfter, faultHeader, byteBefore, byteAfter, byteTimeoutOnly, stopBefore, stopAfter };
