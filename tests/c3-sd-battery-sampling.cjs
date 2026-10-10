@@ -26,7 +26,7 @@ test('C3+SD battery sampling removes spikes but not a systematic overvoltage',()
  assert.match(battery,/uint16_t mvSamples\[16\];/);
  assert.match(battery,/for \(uint8_t i=2;i<14;\+\+i\) centralTotal\+=mvSamples\[i\];/);
  assert.match(battery,/adcMv=\(centralTotal\+6u\)\/12u;/);
- assert.match(battery,/adcUnstable=!adcPadFloating \\|\\| centralSpread>120u \\|\\| adcRaw>=4090u;/);
+ assert.match(battery,/adcUnstable=!adcPadFloating \|\| centralSpread>120u \|\| adcRaw>=4090u;/);
  assert.match(battery,/if \(!adcUnstable && cellMv>=2800u && cellMv<=4350u\)/);
  assert.match(battery,/batteryCellMillivoltsFromAdc\(adcMv\)/);
  assert.doesNotMatch(battery,/4200u\*adcMv\/1425|adcMv\*1343u\/1425u/);
