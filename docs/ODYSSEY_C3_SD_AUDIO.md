@@ -935,3 +935,30 @@ and power/ground, and inspect for unintended electrical bias.
 BLE disconnected while app visible after ~66s; next diagnostics reported
 POWERON reset. That is separate from ADC recovery and should be
 investigated for physical switch/supply resets and peripheral instability.
+
+### Explicit offline SD writing diagnostic: post-1948 (10 October 2026)
+
+For this field C3+SD board, 1948 reports a successfully mounted FAT volume
+(`sdDetectionState=1`, `sdLiveProbeState=6`) but an explicit disconnected
+double-tap aborts before attempting `fopen` or `fwrite`. The C3-local
+recorder now executes the actual write path for **only an explicit
+disconnected double-tap**. This isolates whether card + SPI + FAT + microphone
+can save user audio, independently of battery percentage/ADC telemetry.
+
+After mount proof and mutex ownership, a fresh FAT card gets `/synap`
+initialized, the take appends 4KiB WAV batches, performs 10s `fsync`
+checkpoints, closes on STOP, and reads back the closed WAV header and size.
+A readback/stat failure is a persisted stage 74/75; full success logs
+`[SD] WAV VERIFIED` and clears the prior NVS fault. The PWA retains
+its existing catalogue, chunked BLE reads, sync, and deletion safeguards.
+Other tasks and boot must not create files or clear media automatically.
+CMD24/25 busy errors continue to suppress unsafe immediate recovery and
+deep sleep, and recording owns the SD mutex.
+
+**Power/data-integrity limitation:** a valid FAT mount is not a measurement
+of the SD regulator's 3.3V rail. This is an explicit-user experimental
+recording path, not automatic background writes. Confirm the device has
+a stable external power source, start with a short test, and verify the WAV
+on the PWA before relying on long recordings. Voltage-based recorder gating
+is intentionally not exercised in this diagnostic branch. The normal
+PWA battery telemetry and unrelated firmware power features are unchanged.

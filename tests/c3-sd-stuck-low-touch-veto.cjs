@@ -37,11 +37,12 @@ test('C3 offline touch aborts safely before remount when MISO is stuck low',()=>
   const task=recording.split('static void odysseyRecordTask(void*) {')[1]
     .split('bool odysseyPrepareForConnectedStreaming')[0];
   assert(task);
-  const voltage=task.indexOf('odysseySdPreflightWritePower()');
   const stuck=task.indexOf('if (!odysseySdReady() && odysseySdBusStuckLow())');
   const recover=task.indexOf('odysseyRecoverSdCard("touch")');
   const record=task.indexOf('odysseyRecordTake();');
-  assert(voltage>=0 && stuck>voltage && recover>stuck && record>recover);
+  // Stuck-low SD must veto recovery before any WAV capture or file creation.
+  assert(stuck>=0 && recover>stuck && record>recover);
+  assert.doesNotMatch(task,/odysseySdPreflightWritePower/);
   const veto=task.slice(stuck,recover);
   for(const fragment of [
     'odysseyRecording=false;',

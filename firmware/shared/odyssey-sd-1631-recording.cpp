@@ -148,22 +148,10 @@ static uint8_t odysseyCheckpointWav(FILE* file,int& savedErrno) {
   return 0;
 }
 
-// Do not trust a single high ADC outlier; two consecutive fresh readings
-// must be valid and above the start threshold before any SD recovery/write.
-static bool odysseySdPreflightWritePower() {
-  sampleBattery(true);
-  const bool first=odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV);
-  vTaskDelay(pdMS_TO_TICKS(80));
-  sampleBattery(true);
-  const bool second=odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV);
-  if (!first || !second) {
-    Serial.printf("[SD] offline write blocked: low/untrusted supply cell=%u available=%u threshold=%u\n",
-      unsigned(batteryMillivolts),batteryAvailable.load()?1u:0u,
-      unsigned(ODYSSEY_SD_WRITE_START_MIN_MV));
-  }
-  return first && second;
-}
-
+// Explicit disconnected double-tap is the sole entry to this recorder.
+// The mounted FAT root, the storage mutex and each actual write determine
+// success. Do not block an actual SD I/O test on unrelated ADC telemetry.
+// Always reject stuck-low MISO, mount failure, short writes and sync errors.
 static void odysseyRecordTake() {
   synapSdClearWriteFaultCode();
   odysseyPersistedDriverFault=0;
@@ -176,8 +164,7 @@ static void odysseyRecordTake() {
   uint32_t bytes=0;
   uint32_t lastCheckpointAt=millis();
   uint32_t checkpointedPcmBytes=0;
-  uint32_t lastPowerSampleAt=millis();
-  uint8_t weakPowerSamples=0;
+  // Recorder progress is determined by SD write results, not ADC telemetry.
   char logicalPath[64]{};
   char fullPath[96]{};
   uint8_t header[44];
@@ -195,15 +182,12 @@ static void odysseyRecordTake() {
   if (!storage || !odysseySdReady()) { failed=true;failureStage=40; }
 
   if (!failed) {
-    // Never initialize /synap at boot or during catalogue reads. A deliberate
-    // double-tap is an explicit request to record, after two safe ADC samples.
-    // This allows a freshly formatted SD to become usable without a special
-    // PWA format/setup command and keeps the SD storage mutex held.
+    // This folder is initialized only by an explicit disconnected double-tap,
+    // never by mounting, listing or boot-time probes; mutex remains owned.
     struct stat recordingDir{};
     if (stat(ODYSSEY_SD_RECORDING_DIR,&recordingDir)!=0) {
       const int directoryErrno=errno;
       if (directoryErrno!=ENOENT ||
-          !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV) ||
           mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) {
         const int savedErrno=errno?errno:EIO;
         failed=true;failureStage=odysseyCreateFailureStage(savedErrno);
@@ -295,20 +279,8 @@ static void odysseyRecordTake() {
           bytes+=batchPcmBytes;
           batchUsed=0;
           batchPcmBytes=0;
-          // Recheck Rev K battery while the SD is active; two weak/invalid
-          // consecutive samples trigger an orderly STOP before further PCM.
-          if (uint32_t(millis()-lastPowerSampleAt)>=5000u) {
-            sampleBattery(true);
-            lastPowerSampleAt=millis();
-            if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_CONTINUE_MIN_MV)) {
-              if (weakPowerSamples<2) ++weakPowerSamples;
-            } else weakPowerSamples=0;
-            if (weakPowerSamples>=2) {
-              Serial.printf("[SD] stopping offline take: voltage no longer safe cell=%u available=%u\n",
-                unsigned(batteryMillivolts),batteryAvailable.load()?1u:0u);
-              odysseyStopRequested=true;
-            }
-          }
+          // This is an explicit SD write test: trust the actual complete
+          // 4KiB batch result, not uncalibrated battery ADC readings.
           // Only checkpoint on a complete batch. FAT's file length is not
           // guaranteed durable until f_sync; a power cut may lose all data
           // since the previous successful checkpoint.
@@ -383,6 +355,42 @@ static void odysseyRecordTake() {
   }
 
   if (!failed && bytes==0) failureStage=48;
+  // A successful fwrite/fclose is not proof of persisted FAT data. Re-open
+  // the closed WAV and read the physical on-card RIFF header. The PWA will
+  // synthesize logical RIFF/data lengths from st_size during BLE sync.
+  if (!failed && bytes) {
+    struct stat persisted{};
+    errno=0;
+    if (!fullPath[0] || stat(fullPath,&persisted)!=0 ||
+        !S_ISREG(persisted.st_mode) ||
+        persisted.st_size<44 ||
+        uint64_t(persisted.st_size)<uint64_t(44u)+bytes) {
+      failed=true;failureStage=74;
+      odysseyPersistedWriteErrno=errno?uint32_t(errno):uint32_t(EIO);
+      Serial.printf("[SD] WAV verify stat failed errno=%d pcm=%lu\n",
+        int(odysseyPersistedWriteErrno.load()),static_cast<unsigned long>(bytes));
+    } else {
+      errno=0;
+      FILE* verify=fopen(fullPath,"rb");
+      uint8_t headerReadback[44]{};
+      const size_t got=verify?fread(headerReadback,1,sizeof(headerReadback),verify):0;
+      const int readErrno=errno;
+      const bool closeOk=verify && fclose(verify)==0;
+      if (got!=sizeof(headerReadback) || !closeOk ||
+          memcmp(headerReadback,"RIFF",4)!=0 ||
+          memcmp(headerReadback+8,"WAVEfmt ",8)!=0 ||
+          memcmp(headerReadback+36,"data",4)!=0) {
+        failed=true;failureStage=75;
+        odysseyPersistedWriteErrno=readErrno>0?uint32_t(readErrno):uint32_t(EIO);
+        Serial.printf("[SD] WAV verify readback failed errno=%d got=%u\n",
+          int(odysseyPersistedWriteErrno.load()),unsigned(got));
+      } else {
+        Serial.printf("[SD] WAV VERIFIED logical=%s fileBytes=%llu pcm=%lu\n",
+          logicalPath,static_cast<unsigned long long>(persisted.st_size),
+          static_cast<unsigned long>(bytes));
+      }
+    }
+  }
   Serial.printf("[SD] local audio %s: %s, %lu committed PCM bytes stage=%u%s\n",
     failed?"failed":"saved",logicalPath,static_cast<unsigned long>(bytes),
     unsigned(failureStage),failed?" (mount retained for recovery)":"");
@@ -403,20 +411,8 @@ static void odysseyRecordTake() {
 // FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
 // function first so SD and microphone guards release their mutexes.
 static void odysseyRecordTask(void*) {
-  // An unsafe supply must not provoke a disk remount or the very first
-  // CMD24/FAT metadata write. Keep healthy SD files readable from the PWA.
-  if (!odysseySdPreflightWritePower()) {
-    odysseyRecordFaultAt=millis();
-    const uint32_t finalizedAt=millis();
-    odysseySdSleepGuardUntil=finalizedAt+5000u;
-    disconnectedAt=finalizedAt;
-    odysseyRecording=false;
-    odysseyStopRequested=false;
-    applyCpuPowerProfile(false);
-    updateStatusLed(true);
-    vTaskDelete(nullptr);
-    return;
-  }
+  // The user's explicit offline gesture owns this attempt. Actual card
+  // readiness and I/O failures are checked below; no ADC admission gate.
   // One physical double-tap owns recovery + recording. If the previous take
   // left storage unavailable, recover it here after leaving the touch/control
   // task rather than forcing the user to perform a separate recovery gesture.
@@ -466,8 +462,7 @@ static void odysseyRecordTask(void*) {
   const bool stuckBusyWrite=
     (driverCommand==24u && driverPhase==4u) ||
     (driverCommand==25u && (driverPhase==4u || driverPhase==6u || driverPhase==7u));
-  if (!odysseySdReady() && odysseyLastRecordFailureStage() && !stuckBusyWrite &&
-      odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) {
+  if (!odysseySdReady() && odysseyLastRecordFailureStage() && !stuckBusyWrite) {
     Serial.println("[SD] post-record failure: re-arming storage for next take");
     (void)odysseyRecoverSdCard("rearm");
   } else if (!odysseySdReady() && stuckBusyWrite) {
@@ -520,7 +515,7 @@ void odysseyToggleRecording() {
     return;
   }
   if (deviceConnected.load() || streamingEnabled.load() || OdysseyWifi::busy() ||
-      otaBusy() || sleepPending || batteryCritical()) return;
+      otaBusy() || sleepPending) return;
   if (!odysseySdReady()) {
     Serial.println("[TOUCH] SD unavailable; recording task will recover before capture");
   }
