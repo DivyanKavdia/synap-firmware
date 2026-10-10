@@ -295,6 +295,9 @@ bool batteryCritical();
 void enterDeepSleep(const char* reason);
 void powerTick();
 void pollTouchControl();
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+void odysseyTouchTask(void* parameter);
+#endif
 void updateStatusCharacteristic(bool notify);
 void updateDiagnosticsCharacteristic();
 void applyCpuPowerProfile(bool active);
@@ -2164,7 +2167,11 @@ void controlTask(void* parameter) {
       bleServer->startAdvertising();
     }
 #endif
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+    // C3 physical STOP runs independently of BLE control and media I/O.
+#else
     pollTouchControl();
+#endif
     otaTick();
 #if SYNAP_CHAKSHU
     ChakshuMedia::tick();
@@ -2174,6 +2181,15 @@ void controlTask(void* parameter) {
     updateStatusLed();
   }
 }
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+// SYNAP_C3_INDEPENDENT_TOUCH_STOP: one priority-4 touch state owner.
+void odysseyTouchTask(void*) {
+  for (;;) {
+    pollTouchControl();
+    vTaskDelay(pdMS_TO_TICKS(15));
+  }
+}
+#endif
 bool acquireAudioFrame(AudioFrame& frame) {
 #if USE_REAL_I2S_MIC
   MicrophoneGuard guard;
@@ -5050,6 +5066,11 @@ void setup() {
       xTaskCreatePinnedToCore(transmitterTask, "transmit", 8192, nullptr, 2, nullptr, 1) != pdPASS) {
     fatalSetup("[FATAL] task allocation failed");
   }
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  // C3 STOP gesture remains available if BLE control/media processing stalls.
+  if (xTaskCreate(odysseyTouchTask,"c3-touch",4096,nullptr,4,nullptr)!=pdPASS)
+    fatalSetup("[FATAL] C3 touch task allocation failed");
+#endif
 }
 void loop() {
 #if defined(CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE) && CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
