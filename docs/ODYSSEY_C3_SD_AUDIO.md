@@ -887,3 +887,27 @@ Explicit user-initiated recovery is unchanged. This does **not** rebuild
 a missing FAT directory or recover orphaned data; such recovery
 requires a read-only sector-level image or validated offline repair on
 a spare card. Never automatically format or clear a card in this state.
+
+### Build 1941 regression fix: a formatted SD has no /synap (10 October 2026)
+
+The C3 host mounted the FAT card and verified its root but refused to publish
+SD readiness when `/synap` was absent and persisted NVS history reported an
+older WAV write failure (build 1941 `vfsStep=13`). The retained 2040 KiB was
+not evidence about the identity/content of the **currently inserted** SD:
+the user had physically formatted the card. Independently, an untrusted
+battery measurement blocked automatic `mkdir`. Neither condition means the
+mounted FAT volume is unreadable.
+
+Corrected behavior: after validating the FAT root, `/synap` absent
+(ENOENT) with historical recorder bytes or untrusted battery returns a
+readable, successfully mounted **root-only mode** (diagnostic
+`vfsStep=13`); catalogue returns `[]` after rechecking the FAT root.
+Other directory I/O errors continue to fail. No background, catalogue,
+or boot-time FAT metadata write occurs in this mode.
+
+A disconnected explicit double-tap can initialize `/synap` under the
+recording mutex after two fresh safe battery samples, then create the
+append-only WAV. With the currently anomalous ADC (reported 2.2–2.7 V
+at GPIO1 instead of multimeter ~1.34 V), write admission remains blocked.
+Do not bypass the 3900/3800 mV gates to claim recording fixed. No SD
+format, no NVS reset, no partition change, no changes to S3/Chakshu.
