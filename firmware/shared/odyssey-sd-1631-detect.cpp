@@ -544,17 +544,22 @@ static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
     return false;
   }
   errno=0;
-  const bool writeOk=fputc('S',probe)!=EOF && fflush(probe)==0;
-  const int writeErrno=writeOk?0:errno;
+  const bool byteWritten=fputc('S',probe)!=EOF;
+  const int byteErrno=byteWritten?0:errno;
+  errno=0;
+  const bool flushed=byteWritten && fflush(probe)==0;
+  const int flushErrno=flushed?0:errno;
   errno=0;
   const bool closeOk=fclose(probe)==0;
   const int closeErrno=closeOk?0:errno;
   errno=0;
   const bool removeOk=unlink(probePath)==0;
   const int removeErrno=removeOk?0:errno;
-  if (!writeOk || !closeOk || !removeOk) {
-    const uint8_t failedStep=!writeOk?7:!closeOk?8:9;
-    const int failedErrno=!writeOk?writeErrno:!closeOk?closeErrno:removeErrno;
+  if (!byteWritten || !flushed || !closeOk || !removeOk) {
+    // Step 7 = fputc, step 12 = fflush. A successful fputc can still
+    // conceal a failed SD block program until the buffered FAT flush.
+    const uint8_t failedStep=!byteWritten?7:!flushed?12:!closeOk?8:9;
+    const int failedErrno=!byteWritten?byteErrno:!flushed?flushErrno:!closeOk?closeErrno:removeErrno;
     odysseySdVfsStep=failedStep;odysseySdVfsErrno=failedErrno?failedErrno:EIO;
     odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=4;
@@ -740,6 +745,36 @@ bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
     odysseySdUnsafeToSleep=true;
     return false;
   }
+  return true;
+}
+// A committed OTA has already selected its validated boot partition.
+// Unlike deep sleep, a *historical* SD failure must not strand this boot.
+// Hold the same SD mutex; never restart across an open recording or a mounted
+// card that fails the existing CMD13/quiesce check.
+bool odysseyPrepareSdForCommittedOtaRestart(uint32_t timeoutMs) {
+  OdysseySdGuard guard(pdMS_TO_TICKS(timeoutMs));
+  if (!guard || odysseyRecording.load()) {
+    Serial.println("[OTA] restart deferred: live SD transaction");
+    return false;
+  }
+  const bool ready=odysseySdReady();
+  const uint8_t previous=odysseySdBootState.load();
+  if (!ready) {
+    // Boot/media probe already declared VFS/SD unavailable, so there is no
+    // application-owned open file. Ignore the persisted sleep veto ONLY here.
+    odysseySdReleaseLocked();
+    Serial.printf("[OTA] restart permitted with unmounted SD previousState=%u unsafe=%u\n",
+      unsigned(previous),odysseySdUnsafeToSleep.load()?1u:0u);
+    return true;
+  }
+  const uint8_t idle=odysseySdQuiesceLocked(ODYSSEY_SD_QUIESCE_BUDGET_MS);
+  odysseySdReleaseLocked();
+  if (idle!=1) {
+    odysseySdUnsafeToSleep=true;
+    Serial.println("[OTA] restart deferred: mounted SD failed quiesce");
+    return false;
+  }
+  Serial.println("[OTA] restart permitted: mounted SD quiesced");
   return true;
 }
 #else
