@@ -109,6 +109,12 @@ function patch(source) {
     }
     output = output.replace(before, faultHeader + after);
   }
+  if (output.includes('SYNAP_SD_CMD24_BUSY_FIX') &&
+      !output.includes('extern "C" uint32_t synapSdWriteFaultCode()')) {
+    const anchor='bool sdWriteSector(uint8_t pdrv,';
+    if (output.split(anchor).length !== 2) throw new Error('C3 SD trace insertion ambiguous');
+    output=output.replace(anchor,faultHeader+anchor);
+  }
   if (!output.includes('SYNAP_SD_CMD25_BUSY_FIX')) {
     if (output.split(multiBefore).length !== 2) {
       throw new Error('Pinned Arduino SD CMD25 patch no longer matches ESP32 core 3.3.5');
