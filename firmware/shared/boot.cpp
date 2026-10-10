@@ -168,6 +168,11 @@ void setup() {
       xTaskCreatePinnedToCore(transmitterTask, "transmit", 8192, nullptr, 2, nullptr, 1) != pdPASS) {
     fatalSetup("[FATAL] task allocation failed");
   }
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  // C3 STOP gesture remains available if BLE control/media processing stalls.
+  if (xTaskCreate(odysseyTouchTask,"c3-touch",4096,nullptr,4,nullptr)!=pdPASS)
+    fatalSetup("[FATAL] C3 touch task allocation failed");
+#endif
 }
 void loop() {
 #if defined(CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE) && CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
