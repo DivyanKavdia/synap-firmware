@@ -1,10 +1,10 @@
 'use strict';
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {patch,before,after,multiBefore,multiAfter}=require('../tools/patch-arduino-sd.cjs');
+const {patch,before,after,multiBefore,multiAfter,faultHeader,byteBefore,byteAfter}=require('../tools/patch-arduino-sd.cjs');
 
 test('pinned Arduino 3.3.5 CMD24 patch waits for programming before deselect',()=>{
-  const source='prefix\n'+before+'\n'+multiBefore+'\nsuffix';
+  const source='prefix\n'+byteBefore+'\n'+before+'\n'+multiBefore+'\nsuffix';
   const out=patch(source);
   assert.match(out,/SYNAP_SD_CMD24_BUSY_FIX/);
   assert.match(out,/token != 0x05/);
@@ -16,11 +16,13 @@ test('pinned Arduino 3.3.5 CMD24 patch waits for programming before deselect',()
 });
 
 test('both pinned C3 write patches are idempotent and fail closed on core drift',()=>{
-  const original=before+'\n'+multiBefore;
+  const original=byteBefore+'\n'+before+'\n'+multiBefore;
   const once=patch(original);
   assert.equal(patch(once),once);
-  assert.equal(patch(after+'\n'+multiBefore),after+'\n'+multiAfter);
-  assert.equal(patch(before+'\n'+multiAfter),after+'\n'+multiAfter);
+  assert(once.includes(byteAfter),'both write paths use 5 second bounded waits');
+  assert(once.includes(faultHeader),'exports first driver fault to recorder');
+  assert(patch(after+'\n'+multiBefore).includes(faultHeader));
+  assert(patch(before+'\n'+multiAfter).includes(faultHeader));
   assert.throws(()=>patch('bool sdWriteSector(){}'),/3\.3\.5/);
   assert.throws(()=>patch(before+'\n'+multiBefore.replace('sdStop(pdrv);','sdStopChanged(pdrv);')),
     /CMD25.*3\.3\.5/);
@@ -38,4 +40,13 @@ test('C3 CMD25 completes programming before raising CS, does not send CMD12 on w
     multi.indexOf('sdTransaction(pdrv, SEND_STATUS'), 'status follows completed STOP');
   assert.match(multi,/if \(!accepted \|\| currentCount != 0\) \{[\s\S]*?return false;/);
   assert.doesNotMatch(multi,/for \(int f = 0; f < 3/,'never replay partially accepted blocks');
+});
+
+test('driver patch preserves first sector/token/phase diagnostic without changing SD read driver',()=>{
+  const src=patch(byteBefore+'\n'+before+'\n'+multiBefore);
+  for(const fragment of ['synapSdWriteFaultCode','synapSdClearWriteFaultCode','synapRecordSdWriteFault(25,4','synapRecordSdWriteFault(25,5','synapRecordSdWriteFault(25,7','synapRecordSdWriteFault(24,5']) {
+    assert(src.includes(fragment),fragment);
+  }
+  assert(!src.includes('STOP_TRANSMISSION, 0, NULL'));
+  assert.match(src,/char sdWriteBytes[\s\S]*?sdWait\(pdrv, 5000\)/);
 });
