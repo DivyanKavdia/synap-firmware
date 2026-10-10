@@ -124,3 +124,14 @@ test('C3 accepts a freshly formatted readable FAT root with missing /synap and s
  const task=rec.split('static void odysseyRecordTask(void*) {')[1];
  assert(task.indexOf('odysseySdBusStuckLow()')<task.indexOf('odysseyRecordTake()'));
 });
+
+test('power-loss boot policy: fresh C3 POWERON tries mount before raw SD protocol re-arm',()=>{
+ const bootFn=sd.split('bool odysseyInitializeSdCardBeforeBle() {')[1].split('bool odysseyRecoverSdCard(')[0];
+ assert.match(bootFn,/previousStorageFault/);
+ assert.match(bootFn,/bootResetReason!=ESP_RST_POWERON/);
+ assert.match(bootFn,/odysseySdBitBangRecoverLocked\("rearm"\)/);
+ assert.match(bootFn,/odysseySdMountLocked\("boot",ODYSSEY_SD_BOOT_ATTEMPTS\)/);
+ assert(bootFn.indexOf('bootResetReason!=ESP_RST_POWERON')<bootFn.indexOf('odysseySdBitBangRecoverLocked("rearm")'));
+ assert.match(sd,/if \(!mounted\) \{[\s\S]*?odysseySdBitBangRecoverLocked\(reason\)/);
+ assert.doesNotMatch(bootFn,/SD\.format\(|formatIfMountFailed/);
+});
