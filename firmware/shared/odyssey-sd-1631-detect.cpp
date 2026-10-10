@@ -496,7 +496,8 @@ static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
   }
   struct stat recordings{};
   if (stat(ODYSSEY_SD_RECORDING_DIR,&recordings)!=0) {
-    if (errno!=ENOENT || mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) {
+    if (errno!=ENOENT || !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV) ||
+        mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) {
       odysseySdVfsStep=2;odysseySdVfsErrno=errno?errno:EIO;
       odysseySdLastMountError=ESP_FAIL;
       odysseySdBootState=2;odysseySdProbeStage=4;
@@ -532,6 +533,16 @@ static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
     return false;
   }
 
+  // On a weak or untrusted battery, do NOT create/truncate the temporary
+  // FAT file: doing so can itself issue the failing CMD24 metadata write.
+  // The mounted directory is still available for read-only catalogue/sync.
+  // All destructive media operations and offline recording use the same gate.
+  if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) {
+    odysseySdVfsStep=11;odysseySdVfsErrno=0; // readable, write-probe skipped
+    Serial.printf("[SD] %s battery/read-only mount: no FAT write probe, cell=%u available=%u\n",
+      reason,unsigned(batteryMillivolts),batteryAvailable.load()?1u:0u);
+    return true;
+  }
   const char* probePath="/odyssey-sd/synap/.synap-media-probe.tmp";
   FILE* probe=fopen(probePath,"wb");
   if (!probe) {

@@ -148,6 +148,22 @@ static uint8_t odysseyCheckpointWav(FILE* file,int& savedErrno) {
   return 0;
 }
 
+// Do not trust a single high ADC outlier; two consecutive fresh readings
+// must be valid and above the start threshold before any SD recovery/write.
+static bool odysseySdPreflightWritePower() {
+  sampleBattery(true);
+  const bool first=odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV);
+  vTaskDelay(pdMS_TO_TICKS(80));
+  sampleBattery(true);
+  const bool second=odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV);
+  if (!first || !second) {
+    Serial.printf("[SD] offline write blocked: low/untrusted supply cell=%u available=%u threshold=%u\n",
+      unsigned(batteryMillivolts),batteryAvailable.load()?1u:0u,
+      unsigned(ODYSSEY_SD_WRITE_START_MIN_MV));
+  }
+  return first && second;
+}
+
 static void odysseyRecordTake() {
   synapSdClearWriteFaultCode();
   odysseyPersistedDriverFault=0;
@@ -160,6 +176,8 @@ static void odysseyRecordTake() {
   uint32_t bytes=0;
   uint32_t lastCheckpointAt=millis();
   uint32_t checkpointedPcmBytes=0;
+  uint32_t lastPowerSampleAt=millis();
+  uint8_t weakPowerSamples=0;
   char logicalPath[64]{};
   char fullPath[96]{};
   uint8_t header[44];
@@ -254,6 +272,20 @@ static void odysseyRecordTake() {
           bytes+=batchPcmBytes;
           batchUsed=0;
           batchPcmBytes=0;
+          // Recheck Rev K battery while the SD is active; two weak/invalid
+          // consecutive samples trigger an orderly STOP before further PCM.
+          if (uint32_t(millis()-lastPowerSampleAt)>=5000u) {
+            sampleBattery(true);
+            lastPowerSampleAt=millis();
+            if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_CONTINUE_MIN_MV)) {
+              if (weakPowerSamples<2) ++weakPowerSamples;
+            } else weakPowerSamples=0;
+            if (weakPowerSamples>=2) {
+              Serial.printf("[SD] stopping offline take: voltage no longer safe cell=%u available=%u\n",
+                unsigned(batteryMillivolts),batteryAvailable.load()?1u:0u);
+              odysseyStopRequested=true;
+            }
+          }
           // Only checkpoint on a complete batch. FAT's file length is not
           // guaranteed durable until f_sync; a power cut may lose all data
           // since the previous successful checkpoint.
@@ -348,6 +380,20 @@ static void odysseyRecordTake() {
 // FreeRTOS self-deletion skips C++ stack unwinding; return from a separate
 // function first so SD and microphone guards release their mutexes.
 static void odysseyRecordTask(void*) {
+  // An unsafe supply must not provoke a disk remount or the very first
+  // CMD24/FAT metadata write. Keep healthy SD files readable from the PWA.
+  if (!odysseySdPreflightWritePower()) {
+    odysseyRecordFaultAt=millis();
+    const uint32_t finalizedAt=millis();
+    odysseySdSleepGuardUntil=finalizedAt+5000u;
+    disconnectedAt=finalizedAt;
+    odysseyRecording=false;
+    odysseyStopRequested=false;
+    applyCpuPowerProfile(false);
+    updateStatusLed(true);
+    vTaskDelete(nullptr);
+    return;
+  }
   // One physical double-tap owns recovery + recording. If the previous take
   // left storage unavailable, recover it here after leaving the touch/control
   // task rather than forcing the user to perform a separate recovery gesture.
@@ -375,9 +421,22 @@ static void odysseyRecordTask(void*) {
   // A disk error marks the live mount unavailable. The take's guard has
   // unwound at this point, so perform one bounded re-arm before returning to
   // idle. Preserve the recorder failure stage/bytes for diagnostics.
-  if (!odysseySdReady() && odysseyLastRecordFailureStage()) {
+  const uint32_t driverFault=odysseyLastDriverWriteFault();
+  const uint8_t driverCommand=uint8_t(driverFault>>24);
+  const uint8_t driverPhase=uint8_t(driverFault>>16);
+  const bool stuckBusyWrite=
+    (driverCommand==24u && driverPhase==4u) ||
+    (driverCommand==25u && (driverPhase==4u || driverPhase==6u || driverPhase==7u));
+  if (!odysseySdReady() && odysseyLastRecordFailureStage() && !stuckBusyWrite &&
+      odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) {
     Serial.println("[SD] post-record failure: re-arming storage for next take");
     (void)odysseyRecoverSdCard("rearm");
+  } else if (!odysseySdReady() && stuckBusyWrite) {
+    // A card held busy after accepting a sector must NOT be hammered with
+    // CMD0/CMD12/repeated SD.begin while it still has power.
+    odysseySdUnsafeToSleep=true;
+    Serial.printf("[SD] held-busy write fault 0x%08lx; suppress auto rearm until power-cycle\n",
+      static_cast<unsigned long>(driverFault));
   }
   // An unresolved write/close failure could leave an always-powered SD card
   // inside CMD25 programming. Never allow a later idle timeout or user hold
