@@ -63,23 +63,37 @@ test('destructive media operations require safe supply; user never sees successf
  assert.doesNotMatch(transfer,/SD\.format\(/);
 });
 
-test('offline write admission has two fresh readings; running recording stops at low voltage',()=>{
- const preflight=rec.split('static bool odysseySdPreflightWritePower() {')[1].split('static void odysseyRecordTake()')[0];
- assert.equal((preflight.match(/sampleBattery\(true\)/g)||[]).length,2);
- assert.match(preflight,/vTaskDelay\(pdMS_TO_TICKS\(80\)\)/);
- assert.match(preflight,/return first && second;/);
- const recordTask=rec.split('static void odysseyRecordTask(void\*) {')[1].split('bool odysseyPrepareForConnectedStreaming')[0];
- assert(recordTask.indexOf('odysseySdPreflightWritePower()')<recordTask.indexOf('odysseyRecoverSdCard("touch")'));
- assert.match(rec,/if \(uint32_t\(millis\(\)-lastPowerSampleAt\)>=5000u\)/);
- assert.match(rec,/if \(weakPowerSamples>=2\) \{[\s\S]*?odysseyStopRequested=true;/);
- assert.match(rec,/odysseyCheckpointWav\(file,checkpointErrno\)/);
+test('offline gesture reaches real C3 SD writes and verifies WAV after fclose',()=>{
+ const task=rec.split('static void odysseyRecordTask(void*) {')[1]
+    .split('bool odysseyPrepareForConnectedStreaming')[0];
+ const take=rec.split('static void odysseyRecordTake() {')[1]
+    .split('static void odysseyRecordTask(void*) {')[0];
+ assert.doesNotMatch(task,/odysseySdPreflightWritePower/);
+ assert.match(task,/odysseySdBusStuckLow/);
+ assert.match(task,/odysseyRecoverSdCard\("touch"\)/);
+ assert(task.indexOf('odysseyRecordTake();')>task.indexOf('odysseyRecoverSdCard("touch")'));
+ assert.match(take,/OdysseySdGuard storage;/);
+ assert.match(take,/mkdir\(ODYSSEY_SD_RECORDING_DIR,0755\)/);
+ assert.doesNotMatch(take,/odysseySdPowerSafe\(/);
+ assert.match(take,/file=fopen\(fullPath,"wb"\)/);
+ assert.match(take,/fwrite\(batch,1,sizeof\(batch\),file\)/);
+ assert.match(take,/odysseyCheckpointWav\(file,checkpointErrno\)/);
+ assert.match(take,/fclose\(file\)/);
+ assert.match(take,/stat\(fullPath,&persisted\)/);
+ assert.match(take,/fopen\(fullPath,"rb"\)/);
+ assert.match(take,/memcmp\(headerReadback,"RIFF",4\)/);
+ assert.match(take,/failureStage=74/);
+ assert.match(take,/failureStage=75/);
+ assert.match(take,/WAV VERIFIED/);
+ assert.match(rec,/deviceConnected.load\(\) \|\| streamingEnabled.load\(\)/);
+ assert.match(rec,/xTaskCreate\(odysseyRecordTask/);
 });
 
 test('held-busy CMD24/CMD25 failure does not trigger automatic remount',()=>{
  const task=rec.split('static void odysseyRecordTask(void\*) {')[1].split('bool odysseyPrepareForConnectedStreaming')[0];
  assert.match(task,/driverCommand==24u && driverPhase==4u/);
  assert.match(task,/driverCommand==25u && \(driverPhase==4u \|\| driverPhase==6u \|\| driverPhase==7u\)/);
- assert.match(task,/!stuckBusyWrite &&\s*odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)/);
+ assert.match(task,/!stuckBusyWrite\) \{/);
  assert.match(task,/odysseySdUnsafeToSleep=true;/);
  assert.doesNotMatch(task,/SD\.format\(|remove\(|unlink\(/);
 });
@@ -101,9 +115,9 @@ test('C3 accepts a freshly formatted readable FAT root with missing /synap and s
  const capture=rec.split('static void odysseyRecordTake() {')[1]
    .split('static void odysseyRecordTask(void*) {')[0];
  assert.match(capture,/stat\(ODYSSEY_SD_RECORDING_DIR,&recordingDir\)/);
- assert.match(capture,/!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\) \|\|\s*mkdir\(ODYSSEY_SD_RECORDING_DIR,0755\)/);
+ assert.match(capture,/mkdir\(ODYSSEY_SD_RECORDING_DIR,0755\)/);
  assert(capture.indexOf('mkdir(ODYSSEY_SD_RECORDING_DIR,0755)')<
         capture.indexOf('file=fopen(fullPath,"wb")'));
  const task=rec.split('static void odysseyRecordTask(void*) {')[1];
- assert(task.indexOf('odysseySdPreflightWritePower()')<task.indexOf('odysseyRecordTake()'));
+ assert(task.indexOf('odysseySdBusStuckLow()')<task.indexOf('odysseyRecordTake()'));
 });
