@@ -911,3 +911,27 @@ append-only WAV. With the currently anomalous ADC (reported 2.2–2.7 V
 at GPIO1 instead of multimeter ~1.34 V), write admission remains blocked.
 Do not bypass the 3900/3800 mV gates to claim recording fixed. No SD
 format, no NVS reset, no partition change, no changes to S3/Chakshu.
+
+### 1943 field ADC saturation investigation (10 October 2026)
+
+After formatted SD fix, `sdDetectionState=1` and `sdLiveProbeState=6`.
+Offline double-tap fails battery preflight: GPIO1 raw=4095, ADC=2949mV,
+field ratio gives cellMv=9223, batteryAvailable=false. These are not a
+physical 1S cell voltage; user previously measured ~1.34V on BAT_ADC.
+
+For a 1M/470k divider, Rth≈320kOhm and C1=100nF gives tau≈32ms.
+An accidentally enabled weak GPIO1 pull-up could saturate ADC readings.
+In an isolated **hypothesis test**, clear both internal pulls via
+`gpio_set_pull_mode(GPIO_FLOATING)` after Arduino attaches the ADC,
+then wait 175ms (over five RC constants) on the C3 SD profile.
+Reject near-full-scale raw>=4090 even if calibration changes.
+No guess-based voltage adjustment, ratio change, lower write gate,
+automatic formatting, or S3/Chakshu behavior change.
+
+This is not proof of the exact hardware fault. If saturated readings
+persist, measure the physical pin during operation, verify population
+and power/ground, and inspect for unintended electrical bias.
+
+BLE disconnected while app visible after ~66s; next diagnostics reported
+POWERON reset. That is separate from ADC recovery and should be
+investigated for physical switch/supply resets and peripheral instability.

@@ -45,3 +45,12 @@ test('Fresh post-SD mount battery sample precedes FAT write validation',()=>{
  assert.match(sd,/if \(mounted\) \{\s*markOdysseySdBatteryDividerPresent\(\);[\s\S]*?sampleBattery\(true\);/);
  assert(sd.indexOf('sampleBattery(true);')<sd.indexOf('static bool odysseySdValidateVfsLocked'));
 });
+
+test('C3+SD ADC clears internal pad pulls and waits five input RC time constants',()=>{
+ assert.match(battery,/gpio_set_pull_mode\(adcPin,GPIO_FLOATING\)==ESP_OK/);
+ assert.match(battery,/if \(odysseySdBatteryDividerPresent\(\)\) \{[\s\S]*?delay\(175\);/);
+ assert.match(battery,/adcRaw>=4090u/);
+ assert.match(battery,/adcUnstable=!adcPadFloating \|\| centralSpread>120u \|\| adcRaw>=4090u/);
+ assert.match(battery,/if \(!adcUnstable && cellMv>=2800u && cellMv<=4350u\)/);
+ assert.doesNotMatch(battery,/cellMv\s*=\s*4200;/);
+});

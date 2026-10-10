@@ -94,6 +94,17 @@ void sampleBattery(bool force) {
   // High-value divider needs settling time. Throw away one conversion, then
   // average both calibrated millivolts and raw ADC counts over 16 samples.
   (void)analogRead(BATTERY_ADC_PIN);
+#if CONFIG_IDF_TARGET_ESP32C3
+  // Attach ADC channel first, then remove any internal pull-up/pull-down.
+  // On the 1M/470k divider, Rth=320kOhm; even a weak pad pull-up can
+  // dominate the battery signal and saturate raw ADC near 4095.
+  const gpio_num_t adcPin=static_cast<gpio_num_t>(BATTERY_ADC_PIN);
+  const bool adcPadFloating=gpio_set_pull_mode(adcPin,GPIO_FLOATING)==ESP_OK;
+  if (odysseySdBatteryDividerPresent()) {
+    // Rth*100nF = 32ms; allow >5tau (175ms) after removing pad bias.
+    delay(175);
+  }
+#endif
   delayMicroseconds(1200);
   uint32_t mvTotal=0, rawTotal=0;
 #if CONFIG_IDF_TARGET_ESP32C3
@@ -132,9 +143,10 @@ void sampleBattery(bool force) {
     for (uint8_t i=2;i<14;++i) centralTotal+=mvSamples[i];
     adcMv=(centralTotal+6u)/12u;
     const uint16_t centralSpread=mvSamples[13]-mvSamples[2];
-    adcUnstable=centralSpread>120u;
+    adcUnstable=!adcPadFloating || centralSpread>120u || adcRaw>=4090u;
     if (adcUnstable) {
-      Serial.printf("[BATTERY] C3 SD ADC unstable: central range=%u..%umV\n",
+      Serial.printf("[BATTERY] C3 SD ADC untrusted: raw=%lu noBias=%u central=%u..%umV\n",
+        static_cast<unsigned long>(adcRaw),adcPadFloating?1u:0u,
         unsigned(mvSamples[2]),unsigned(mvSamples[13]));
     }
   }
