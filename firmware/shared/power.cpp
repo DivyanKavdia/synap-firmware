@@ -227,15 +227,19 @@ void enterDeepSleep(const char* reason) {
     // held-LOW SD bus. Explicit op14 or a disconnected double-tap can retry;
     // a verified mount is still required before entering deep sleep.
     if (odysseySdBusStuckLow()) return;
-    // A previous quiesce may have left the always-powered SD host unmounted.
-    // One bounded explicit recovery is safer than either forcing sleep or
-    // permanently leaving the C3 awake. Throttle recurring idle-timeout
-    // retries to protect the battery and preserve responsiveness.
+    // Never hammer an unmounted, continuously powered card every 30 s.
+    // The first background sleep recovery is bounded to ONE attempt per boot.
+    // Untrusted battery readings must not trigger any unattended SD activity.
+    // Explicit user-initiated SD recovery/sync remains separately available.
     static uint32_t lastSdSleepRecoveryAt=0;
+    static uint8_t automaticSleepSdRecoveryAttempts=0;
     const uint32_t now=millis();
+    if (automaticSleepSdRecoveryAttempts>=1u ||
+        !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) return;
     if (lastSdSleepRecoveryAt && uint32_t(now-lastSdSleepRecoveryAt)<30000u) return;
     lastSdSleepRecoveryAt=now ? now : 1u;
-    Serial.println("[POWER] retrying validated SD mount before sleep");
+    ++automaticSleepSdRecoveryAttempts;
+    Serial.println("[POWER] one guarded SD recovery attempt before sleep");
     if (!odysseyRecoverSdCard("sleep")) {
       Serial.println("[POWER] sleep deferred: SD recovery has not completed");
       return;

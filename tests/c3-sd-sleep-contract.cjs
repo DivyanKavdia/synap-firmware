@@ -110,3 +110,12 @@ test('C3 driven-low SD bus cannot sleep as if the card were absent',()=>{
  assert(prepare.indexOf('if (odysseySdUnsafeToSleep.load())')<
         prepare.indexOf('if (!wasReady)'));
 });
+
+test('SD error sleep recovery is bounded to one unprompted attempt per boot',()=>{
+ const deep=power.split('void enterDeepSleep(const char* reason) {')[1].split('void powerTick() {')[0];
+ assert.match(deep,/static uint8_t automaticSleepSdRecoveryAttempts=0;/);
+ assert.match(deep,/automaticSleepSdRecoveryAttempts>=1u/);
+ assert.match(deep,/!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)/);
+ assert(deep.indexOf('++automaticSleepSdRecoveryAttempts;')<deep.indexOf('odysseyRecoverSdCard("sleep")'));
+ assert.match(deep,/if \(odysseySdBusStuckLow\(\)\) return;/);
+});

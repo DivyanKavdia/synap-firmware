@@ -862,3 +862,28 @@ battery thresholds. This **does not** repair a card held LOW, and must
 not be described as a substitute for regulator headroom or switchable
 SD power. Prefer read/sync of intact recordings after a true power-off
 (USB disconnected) and confirmation of a healthy mount.
+
+### 10 October 2026: build 1937 SD read-rescue findings
+On installed firmware **1937** the PWA reported `wrD=0x18040000` (a
+historical accepted CMD24 write followed by busy timeout), `lastRecordKiB=2040`,
+and `sdState=2`. Later it also reported `vfsStep=2,vfsErrno=2`, meaning
+the SD driver reached FAT/VFS but `/synap` was not present or could not
+be created. Low-level `CMD0=1,CMD8=1,R7=426` responses indicate the
+card answered SPI commands in that session; they do not prove intact FAT
+metadata or readable WAV files. The reported `mountAttempts=44` came
+from repeated attempted recovery; do not continue automatic mount cycling.
+
+The guarded fix adds `vfsStep=13,errno=ENOENT` when `/synap` is
+missing on a card with a **persisted prior WAV byte count**. In that
+case firmware intentionally **does not create the directory**, format
+the card, rewrite FAT, or claim that the old recordings were deleted.
+It prints up to eight root directory entries over serial for diagnostics.
+A genuinely fresh, never-recorded SD can still create its directory
+only when power measurements pass the existing safety gate.
+
+Automatic SD remount before idle sleep is now limited to a single
+attempt per boot and is suppressed entirely for an untrusted/weak ADC.
+Explicit user-initiated recovery is unchanged. This does **not** rebuild
+a missing FAT directory or recover orphaned data; such recovery
+requires a read-only sector-level image or validated offline repair on
+a spare card. Never automatically format or clear a card in this state.

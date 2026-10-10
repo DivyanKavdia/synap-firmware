@@ -1247,15 +1247,19 @@ void enterDeepSleep(const char* reason) {
     // held-LOW SD bus. Explicit op14 or a disconnected double-tap can retry;
     // a verified mount is still required before entering deep sleep.
     if (odysseySdBusStuckLow()) return;
-    // A previous quiesce may have left the always-powered SD host unmounted.
-    // One bounded explicit recovery is safer than either forcing sleep or
-    // permanently leaving the C3 awake. Throttle recurring idle-timeout
-    // retries to protect the battery and preserve responsiveness.
+    // Never hammer an unmounted, continuously powered card every 30 s.
+    // The first background sleep recovery is bounded to ONE attempt per boot.
+    // Untrusted battery readings must not trigger any unattended SD activity.
+    // Explicit user-initiated SD recovery/sync remains separately available.
     static uint32_t lastSdSleepRecoveryAt=0;
+    static uint8_t automaticSleepSdRecoveryAttempts=0;
     const uint32_t now=millis();
+    if (automaticSleepSdRecoveryAttempts>=1u ||
+        !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) return;
     if (lastSdSleepRecoveryAt && uint32_t(now-lastSdSleepRecoveryAt)<30000u) return;
     lastSdSleepRecoveryAt=now ? now : 1u;
-    Serial.println("[POWER] retrying validated SD mount before sleep");
+    ++automaticSleepSdRecoveryAttempts;
+    Serial.println("[POWER] one guarded SD recovery attempt before sleep");
     if (!odysseyRecoverSdCard("sleep")) {
       Serial.println("[POWER] sleep deferred: SD recovery has not completed");
       return;
@@ -2882,13 +2886,43 @@ static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
   }
   struct stat recordings{};
   if (stat(ODYSSEY_SD_RECORDING_DIR,&recordings)!=0) {
-    if (errno!=ENOENT || !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV) ||
+    const int directoryErrno=errno;
+    // A previous WAV write reached the card, but the FAT directory entry
+    // may have been lost in a CMD24 metadata timeout. NEVER auto-create an
+    // apparently empty /synap over a card with known recording history.
+    // Creating a new directory would mutate FAT and obscure recovery.
+    if (directoryErrno==ENOENT && odysseyLastRecordFailureBytes()>0u) {
+      odysseySdVfsStep=13;odysseySdVfsErrno=ENOENT;
+      odysseySdLastMountError=ESP_FAIL;
+      odysseySdBootState=2;odysseySdProbeStage=4;
+      Serial.printf("[SD] %s /synap missing after %lu previous PCM bytes: preserve card, do not mkdir\n",
+        reason,static_cast<unsigned long>(odysseyLastRecordFailureBytes()));
+      // Read-only root inspection is diagnostic, not proof that lost FAT
+      // entries are recoverable. Limit traversal to avoid a new read storm.
+      DIR* rootEntries=opendir(ODYSSEY_SD_MOUNT_POINT);
+      if (rootEntries) {
+        for (uint8_t i=0;i<8u;++i) {
+          errno=0;
+          dirent* entry=readdir(rootEntries);
+          if (!entry) {
+            if (errno) Serial.printf("[SD] root inspect errno=%d\n",errno);
+            break;
+          }
+          Serial.printf("[SD] root entry %u: %.48s\n",unsigned(i),entry->d_name);
+        }
+        (void)closedir(rootEntries);
+      }
+      return false;
+    }
+    if (directoryErrno!=ENOENT || !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV) ||
         mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) {
-      odysseySdVfsStep=2;odysseySdVfsErrno=errno?errno:EIO;
+      const int failedErrno=directoryErrno==ENOENT && !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)
+        ? ENOENT : (errno?errno:EIO);
+      odysseySdVfsStep=2;odysseySdVfsErrno=failedErrno;
       odysseySdLastMountError=ESP_FAIL;
       odysseySdBootState=2;odysseySdProbeStage=4;
       Serial.printf("[SD] %s attempt %u recording directory unavailable errno=%d\n",
-        reason,unsigned(attempt),errno);
+        reason,unsigned(attempt),failedErrno);
       return false;
     }
   } else if (!S_ISDIR(recordings.st_mode)) {

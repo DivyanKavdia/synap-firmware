@@ -49,7 +49,7 @@ test('C3 mounts readable SD without low-voltage FAT probe writes and still expos
  const validate=sd.split('static bool odysseySdValidateVfsLocked(')[1].split('static uint8_t odysseySdMountReasonCode')[0];
  assert.match(validate,/if \(!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)\) \{[\s\S]*?odysseySdVfsStep=11;[\s\S]*?return true;/);
  assert(validate.indexOf('odysseySdVfsStep=11;')<validate.indexOf('const char* probePath='));
- assert.match(validate,/!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\) \|\|\s*mkdir/);
+ assert.match(validate,/directoryErrno!=ENOENT \|\| !odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\) \|\|\s*mkdir/);
  assert.match(validate,/opendir\(ODYSSEY_SD_RECORDING_DIR\)/);
  assert.match(sd,/odysseySdBootState=1;\s*odysseySdProbeStage=6/);
  assert.match(transfer,/case 7:\s*error=catalogue\(total\)/);
@@ -82,4 +82,17 @@ test('held-busy CMD24/CMD25 failure does not trigger automatic remount',()=>{
  assert.match(task,/!stuckBusyWrite &&\s*odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)/);
  assert.match(task,/odysseySdUnsafeToSleep=true;/);
  assert.doesNotMatch(task,/SD\.format\(|remove\(|unlink\(/);
+});
+
+test('C3 SD preserves missing recording directory after a previously failed WAV write',()=>{
+ const validation=sd.split('static bool odysseySdValidateVfsLocked(')[1]
+   .split('static uint8_t odysseySdMountReasonCode')[0];
+ const safeguard=validation.split('if (directoryErrno==ENOENT && odysseyLastRecordFailureBytes()>0u) {')[1]
+   .split('if (directoryErrno!=ENOENT')[0];
+ assert(safeguard && safeguard.includes('odysseySdVfsStep=13'));
+ assert.match(safeguard,/odysseySdVfsErrno=ENOENT/);
+ assert.match(safeguard,/opendir\(ODYSSEY_SD_MOUNT_POINT\)/);
+ assert.match(safeguard,/return false;/);
+ assert.doesNotMatch(safeguard,/mkdir\(|unlink\(|fopen\(|SD\.format\(/);
+ assert(validation.indexOf('odysseySdVfsStep=13')<validation.indexOf('mkdir(ODYSSEY_SD_RECORDING_DIR'));
 });
