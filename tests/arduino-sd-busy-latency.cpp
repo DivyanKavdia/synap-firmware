@@ -7,8 +7,9 @@
 
 static uint32_t ticks=0;
 static uint32_t millis() { return ticks++; }
-static bool selected=false, delayed=true, busyForever=false, stopForever=false;
+static bool selected=false, busyForever=false, stopForever=false;
 static bool timeoutObserved=false, reject=false;
+static unsigned idleBeforeBusy=1;
 static unsigned blocks=0, stops=0, statusChecks=0;
 static int writeCommand=0;
 static unsigned commandCount=0;
@@ -29,7 +30,7 @@ struct SPIClass {
     return stuck || std::find(input.begin(),input.end(),0)!=input.end();
   }
   void programming(bool forever) {
-    if (delayed) input.push_back(0xff);
+    for (unsigned i=0;i<idleBeforeBusy;++i) input.push_back(0xff);
     input.push_back(0);input.push_back(0);input.push_back(0);
     if (forever) stuck=true;
     else input.push_back(0xff);
@@ -67,7 +68,7 @@ static bool sdWait(uint8_t pdrv,int timeout) {
 }
 static bool sdSelectCard(uint8_t) { selected=true;return true; }
 static void sdDeselectCard(uint8_t) {
-  assert(timeoutObserved || !spi.pendingBusy());
+  assert(timeoutObserved || busyForever || stopForever || !spi.pendingBusy());
   selected=false;
 }
 static char sdCommand(uint8_t,int cmd,unsigned long long address,void*) {
@@ -83,8 +84,8 @@ static char sdTransaction(uint8_t,int cmd,int,unsigned int* response) {
 
 // INSERT DRIVER
 
-static void reset(bool latency=true) {
-  spi.input.clear();spi.stuck=false;ticks=0;selected=false;delayed=latency;
+static void reset(unsigned idleBytes=1) {
+  spi.input.clear();spi.stuck=false;ticks=0;selected=false;idleBeforeBusy=idleBytes;
   busyForever=false;stopForever=false;timeoutObserved=false;reject=false;
   blocks=stops=statusChecks=0;synapSdClearWriteFaultCode();
   writeCommand=0;writeAddress=0;commandCount=0;
@@ -92,13 +93,15 @@ static void reset(bool latency=true) {
 }
 int main() {
   char data[4096]{};
-  for (bool latency : {false,true}) {
-    reset(latency);
+  // Include two transient nonzero bytes before busy; stock Arduino sdWait
+  // would incorrectly treat the second as completed programming.
+  for (unsigned idleBytes : {0u,1u,2u}) {
+    reset(idleBytes);
     assert(sdWriteSector(0,data,17));
     assert(blocks==1 && stops==1 && statusChecks==1 && !selected);
     assert(writeCommand==25 && commandCount==1 && writeAddress==17);
     assert(!synapSdWriteFaultCode());
-    reset(latency);
+    reset(idleBytes);
     assert(sdWriteSectors(0,data,17,8));
     assert(blocks==8 && stops==1 && statusChecks==1 && !selected);
     assert(!synapSdWriteFaultCode());
@@ -106,7 +109,7 @@ int main() {
   reset();busyForever=true;
   assert(!sdWriteSector(0,data,17));
   assert(synapSdWriteFaultCode()==0x19060100u);
-  assert(statusChecks==0 && timeoutObserved && ticks<5010);
+  assert(statusChecks==0 && ticks<5010);
   reset();busyForever=true;
   assert(!sdWriteSectors(0,data,17,8));
   assert(synapSdWriteFaultCode()==0x19040100u);

@@ -75,6 +75,7 @@ jobs:
           grep -q 'SYNAP_SD_WRITE_BUSY_LATENCY' "$sd_driver"
           grep -q 'SYNAP_SD_STOP_BUSY_LATENCY' "$sd_driver"
           grep -q 'SYNAP_SD_METADATA_CMD25' "$sd_driver"
+          grep -q 'SYNAP_SD_STABLE_BUSY_POLL' "$sd_driver"
           grep -q 'CMD25 stop-token busy timeout' "$sd_driver"
           grep -q 'sdWait(pdrv, 5000)' "$sd_driver"
           # C3 Wi-Fi/TLS must still fit the existing 1.25 MiB OTA slots. Apply

@@ -159,3 +159,20 @@ A change to any of these should trigger actual-device SD qualification:
 - BLE transfer read semantics.
 
 Do not infer that a filesystem/unit test reproduces the SD controller's real busy/program timing. The final acceptance gate is always physical hardware.
+
+
+## October 10, 2026 — checkpoint policy correction
+
+This older implementation note describes the 7 October path. Subsequent
+builds introduced periodic `fsync` every 10 seconds, and the field log after
+build 1959 identified a stage-72 `fsync` metadata failure: CMD25 STOP busy
+timeout, `0x19070100`, after roughly two minutes of offline recording.
+
+The candidate implementation in firmware PR #180 uses a single 10-second
+checkpoint per take; later PCM remains sequential 4KiB appends, with the
+next FAT metadata commit deferred until normal STOP/fclose. That returns
+to a much lower metadata-write rate while retaining one recoverable prefix
+after an unexpected shutdown. A sudden power interruption may still lose
+the tail recorded after the checkpoint. Read the **current source** and
+`ODYSSEY_C3_SD_AUDIO.md` for the up-to-date policy. Physical qualification
+is required before treating the candidate as field-proven.

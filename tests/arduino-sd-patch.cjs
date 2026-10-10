@@ -32,10 +32,12 @@ test('C3 CMD25 completes programming before raising CS, does not send CMD12 on w
   const out=patch(before+'\n'+multiBefore);
   const multi=out.slice(out.lastIndexOf('bool sdWriteSectors(uint8_t pdrv')).split('\nunsigned long sdGetSectorsCount')[0];
   assert.match(multi,/SYNAP_SD_CMD25_BUSY_FIX/);
+  assert.match(out,/SYNAP_SD_STABLE_BUSY_POLL/);
+  assert.match(out,/\+\+nonzero >= 2/);
   assert.doesNotMatch(multi,/STOP_TRANSMISSION|sdCommand\(pdrv,\s*12/);
   assert.match(multi,/sdWriteBytes\(pdrv, currentBuffer, 0xFC\)/);
-  assert.match(multi,/if \(!sdWait\(pdrv, 5000\)\) \{[\s\S]*?\}\s+sdStop\(pdrv\);/);
-  assert.match(multi,/sdStop\(pdrv\);\s+if \(!sdWait\(pdrv, 5000\)\) \{[\s\S]*?return false;\s+\}\s+sdDeselectCard\(pdrv\);/);
+  assert.match(multi,/if \(!synapSdWaitStable\(pdrv, 5000\)\) \{[\s\S]*?\}\s+sdStop\(pdrv\);/);
+  assert.match(multi,/sdStop\(pdrv\);\s+if \(!synapSdWaitStable\(pdrv, 5000\)\) \{[\s\S]*?return false;\s+\}\s+sdDeselectCard\(pdrv\);/);
   assert(multi.indexOf('sdDeselectCard(pdrv);\n\n  if (!accepted') <
     multi.indexOf('sdTransaction(pdrv, SEND_STATUS'), 'status follows completed STOP');
   assert.match(multi,/if \(!accepted \|\| currentCount != 0\) \{[\s\S]*?return false;/);
