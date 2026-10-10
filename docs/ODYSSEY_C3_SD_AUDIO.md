@@ -1155,3 +1155,45 @@ confirms compilation/tests only. Before declaring the issue resolved,
 safely back up recoverable files, confirm SD mount, exercise short and
 10-minute disconnected double-tap recording, STOP/readback and a second take
 on a known-stable supply. Do not assume success from purple LEDs alone.
+
+
+### October 10 2026: boot activation independent of battery ADC (C3 only)
+
+Field build 1972 successfully updated, but after OTA restart card MISO stayed LOW
+(1023/1024 zero bytes, CMD0 0x00, CMD8 0xFF), and a later cold boot
+reproduced CMD24 phase-4 busy timeout `wrD=0x18040000` before committing
+audio (`recordBytes=0`). Battery values alternated between ~2932mV
+(`available=true`) and >4400mV (`available=false`) because firmware
+selected the fitted 1M/470k divider only when SD.begin succeeded.
+
+**C3-only correction:** Save the fitted divider identity in MCU NVS after a
+proper mount; restore it before any new-boot battery sampling even if SD fails.
+The SD *mount/admission logic* never consults the ADC. The FAT validation on
+boot now performs **only reads**: verify mount root, inspect /synap if present,
+and treat an absent /synap as a valid empty library. No mount-time mkdir,
+temporary-file write/flush/unlink or auto-format occurs, even at a healthy
+battery level. /synap is created only when the user explicitly starts a local
+recording. Existing media catalogue/sync stays unchanged. Destructive
+delete/format guard still requires trusted supply measurement and explicit
+request; a failed battery ADC must not prevent mounting or reading existing
+files.
+
+A **cold ESP_RST_POWERON** now tries stock SD.begin before doing any raw
+CMD12/0xFD recovery, even if a historical write fault is retained in NVS.
+A warm/OTA reset that may have left the SD powered mid-command continues
+the existing bounded protocol recovery. A failed ordinary mount can still
+attempt bounded bit-bang recovery. Do not clear historic diagnostic evidence
+merely to make UI report ready; only a successfully verified current mount
+sets `sdDetectionState=1`, `sdLiveProbeState=6`. A bus still electrically
+LOW / card permanently busy after host reset cannot be guaranteed recoverable
+without independently switching **SD 3.3V power** or replacing an unhealthy
+card. On fixed sealed boards, a full power-off must cut SD 3.3V too.
+
+Power-loss durability is **bounded, not absolute** on FAT: the recorder
+checkpoint after ten seconds makes an early prefix discoverable and STOP
+closes/syncs the final file, but data/FAT sectors being programmed during a
+sudden power cut may still be lost or torn. Firmware must not promise that a
+microSD can never corrupt on interrupted writes. Robust future hardware
+should provide an SD power switch/supervisor, measured 3.3V rail, hold-up
+capacitor and stable external pullups. Continue preserving the original card
+and avoid unconditional fsck/format/delete on boot.
