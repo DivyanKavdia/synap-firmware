@@ -58,8 +58,11 @@ function materializeChakshu(source,target) {
   // Preserve Chakshu's established 4 warmups / 24 samples. The generic
   // source now has a C3-only trim buffer between the accumulator and loop,
   // so patch the sampling pieces separately rather than using a stale block.
-  replace("  (void)analogRead(BATTERY_ADC_PIN);\n  delayMicroseconds(1200);",
-    "  for(uint8_t warmup=0;warmup<4;++warmup){(void)analogRead(BATTERY_ADC_PIN);delayMicroseconds(500);}\n  delayMicroseconds(3000);\n  constexpr uint8_t BATTERY_SAMPLE_COUNT=24;",
+  // The generic sampler now configures a C3-only GPIO_FLOATING pad between
+  // its first discard conversion and 1200us settle. Preserve Chakshu's
+  // existing four warmups (one shared + three target-specific) and 24 samples.
+  replace("  delayMicroseconds(1200);",
+    "  for(uint8_t warmup=1;warmup<4;++warmup){(void)analogRead(BATTERY_ADC_PIN);delayMicroseconds(500);}\n  delayMicroseconds(3000);\n  constexpr uint8_t BATTERY_SAMPLE_COUNT=24;",
     'Settle high-impedance Chakshu battery divider');
   replace("  for (uint8_t i=0;i<16;++i) {\n    rawTotal+=analogRead(BATTERY_ADC_PIN);",
     "  for (uint8_t i=0;i<BATTERY_SAMPLE_COUNT;++i) {\n    rawTotal+=analogRead(BATTERY_ADC_PIN);",
