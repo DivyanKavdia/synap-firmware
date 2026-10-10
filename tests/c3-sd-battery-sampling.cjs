@@ -14,7 +14,7 @@ test('C3 battery is sampled after SD divider discovery, without changing S3 boot
  assert.match(after,/sampleBattery\(true\);/);
  const c3=devices.find(x=>x.id==='esp32c3-supermini-4m');
  const s3=devices.find(x=>x.id==='esp32s3-fh4r2-qspi-4m');
- assert.deepEqual(c3.hardware.sdBatteryCalibration,{batteryAdcMv:470,batteryCellMv:1470,batteryFullMv:4200});
+ assert.deepEqual(c3.hardware.sdBatteryCalibration,{batteryAdcMv:1,batteryCellMv:2,batteryFullMv:4200});
  assert.equal(c3.hardware.batteryCellMv/c3.hardware.batteryAdcMv,2);
  assert.equal(s3.hardware.batteryAttenuation,'ADC_6db');
 });
@@ -30,12 +30,12 @@ test('C3+SD battery sampling removes spikes but not a systematic overvoltage',()
  assert.match(battery,/batteryAdcMillivolts=uint16_t\(adcMv/);
 });
 
-test('the actual C3+SD field sample stays untrusted until the input can be physically verified',()=>{
- const full=4200,top=1000000,bottom=470000;
+test('Rev K BOM 470k/470k calibrates the observed 2051mV ADC near 4102mV',()=>{
+ const full=4200,top=470000,bottom=470000;
  const expected=Math.round(full*bottom/(top+bottom));
- assert.equal(expected,1343);
- const observed=1425;
+ assert.equal(expected,2100);
+ const observed=2051;
  const reconstructed=Math.round(observed*(top+bottom)/bottom);
- assert.equal(reconstructed,4457);
- assert(reconstructed>4350);
+ assert.equal(reconstructed,4102);
+ assert(reconstructed>=4000&&reconstructed<=4350);
 });
