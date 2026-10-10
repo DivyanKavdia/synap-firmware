@@ -34,11 +34,13 @@ test('partition state is traced on boot and commit without bypassing ESP-IDF ima
   assert.match(boot,/\[OTA\] boot /);
 });
 
-test('SD mount validation distinguishes fputc failure from fflush failure',()=>{
-  assert.match(sd,/const bool byteWritten=fputc\('S',probe\)!=EOF;/);
-  assert.match(sd,/const bool flushed=byteWritten && fflush\(probe\)==0;/);
-  assert.match(sd,/failedStep=!byteWritten\?7:!flushed\?12:!closeOk\?8:9/);
-  assert.match(sd,/const bool closeOk=fclose\(probe\)==0/);
-  assert.match(sd,/const bool removeOk=unlink\(probePath\)==0/);
+test('C3 SD boot mount is read-verified without FAT writes or battery calibration admission',()=>{
+  const body=sd.split('static bool odysseySdValidateVfsLocked(')[1]
+    .split('static uint8_t odysseySdMountReasonCode')[0];
+  assert.match(body,/stat\(ODYSSEY_SD_MOUNT_POINT,&root\)/);
+  assert.match(body,/stat\(ODYSSEY_SD_RECORDING_DIR,&recordings\)/);
+  assert.match(body,/opendir\(ODYSSEY_SD_RECORDING_DIR\)/);
+  assert.match(body,/closedir\(verified\)/);
+  assert.doesNotMatch(body,/fputc\(|fflush\(|unlink\(|mkdir\(|fopen\(|fsync\(|odysseySdPowerSafe/);
   assert.doesNotMatch(sd,/SD\.format\(/);
 });

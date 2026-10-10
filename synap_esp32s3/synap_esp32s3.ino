@@ -855,7 +855,27 @@ void stopMicrophone() {
 // SYNAP_BATTERY_RUNTIME_BEGIN
 #if CONFIG_IDF_TARGET_ESP32C3
 static std::atomic<bool> odysseySdBatteryDividerObserved{false};
+// A C3+SD has the 1M/470k ADC divider independently of the SD card's
+// current read/write state. Remember an *observed successful mount* so a
+// failed boot-time SD probe cannot silently select the legacy x2 curve,
+// label a good battery critical, or request a misleading low-battery sleep.
+void restoreOdysseySdBatteryDividerProfile() {
+  Preferences prefs;
+  if (!prefs.begin("synap-c3-sd",true)) return;
+  const bool observed=prefs.getBool("adc-div",false);
+  prefs.end();
+  if (observed) odysseySdBatteryDividerObserved=true;
+}
 void markOdysseySdBatteryDividerPresent() { odysseySdBatteryDividerObserved=true; }
+void persistOdysseySdBatteryDividerProfile() {
+  if (!odysseySdBatteryDividerObserved.load()) return;
+  Preferences prefs;
+  if (!prefs.begin("synap-c3-sd",false)) return;
+  if (!prefs.getBool("adc-div",false) &&
+      prefs.putBool("adc-div",true)!=1u)
+    Serial.println("[BATTERY] C3 SD ADC divider profile not persisted");
+  prefs.end();
+}
 bool odysseySdBatteryDividerPresent() { return odysseySdBatteryDividerObserved.load(); }
 // Field Odyssey C3+SD is assembled with R1=1 MOhm from SW_BAT
 // to GPIO1 and R2=470 kOhm from GPIO1 to GND (1470/470 ratio).
@@ -863,7 +883,9 @@ bool odysseySdBatteryDividerPresent() { return odysseySdBatteryDividerObserved.l
 // SD detection selects the field profile, not a resistor measurement.
 // Do not compensate untrusted ADC readings with a guessed gain.
 #else
+void restoreOdysseySdBatteryDividerProfile() {}
 void markOdysseySdBatteryDividerPresent() {}
+void persistOdysseySdBatteryDividerProfile() {}
 bool odysseySdBatteryDividerPresent() { return false; }
 #endif
 
@@ -2482,9 +2504,9 @@ static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
 static std::atomic<uint32_t> odysseySdBeginAttempts{0};
 static std::atomic<uint8_t> odysseySdLastMountReason{0}; // 1=boot,2=op14,3=touch,4=probe
-// VFS stages: 0=not run; 1=root; 2=directory setup; 3=directory type;
-// 4=opendir; 5=closedir; 6=probe open; 7=probe write/flush;
-// 8=probe close; 9=probe unlink; 10=ready; 11=runtime catalogue/read.
+// VFS stages: 0=not run; 1=root; 2=directory stat; 3=directory type;
+// 4=opendir; 5=closedir; 11=read-verified; 13=missing /synap (valid empty FAT).
+// A boot mount NEVER writes metadata; user-initiated recording tests write.
 // Diagnostic only: these fields must not change the proven SD mount path.
 static std::atomic<uint8_t> odysseySdVfsStep{0};
 static std::atomic<int32_t> odysseySdVfsErrno{0};
@@ -2890,115 +2912,64 @@ static bool odysseySdBeginLocked() {
 }
 
 static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
+  // Power-loss-safe BOOT contract: validate the FAT volume and existing
+  // directories using ONLY reads. Never create a test file, force fsync,
+  // unlink, format or mkdir during mount. Battery ADC is not consulted.
+  // Explicit recording creates /synap and verifies its own writes.
   odysseySdVfsStep=0;odysseySdVfsErrno=0;
   struct stat root{};
   if (stat(ODYSSEY_SD_MOUNT_POINT,&root)!=0 || !S_ISDIR(root.st_mode)) {
     odysseySdVfsStep=1;odysseySdVfsErrno=errno?errno:ENOTDIR;
     odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=4;
-    Serial.printf("[SD] %s attempt %u VFS root unavailable errno=%d\n",reason,unsigned(attempt),errno);
-    return false;
-  }
-  struct stat recordings{};
-  if (stat(ODYSSEY_SD_RECORDING_DIR,&recordings)!=0) {
-    const int directoryErrno=errno;
-    if (directoryErrno==ENOENT &&
-        (odysseyLastRecordFailureBytes()>0u ||
-         !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV))) {
-      // A FAT-formatted card is allowed to have no /synap directory.
-      // NVS recording failures belong to the MCU, not necessarily this card:
-      // the user may have replaced or reformatted it since the old failure.
-      // Keep the verified FAT root readable without any boot-time FAT write.
-      // An explicit offline recording may create /synap after power preflight.
-      odysseySdVfsStep=13;odysseySdVfsErrno=ENOENT;
-      Serial.printf("[SD] %s FAT root readable, /synap missing; cell=%u trusted=%u oldPcmBytes=%lu; read-only empty catalogue\n",
-        reason,unsigned(batteryMillivolts),batteryAvailable.load()?1u:0u,
-        static_cast<unsigned long>(odysseyLastRecordFailureBytes()));
-      return true;
-    }
-    if (directoryErrno!=ENOENT || !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV) ||
-        mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) {
-      odysseySdVfsStep=2;odysseySdVfsErrno=errno?errno:EIO;
-      odysseySdLastMountError=ESP_FAIL;
-      odysseySdBootState=2;odysseySdProbeStage=4;
-      Serial.printf("[SD] %s attempt %u recording directory creation failed errno=%d\n",
-        reason,unsigned(attempt),int(odysseySdVfsErrno.load()));
-      return false;
-    }
-  } else if (!S_ISDIR(recordings.st_mode)) {
-    odysseySdVfsStep=3;odysseySdVfsErrno=ENOTDIR;
-    odysseySdLastMountError=ESP_FAIL;
-    odysseySdBootState=2;odysseySdProbeStage=4;
-    Serial.printf("[SD] %s attempt %u /synap is not a directory\n",reason,unsigned(attempt));
-    return false;
-  }
-
-  DIR* verified=opendir(ODYSSEY_SD_RECORDING_DIR);
-  if (!verified) {
-    const int saved=errno;
-    odysseySdVfsStep=4;odysseySdVfsErrno=saved;
-    odysseySdLastMountError=ESP_FAIL;
-    odysseySdBootState=2;odysseySdProbeStage=4;
-    Serial.printf("[SD] %s attempt %u recordings opendir failed errno=%d\n",
-      reason,unsigned(attempt),saved);
-    return false;
-  }
-  if (closedir(verified)!=0) {
-    const int saved=errno;
-    odysseySdVfsStep=5;odysseySdVfsErrno=saved;
-    odysseySdLastMountError=ESP_FAIL;
-    odysseySdBootState=2;odysseySdProbeStage=4;
-    Serial.printf("[SD] %s attempt %u recordings closedir failed errno=%d\n",
-      reason,unsigned(attempt),saved);
-    return false;
-  }
-
-  // On a weak or untrusted battery, do NOT create/truncate the temporary
-  // FAT file: doing so can itself issue the failing CMD24 metadata write.
-  // The mounted directory is still available for read-only catalogue/sync.
-  // All destructive media operations and offline recording use the same gate.
-  if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) {
-    odysseySdVfsStep=11;odysseySdVfsErrno=0; // readable, write-probe skipped
-    Serial.printf("[SD] %s battery/read-only mount: no FAT write probe, cell=%u available=%u\n",
-      reason,unsigned(batteryMillivolts),batteryAvailable.load()?1u:0u);
-    return true;
-  }
-  const char* probePath="/odyssey-sd/synap/.synap-media-probe.tmp";
-  FILE* probe=fopen(probePath,"wb");
-  if (!probe) {
-    const int saved=errno;
-    odysseySdVfsStep=6;odysseySdVfsErrno=saved;
-    odysseySdLastMountError=ESP_FAIL;
-    odysseySdBootState=2;odysseySdProbeStage=4;
-    Serial.printf("[SD] %s attempt %u recordings not writable errno=%d\n",
-      reason,unsigned(attempt),saved);
-    return false;
-  }
-  errno=0;
-  const bool byteWritten=fputc('S',probe)!=EOF;
-  const int byteErrno=byteWritten?0:errno;
-  errno=0;
-  const bool flushed=byteWritten && fflush(probe)==0;
-  const int flushErrno=flushed?0:errno;
-  errno=0;
-  const bool closeOk=fclose(probe)==0;
-  const int closeErrno=closeOk?0:errno;
-  errno=0;
-  const bool removeOk=unlink(probePath)==0;
-  const int removeErrno=removeOk?0:errno;
-  if (!byteWritten || !flushed || !closeOk || !removeOk) {
-    // Step 7 = fputc, step 12 = fflush. A successful fputc can still
-    // conceal a failed SD block program until the buffered FAT flush.
-    const uint8_t failedStep=!byteWritten?7:!flushed?12:!closeOk?8:9;
-    const int failedErrno=!byteWritten?byteErrno:!flushed?flushErrno:!closeOk?closeErrno:removeErrno;
-    odysseySdVfsStep=failedStep;odysseySdVfsErrno=failedErrno?failedErrno:EIO;
-    odysseySdLastMountError=ESP_FAIL;
-    odysseySdBootState=2;odysseySdProbeStage=4;
-    Serial.printf("[SD] %s attempt %u write/readiness probe failed errno=%d\n",
+    Serial.printf("[SD] %s attempt %u FAT root not readable errno=%d\\n",
       reason,unsigned(attempt),int(odysseySdVfsErrno.load()));
     return false;
   }
-  odysseySdVfsStep=10;odysseySdVfsErrno=0;
+  struct stat recordings{};
+  errno=0;
+  if (stat(ODYSSEY_SD_RECORDING_DIR,&recordings)!=0) {
+    const int directoryErrno=errno;
+    if (directoryErrno==ENOENT) {
+      // A formatted or recovered SD with no recordings is still healthy.
+      // Directory creation is reserved for explicit double-tap capture.
+      odysseySdVfsStep=13;odysseySdVfsErrno=ENOENT;
+      Serial.printf("[SD] %s FAT root verified, /synap absent; mount ready without writes\\n",reason);
+      return true;
+    }
+    odysseySdVfsStep=2;odysseySdVfsErrno=directoryErrno?directoryErrno:EIO;
+    odysseySdLastMountError=ESP_FAIL;
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    Serial.printf("[SD] %s attempt %u /synap stat I/O fault errno=%d\\n",
+      reason,unsigned(attempt),int(odysseySdVfsErrno.load()));
+    return false;
+  }
+  if (!S_ISDIR(recordings.st_mode)) {
+    odysseySdVfsStep=3;odysseySdVfsErrno=ENOTDIR;
+    odysseySdLastMountError=ESP_FAIL;
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    Serial.printf("[SD] %s attempt %u /synap is not a directory\\n",reason,unsigned(attempt));
+    return false;
+  }
+  DIR* verified=opendir(ODYSSEY_SD_RECORDING_DIR);
+  if (!verified) {
+    odysseySdVfsStep=4;odysseySdVfsErrno=errno?errno:EIO;
+    odysseySdLastMountError=ESP_FAIL;
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    Serial.printf("[SD] %s attempt %u /synap opendir failed errno=%d\\n",
+      reason,unsigned(attempt),int(odysseySdVfsErrno.load()));
+    return false;
+  }
+  if (closedir(verified)!=0) {
+    odysseySdVfsStep=5;odysseySdVfsErrno=errno?errno:EIO;
+    odysseySdLastMountError=ESP_FAIL;
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    Serial.printf("[SD] %s attempt %u /synap closedir failed errno=%d\\n",
+      reason,unsigned(attempt),int(odysseySdVfsErrno.load()));
+    return false;
+  }
+  odysseySdVfsStep=11;odysseySdVfsErrno=0; // read-verified, no boot-time FAT mutation
+  Serial.printf("[SD] %s FAT directory verified; no boot write probe, no ADC admission\\n",reason);
   return true;
 }
 
@@ -3067,6 +3038,9 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
     return false;
   }
 
+  // Persist the field C3+SD divider only after a genuine mounted and
+  // VFS-validated SD session. This survives failed SD probes and cold boots.
+  persistOdysseySdBatteryDividerProfile();
   odysseySdLastMountError=ESP_OK;
   odysseySdBootState=1;
   odysseySdProbeStage=6;
@@ -3116,12 +3090,20 @@ bool odysseyInitializeSdCardBeforeBle() {
   const uint8_t previousRecordStage=odysseyLastRecordFailureStage();
   const bool previousStorageFault=previousRecordStage>=44u && previousRecordStage!=48u;
   if (previousStorageFault) {
-    // Retained write/close faults survive reboot, unlike this in-RAM veto.
-    // Only successful VFS-validated remount may clear unsafe-to-sleep.
+    // Historical EIO survives MCU resets. Never clear it until a new mount
+    // succeeds. Cold power-on first tries ordinary SD.begin; an SD card whose
+    // rail actually cycled should already have reset. Warm/OTA boots perform
+    // one bounded, non-formatting protocol re-arm for a potentially powered
+    // card left mid-command. A normal mount failure still triggers recovery.
     odysseySdUnsafeToSleep=true;
-    Serial.printf("[SD] boot re-arm after recorder stage=%u\n",unsigned(previousRecordStage));
-    (void)odysseySdBitBangRecoverLocked("rearm");
-    delay(20);
+    if (bootResetReason!=ESP_RST_POWERON) {
+      Serial.printf("[SD] warm boot re-arm after recorder stage=%u\\n",unsigned(previousRecordStage));
+      (void)odysseySdBitBangRecoverLocked("rearm");
+      delay(20);
+    } else {
+      Serial.printf("[SD] cold boot first tries fresh SD.begin after old stage=%u\\n",
+        unsigned(previousRecordStage));
+    }
   }
 
   const bool ready=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
@@ -5049,8 +5031,10 @@ void setup() {
   // The worker cannot touch storage until BLE submits a request.
   OdysseyWifi::initialize();
   OdysseyTransfer::initialize();
-  // Conservative initial x2 sample. After SD.begin, assembled C3+SD
-  // switches to 1470/470 and resamples before FAT write-probe admission.
+  // Restore the once-confirmed C3+SD divider before ANY battery reading.
+  // Card mount/write failures must not switch a fitted 1M/470k board to x2
+  // or falsely trip the critical-battery sleep guard.
+  restoreOdysseySdBatteryDividerProfile();
   sampleBattery(true);
   odysseyInitializeSdCardBeforeBle();
   // Refresh telemetry after SD detection; standard C3 without SD stays x2.

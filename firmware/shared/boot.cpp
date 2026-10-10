@@ -149,8 +149,10 @@ void setup() {
   // The worker cannot touch storage until BLE submits a request.
   OdysseyWifi::initialize();
   OdysseyTransfer::initialize();
-  // Conservative initial x2 sample. After SD.begin, assembled C3+SD
-  // switches to 1470/470 and resamples before FAT write-probe admission.
+  // Restore the once-confirmed C3+SD divider before ANY battery reading.
+  // Card mount/write failures must not switch a fitted 1M/470k board to x2
+  // or falsely trip the critical-battery sleep guard.
+  restoreOdysseySdBatteryDividerProfile();
   sampleBattery(true);
   odysseyInitializeSdCardBeforeBle();
   // Refresh telemetry after SD detection; standard C3 without SD stays x2.

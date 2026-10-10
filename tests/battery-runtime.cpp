@@ -47,7 +47,19 @@ struct Characteristic {
 } control,event;
 auto* controlCharacteristic=&control;
 auto* eventCharacteristic=&event;
-struct Logger {template<class... T> void printf(const char*,T...) {}} Serial;
+struct Logger {
+  template<class... T> void printf(const char*,T...) {}
+  void println(const char*) {}
+} Serial;
+#if CONFIG_IDF_TARGET_ESP32C3
+static bool savedC3Divider=false;
+struct Preferences {
+  bool begin(const char*,bool) { return true; }
+  bool getBool(const char*,bool) { return savedC3Divider; }
+  size_t putBool(const char*,bool enabled) { savedC3Divider=enabled;return 1u; }
+  void end() {}
+};
+#endif
 uint32_t pdMS_TO_TICKS(uint32_t ms){return ms;}
 void vTaskDelay(uint32_t){}
 void updateStatusCharacteristic(bool){}

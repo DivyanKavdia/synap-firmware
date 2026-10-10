@@ -44,13 +44,16 @@ int main(){
  assert.match(nativeTest(code),/PASS Rev K SD conservative low-voltage policy/);
 });
 
-test('C3 mounts readable SD without low-voltage FAT probe writes and still exposes catalogue',()=>{
- assert.match(boot,/sampleBattery\(true\);\s*odysseyInitializeSdCardBeforeBle\(\)/);
+test('C3 SD boot mount is ADC-independent and read-only, even without /synap',()=>{
  const validate=sd.split('static bool odysseySdValidateVfsLocked(')[1].split('static uint8_t odysseySdMountReasonCode')[0];
- assert.match(validate,/if \(!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)\) \{[\s\S]*?odysseySdVfsStep=11;[\s\S]*?return true;/);
- assert(validate.indexOf('odysseySdVfsStep=11;')<validate.indexOf('const char* probePath='));
- assert.match(validate,/directoryErrno!=ENOENT \|\| !odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\) \|\|\s*mkdir/);
+ assert.match(boot,/restoreOdysseySdBatteryDividerProfile\(\);\s*sampleBattery\(true\);\s*odysseyInitializeSdCardBeforeBle\(\)/);
+ assert.doesNotMatch(validate,/odysseySdPowerSafe\(|batteryAvailable|batteryMillivolts/);
+ assert.doesNotMatch(validate,/mkdir\(|fopen\(|unlink\(|remove\(|fflush\(|fsync\(|fputc\(/);
+ assert.match(validate,/if \(directoryErrno==ENOENT\)/);
+ assert.match(validate,/odysseySdVfsStep=13;odysseySdVfsErrno=ENOENT;/);
  assert.match(validate,/opendir\(ODYSSEY_SD_RECORDING_DIR\)/);
+ assert.match(validate,/closedir\(verified\)/);
+ assert.match(validate,/odysseySdVfsStep=11;odysseySdVfsErrno=0/);
  assert.match(sd,/odysseySdBootState=1;\s*odysseySdProbeStage=6/);
  assert.match(transfer,/case 7:\s*error=catalogue\(total\)/);
  assert.match(transfer,/FILE\* file=fopen\(full,"rb"\)/);
@@ -101,11 +104,11 @@ test('held-busy CMD24/CMD25 failure does not trigger automatic remount',()=>{
 test('C3 accepts a freshly formatted readable FAT root with missing /synap and stale recorder NVS',()=>{
  const validate=sd.split('static bool odysseySdValidateVfsLocked(')[1]
    .split('static uint8_t odysseySdMountReasonCode')[0];
- const missing=validate.split('if (directoryErrno==ENOENT &&')[1];
- assert(missing && missing.includes('odysseyLastRecordFailureBytes()>0u'));
+ const missing=validate.split('if (directoryErrno==ENOENT)')[1];
+ assert(missing);
  assert.match(missing,/odysseySdVfsStep=13;odysseySdVfsErrno=ENOENT;/);
  assert.match(missing,/return true;/);
- assert(missing.indexOf('return true;')<missing.indexOf('mkdir(ODYSSEY_SD_RECORDING_DIR'));
+ assert.doesNotMatch(validate,/mkdir\(ODYSSEY_SD_RECORDING_DIR/);
  const list=transfer.split('static uint8_t catalogue(uint32_t& total) {')[1]
    .split('static uint8_t removeFile(')[0];
  assert.match(list,/if \(directoryErrno==ENOENT\)/);
@@ -120,4 +123,15 @@ test('C3 accepts a freshly formatted readable FAT root with missing /synap and s
         capture.indexOf('file=fopen(fullPath,"wb")'));
  const task=rec.split('static void odysseyRecordTask(void*) {')[1];
  assert(task.indexOf('odysseySdBusStuckLow()')<task.indexOf('odysseyRecordTake()'));
+});
+
+test('power-loss boot policy: fresh C3 POWERON tries mount before raw SD protocol re-arm',()=>{
+ const bootFn=sd.split('bool odysseyInitializeSdCardBeforeBle() {')[1].split('bool odysseyRecoverSdCard(')[0];
+ assert.match(bootFn,/previousStorageFault/);
+ assert.match(bootFn,/bootResetReason!=ESP_RST_POWERON/);
+ assert.match(bootFn,/odysseySdBitBangRecoverLocked\("rearm"\)/);
+ assert.match(bootFn,/odysseySdMountLocked\("boot",ODYSSEY_SD_BOOT_ATTEMPTS\)/);
+ assert(bootFn.indexOf('bootResetReason!=ESP_RST_POWERON')<bootFn.indexOf('odysseySdBitBangRecoverLocked("rearm")'));
+ assert.match(sd,/if \(!mounted\) \{[\s\S]*?odysseySdBitBangRecoverLocked\(reason\)/);
+ assert.doesNotMatch(bootFn,/SD\.format\(|formatIfMountFailed/);
 });
