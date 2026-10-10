@@ -27,8 +27,8 @@ for(const [c3,disabled] of [[false,false],[true,false],[true,true]]){
       assert.match(code,/#define SYNAP_BATTERY_SCALE_NUMERATOR 2/);
       assert.match(code,/#define SYNAP_BATTERY_SCALE_DENOMINATOR 1/);
       assert.match(code,/#define SYNAP_BATTERY_FULL_MV 4150/);
-      assert.match(code,/#define SYNAP_SD_BATTERY_SCALE_NUMERATOR 1470/);
-      assert.match(code,/#define SYNAP_SD_BATTERY_SCALE_DENOMINATOR 470/);
+      assert.match(code,/#define SYNAP_SD_BATTERY_SCALE_NUMERATOR 2/);
+      assert.match(code,/#define SYNAP_SD_BATTERY_SCALE_DENOMINATOR 1/);
       assert.match(code,/#define SYNAP_SD_BATTERY_FULL_MV 4200/);
       assert.doesNotMatch(code,/BATTERY_CAL_ADC_MV|raw 1544/);
       assert.match(code,/TOUCH_SLEEP_HOLD_MS = 4000/);
