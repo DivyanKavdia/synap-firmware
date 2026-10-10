@@ -25,7 +25,13 @@ test('C3 production image uses guarded append-only multi-block offline recording
   assert.match(c3,/OdysseySdGuard storage/);
   assert.match(c3,/file=fopen\(fullPath,"wb"\)/);
   assert.doesNotMatch(c3,/esp_vfs_fat_create_contiguous_file|ODYSSEY_SD_RECORD_RESERVE_BYTES|ftruncate\(|odysseyFinalizeWav|fseek\(file,0/);
-  assert.doesNotMatch(c3,/stat\(fullPath/);
+  const take=c3.split('static void odysseyRecordTake() {')[1]
+    .split('static void odysseyRecordTask(void*) {')[0];
+  assert(take.indexOf('stat(fullPath')>take.indexOf('if (fclose(file)!=0)'),
+    'closed WAV readback may not interrupt aligned append-only writes');
+  assert.match(take,/fopen\(fullPath,"rb"\)/);
+  assert.match(take,/failureStage=74/);
+  assert.match(take,/failureStage=75/);
   assert.match(c3,/odysseyCheckpointWav\(file,checkpointErrno\)/);
   assert.match(c3,/uint32_t\(millis\(\)-lastCheckpointAt\)>=ODYSSEY_SD_CHECKPOINT_INTERVAL_MS/);
   assert.doesNotMatch(c3,/fseek\(file,0|ftruncate\(|SD\.format\(/);

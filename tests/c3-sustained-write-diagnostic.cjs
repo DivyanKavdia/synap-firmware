@@ -10,7 +10,11 @@ test('C3 offline recorder is append-only and writes aligned multi-sector batches
   assert.match(take,/OdysseySdGuard storage/);
   assert.match(take,/file=fopen\(fullPath,"wb"\)/);
   assert.doesNotMatch(take,/odysseySdReserveRecordingFile|esp_vfs_fat_create_contiguous_file|ftruncate\(|odysseyFinalizeWav|fseek\(file,0/);
-  assert.doesNotMatch(take,/stat\(fullPath/);
+  // No random seeks/stat checks during the write session: only after close.
+  assert(take.indexOf('stat(fullPath')>take.indexOf('if (fclose(file)!=0)'));
+  assert.match(take,/fopen\(fullPath,"rb"\)/);
+  assert.match(take,/failureStage=74/);
+  assert.match(take,/failureStage=75/);
   assert.match(take,/startMicrophone\(\)/);
   assert(take.indexOf('file=fopen(fullPath,"wb")')<take.indexOf('startMicrophone()'));
   assert.match(take,/odysseyCheckpointWav\(file,checkpointErrno\)/);
