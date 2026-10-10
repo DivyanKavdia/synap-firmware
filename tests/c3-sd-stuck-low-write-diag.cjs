@@ -94,7 +94,7 @@ test('failed 4 KiB writes record errno, returned byte count and ferror before cl
   assert.match(recorder,/stage\?1u:0u/);
   assert.match(recorder,/prefs\.putBytes\("write",detail,sizeof\(detail\)\)/);
   assert.match(recorder,/synapSdClearWriteFaultCode\(\)/);
-  assert.equal((recorder.match(/odysseyPersistedDriverFault=synapSdWriteFaultCode\(\)/g)||[]).length,2);
+  assert.equal((recorder.match(/odysseyPersistedDriverFault=synapSdWriteFaultCode\(\)/g)||[]).length,3);
   assert.match(recorder,/prefs\.putBytes\("last",record,sizeof\(record\)\)/);
   assert.match(recorder,/legacy\?record\[0\]==1u:record\[0\]==2u/);
   assert.doesNotMatch(recorder,/fseek\(file,0|ftruncate\(/);
