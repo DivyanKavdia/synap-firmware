@@ -254,6 +254,7 @@ std::atomic<bool> odysseySdUnsafeToSleep{false};
 void odysseyToggleRecording();
 bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs);
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs);
+bool odysseyPrepareSdForCommittedOtaRestart(uint32_t timeoutMs);
 bool odysseySdBusStuckLow(); // confirmed deselected MISO held LOW after failed mount
 namespace OdysseyWifi {
 void initialize();
@@ -489,7 +490,17 @@ class EspOtaBackend : public Synap::OtaBackend {
     handleActive=false; // esp_ota_end frees the handle even on error.
     return esp_ota_end(handle)==ESP_OK ? Synap::OK : Synap::INVALID_IMAGE;
   }
-  bool commit() override { return target && esp_ota_set_boot_partition(target)==ESP_OK; }
+  bool commit() override {
+    const esp_err_t result=target?esp_ota_set_boot_partition(target):ESP_ERR_INVALID_ARG;
+    const esp_partition_t* selected=esp_ota_get_boot_partition();
+    const esp_partition_t* running=esp_ota_get_running_partition();
+    Serial.printf("[OTA] commit result=%d running=0x%lx selected=0x%lx target=0x%lx\n",
+      int(result),
+      static_cast<unsigned long>(running?running->address:0u),
+      static_cast<unsigned long>(selected?selected->address:0u),
+      static_cast<unsigned long>(target?target->address:0u));
+    return result==ESP_OK;
+  }
   void abort() override {
     if (handleActive) { esp_ota_abort(handle);handleActive=false; }
     if (hashActive) { mbedtls_sha256_free(&sha);hashActive=false; }
@@ -629,7 +640,7 @@ void otaTick() {
     if (!rebootAt) rebootAt=millis();
     if (uint32_t(millis()-rebootAt)>1500) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-      if (!odysseyPrepareSdForPowerTransition(1000u)) return;
+      if (!odysseyPrepareSdForCommittedOtaRestart(1000u)) return;
 #endif
       ESP.restart();
     }
@@ -2922,17 +2933,22 @@ static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
     return false;
   }
   errno=0;
-  const bool writeOk=fputc('S',probe)!=EOF && fflush(probe)==0;
-  const int writeErrno=writeOk?0:errno;
+  const bool byteWritten=fputc('S',probe)!=EOF;
+  const int byteErrno=byteWritten?0:errno;
+  errno=0;
+  const bool flushed=byteWritten && fflush(probe)==0;
+  const int flushErrno=flushed?0:errno;
   errno=0;
   const bool closeOk=fclose(probe)==0;
   const int closeErrno=closeOk?0:errno;
   errno=0;
   const bool removeOk=unlink(probePath)==0;
   const int removeErrno=removeOk?0:errno;
-  if (!writeOk || !closeOk || !removeOk) {
-    const uint8_t failedStep=!writeOk?7:!closeOk?8:9;
-    const int failedErrno=!writeOk?writeErrno:!closeOk?closeErrno:removeErrno;
+  if (!byteWritten || !flushed || !closeOk || !removeOk) {
+    // Step 7 = fputc, step 12 = fflush. A successful fputc can still
+    // conceal a failed SD block program until the buffered FAT flush.
+    const uint8_t failedStep=!byteWritten?7:!flushed?12:!closeOk?8:9;
+    const int failedErrno=!byteWritten?byteErrno:!flushed?flushErrno:!closeOk?closeErrno:removeErrno;
     odysseySdVfsStep=failedStep;odysseySdVfsErrno=failedErrno?failedErrno:EIO;
     odysseySdLastMountError=ESP_FAIL;
     odysseySdBootState=2;odysseySdProbeStage=4;
@@ -3118,6 +3134,36 @@ bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
     odysseySdUnsafeToSleep=true;
     return false;
   }
+  return true;
+}
+// A committed OTA has already selected its validated boot partition.
+// Unlike deep sleep, a *historical* SD failure must not strand this boot.
+// Hold the same SD mutex; never restart across an open recording or a mounted
+// card that fails the existing CMD13/quiesce check.
+bool odysseyPrepareSdForCommittedOtaRestart(uint32_t timeoutMs) {
+  OdysseySdGuard guard(pdMS_TO_TICKS(timeoutMs));
+  if (!guard || odysseyRecording.load()) {
+    Serial.println("[OTA] restart deferred: live SD transaction");
+    return false;
+  }
+  const bool ready=odysseySdReady();
+  const uint8_t previous=odysseySdBootState.load();
+  if (!ready) {
+    // Boot/media probe already declared VFS/SD unavailable, so there is no
+    // application-owned open file. Ignore the persisted sleep veto ONLY here.
+    odysseySdReleaseLocked();
+    Serial.printf("[OTA] restart permitted with unmounted SD previousState=%u unsafe=%u\n",
+      unsigned(previous),odysseySdUnsafeToSleep.load()?1u:0u);
+    return true;
+  }
+  const uint8_t idle=odysseySdQuiesceLocked(ODYSSEY_SD_QUIESCE_BUDGET_MS);
+  odysseySdReleaseLocked();
+  if (idle!=1) {
+    odysseySdUnsafeToSleep=true;
+    Serial.println("[OTA] restart deferred: mounted SD failed quiesce");
+    return false;
+  }
+  Serial.println("[OTA] restart permitted: mounted SD quiesced");
   return true;
 }
 #else
@@ -4720,6 +4766,16 @@ void setup() {
   snprintf(synapDeviceId, sizeof(synapDeviceId), "SYNAP-%02X%02X%02X%02X%02X%02X",
     factoryMac[0], factoryMac[1], factoryMac[2], factoryMac[3], factoryMac[4], factoryMac[5]);
   Serial.printf("Synap %u %s reset=%u\n", SYNAP_FIRMWARE_BUILD, synapDeviceId, unsigned(bootResetReason));
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  const esp_partition_t* runningOta=esp_ota_get_running_partition();
+  const esp_partition_t* selectedOta=esp_ota_get_boot_partition();
+  esp_ota_img_states_t otaImageState=ESP_OTA_IMG_UNDEFINED;
+  const esp_err_t imageStateResult=runningOta?esp_ota_get_state_partition(runningOta,&otaImageState):ESP_ERR_NOT_FOUND;
+  Serial.printf("[OTA] boot running=0x%lx selected=0x%lx imageState=%d stateResult=%d reset=%u build=%u\n",
+    static_cast<unsigned long>(runningOta?runningOta->address:0u),
+    static_cast<unsigned long>(selectedOta?selectedOta->address:0u),
+    int(otaImageState),int(imageStateResult),unsigned(bootResetReason),unsigned(SYNAP_FIRMWARE_BUILD));
+#endif
 #if SYNAP_CHAKSHU
   ChakshuMedia::initialize();
   ChakshuTransfer::initialize();
