@@ -962,3 +962,28 @@ a stable external power source, start with a short test, and verify the WAV
 on the PWA before relying on long recordings. Voltage-based recorder gating
 is intentionally not exercised in this diagnostic branch. The normal
 PWA battery telemetry and unrelated firmware power features are unchanged.
+
+### C3 SD write path fault localization after build 1951 (10 October 2026)
+
+Field observation on build 1951: `sdDetectionState=1, sdLiveProbeState=6,
+sdProbeState=49, lastRecordKiB=0`. Stage 49 maps to an `EIO` during
+directory setup *or* WAV creation (both reused the same mapping).
+This only proves that FAT was readable enough to mount; boot avoids write
+probes with untrusted ADC, so it **does not** validate CMD24 write capability.
+
+A deliberate offline double tap now records *the first* Arduino SD driver's
+`CMD24/CMD25` failure from `mkdir`, `fopen` and close. New persisted
+stage 76 = `mkdir('/synap')` failure; 77 = directory stat failure;
+78 = path not a directory. Stage 49 remains WAV `fopen` with `EIO`.
+The first fault code is `(command<<24)|(phase<<16)|(block<<8)|token`.
+`wrD` decodes command 24/25 and phase 1–9 as defined in
+`tools/patch-arduino-sd.cjs`; zero means the SD driver did not log a
+CMD24/25 failure. `wrE` stores the POSIX error (5 for EIO).
+
+BLE media operation 27 is a *read-only* report that returns
+`recordStage,recordBytes,wrE,wrD,wrN,wrX,wrF,sdState,sdLiveProbe,
+vfsStep,vfsErrno`. The PWA may inspect it after a failed recording.
+It never triggers remount, file creation, formatting or media reset.
+The report supports comparing SD command phase against the exact pinned
+Arduino ESP32 3.3.5 driver to select a verified remedy; do not
+speculatively increase retries or change FAT content on an unproven bus.
