@@ -658,3 +658,34 @@ produce the same symptom. OTA cannot revive an already hung, still-powered
 SD card. Confirm a genuine SD 3V3 power cycle and sync existing recordings
 before acceptance testing. Qualification still requires real-device long
 offline recordings, repeated start/stop cycles, recovery, and BLE sync.
+
+### Committed OTA and failed SD: distinct restart safety (10 October 2026)
+
+Field evidence on build 1908: a correctly transferred build 1913 remained
+`COMMITTED` (OTA state 5) and continued advertising build 1908. An existing
+`odysseySdUnsafeToSleep` latch from a failed offline write prevented the
+ordinary SD power-transition function from allowing reboot.
+
+The committed-update handler is now **separate from deep sleep/restart**:
+it acquires the shared SD mutex, refuses restart with an active recording,
+and requires the existing idle/quiesce proof if SD is mounted. But if the
+SD mount already failed and no application file is open, an old SD failure
+flag alone cannot prevent an already-committed firmware from booting. No
+partition table, WAV format, SD contents or sleep safety contract changes.
+The firmware prints the running/selected partition and OTA image status on
+boot and the partition selection result on commit.
+
+C3 mount VFS diagnostics now identify the failing operation:
+`vfsStep=7` means `fputc` failed and `vfsStep=12` means `fflush` failed
+(after a successful `fputc`). Existing 8/9 remain close/unlink failures.
+Neither operation is automatically retried or formatted.
+
+**Bootstrap limitation:** this fix is not present in build 1908. If an older
+firmware commits a newer OTA image but blocks its restart, power must
+actually be cycled, and successful boot of the new image must be confirmed.
+ESP-IDF rollback can still occur if the candidate image does not validate.
+PWA shell198 recognizes OTA state 5 and stops offering a second transfer.
+
+A device with invalid battery voltage telemetry, media I/O failures or
+possible power instability still needs physical validation. Do not erase SD
+recordings to repair the OTA flow.
