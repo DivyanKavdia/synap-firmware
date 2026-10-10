@@ -32,7 +32,7 @@ test('busy latency patch upgrades previous 5-second patch and rejects source dri
 });
 
 test('C3 production CMD24 writer completes 4 KiB as eight verified sectors, without CMD25 STOP',()=>{
-  const driver=patchC3([stopBefore,byteBefore,before,multiBefore].join('\\n'));
+  const driver=patchC3([stopBefore,byteBefore,before,multiBefore].join('\n'));
   assert.match(driver,/SYNAP_SD_C3_CMD24_SECTORS/);
   assert.match(driver,/SYNAP_SD_C3_STABLE_READY/);
   const base=fs.readFileSync('tests/arduino-sd-busy-latency.cpp','utf8');
