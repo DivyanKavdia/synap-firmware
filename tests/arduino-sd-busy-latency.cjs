@@ -3,12 +3,20 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const {nativeTest}=require('./support/native.cjs');
-const {patch,before,multiBefore,byteBefore,byteTimeoutOnly,stopBefore,byteAfter,stopAfter}=require('../tools/patch-arduino-sd.cjs');
+const {patch,before,after,multiBefore,multiAfter,faultHeader,byteBefore,byteTimeoutOnly,stopBefore,byteAfter,stopAfter}=require('../tools/patch-arduino-sd.cjs');
 
 test('C3 write driver consumes delayed busy after data and STOP before releasing CS',()=>{
   const driver=patch([stopBefore,byteBefore,before,multiBefore].join('\n'));
   const fixture=fs.readFileSync('tests/arduino-sd-busy-latency.cpp','utf8');
   nativeTest(fixture.replace('// INSERT DRIVER',driver));
+});
+
+test('metadata CMD25 upgrade accepts the complete build-1957 patched driver',()=>{
+  const old=[stopAfter,byteAfter,faultHeader+after,multiAfter].join('\n');
+  const fresh=patch([stopBefore,byteBefore,before,multiBefore].join('\n'));
+  assert.equal(patch(old),fresh);
+  assert.match(fresh,/return sdWriteSectors\(pdrv, buffer, sector, 1\)/);
+  assert.match(fresh,/if \(count <= 0\)/);
 });
 
 test('busy latency patch upgrades previous 5-second patch and rejects source drift',()=>{

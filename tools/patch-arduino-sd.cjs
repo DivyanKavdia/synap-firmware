@@ -87,6 +87,18 @@ const after = `bool sdWriteSector(uint8_t pdrv, const char *buffer, unsigned lon
 }`;
 
 // Compact pinned driver fault code: [command 24/25][phase][sector index][token].
+// SD cards may terminate CMD25 after one block. Use that same completion
+// path for FAT/directory sectors; preserve the original MMC command choice.
+const singleAfter = `bool sdWriteSectors(uint8_t pdrv, const char *buffer, unsigned long long sector, int count);
+${after.replace('bool sdWriteSector(', 'bool synapSdWriteMmcSector(')}
+bool sdWriteSector(uint8_t pdrv, const char *buffer, unsigned long long sector) {
+  // SYNAP_SD_METADATA_CMD25: exactly one sector, then write STOP and status.
+  // Never fall back to CMD24 after a timeout: durability is then unknown.
+  if (s_cards[pdrv]->type == CARD_MMC)
+    return synapSdWriteMmcSector(pdrv, buffer, sector);
+  return sdWriteSectors(pdrv, buffer, sector, 1);
+}`;
+
 // Capture the FIRST error in a recording, even if fclose subsequently writes.
 const faultHeader = `static volatile uint32_t synapSdWriteFault=0;
 static inline void synapRecordSdWriteFault(uint8_t command,uint8_t phase,uint8_t block,uint8_t token) {
@@ -168,6 +180,16 @@ function patch(source) {
     }
     output = output.replace(multiBefore, multiAfter);
   }
+  if (!output.includes('SYNAP_SD_METADATA_CMD25')) {
+    if (output.split(after).length!==2)
+      throw new Error('Pinned C3 single-sector write path changed');
+    output=output.replace(after,singleAfter);
+  }
+  // Upgrade the previous C3 patch too, without duplicating its implementation.
+  const oldCount='if (count <= 1) {\n    synapRecordSdWriteFault(25,9,0,0);';
+  const newCount='if (count <= 0) {\n    synapRecordSdWriteFault(25,9,0,0);';
+  if (output.includes(oldCount)) output=output.replace(oldCount,newCount);
+  else if (!output.includes(newCount)) throw new Error('Pinned C3 CMD25 count guard changed');
   return output;
 }
 
@@ -185,4 +207,4 @@ if (require.main === module) {
   console.log('Applied pinned C3 CMD24/CMD25 write-completion fixes');
 }
 
-module.exports = { patch, install, before, after, multiBefore, multiAfter, faultHeader, byteBefore, byteAfter, byteTimeoutOnly, stopBefore, stopAfter };
+module.exports = { patch, install, before, after, singleAfter, multiBefore, multiAfter, faultHeader, byteBefore, byteAfter, byteTimeoutOnly, stopBefore, stopAfter };
