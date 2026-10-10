@@ -215,6 +215,16 @@ std::atomic<uint32_t> odysseySdSleepGuardUntil{0};
 // Latches a failed SD idle/quiesce or unresolved write fault. Never permit a
 // later deep-sleep retry to mistake the now-unmounted card for an absent card.
 std::atomic<bool> odysseySdUnsafeToSleep{false};
+// Rev K battery is routed through a diode to the SuperMini VIN input.
+// The SD 3V3 rail is not independently measured: this is a deliberately
+// conservative START/CONTINUE gate, not a regulator power-good signal.
+constexpr uint16_t ODYSSEY_SD_WRITE_START_MIN_MV=3900u;
+constexpr uint16_t ODYSSEY_SD_WRITE_CONTINUE_MIN_MV=3800u;
+bool odysseySdPowerSafe(uint16_t floorMv) {
+  return batteryAvailable.load() && batteryMillivolts>=floorMv &&
+    batteryMillivolts<=4350u;
+}
+
 void odysseyToggleRecording();
 bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs);
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs);
