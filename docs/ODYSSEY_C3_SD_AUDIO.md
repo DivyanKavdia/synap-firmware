@@ -1062,3 +1062,27 @@ status errors, zero-count rejection, MMC compatibility, and eight-sector
 audio writes. This is a protocol compatibility remedy for the observed
 CMD24 failure, not proof that the card or power rail is healthy. Real-device
 mkdir, recording, STOP and transfer verification remain necessary.
+
+### Stage-72 investigation: two-sample CMD25 busy polling (candidate)
+
+The October 10 offline take progressed for roughly two minutes, then stage 72
+identified an `fsync` checkpoint failure (`errno=EIO`,
+`wrD=0x19070100`: CMD25 one-sector STOP programming timeout). The later
+recovery snapshot reported MISO low even while CS was high, 1023 raw-zero
+samples, and unavailable storage. These diagnostics do not prove whether the
+SD card firmware, supply integrity, SPI timing, or the host's STOP timing was
+responsible; the recorded `lastRecordKiB=2040` is a *saturated* progress
+counter, not the full byte count. Use read-only operation 27 for exact
+`recordBytes` following PWA PR #183.
+
+Arduino-ESP32 3.3.5 `sdWait()` accepts one nonzero byte. The ESP-IDF v5.5
+SDSPI host instead requires two nonzero busy-poll observations before it
+proceeds. Candidate firmware PR #180 adds this two-sample readiness poll only
+inside the C3 CMD25 write path, before blocks, before STOP, and after STOP,
+without lengthening the five-second deadline, replaying uncertain writes,
+altering MMC/CMD24, the 4 KiB recording batch, SPI pinout, power policy, or
+OTA partitions. Native tests inject two transient 0xFF samples before the
+program-busy period. A card that remains busy returns an explicit fault and
+must not be hammered with retries. This is a protocol hardening hypothesis,
+not field-verified recovery; keep PR #180 separate from production until
+recovery/readback and physical long-duration recording tests pass.
