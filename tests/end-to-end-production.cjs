@@ -26,7 +26,9 @@ test('C3 production image uses guarded append-only multi-block offline recording
   assert.match(c3,/file=fopen\(fullPath,"wb"\)/);
   assert.doesNotMatch(c3,/esp_vfs_fat_create_contiguous_file|ODYSSEY_SD_RECORD_RESERVE_BYTES|ftruncate\(|odysseyFinalizeWav|fseek\(file,0/);
   assert.doesNotMatch(c3,/stat\(fullPath/);
-  assert.doesNotMatch(c3,/checkpointAt|odysseyCheckpointWav/);
+  assert.match(c3,/odysseyCheckpointWav\(file,checkpointErrno\)/);
+  assert.match(c3,/uint32_t\(millis\(\)-lastCheckpointAt\)>=ODYSSEY_SD_CHECKPOINT_INTERVAL_MS/);
+  assert.doesNotMatch(c3,/fseek\(file,0|ftruncate\(|SD\.format\(/);
   assert.match(c3,/ODYSSEY_SD_MAX_OPEN_FILES=1/);
   assert.match(c3,/alignas\(4\) static uint8_t batch\[4096\]/);
   assert.match(c3,/setvbuf\(file,nullptr,_IONBF,0\)/);
