@@ -20,7 +20,7 @@ test('target catalog keeps S3 SuperMini as primary',()=>{
   assert.equal(c3sd.hardware.batteryCellMv,2);
   assert.equal(c3sd.hardware.batteryAdcMv,1);
   assert.equal(c3sd.hardware.batteryFullMv,4150);
-  assert.deepEqual(c3sd.hardware.sdBatteryCalibration,{batteryAdcMv:1,batteryCellMv:2,batteryFullMv:4200});
+  assert.deepEqual(c3sd.hardware.sdBatteryCalibration,{batteryAdcMv:470,batteryCellMv:1470,batteryFullMv:4200});
 });
 
 test('secondary generated target preserves the production interaction contract',()=>{

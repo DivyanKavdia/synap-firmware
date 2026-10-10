@@ -854,10 +854,11 @@ void stopMicrophone() {
 static std::atomic<bool> odysseySdBatteryDividerObserved{false};
 void markOdysseySdBatteryDividerPresent() { odysseySdBatteryDividerObserved=true; }
 bool odysseySdBatteryDividerPresent() { return odysseySdBatteryDividerObserved.load(); }
-// Rev K R1/R2 are both 470 kOhm per the released BOM and PCB netlist.
-// Both standard and SD C3 therefore reconstruct cell voltage at x2.
-// Keep the SD-present flag for the 4200 mV full-scale policy, not ratio inference.
-// A plausible single ADC reading cannot identify physically identical dividers.
+// Field Odyssey C3+SD is assembled with R1=1 MOhm from SW_BAT
+// to GPIO1 and R2=470 kOhm from GPIO1 to GND (1470/470 ratio).
+// Standard C3 remains x2. Rev K's archived BOM differs (470k/470k);
+// SD detection selects the field profile, not a resistor measurement.
+// Do not compensate untrusted ADC readings with a guessed gain.
 #else
 void markOdysseySdBatteryDividerPresent() {}
 bool odysseySdBatteryDividerPresent() { return false; }
@@ -883,8 +884,7 @@ uint32_t batteryCellMillivoltsFromAdc(uint32_t adcMv) {
 }
 
 uint8_t batteryPercentFromMillivolts(uint16_t mv) {
-  // Standard C3 keeps its historical 2:1 calibration. Once SD hardware is
-  // positively observed, the SD-equipped C3 uses its 470 kOhm / 470 kOhm divider.
+  // Standard C3 remains 2:1; assembled C3+SD uses 1M/470k.
   const uint16_t fullMv=batteryFullMillivolts();
   if (mv>=fullMv) return 100;
   if (mv>=4050) return 90 + uint32_t(mv-4050)*10/(fullMv-4050);
@@ -967,7 +967,7 @@ void sampleBattery(bool force) {
   bool adcUnstable=false;
 #if CONFIG_IDF_TARGET_ESP32C3
   if (odysseySdBatteryDividerPresent()) {
-    // R1=R2=470 kOhm, Rth~235 kOhm (C1=100 nF on Rev K).
+    // Assembled C3+SD R1=1 MOhm, R2=470 kOhm, Rth~320 kOhm; C1=100 nF.
     // Trim two extremes on either side. A wide central spread means the
     // voltage is not a trustworthy battery measurement; never fake 100%.
     for (uint8_t i=1;i<16;++i) {
@@ -1247,15 +1247,19 @@ void enterDeepSleep(const char* reason) {
     // held-LOW SD bus. Explicit op14 or a disconnected double-tap can retry;
     // a verified mount is still required before entering deep sleep.
     if (odysseySdBusStuckLow()) return;
-    // A previous quiesce may have left the always-powered SD host unmounted.
-    // One bounded explicit recovery is safer than either forcing sleep or
-    // permanently leaving the C3 awake. Throttle recurring idle-timeout
-    // retries to protect the battery and preserve responsiveness.
+    // Never hammer an unmounted, continuously powered card every 30 s.
+    // The first background sleep recovery is bounded to ONE attempt per boot.
+    // Untrusted battery readings must not trigger any unattended SD activity.
+    // Explicit user-initiated SD recovery/sync remains separately available.
     static uint32_t lastSdSleepRecoveryAt=0;
+    static uint8_t automaticSleepSdRecoveryAttempts=0;
     const uint32_t now=millis();
+    if (automaticSleepSdRecoveryAttempts>=1u ||
+        !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) return;
     if (lastSdSleepRecoveryAt && uint32_t(now-lastSdSleepRecoveryAt)<30000u) return;
     lastSdSleepRecoveryAt=now ? now : 1u;
-    Serial.println("[POWER] retrying validated SD mount before sleep");
+    ++automaticSleepSdRecoveryAttempts;
+    Serial.println("[POWER] one guarded SD recovery attempt before sleep");
     if (!odysseyRecoverSdCard("sleep")) {
       Serial.println("[POWER] sleep deferred: SD recovery has not completed");
       return;
@@ -2861,8 +2865,12 @@ static bool odysseySdBeginLocked() {
   odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
   const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,
     ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false);
-  if (mounted) markOdysseySdBatteryDividerPresent();
-  else odysseySdReleaseLocked();
+  if (mounted) {
+    markOdysseySdBatteryDividerPresent();
+    // Re-sample under the field C3+SD 1M/470k profile before any VFS FAT
+    // write probe. Implausible ADC measurements remain read-only.
+    sampleBattery(true);
+  } else odysseySdReleaseLocked();
   return mounted;
 }
 
@@ -2878,13 +2886,43 @@ static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
   }
   struct stat recordings{};
   if (stat(ODYSSEY_SD_RECORDING_DIR,&recordings)!=0) {
-    if (errno!=ENOENT || !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV) ||
+    const int directoryErrno=errno;
+    // A previous WAV write reached the card, but the FAT directory entry
+    // may have been lost in a CMD24 metadata timeout. NEVER auto-create an
+    // apparently empty /synap over a card with known recording history.
+    // Creating a new directory would mutate FAT and obscure recovery.
+    if (directoryErrno==ENOENT && odysseyLastRecordFailureBytes()>0u) {
+      odysseySdVfsStep=13;odysseySdVfsErrno=ENOENT;
+      odysseySdLastMountError=ESP_FAIL;
+      odysseySdBootState=2;odysseySdProbeStage=4;
+      Serial.printf("[SD] %s /synap missing after %lu previous PCM bytes: preserve card, do not mkdir\n",
+        reason,static_cast<unsigned long>(odysseyLastRecordFailureBytes()));
+      // Read-only root inspection is diagnostic, not proof that lost FAT
+      // entries are recoverable. Limit traversal to avoid a new read storm.
+      DIR* rootEntries=opendir(ODYSSEY_SD_MOUNT_POINT);
+      if (rootEntries) {
+        for (uint8_t i=0;i<8u;++i) {
+          errno=0;
+          dirent* entry=readdir(rootEntries);
+          if (!entry) {
+            if (errno) Serial.printf("[SD] root inspect errno=%d\n",errno);
+            break;
+          }
+          Serial.printf("[SD] root entry %u: %.48s\n",unsigned(i),entry->d_name);
+        }
+        (void)closedir(rootEntries);
+      }
+      return false;
+    }
+    if (directoryErrno!=ENOENT || !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV) ||
         mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) {
-      odysseySdVfsStep=2;odysseySdVfsErrno=errno?errno:EIO;
+      const int failedErrno=directoryErrno==ENOENT && !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)
+        ? ENOENT : (errno?errno:EIO);
+      odysseySdVfsStep=2;odysseySdVfsErrno=failedErrno;
       odysseySdLastMountError=ESP_FAIL;
       odysseySdBootState=2;odysseySdProbeStage=4;
       Serial.printf("[SD] %s attempt %u recording directory unavailable errno=%d\n",
-        reason,unsigned(attempt),errno);
+        reason,unsigned(attempt),failedErrno);
       return false;
     }
   } else if (!S_ISDIR(recordings.st_mode)) {
@@ -4882,9 +4920,8 @@ void setup() {
   touchChangedAt=millis();
   pinMode(BATTERY_ADC_PIN, INPUT);
   analogReadResolution(12);
-  // Rev K C3 uses a 470 kOhm / 470 kOhm battery divider (2:1).
-  // The ADC therefore sees ~2.1 V at a fully charged cell. Keep C3
-  // attenuation at 11 dB; retain S3's separate validated 6 dB setting.
+  // Standard C3 uses x2; assembled field C3+SD uses 1 MOhm/470 kOhm
+  // (~1.343V at a 4.2V cell). C3 stays at 11 dB and S3 at 6 dB.
 #if CONFIG_IDF_TARGET_ESP32C3
   analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);
 #else
@@ -4896,8 +4933,8 @@ void setup() {
   if (!confirmTouchWakeGesture()) return;
   disconnectedAt=millis();
   setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
-  // Rev K C3 and the standard C3 both use 2:1. Initial C3 sampling occurs
-  // immediately before SD initialization so low-power probing stays read-only.
+  // Initial C3 sample is provisional x2. On SD.begin the field C3+SD
+  // profile changes to 1470/470 and resamples before any FAT write probe.
 #if !CONFIG_IDF_TARGET_ESP32C3
   sampleBattery(true);
 #endif
@@ -4933,12 +4970,11 @@ void setup() {
   // The worker cannot touch storage until BLE submits a request.
   OdysseyWifi::initialize();
   OdysseyTransfer::initialize();
-  // Battery divider is x2 on Rev K, irrespective of SD detection. Establish
-  // write safety before mount validation can create a probe file.
+  // Conservative initial x2 sample. After SD.begin, assembled C3+SD
+  // switches to 1470/470 and resamples before FAT write-probe admission.
   sampleBattery(true);
   odysseyInitializeSdCardBeforeBle();
-  // The initial C3 reading now uses the appropriate divider when SD mounts.
-  // Standard C3 without SD retains its 2:1 measurement.
+  // Refresh telemetry after SD detection; standard C3 without SD stays x2.
   sampleBattery(true);
 #else
   // Odyssey S3 remains a detection-only target.

@@ -3,10 +3,11 @@
 static std::atomic<bool> odysseySdBatteryDividerObserved{false};
 void markOdysseySdBatteryDividerPresent() { odysseySdBatteryDividerObserved=true; }
 bool odysseySdBatteryDividerPresent() { return odysseySdBatteryDividerObserved.load(); }
-// Rev K R1/R2 are both 470 kOhm per the released BOM and PCB netlist.
-// Both standard and SD C3 therefore reconstruct cell voltage at x2.
-// Keep the SD-present flag for the 4200 mV full-scale policy, not ratio inference.
-// A plausible single ADC reading cannot identify physically identical dividers.
+// Field Odyssey C3+SD is assembled with R1=1 MOhm from SW_BAT
+// to GPIO1 and R2=470 kOhm from GPIO1 to GND (1470/470 ratio).
+// Standard C3 remains x2. Rev K's archived BOM differs (470k/470k);
+// SD detection selects the field profile, not a resistor measurement.
+// Do not compensate untrusted ADC readings with a guessed gain.
 #else
 void markOdysseySdBatteryDividerPresent() {}
 bool odysseySdBatteryDividerPresent() { return false; }
@@ -32,8 +33,7 @@ uint32_t batteryCellMillivoltsFromAdc(uint32_t adcMv) {
 }
 
 uint8_t batteryPercentFromMillivolts(uint16_t mv) {
-  // Standard C3 keeps its historical 2:1 calibration. Once SD hardware is
-  // positively observed, the SD-equipped C3 uses its 470 kOhm / 470 kOhm divider.
+  // Standard C3 remains 2:1; assembled C3+SD uses 1M/470k.
   const uint16_t fullMv=batteryFullMillivolts();
   if (mv>=fullMv) return 100;
   if (mv>=4050) return 90 + uint32_t(mv-4050)*10/(fullMv-4050);
@@ -116,7 +116,7 @@ void sampleBattery(bool force) {
   bool adcUnstable=false;
 #if CONFIG_IDF_TARGET_ESP32C3
   if (odysseySdBatteryDividerPresent()) {
-    // R1=R2=470 kOhm, Rth~235 kOhm (C1=100 nF on Rev K).
+    // Assembled C3+SD R1=1 MOhm, R2=470 kOhm, Rth~320 kOhm; C1=100 nF.
     // Trim two extremes on either side. A wide central spread means the
     // voltage is not a trustworthy battery measurement; never fake 100%.
     for (uint8_t i=1;i<16;++i) {

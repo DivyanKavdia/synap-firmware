@@ -1,6 +1,19 @@
 # Odyssey C3 SD audio — production architecture and recovery reference
 
-**Reviewed: 7 October 2026.**
+**Reviewed: 10 October 2026 (assembled C3+SD divider correction).**
+
+**Current field-board profile:** Assembled Odyssey C3+SD has R1=1 MΩ
+(SW_BAT to GPIO1), R2=470 kΩ (GPIO1 to GND); firmware reconstructs
+**cellMv = round(adcMv × 1470/470)** after confirming SD mount. Standard
+C3 without SD remains x2. The archived Rev K PCB BOM/NETLIST separately
+specify 470k/470k: do not infer field resistor values from manufacturing
+files or from ADC measurements. A mounted SD triggers a fresh 1470/470
+sample before any FAT write probe. At 4.30V battery the ideal GPIO1 is
+~1.375V. Measured GPIO1=1.34V versus firmware ADC=1.60V remains a
+separate physical measurement discrepancy; firmware must mark ~5.0V
+reconstructions untrusted and keep SD writes blocked until verified.
+No arbitrary ADC gain, SD safety bypass or OTA partition change.
+
 
 This document is the canonical reference for the optional microSD implementation on **Synap Odyssey C3 / ESP32-C3 SuperMini**. It exists specifically to prevent a repeat of the October 2026 debugging cycle.
 
@@ -690,19 +703,15 @@ A device with invalid battery voltage telemetry, media I/O failures or
 possible power instability still needs physical validation. Do not erase SD
 recordings to repair the OTA flow.
 
-### Rev K battery hardware and root-cause SD write telemetry (10 October 2026)
+### Rev K BOM versus assembled field C3+SD and SD write telemetry (10 October 2026)
 
-**Hardware correction:** `hardware/odyssey-c3/pcb/final/BOM.csv` explicitly
-specifies **R1/R2 = 470 kΩ / 470 kΩ**. The Rev K netlist confirms R1 connects
-`SW_BAT` to `BAT_ADC` and R2 connects `BAT_ADC` to GND, with C1=100 nF
-from `BAT_ADC` to GND. The firmware's earlier *1 MΩ / 470 kΩ* calibration
-was an incorrect assumption and produced impossible `cellMv` values ~6.4 V
-from otherwise plausible ~2.05 V ADC readings. The updated Rev K profile
-uses **2:1**. Existing ADC readings that intermittently dip to ~0.7 V are
-still not proven accurate; actual battery and SD 3V3 supplies must be
-measured independently. Do not treat an invalid ADC as evidence of >6 V
-at the cell. The ADC's 235 kΩ Thevenin source impedance and 100 nF input
-capacitor warrant physical sampling validation.
+**Hardware distinction:** Archived Rev K BOM specifies
+**R1/R2 = 470kΩ / 470kΩ** (2:1) with R1 SW_BAT to BAT_ADC, R2 BAT_ADC
+to GND, and C1=100nF; this is a manufacturing design, not an actual
+measurement of the tested field C3+SD device. The latter is physically
+assembled as **1MΩ / 470kΩ** (1470/470), with ~320kΩ Thevenin source
+impedance. Verify physical GPIO1, switched battery, and SD 3V3 rail;
+neither force-correct ADC samples nor bypass write safety.
 
 **SD write failure localization:** the C3-only pinned Arduino core patch
 now retains one compact, first-error 32-bit value `wrD` in the existing
@@ -853,3 +862,28 @@ battery thresholds. This **does not** repair a card held LOW, and must
 not be described as a substitute for regulator headroom or switchable
 SD power. Prefer read/sync of intact recordings after a true power-off
 (USB disconnected) and confirmation of a healthy mount.
+
+### 10 October 2026: build 1937 SD read-rescue findings
+On installed firmware **1937** the PWA reported `wrD=0x18040000` (a
+historical accepted CMD24 write followed by busy timeout), `lastRecordKiB=2040`,
+and `sdState=2`. Later it also reported `vfsStep=2,vfsErrno=2`, meaning
+the SD driver reached FAT/VFS but `/synap` was not present or could not
+be created. Low-level `CMD0=1,CMD8=1,R7=426` responses indicate the
+card answered SPI commands in that session; they do not prove intact FAT
+metadata or readable WAV files. The reported `mountAttempts=44` came
+from repeated attempted recovery; do not continue automatic mount cycling.
+
+The guarded fix adds `vfsStep=13,errno=ENOENT` when `/synap` is
+missing on a card with a **persisted prior WAV byte count**. In that
+case firmware intentionally **does not create the directory**, format
+the card, rewrite FAT, or claim that the old recordings were deleted.
+It prints up to eight root directory entries over serial for diagnostics.
+A genuinely fresh, never-recorded SD can still create its directory
+only when power measurements pass the existing safety gate.
+
+Automatic SD remount before idle sleep is now limited to a single
+attempt per boot and is suppressed entirely for an untrusted/weak ADC.
+Explicit user-initiated recovery is unchanged. This does **not** rebuild
+a missing FAT directory or recover orphaned data; such recovery
+requires a read-only sector-level image or validated offline repair on
+a spare card. Never automatically format or clear a card in this state.
