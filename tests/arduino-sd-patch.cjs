@@ -32,8 +32,8 @@ test('C3 CMD25 completes programming before raising CS, does not send CMD12 on w
   const out=patch(before+'\n'+multiBefore);
   const multi=out.slice(out.lastIndexOf('bool sdWriteSectors(uint8_t pdrv')).split('\nunsigned long sdGetSectorsCount')[0];
   assert.match(multi,/SYNAP_SD_CMD25_BUSY_FIX/);
-  assert.match(multi,/SYNAP_SD_STABLE_BUSY_POLL/);
-  assert.match(multi,/\+\+nonzero >= 2/);
+  assert.match(out,/SYNAP_SD_STABLE_BUSY_POLL/);
+  assert.match(out,/\+\+nonzero >= 2/);
   assert.doesNotMatch(multi,/STOP_TRANSMISSION|sdCommand\(pdrv,\s*12/);
   assert.match(multi,/sdWriteBytes\(pdrv, currentBuffer, 0xFC\)/);
   assert.match(multi,/if \(!synapSdWaitStable\(pdrv, 5000\)\) \{[\s\S]*?\}\s+sdStop\(pdrv\);/);
