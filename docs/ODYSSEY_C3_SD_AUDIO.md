@@ -869,3 +869,50 @@ from a successful firmware build.
 The policy preserves the existing 4KiB CMD25 writes, 10s fsync, FAT
 format, provisional WAV header, PWA media protocol, NVS, OTA partitions
 and no-automatic-format/no-delete semantics.
+
+### Low-supply write admission and non-destructive SD startup (10 October 2026)
+
+Field evidence on Odyssey C3 build 1922/1928: a 512-byte `CMD24` write
+returned an accepted token but did **not** finish busy-programming within
+5 s (`wrD=0x18040000`, `wrE=EIO`); subsequent CS-high MISO samples were
+overwhelmingly LOW and normal mount failed. The device reported a plausible
+**~3.49–3.51 V** cell after fixing the Rev K R1/R2 470k/470k divider.
+This is consistent with insufficient regulator headroom in the Rev K
+LiPo → SS14 → SuperMini 5V/VIN → SD 3V3 path, but the SD rail has not been
+probed: *power instability is a hypothesis, not proven causation*.
+
+The C3 firmware adds a conservative write-admission policy (Rev K only):
+
+- On boot, take a fresh calibrated ADC sample **before SD initialization**.
+- If the ADC is invalid or the measured cell is **below 3900 mV**, mount and
+  verify the *existing directory for reads*, but do **not** create/truncate
+  the temporary `.synap-media-probe.tmp` file. `vfsStep=11` indicates
+  "writable mount test intentionally skipped." This is **not** a native
+  read-only FatFs mount: Arduino `SD.begin()` retains its existing VFS mode.
+- Starting an offline recording requires two fresh valid battery samples
+  80 ms apart, both >=3900 mV; rejected attempts do not create any WAV.
+- During offline recording, check power every 5 s. Two consecutive invalid
+  or below-3800 mV samples request a controlled STOP, preserving the current
+  file's existing 10 s `f_sync` checkpoints and `fclose` semantics.
+- Keep catalogue and WAV download/verified sync available at low battery.
+  Explicit WAV deletion and clear-card operations require valid battery
+  >=3900 mV; no implicit format or delete ever occurs.
+- If a failed boot probe shows MISO stuck LOW, a double tap cannot trigger
+  another software SD reset. After CMD24 post-write busy timeout or
+  CMD25 busy/stop timeout, suppress post-record auto-rearm. A *genuine SD
+  power-off* may still be needed. Existing OTA/partition and BLE media
+  protocol remain unchanged.
+
+The 3900/3800 mV thresholds are intentionally conservative **interim
+protections**, not measured safe VIN/regulator/SD VCC limits. They also
+block SD writes on a stable external supply if the cell ADC is invalid or
+below threshold; no independent power-good or USB-is-powering-SD signal
+exists on Rev K. Do not infer actual SD VCC from the battery ADC. Bench
+qualification at varying battery state, with and without USB, is required
+before enabling unrestricted low-cell writing.
+
+Known limitations: `SD.begin()` can still require SPI/card startup even
+when skipping the application write probe. FAT damage and a card already
+held busy cannot be repaired with this policy alone. **Never delete or
+format a card with unsynced files.** A next board revision needs a stable
+dedicated SD regulator, local capacitors and a switchable SD rail.
