@@ -1,7 +1,27 @@
 // SYNAP_BATTERY_RUNTIME_BEGIN
 #if CONFIG_IDF_TARGET_ESP32C3
 static std::atomic<bool> odysseySdBatteryDividerObserved{false};
+// A C3+SD has the 1M/470k ADC divider independently of the SD card's
+// current read/write state. Remember an *observed successful mount* so a
+// failed boot-time SD probe cannot silently select the legacy x2 curve,
+// label a good battery critical, or request a misleading low-battery sleep.
+void restoreOdysseySdBatteryDividerProfile() {
+  Preferences prefs;
+  if (!prefs.begin("synap-c3-sd",true)) return;
+  const bool observed=prefs.getBool("adc-div",false);
+  prefs.end();
+  if (observed) odysseySdBatteryDividerObserved=true;
+}
 void markOdysseySdBatteryDividerPresent() { odysseySdBatteryDividerObserved=true; }
+void persistOdysseySdBatteryDividerProfile() {
+  if (!odysseySdBatteryDividerObserved.load()) return;
+  Preferences prefs;
+  if (!prefs.begin("synap-c3-sd",false)) return;
+  if (!prefs.getBool("adc-div",false) &&
+      prefs.putBool("adc-div",true)!=1u)
+    Serial.println("[BATTERY] C3 SD ADC divider profile not persisted");
+  prefs.end();
+}
 bool odysseySdBatteryDividerPresent() { return odysseySdBatteryDividerObserved.load(); }
 // Field Odyssey C3+SD is assembled with R1=1 MOhm from SW_BAT
 // to GPIO1 and R2=470 kOhm from GPIO1 to GND (1470/470 ratio).
@@ -9,7 +29,9 @@ bool odysseySdBatteryDividerPresent() { return odysseySdBatteryDividerObserved.l
 // SD detection selects the field profile, not a resistor measurement.
 // Do not compensate untrusted ADC readings with a guessed gain.
 #else
+void restoreOdysseySdBatteryDividerProfile() {}
 void markOdysseySdBatteryDividerPresent() {}
+void persistOdysseySdBatteryDividerProfile() {}
 bool odysseySdBatteryDividerPresent() { return false; }
 #endif
 
