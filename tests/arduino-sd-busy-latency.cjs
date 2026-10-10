@@ -3,7 +3,7 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const {nativeTest}=require('./support/native.cjs');
-const {patch,before,after,multiBefore,multiAfter,faultHeader,byteBefore,byteTimeoutOnly,stopBefore,byteAfter,stopAfter}=require('../tools/patch-arduino-sd.cjs');
+const {patchOld:patch,before,after,multiBefore,multiAfter,faultHeader,byteBefore,byteTimeoutOnly,stopBefore,byteAfter,stopAfter}=require('../tools/patch-arduino-sd.cjs');
 
 test('C3 write driver consumes delayed busy after data and STOP before releasing CS',()=>{
   const driver=patch([stopBefore,byteBefore,before,multiBefore].join('\n'));
