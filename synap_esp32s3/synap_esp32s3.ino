@@ -855,7 +855,27 @@ void stopMicrophone() {
 // SYNAP_BATTERY_RUNTIME_BEGIN
 #if CONFIG_IDF_TARGET_ESP32C3
 static std::atomic<bool> odysseySdBatteryDividerObserved{false};
+// A C3+SD has the 1M/470k ADC divider independently of the SD card's
+// current read/write state. Remember an *observed successful mount* so a
+// failed boot-time SD probe cannot silently select the legacy x2 curve,
+// label a good battery critical, or request a misleading low-battery sleep.
+void restoreOdysseySdBatteryDividerProfile() {
+  Preferences prefs;
+  if (!prefs.begin("synap-c3-sd",true)) return;
+  const bool observed=prefs.getBool("adc-div",false);
+  prefs.end();
+  if (observed) odysseySdBatteryDividerObserved=true;
+}
 void markOdysseySdBatteryDividerPresent() { odysseySdBatteryDividerObserved=true; }
+void persistOdysseySdBatteryDividerProfile() {
+  if (!odysseySdBatteryDividerObserved.load()) return;
+  Preferences prefs;
+  if (!prefs.begin("synap-c3-sd",false)) return;
+  if (!prefs.getBool("adc-div",false) &&
+      prefs.putBool("adc-div",true)!=1u)
+    Serial.println("[BATTERY] C3 SD ADC divider profile not persisted");
+  prefs.end();
+}
 bool odysseySdBatteryDividerPresent() { return odysseySdBatteryDividerObserved.load(); }
 // Field Odyssey C3+SD is assembled with R1=1 MOhm from SW_BAT
 // to GPIO1 and R2=470 kOhm from GPIO1 to GND (1470/470 ratio).
@@ -863,7 +883,9 @@ bool odysseySdBatteryDividerPresent() { return odysseySdBatteryDividerObserved.l
 // SD detection selects the field profile, not a resistor measurement.
 // Do not compensate untrusted ADC readings with a guessed gain.
 #else
+void restoreOdysseySdBatteryDividerProfile() {}
 void markOdysseySdBatteryDividerPresent() {}
+void persistOdysseySdBatteryDividerProfile() {}
 bool odysseySdBatteryDividerPresent() { return false; }
 #endif
 
@@ -3067,6 +3089,9 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
     return false;
   }
 
+  // Persist the field C3+SD divider only after a genuine mounted and
+  // VFS-validated SD session. This survives failed SD probes and cold boots.
+  persistOdysseySdBatteryDividerProfile();
   odysseySdLastMountError=ESP_OK;
   odysseySdBootState=1;
   odysseySdProbeStage=6;
@@ -5049,8 +5074,10 @@ void setup() {
   // The worker cannot touch storage until BLE submits a request.
   OdysseyWifi::initialize();
   OdysseyTransfer::initialize();
-  // Conservative initial x2 sample. After SD.begin, assembled C3+SD
-  // switches to 1470/470 and resamples before FAT write-probe admission.
+  // Restore the once-confirmed C3+SD divider before ANY battery reading.
+  // Card mount/write failures must not switch a fitted 1M/470k board to x2
+  // or falsely trip the critical-battery sleep guard.
+  restoreOdysseySdBatteryDividerProfile();
   sampleBattery(true);
   odysseyInitializeSdCardBeforeBle();
   // Refresh telemetry after SD detection; standard C3 without SD stays x2.
