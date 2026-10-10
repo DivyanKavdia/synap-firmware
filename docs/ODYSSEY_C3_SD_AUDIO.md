@@ -830,3 +830,42 @@ At low battery, catalogue and SD download must remain usable without
 creating a write probe or allowing deletion. At high battery, short
 and 15-minute offline recording must stop correctly and sync after
 cold restart. Capture SD1 VCC and CMD24 timing on an oscilloscope.
+
+### C3 low-voltage SD write containment and read-only rescue (10 October 2026)
+
+Field code wrD=402915328 (0x18040000) decodes to CMD24 single-sector
+write, phase 4: timeout waiting for the card to become ready after it
+accepted a write. The battery was ~3.49–3.51 V. A low-voltage supply
+is suspected but NOT verified without measurements at the actual SD VCC.
+
+**C3-only risk reduction**:
+- Boot samples the battery ADC before SD mount. Rev K divider is 470k/470k.
+- Below a valid conservative 3.90 V battery threshold, mount checks the
+  directory but skips the temporary create/flush/unlink write probe.
+  Existing recordings remain readable/syncable if FAT mounts; missing
+  /synap directories are not created under uncertain power.
+- Offline double-tap takes two fresh battery samples 80ms apart before
+  any recovery/mount/write. Invalid, absent, or low samples block writing.
+- During a take, sample roughly every five seconds after successful 4KiB
+  writes; two consecutive readings below 3.80V or untrusted readings
+  request normal STOP, giving time for existing fsync/fclose finalization.
+- File delete and clear card are also gated at the 3.90V write threshold.
+  BLE mutation returns BUSY (not success) when writing is forbidden.
+  Catalogue, download, verify remain accessible without this write gate.
+- When a captured driver write fault is CMD24 phase4 or CMD25 phase4/6/7,
+  suppress the automatic rearm that can hammer a still-busy powered SD
+  controller. Persist the original wrD/errno diagnostics and sleep veto.
+  Explicit user-requested recovery is still possible.
+
+**Limits:** The battery cell threshold is a guard, not confirmation
+that the SD rail stays at 3.3 V. Rev K battery -> SS14 -> SuperMini VIN
+is not a verified regulator power source, and the ADC cannot capture
+fast SD programming current transients. The conservative threshold may
+reject recordings with otherwise usable battery. Check SD VCC/GND with
+a scope on a spare device during the first and sustained SD write, on
+battery and on a stable USB supply. Do not claim physical reliability
+from a successful firmware build.
+
+The policy preserves the existing 4KiB CMD25 writes, 10s fsync, FAT
+format, provisional WAV header, PWA media protocol, NVS, OTA partitions
+and no-automatic-format/no-delete semantics.
