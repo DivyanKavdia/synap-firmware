@@ -10,7 +10,7 @@ test('pinned Arduino 3.3.5 CMD24 patch waits for programming before deselect',()
   assert.match(out,/token != 0x05/);
   assert.match(out,/token == 0x0B/);
   assert.match(out,/sdWait\(pdrv, 5000\)/);
-  assert.match(out,/if \(token != 0x05\) \{[\s\S]*?return false;\n      \}\n      if \(!sdWait\(pdrv, 5000\)\) \{\n        sdDeselectCard\(pdrv\);\n        return false;\n      \}\n      sdDeselectCard\(pdrv\);/,
+  assert.match(out,/if \(token != 0x05\) \{[\s\S]*?return false;\n      \}\n      if \(!sdWait\(pdrv, 5000\)\) \{\n        synapRecordSdWriteFault\(24,4,0,0\);\n        sdDeselectCard\(pdrv\);\n        return false;\n      \}\n      sdDeselectCard\(pdrv\);/,
     'accepted CMD24 path must wait for post-program busy before deselect');
   assert.doesNotMatch(out,/token == 0x0A|token == 0x0C/);
 });
