@@ -96,5 +96,6 @@ test('C3 FAT mkdir and WAV fopen errors preserve the FIRST core SD write fault',
  assert.match(report,/odysseyLastRecordFailureStage\(\)/);
  assert.match(report,/odysseyLastDriverWriteFault\(\)/);
  assert.match(report,/reply\(request,OK/);
- assert.doesNotMatch(report,/SD\.begin|SD\.end|mkdir\(|fopen\(|unlink\(|odysseyRecoverSdCard/);
+ const executable=report.replace(/\/\/[^\n]*/g,''); // comments may name forbidden operations
+ assert.doesNotMatch(executable,/SD\.begin|SD\.end|mkdir\(|fopen\(|unlink\(|odysseyRecoverSdCard/);
 });
