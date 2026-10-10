@@ -121,6 +121,33 @@ static uint8_t odysseyBatchWriteFailureStage(int error) {
     default: return 70;
   }
 }
+// A POSIX fsync on the pinned ESP-IDF FatFs VFS maps to f_sync(), which
+// commits file size, allocation and directory metadata while keeping this
+// sequential append-only WAV open. The transfer path synthesizes its WAV
+// header from the resulting file length after an interrupted power cycle.
+// Only invoke after a successful, complete 4 KiB batch under OdysseySdGuard.
+static constexpr uint32_t ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=10000u;
+static uint8_t odysseyCheckpointWav(FILE* file,int& savedErrno) {
+  savedErrno=0;
+  errno=0;
+  if (fflush(file)!=0) {
+    savedErrno=errno?errno:EIO;
+    return 71;  // C stdio flush failed
+  }
+  errno=0;
+  const int fd=fileno(file);
+  if (fd<0) {
+    savedErrno=errno?errno:EBADF;
+    return 73;  // no valid VFS descriptor; do not fsync arbitrary fd
+  }
+  errno=0;
+  if (fsync(fd)!=0) {
+    savedErrno=errno?errno:EIO;
+    return 72;  // FatFs f_sync failed: directory/size durability unknown
+  }
+  return 0;
+}
+
 static void odysseyRecordTake() {
   synapSdClearWriteFaultCode();
   odysseyPersistedDriverFault=0;
@@ -131,6 +158,8 @@ static void odysseyRecordTake() {
   bool failed=false;
   uint8_t failureStage=0;
   uint32_t bytes=0;
+  uint32_t lastCheckpointAt=millis();
+  uint32_t checkpointedPcmBytes=0;
   char logicalPath[64]{};
   char fullPath[96]{};
   uint8_t header[44];
@@ -225,6 +254,29 @@ static void odysseyRecordTake() {
           bytes+=batchPcmBytes;
           batchUsed=0;
           batchPcmBytes=0;
+          // Only checkpoint on a complete batch. FAT's file length is not
+          // guaranteed durable until f_sync; a power cut may lose all data
+          // since the previous successful checkpoint.
+          if (uint32_t(millis()-lastCheckpointAt)>=ODYSSEY_SD_CHECKPOINT_INTERVAL_MS) {
+            int checkpointErrno=0;
+            const uint8_t checkpointStage=odysseyCheckpointWav(file,checkpointErrno);
+            if (checkpointStage) {
+              odysseyPersistedWriteErrno=uint32_t(checkpointErrno);
+              odysseyPersistedWriteReturned=0;
+              odysseyPersistedWriteExpected=0;
+              odysseyPersistedWriteFerror=ferror(file)?1u:0u;
+              odysseyPersistedDriverFault=synapSdWriteFaultCode();
+              failed=true;
+              failureStage=checkpointStage;
+              Serial.printf("[SD] WAV checkpoint failed stage=%u errno=%d pcm=%lu lastSynced=%lu\n",
+                unsigned(checkpointStage),checkpointErrno,
+                static_cast<unsigned long>(bytes),
+                static_cast<unsigned long>(checkpointedPcmBytes));
+              break;
+            }
+            checkpointedPcmBytes=bytes;
+            lastCheckpointAt=millis();
+          }
         }
       }
 
@@ -264,9 +316,10 @@ static void odysseyRecordTake() {
       }
     }
 
-    // STOP is deliberately append-only. fclose() is the only filesystem
-    // finalization operation. The on-card header remains provisional; the
-    // transfer path synthesizes the correct 44-byte WAV header from file size.
+    // STOP is append-only. Periodic f_sync checkpoints plus fclose() make
+    // directory size and data recoverable when the filesystem remains readable.
+    // The on-card header stays provisional; transfer synthesizes the true WAV
+    // header from file size after a clean stop OR interrupted power cycle.
     if (fclose(file)!=0) {
       failed=true;
       if (!failureStage) failureStage=47;

@@ -733,3 +733,43 @@ SD1 VCC/GND at the first offline write, (3) 10 short offline captures,
 deletion, (6) real power-switch and USB backfeed behavior. If `wrD`
 indicates driver failure or MISO remains stuck LOW, adding OTA
 retries cannot prove recovery.
+
+### Power-loss-tolerant C3 WAV checkpoints (10 October 2026)
+
+Odyssey C3 **SD-equipped firmware only** now checkpoints an open WAV every
+10 seconds, **after** a complete successful 4 KiB PCM batch, while holding
+the existing full-take SD mutex. It calls `fflush(FILE*)` followed by
+`fsync(fileno(FILE*))`. On the pinned ESP-IDF FatFs VFS, `fsync` maps to
+FatFs `f_sync()`, committing allocation and file-size/directory metadata
+without closing/reopening or rewriting audio sectors.
+
+The on-disk WAV still starts with the provisional 44-byte header and
+appends only the original 4 KiB batches. After a sudden rail disconnect
+or MCU reset, provided the FAT volume is readable and the file has a
+committed length, **existing media-v1 catalogue/read** lists the WAV and
+synthesizes a correct 44-byte RIFF header during transfer, in memory.
+It does not format, truncate, rename, remove or edit the source file.
+Recoverability is best-effort, not guaranteed if power disappears during
+FAT metadata programming or the SD controller remains stuck LOW.
+
+If a checkpoint fails, the recorder **stops**; it retains the original
+file for later recovery and saves these stages in the existing failure
+journal:
+* `71` — C stdio `fflush` failed.
+* `72` — FatFs-backed POSIX `fsync` failed.
+* `73` — the VFS `fileno` was invalid.
+
+The first filesystem errno and any low-level `wrD` trace are preserved
+in the existing diagnostic response; no partial sector is replayed.
+A normal stop still calls `fclose` for finalization. No OTA partition
+changes, journal compatibility changes or PWA protocol changes.
+
+**Limits and validation:** a checkpoint helps make the last successful
+~10 seconds of data *durable at file-system level* but cannot provide
+atomic FAT transactions or electrically complete a microSD write.
+Hardware Rev K has no software-controlled SD rail. Before testing on
+sealed units: sync recordings while accessible. Qualify on a spare card
+by interrupting power after different checkpoints, remounting, verifying
+WAV readability/content and checking that no existing recordings are
+deleted. Test battery and USB supply separately because Rev K routes
+the single-cell battery through an SS14 diode to the SuperMini 5V input.

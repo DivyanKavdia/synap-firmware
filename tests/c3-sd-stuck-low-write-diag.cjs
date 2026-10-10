@@ -87,14 +87,15 @@ int main(){
 
 test('failed 4 KiB writes record errno, returned byte count and ferror before closing file',()=>{
   assert.equal((recorder.match(/odysseyPersistedWriteExpected=sizeof\(batch\);/g)||[]).length,2);
-  assert.equal((recorder.match(/odysseyPersistedWriteFerror=ferror\(file\)\?1u:0u;/g)||[]).length,2);
+  // Two failed batch writes plus one periodic fsync/flush checkpoint failure.
+  assert.equal((recorder.match(/odysseyPersistedWriteFerror=ferror\(file\)\?1u:0u;/g)||[]).length,3);
   assert.match(recorder,/const int writeError=errno;\s+odysseyPersistedWriteErrno=/);
   assert.match(recorder,/odysseyPersistRecordFailure\(persistedStage,bytes\)/);
   assert.match(recorder,/odysseyPersistRecordFailure\(0,0\)/);
   assert.match(recorder,/stage\?1u:0u/);
   assert.match(recorder,/prefs\.putBytes\("write",detail,sizeof\(detail\)\)/);
   assert.match(recorder,/synapSdClearWriteFaultCode\(\)/);
-  assert.equal((recorder.match(/odysseyPersistedDriverFault=synapSdWriteFaultCode\(\)/g)||[]).length,2);
+  assert.equal((recorder.match(/odysseyPersistedDriverFault=synapSdWriteFaultCode\(\)/g)||[]).length,3);
   assert.match(recorder,/prefs\.putBytes\("last",record,sizeof\(record\)\)/);
   assert.match(recorder,/legacy\?record\[0\]==1u:record\[0\]==2u/);
   assert.doesNotMatch(recorder,/fseek\(file,0|ftruncate\(/);
