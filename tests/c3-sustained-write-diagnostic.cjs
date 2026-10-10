@@ -80,3 +80,21 @@ test('C3 transfer synthesizes a valid virtual WAV header for append-only files',
   assert.match(transfer,/pcmBytes=totalBytes>44u\?totalBytes-44u:0u/);
   assert.match(transfer,/patchVirtualWavHeader\(bytes,size,offset,total\)/);
 });
+
+test('C3 FAT mkdir and WAV fopen errors preserve the FIRST core SD write fault',()=>{
+ const rec=read('firmware/shared/odyssey-sd-1631-recording.cpp');
+ assert.match(rec,/odysseyCaptureCreateFault\(savedErrno,"mkdir \/synap",failureStage\)/);
+ assert.match(rec,/failureStage=directoryErrno==ENOENT\?76u:77u/);
+ assert.match(rec,/failureStage=78/);
+ assert.match(rec,/odysseyCaptureCreateFault\(openError,"fopen WAV",failureStage\)/);
+ assert.match(rec,/odysseyPersistedDriverFault=synapSdWriteFaultCode\(\)/);
+ assert.match(rec,/odysseyPersistedWriteErrno=err>0/);
+ assert.match(rec,/odysseyCaptureCreateFault\(closeErrno,"fclose WAV",failureStage\)/);
+ assert.match(rec,/synapSdClearWriteFaultCode\(\)/);
+ const transfer=read('firmware/shared/odyssey-sd-1631-transfer.cpp');
+ const report=transfer.split('case 27: {')[1].split('case 4:')[0];
+ assert.match(report,/odysseyLastRecordFailureStage\(\)/);
+ assert.match(report,/odysseyLastDriverWriteFault\(\)/);
+ assert.match(report,/reply\(request,OK/);
+ assert.doesNotMatch(report,/SD\.begin|SD\.end|mkdir\(|fopen\(|unlink\(|odysseyRecoverSdCard/);
+});

@@ -378,6 +378,30 @@ static void worker(void*) {
         sdBleTransferInFlight=false;
         continue;
       case 16: error=OK; break;
+      case 27: {
+        // Purely read-only snapshot of the LAST recorder error after a
+        // reboot. It never calls SD.begin, SD.end, mkdir, fopen or recovery.
+        // Clients request this only when capabilities report stage >=40.
+        char detail[340];
+        const int n=snprintf(detail,sizeof(detail),
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"wrE\":%lu,\"wrD\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu,\"vfsStep\":%u,\"vfsErrno\":%ld}",
+          unsigned(odysseySdDetectionState()),
+          unsigned(odysseySdProbeState()),
+          unsigned(odysseyLastRecordFailureStage()),
+          static_cast<unsigned long>(odysseyLastRecordFailureBytes()),
+          static_cast<unsigned long>(odysseyLastWriteErrno()),
+          static_cast<unsigned long>(odysseyLastDriverWriteFault()),
+          static_cast<unsigned long>(odysseyLastWriteReturned()),
+          static_cast<unsigned long>(odysseyLastWriteExpected()),
+          static_cast<unsigned long>(odysseyLastWriteFerror()),
+          unsigned(odysseySdVfsStepValue()),
+          static_cast<long>(odysseySdVfsErrnoValue()));
+        if (n<0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
+        reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
+        sdBleLastTransferAt=millis();
+        sdBleTransferInFlight=false;
+        continue;
+      }
       case 4:
         error=readSelected(request.path,request.offset,total,bytes,size);
         if (error==IO_ERROR) odysseySdMarkVfsFailure();

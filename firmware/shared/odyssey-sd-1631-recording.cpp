@@ -152,6 +152,20 @@ static uint8_t odysseyCheckpointWav(FILE* file,int& savedErrno) {
 // The mounted FAT root, the storage mutex and each actual write determine
 // success. Do not block an actual SD I/O test on unrelated ADC telemetry.
 // Always reject stuck-low MISO, mount failure, short writes and sync errors.
+// Save the FIRST low-level CMD24/CMD25 fault even when FatFs aborts inside
+// mkdir() or fopen() before the normal audio fwrite() loop is entered.
+// A 0 driver fault with EIO points to another FAT/VFS I/O failure.
+static void odysseyCaptureCreateFault(int err,const char* operation,uint8_t stage) {
+  odysseyPersistedWriteErrno=err>0?uint32_t(err):uint32_t(EIO);
+  odysseyPersistedWriteReturned=0;
+  odysseyPersistedWriteExpected=0;
+  odysseyPersistedWriteFerror=0;
+  odysseyPersistedDriverFault=synapSdWriteFaultCode();
+  Serial.printf("[SD] %s failed stage=%u errno=%d driverFault=0x%08lx\\n",
+    operation,unsigned(stage),err,
+    static_cast<unsigned long>(odysseyPersistedDriverFault.load()));
+}
+
 static void odysseyRecordTake() {
   synapSdClearWriteFaultCode();
   odysseyPersistedDriverFault=0;
@@ -190,14 +204,16 @@ static void odysseyRecordTake() {
       if (directoryErrno!=ENOENT ||
           mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) {
         const int savedErrno=errno?errno:EIO;
-        failed=true;failureStage=odysseyCreateFailureStage(savedErrno);
-        Serial.printf("[SD] record directory initialization failed errno=%d stage=%u\n",
-          savedErrno,unsigned(failureStage));
+        // Stage 76 = mkdir failed; 77 = directory stat failed for an
+        // unexpected errno. Both were previously misreported as stage 49.
+        failed=true;failureStage=directoryErrno==ENOENT?76u:77u;
+        odysseyCaptureCreateFault(savedErrno,"mkdir /synap",failureStage);
       } else {
         Serial.println("[SD] offline gesture initialized /synap directory");
       }
     } else if (!S_ISDIR(recordingDir.st_mode)) {
-      failed=true;failureStage=odysseyCreateFailureStage(ENOTDIR);
+      failed=true;failureStage=78;
+      odysseyCaptureCreateFault(ENOTDIR,"/synap not directory",failureStage);
     }
   }
 
@@ -215,8 +231,8 @@ static void odysseyRecordTake() {
       if (!file) {
         const int openError=errno;
         failed=true;failureStage=odysseyCreateFailureStage(openError);
-        Serial.printf("[SD] WAV create failed errno=%d stage=%u path=%s\n",
-          openError,unsigned(failureStage),fullPath);
+        odysseyCaptureCreateFault(openError,"fopen WAV",failureStage);
+        Serial.printf("[SD] WAV create failed path=%s\n",fullPath);
       } else if (setvbuf(file,nullptr,_IONBF,0)!=0) {
         failed=true;failureStage=42;
       }
@@ -347,9 +363,13 @@ static void odysseyRecordTake() {
     // directory size and data recoverable when the filesystem remains readable.
     // The on-card header stays provisional; transfer synthesizes the true WAV
     // header from file size after a clean stop OR interrupted power cycle.
+    errno=0;
     if (fclose(file)!=0) {
+      const int closeErrno=errno;
       failed=true;
       if (!failureStage) failureStage=47;
+      if (!odysseyPersistedWriteErrno.load())
+        odysseyCaptureCreateFault(closeErrno,"fclose WAV",failureStage);
     }
     file=nullptr;
   }
