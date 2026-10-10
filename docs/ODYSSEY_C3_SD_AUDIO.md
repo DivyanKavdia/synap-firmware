@@ -830,3 +830,26 @@ At low battery, catalogue and SD download must remain usable without
 creating a write probe or allowing deletion. At high battery, short
 and 15-minute offline recording must stop correctly and sync after
 cold restart. Capture SD1 VCC and CMD24 timing on an oscilloscope.
+
+### Hardware-unresponsive SD: touch-recovery veto (10 October 2026)
+
+Firmware build 1935 already contains Rev K battery-admission safeguards:
+calibrated battery sampling before writable mount checks, two fresh >=3900 mV
+samples before offline recording, continued checks below 3800 mV,
+and read-first SD catalogue/sync access when the writable probe is skipped.
+The current patch adds **one further C3-only guard**: if the card is
+unmounted and the bit-bang probe confirms deselected MISO remains LOW
+(`odysseySdBusStuckLow()`, at least 900 of 1024 bytes zero), a hardware
+double-tap does not attempt another `odysseyRecoverSdCard("touch")`.
+Instead it records a visible fault, stops the task, releases recording
+state, and waits for an actual card-power recovery. This prevents
+repeating CMD0/CMD12/SPI reset against an electrically nonresponsive,
+still-powered card. A normal available card and a card with *non*
+stuck-low mount errors retain the previous one-gesture recovery path.
+
+No change to recording bytes, WAV transfer, 10s `f_sync`, PWA media
+protocol, SD deletion policy, OTA partitions, S3/Chakshu or native
+battery thresholds. This **does not** repair a card held LOW, and must
+not be described as a substitute for regulator headroom or switchable
+SD power. Prefer read/sync of intact recordings after a true power-off
+(USB disconnected) and confirmation of a healthy mount.
