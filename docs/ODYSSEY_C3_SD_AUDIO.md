@@ -1086,3 +1086,30 @@ program-busy period. A card that remains busy returns an explicit fault and
 must not be hammered with retries. This is a protocol hardening hypothesis,
 not field-verified recovery; keep PR #180 separate from production until
 recovery/readback and physical long-duration recording tests pass.
+
+
+### October 10 field reliability follow-up: one early FAT checkpoint
+
+The first field recording after release 1959 advanced past mkdir/file opening
+and wrote microphone PCM with a purple recording indication, then turned red
+after approximately two minutes. A following BLE catalogue returned failure,
+`sdProbeState=72`, `wrE=5`, and `wrD=0x19070100`: the last failed operation
+was `fsync` writing a single FAT metadata sector via CMD25, and STOP never
+completed within the five-second busy budget. The card then appeared held-low
+on MISO even with CS HIGH. This is not a microphone fault.
+
+The 10-second `f_sync` loop, introduced after the historically successful
+append-only STOP path, repeatedly forces the same high-risk FAT metadata write.
+Firmware PR #180 now performs **one checkpoint** after the first complete 4KiB
+audio batch at or after 10 seconds, making a prefix of the take recoverable.
+After that, all audio remains sequential CMD25 writes and further directory
+metadata is deferred until normal `fclose` on STOP. Abrupt power loss may lose
+the appended data after the first checkpoint, even if PCM sectors were accepted.
+The existing PWA read-only virtual WAV header and SD source retention continue.
+
+PR #180 also requires two nonzero ready samples for CMD25 phase 4/6/7 while
+CS remains asserted, following ESP-IDF's SDSPI polling strategy. The five-second
+timeout and first-fault codes remain; uncertain sectors are never replayed.
+Neither change can release a card/controller physically held BUSY or fix a
+defective SD supply; physical validation of boot, 10-minute capture, STOP,
+catalogue/download and second take remains required.
