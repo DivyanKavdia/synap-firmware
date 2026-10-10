@@ -174,7 +174,17 @@ class EspOtaBackend : public Synap::OtaBackend {
     handleActive=false; // esp_ota_end frees the handle even on error.
     return esp_ota_end(handle)==ESP_OK ? Synap::OK : Synap::INVALID_IMAGE;
   }
-  bool commit() override { return target && esp_ota_set_boot_partition(target)==ESP_OK; }
+  bool commit() override {
+    const esp_err_t result=target?esp_ota_set_boot_partition(target):ESP_ERR_INVALID_ARG;
+    const esp_partition_t* selected=esp_ota_get_boot_partition();
+    const esp_partition_t* running=esp_ota_get_running_partition();
+    Serial.printf("[OTA] commit result=%d running=0x%lx selected=0x%lx target=0x%lx\n",
+      int(result),
+      static_cast<unsigned long>(running?running->address:0u),
+      static_cast<unsigned long>(selected?selected->address:0u),
+      static_cast<unsigned long>(target?target->address:0u));
+    return result==ESP_OK;
+  }
   void abort() override {
     if (handleActive) { esp_ota_abort(handle);handleActive=false; }
     if (hashActive) { mbedtls_sha256_free(&sha);hashActive=false; }
@@ -314,7 +324,7 @@ void otaTick() {
     if (!rebootAt) rebootAt=millis();
     if (uint32_t(millis()-rebootAt)>1500) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-      if (!odysseyPrepareSdForPowerTransition(1000u)) return;
+      if (!odysseyPrepareSdForCommittedOtaRestart(1000u)) return;
 #endif
       ESP.restart();
     }

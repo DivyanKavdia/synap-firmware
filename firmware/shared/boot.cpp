@@ -132,6 +132,16 @@ void setup() {
   snprintf(synapDeviceId, sizeof(synapDeviceId), "SYNAP-%02X%02X%02X%02X%02X%02X",
     factoryMac[0], factoryMac[1], factoryMac[2], factoryMac[3], factoryMac[4], factoryMac[5]);
   Serial.printf("Synap %u %s reset=%u\n", SYNAP_FIRMWARE_BUILD, synapDeviceId, unsigned(bootResetReason));
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  const esp_partition_t* runningOta=esp_ota_get_running_partition();
+  const esp_partition_t* selectedOta=esp_ota_get_boot_partition();
+  esp_ota_img_states_t otaImageState=ESP_OTA_IMG_UNDEFINED;
+  const esp_err_t imageStateResult=runningOta?esp_ota_get_state_partition(runningOta,&otaImageState):ESP_ERR_NOT_FOUND;
+  Serial.printf("[OTA] boot running=0x%lx selected=0x%lx imageState=%d stateResult=%d reset=%u build=%u\n",
+    static_cast<unsigned long>(runningOta?runningOta->address:0u),
+    static_cast<unsigned long>(selectedOta?selectedOta->address:0u),
+    int(otaImageState),int(imageStateResult),unsigned(bootResetReason),unsigned(SYNAP_FIRMWARE_BUILD));
+#endif
 #if SYNAP_CHAKSHU
   ChakshuMedia::initialize();
   ChakshuTransfer::initialize();
