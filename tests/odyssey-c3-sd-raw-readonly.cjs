@@ -12,7 +12,7 @@ const op=transfer.split('case 28: {')[1].split('case 4:')[0];
 test('read-only diagnosis never repairs, formats, remounts, or writes sectors',()=>{
   assert.match(fn,/sdspi_host_init_device\(&device,&handle\)/);
   assert.match(fn,/sdmmc_card_init\(&host,&card\)/);
-  assert.match(fn,/sdmmc_read_sectors\(&card,sector,0,1\)/);
+  assert.match(fn,/sdmmc_read_sectors\(&card,bootBlock,0,1\)/);
   assert.doesNotMatch(fn,/(?:sdmmc_write_sectors|esp_vfs_fat_sdcard_format|f_mkfs|f_mount|f_open|f_write|unlink|odysseySdMountLocked|odysseySdRecover)/);
   assert.match(fn,/odysseySdRawProbeAttempted=true/);
   assert.match(fn,/odysseySdRawProbeCached/);
