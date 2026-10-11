@@ -44,5 +44,6 @@ test('purple remains visible until WAV finalization completes; verified recorder
   assert.match(rec,/alignas\(4\) static uint8_t batch\[4096\]/);
   assert.match(rec,/odysseyCheckpointWav\(file,checkpointErrno\)/);
   assert.match(rec,/fwrite\(batch,1,sizeof\(batch\),file\)/);
-  for(const part of [sd,tx,rec,cap,power,led,runtime]) assert.ok(ino.includes(part),'generated sketch must include changed shared module');
+  for(const part of [sd,tx,rec,cap,power,led]) assert.ok(ino.includes(part),'generated sketch must include changed shared module');
+  assert.match(ino,/bool odysseySdFormatting\(\); \/\/ media-v1 op19/);
 });
