@@ -84,18 +84,18 @@ test('1631 C3 worker exposes media-v1 plus BLE-controlled direct Wi-Fi upload',(
   assert.doesNotMatch(c3,/p\[16\]\|=4/,'C3 must not advertise destructive format');
 });
 
-test('release keeps Arduino 3.3.5 pinned and applies the CMD24 fix only before C3 compile',()=>{
+test('release retains pinned core but C3 uses native SDSPI, not Arduino patch',()=>{
   const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
   const compileLines=workflow.split('\n').filter(line=>line.includes('arduino-cli compile'));
   assert.equal(compileLines.length,3);
   assert(compileLines.every(line=>line.includes('-DUSE_REAL_I2S_MIC=1')));
   assert.match(workflow,/arduino-cli core install esp32:esp32@3\.3\.5/);
-  assert.match(workflow,/node tools\/patch-arduino-sd\.cjs/);
-  assert.match(workflow,/SYNAP_SD_CMD24_BUSY_FIX/);
-  const patchAt=workflow.indexOf('node tools/patch-arduino-sd.cjs');
+  assert.doesNotMatch(workflow,/node tools\/patch-arduino-sd\.cjs/);
+  assert.match(workflow,/grep -q 'esp_vfs_fat_sdspi_mount'/);
+  assert.match(workflow,/! grep -q 'SYNAP_SD_C3_CMD24_ONLY'/);
   const s3At=workflow.indexOf("--output-dir compiled-s3");
   const chakshuAt=workflow.indexOf("--output-dir compiled-chakshu");
   const c3At=workflow.indexOf("--output-dir compiled-c3");
-  assert(s3At>=0 && chakshuAt>s3At && patchAt>chakshuAt && c3At>patchAt,
-    'SD core patch must affect C3 only, after S3 and Chakshu are compiled');
+  assert(s3At>=0 && chakshuAt>s3At && c3At>chakshuAt);
+
 });
