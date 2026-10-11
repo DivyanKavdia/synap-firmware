@@ -2979,10 +2979,13 @@ static bool odysseySdBeginLocked() {
   mount.format_if_mount_failed=false;
   mount.max_files=ODYSSEY_SD_MAX_OPEN_FILES;
   mount.allocation_unit_size=4096; // ignored for an existing FAT filesystem
-  // IDF FAT diskio normally trusts cached card readiness; enable the real
-  // SD status check on this unstable removable-media path. Detect a failed
-  // controller earlier instead of issuing additional FAT metadata writes.
-  mount.disk_status_check_enable=true;
+  // FatFs disk_status_check_enable issues a *separate* CMD13 before ordinary
+  // filesystem operations. A transient post-write/program-busy CMD13 can
+  // return STA_NOINIT and poison reads/catalogue even when the previous
+  // SD sector operation was successful. The native SDSPI read/write paths
+  // already check SD responses and report actual I/O failures. Keep FatFs'
+  // disk status gate off; check CMD13 only at explicit power transitions.
+  mount.disk_status_check_enable=false;
   result=esp_vfs_fat_sdspi_mount(ODYSSEY_SD_MOUNT_POINT,
     &host,&device,&mount,&odysseySdNativeCard);
   if (result!=ESP_OK) {
@@ -4922,6 +4925,27 @@ static void worker(void*) {
         break;
       case 7:
         error=catalogue(total);
+        // After an SD metadata mutation, a card may still be completing
+        // internal programming. Retry ONE observational catalogue read after
+        // a bounded settle interval before declaring storage unavailable.
+        // No write/delete/reinit/remount is repeated. A partial catalogue
+        // remains an error, never a verified file absence.
+        if (error==IO_ERROR &&
+            (catalogueErrno==EIO || catalogueErrno==ENODEV ||
+             catalogueErrno==ETIMEDOUT) &&
+            request.connection==connectionGeneration.load() &&
+            deviceConnected.load() && !odysseyRecording.load()) {
+          const int firstError=catalogueErrno;
+          const uint8_t firstStep=catalogueStep;
+          Serial.printf("[SD] catalogue transient I/O op7 step=%u errno=%d; one read-only retry\\n",
+            unsigned(firstStep),firstError);
+          vTaskDelay(pdMS_TO_TICKS(120u));
+          if (request.connection==connectionGeneration.load() &&
+              deviceConnected.load() && odysseySdReady()) {
+            error=catalogue(total);
+            if (error==OK) Serial.println("[SD] catalogue recovered without remount or FAT writes");
+          }
+        }
         // ENOMEM/EOVERFLOW means the BLE catalogue is incomplete, not that the
         // SD controller has stopped responding. Fail closed but keep FAT
         // mounted for the user's existing recordings.
