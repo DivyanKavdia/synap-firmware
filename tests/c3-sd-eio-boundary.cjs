@@ -51,7 +51,7 @@ test('selected BUSY-low is separate from deselected stuck-low and vetoes new WAV
     'odysseySdRawZero=1023;odysseySdBootState=1;assert(!odysseySdControllerBusyLow());',
     'std::cout<<"PASS selected busy-low veto\\n";',
     '}'
-  ].join('\\n');
+  ].join('\n');
   assert.match(nativeTest(code),/PASS selected busy-low veto/);
   const task=recording.split('static void odysseyRecordTask(void*) {')[1]
     .split('bool odysseyPrepareForConnectedStreaming')[0];
