@@ -22,11 +22,13 @@ test('C3 persisted stage 70 diagnostics migrate from legacy NVS and survive soft
 #include <vector>
 #include <cstdio>
 #include <iostream>
-static std::vector<uint8_t> saved, extra;
+static std::vector<uint8_t> saved, extra, wireJournal;
 struct Preferences {
   bool begin(const char*,bool){return true;}
   std::vector<uint8_t>& bucket(const char* k){
-    return std::strcmp(k,"write")==0?extra:saved;
+    if(std::strcmp(k,"write")==0)return extra;
+    if(std::strcmp(k,"wire")==0)return wireJournal;
+    return saved;
   }
   size_t getBytesLength(const char* k){return bucket(k).size();}
   size_t getBytes(const char* k,void* out,size_t n){
@@ -39,12 +41,21 @@ struct Preferences {
   void end(){}
 };
 ${source}
+void odysseySdClearWireFault(){}
+uint32_t odysseySdWireFaultCmd(){return UINT32_MAX;}
+uint32_t odysseySdWireFaultError(){return 0;}
+uint32_t odysseySdWireFaultArg(){return 0;}
+uint32_t odysseySdWireFaultResponse(){return 0;}
+uint32_t odysseySdLastCmd13Response(){return 0;}
 static void resetLoaded(){
   odysseyPersistedRecordLoaded=false;
   odysseyPersistedRecordStage=0;odysseyPersistedRecordBytes=0;
   odysseyPersistedWriteErrno=0;odysseyPersistedWriteReturned=0;
   odysseyPersistedWriteExpected=0;odysseyPersistedWriteFerror=0;
   odysseyPersistedDriverFault=0;
+  odysseyPersistedWireCmd=UINT32_MAX;
+  odysseyPersistedWireErr=0;odysseyPersistedWireArg=0;
+  odysseyPersistedWireRsp=0;odysseyPersistedWireCmd13=0;
 }
 int main(){
   uint32_t old[3]={1,70,2040u*1024u};
@@ -63,6 +74,7 @@ int main(){
   // Legacy firmware still reads the original three-word "last" record.
   assert(saved.size()==3u*sizeof(uint32_t));
   assert(extra.size()==7u*sizeof(uint32_t));
+  assert(wireJournal.size()==7u*sizeof(uint32_t));
   uint32_t retained[3]{};std::memcpy(retained,saved.data(),sizeof(retained));
   assert(retained[0]==1&&retained[1]==70&&retained[2]==2040u*1024u);
   resetLoaded();
