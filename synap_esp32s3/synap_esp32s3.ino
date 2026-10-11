@@ -1288,7 +1288,8 @@ void enterDeepSleep(const char* reason) {
     // CMD12/CMD0 or re-mount merely to enter sleep. Only an explicit user
     // action or a genuine SD power cycle may re-arm the card after this fault.
     const uint8_t pendingRecordFault=odysseyLastRecordFailureStage();
-    if (pendingRecordFault>=44u && pendingRecordFault!=48u) return;
+    if (!odysseySdReady() &&
+        pendingRecordFault>=44u && pendingRecordFault!=48u) return;
     // Do not autonomously repeat destructive reinitialization on a proven
     // held-LOW SD bus. Explicit op14 or a disconnected double-tap can retry;
     // a verified mount is still required before entering deep sleep.
