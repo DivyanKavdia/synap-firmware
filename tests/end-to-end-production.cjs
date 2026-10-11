@@ -15,7 +15,7 @@ test('final production S3 source retains core audio, touch, low-power and OTA co
   assert.match(s3,/publishPowerEvent\(POWER_STATE_DEEP_SLEEP\)/);
 });
 
-test('C3 production image uses guarded append-only multi-block offline recording',()=>{
+test('C3 production image uses guarded append-only single-sector offline recording',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);
   assert.match(c3,/static constexpr spi_host_device_t ODYSSEY_SD_HOST=SPI2_HOST/);
@@ -38,7 +38,7 @@ test('C3 production image uses guarded append-only multi-block offline recording
   assert.match(c3,/ODYSSEY_SD_MAX_OPEN_FILES=1/);
   assert.match(c3,/alignas\(4\) static uint8_t batch\[4096\]/);
   assert.match(c3,/setvbuf\(file,nullptr,_IONBF,0\)/);
-  assert.match(c3,/fwrite\(batch,1,sizeof\(batch\),file\)/);
+  assert.match(c3,/odysseyWritePcmBatch\(file,batch,sizeof\(batch\)\)/);
   assert.match(c3,/memset\(batch\+batchUsed,0,sizeof\(batch\)-batchUsed\)/);
   assert.match(c3,/fclose\(file\)/);
   assert.doesNotMatch(c3,/uint8_t sector\[512\]|fwrite\(sector/);
