@@ -2592,6 +2592,15 @@ bool odysseySdBusStuckLow() {
   return odysseySdBootState.load()!=1 &&
     odysseySdBitBangCsHigh.load()==0 && odysseySdRawZero.load()>=900u;
 }
+// Field signature: CS-high DO releases normally, but the selected card
+// drives 0x00 continuously (~1023/1024 bytes) and cannot accept CMD0.
+// Refuse repeated mount/recover attempts until an actual card rail reset.
+bool odysseySdControllerBusyLow() {
+  return odysseySdBootState.load()!=1 &&
+    odysseySdBitBangCsHigh.load()==1 &&
+    odysseySdBitBangCsLow.load()==1 &&
+    odysseySdRawZero.load()>=1000u && odysseySdRawFF.load()<=2u;
+}
 uint16_t odysseySdRawFFCount() { return odysseySdRawFF.load(); }
 uint16_t odysseySdRawFECount() { return odysseySdRawFE.load(); }
 uint16_t odysseySdRawOtherCount() { return odysseySdRawOther.load(); }
@@ -3179,6 +3188,11 @@ bool odysseyInitializeSdCardBeforeBle() {
 bool odysseyRecoverSdCard(const char* reason) {
   OdysseySdGuard guard(pdMS_TO_TICKS(5000));
   if (!guard) return false;
+  if (odysseySdControllerBusyLow()) {
+    odysseySdUnsafeToSleep=true;
+    Serial.println("[SD] recovery refused: selected SD still drives sustained busy-low, cycle SD power");
+    return false;
+  }
   odysseySdBootState=0;odysseySdProbeStage=0;
   odysseySdReleaseLocked();
   return odysseySdMountLocked(reason?reason:"op14",ODYSSEY_SD_RECOVERY_ATTEMPTS);
@@ -3744,6 +3758,23 @@ static void odysseyRecordTask(void*) {
     applyCpuPowerProfile(false);
     updateStatusLed(true);
     Serial.println("[SD] offline start blocked: MISO stuck LOW; full card power-cycle required");
+    vTaskDelete(nullptr);
+    return;
+  }
+  if (!odysseySdReady() && odysseySdControllerBusyLow()) {
+    // The last passive probe saw CS-high MISO released but a selected
+    // controller responding 0x00 continuously. A new mount cannot restore
+    // a card stuck internally BUSY. Never create another empty WAV or
+    // hammer the continuously-powered SD with CMD0/CMD12.
+    const uint32_t finalizedAt=millis();
+    odysseyRecordFaultAt=finalizedAt;
+    odysseySdSleepGuardUntil=finalizedAt+5000u;
+    disconnectedAt=finalizedAt;
+    odysseyRecording=false;
+    odysseyStopRequested=false;
+    applyCpuPowerProfile(false);
+    updateStatusLed(true);
+    Serial.println("[SD] offline start blocked: controller busy-low; power-cycle SD rail");
     vTaskDelete(nullptr);
     return;
   }
