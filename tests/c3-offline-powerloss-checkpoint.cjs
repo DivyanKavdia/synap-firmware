@@ -67,7 +67,7 @@ test('periodic 10-second native FatFs checkpoints after completed PCM batches',(
  const capture=recorder.split('static void odysseyRecordTake() {')[1].split('static void odysseyRecordTask(void*) {')[0];
  assert.match(capture,/OdysseySdGuard storage;/);
  const batch=capture.split('if (batchUsed==sizeof(batch)) {')[1].split('// Capture performs only sequential')[0];
- assert(batch.indexOf('const size_t written=odysseyWritePcmBatch(file,batch,sizeof(batch))')<batch.indexOf('bytes+=batchPcmBytes'));
+ assert(batch.indexOf('const size_t written=fwrite(batch')<batch.indexOf('bytes+=batchPcmBytes'));
  assert(batch.indexOf('bytes+=batchPcmBytes')<batch.indexOf('odysseyCheckpointWav(file,checkpointErrno)'));
   assert.match(batch,/if \(uint32_t\(millis\(\)-lastCheckpointAt\)>=ODYSSEY_SD_CHECKPOINT_INTERVAL_MS\)/);
  assert.match(batch,/if \(checkpointStage\) \{[\s\S]*?failed=true;[\s\S]*?failureStage=checkpointStage;[\s\S]*?break;/);
