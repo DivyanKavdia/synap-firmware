@@ -10,7 +10,7 @@ const detect=read('odyssey-sd-1631-detect.cpp');
 
 test('stuck-low detection recognizes deselected MISO held low, not normal card idle',()=>{
   const start=detect.indexOf('bool odysseySdBusStuckLow() {');
-  const end=detect.indexOf('\nuint16_t odysseySdRawFFCount()',start);
+  const end=detect.indexOf('\nbool odysseySdControllerBusyLow()',start);
   assert(start>=0 && end>start);
   const source=detect.slice(start,end);
   const code=[
