@@ -467,6 +467,23 @@ static void odysseyRecordTask(void*) {
     vTaskDelete(nullptr);
     return;
   }
+  if (!odysseySdReady() && odysseySdControllerBusyLow()) {
+    // The last passive probe saw CS-high MISO released but a selected
+    // controller responding 0x00 continuously. A new mount cannot restore
+    // a card stuck internally BUSY. Never create another empty WAV or
+    // hammer the continuously-powered SD with CMD0/CMD12.
+    const uint32_t finalizedAt=millis();
+    odysseyRecordFaultAt=finalizedAt;
+    odysseySdSleepGuardUntil=finalizedAt+5000u;
+    disconnectedAt=finalizedAt;
+    odysseyRecording=false;
+    odysseyStopRequested=false;
+    applyCpuPowerProfile(false);
+    updateStatusLed(true);
+    Serial.println("[SD] offline start blocked: controller busy-low; power-cycle SD rail");
+    vTaskDelete(nullptr);
+    return;
+  }
   if (!odysseySdReady()) {
     Serial.println("[SD] one-gesture offline start: recovering storage before capture");
     if (!odysseyRecoverSdCard("touch")) {
