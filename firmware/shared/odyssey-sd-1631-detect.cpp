@@ -434,68 +434,22 @@ static uint8_t odysseySdBitBangRecoverLocked(const char* reason) {
 //
 // Returns 1 when the bus reached a sustained idle window, 2 otherwise.
 static uint8_t odysseySdQuiesceLocked(uint32_t budgetMs) {
-  odysseySdReleaseLocked();
-  digitalWrite(ODYSSEY_SD_CS,HIGH);pinMode(ODYSSEY_SD_CS,OUTPUT);
-  pinMode(ODYSSEY_SD_SCK,OUTPUT);digitalWrite(ODYSSEY_SD_SCK,LOW);
-  pinMode(ODYSSEY_SD_MOSI,OUTPUT);digitalWrite(ODYSSEY_SD_MOSI,HIGH);
-  pinMode(ODYSSEY_SD_MISO,INPUT_PULLUP);
-  delayMicroseconds(50);
-
-  const uint32_t started=millis();
-  const int csHigh=digitalRead(ODYSSEY_SD_MISO)==HIGH?1:0;
-  for (uint8_t i=0;i<16;++i) (void)odysseySdBitBangTransfer(0xFF);
-
-  // The mounted FatFs session is closed and the storage mutex is held.
-  // On a healthy SD card, do NOT inject CMD12 into an already idle SPI bus:
-  // first require sustained 0xFF while selected AND a successful R2 status
-  // (CMD13). A pulled-up floating MISO alone is not sufficient proof.
-  uint16_t idleRun=0;
-  digitalWrite(ODYSSEY_SD_CS,LOW);
-  for (uint16_t i=0;i<256u && idleRun<64u;++i) {
-    const uint8_t response=odysseySdBitBangTransfer(0xFF);
-    if (response==0xFF) ++idleRun;
-    else idleRun=0;
-  }
-  digitalWrite(ODYSSEY_SD_CS,HIGH);
-  (void)odysseySdBitBangTransfer(0xFF);
-  if (idleRun>=64u) {
-    uint8_t status=0xFF;
-    const uint8_t r1=odysseySdBitBangCommand(13u,0u,0x01u,&status,1u);
-    if (r1==0x00u && status==0x00u) {
-      digitalWrite(ODYSSEY_SD_SCK,LOW);
-      digitalWrite(ODYSSEY_SD_MOSI,HIGH);
-      Serial.printf("[SD] quiesce idle=1 via CMD13 status=%u in %lums\n",
-        unsigned(status),static_cast<unsigned long>(millis()-started));
-      return 1;
+  (void)budgetMs;
+  // Native SDSPI knows whether the card has completed the last write.
+  // A direct CMD13 check is safer than injecting legacy CMD12/STOP tokens
+  // into a healthy native transaction stream during OTA/restart.
+  if (odysseySdNativeCard) {
+    const esp_err_t status=sdmmc_get_status(odysseySdNativeCard);
+    if (status!=ESP_OK) {
+      odysseySdLastMountError=status;
+      odysseySdUnsafeToSleep=true;
+      Serial.printf("[SD] native CMD13 idle status failed err=%s\\n",esp_err_to_name(status));
+      return 2;
     }
-    Serial.printf("[SD] CMD13 idle probe inconclusive r1=0x%02X status=0x%02X; using recovery quiesce\n",
-      unsigned(r1),unsigned(status));
   }
-
-  uint8_t candidate=0xFF;
-  uint32_t drained=0;
-  uint8_t state=odysseySdBitBangStopReadLocked(candidate,drained,budgetMs);
-
-  // A card left inside CMD25 ignores CMD12 and waits for a data token instead.
-  // Only reachable if budget remains, and with timeouts scaled to it.
-  uint8_t writeStop=0;
-  const uint32_t spent=uint32_t(millis()-started);
-  if (state!=1 && spent<budgetMs) {
-    const uint32_t remaining=budgetMs-spent;
-    writeStop=odysseySdBitBangStopWriteLocked(remaining/2u+1u,remaining/2u+1u);
-    if (writeStop==1) state=1;
-  }
-
-  // Park the bus the way a deselected card expects to find it.
-  digitalWrite(ODYSSEY_SD_CS,HIGH);
-  for (uint8_t i=0;i<10;++i) (void)odysseySdBitBangTransfer(0xFF);
-  digitalWrite(ODYSSEY_SD_SCK,LOW);
-  digitalWrite(ODYSSEY_SD_MOSI,HIGH);
-
-  Serial.printf("[SD] quiesce idle=%u csHigh=%d drain=%lu writeStop=%u in %lums\n",
-    unsigned(state),csHigh,static_cast<unsigned long>(drained),unsigned(writeStop),
-    static_cast<unsigned long>(millis()-started));
-  return state;
+  if (!odysseySdReleaseLocked()) return 2;
+  Serial.println("[SD] native SDSPI clean unmount before power transition");
+  return 1;
 }
 
 static bool odysseySdBeginLocked() {
@@ -684,10 +638,8 @@ static bool odysseySdMountLocked(const char* reason,uint8_t attempts) {
   if (odysseySdReady()) return true;
   for (uint8_t attempt=1;attempt<=attempts;++attempt) {
     if (odysseySdMountOnceLocked(reason,attempt)) return true;
-    // After a brownout, an all-zero response even with CS HIGH indicates a
-    // held-low bus. Repeating CMD12/CMD0 before advertising only delays BLE
-    // and can leave the battery exposed to repeated power spikes. Preserve
-    // fault diagnostics and offer explicit recovery after connectivity.
+    // Do not hammer a deselected busy-low SD on a sealed C3.
+    // A controller-only restart cannot physically power-cycle that card.
     if (reason && !strcmp(reason,"boot") &&
         odysseySdBitBangCsHigh.load()==0 && odysseySdRawZero.load()>=900u) {
       odysseySdUnsafeToSleep=true;
