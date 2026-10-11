@@ -5506,7 +5506,7 @@ static void worker(void*) {
       case 29: {
         // SD-independent sync trace. This reads only RAM counters from
         // previous op4/op12 requests; it must remain safe after mount loss.
-        char detail[320];
+        char detail[400];
         const int n=snprintf(detail,sizeof(detail),
           "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"reads\":%lu,\"cacheHits\":%lu,\"diskFills\":%lu,\"lastRequestedOffset\":%lu,\"lastOkOffset\":%lu,\"faultOffset\":%lu,\"windowRequests\":%lu,\"mtuFallbacks\":%lu}",
           unsigned(odysseySdDetectionState()),
