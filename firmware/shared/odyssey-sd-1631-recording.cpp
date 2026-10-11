@@ -638,7 +638,7 @@ void odysseyToggleRecording() {
     return;
   }
   if (deviceConnected.load() || streamingEnabled.load() || OdysseyWifi::busy() ||
-      otaBusy() || sleepPending) return;
+      odysseySdFormatting() || otaBusy() || sleepPending) return;
   if (!odysseySdReady()) {
     Serial.println("[TOUCH] SD unavailable; recording task will recover before capture");
   }
