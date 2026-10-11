@@ -426,8 +426,16 @@ static void odysseyRecordTake() {
   if (failed || bytes==0) {
     const uint8_t persistedStage=failureStage?failureStage:40;
     odysseyPersistRecordFailure(persistedStage,bytes);
-    odysseySdBootState=2;
-    odysseySdProbeStage=persistedStage;
+    // Mic failure (43) and an empty, user-stopped take (48) do not establish
+    // that the SD card failed. Keep a still-mounted FAT volume accessible so
+    // the user can delete incomplete WAVs. Only storage/verify faults revoke
+    // SD readiness. Never remove or format a failed recording automatically.
+    const bool storageFailure=persistedStage!=43u && persistedStage!=48u;
+    if (storageFailure) {
+      odysseySdBootState=2;
+      odysseySdProbeStage=persistedStage;
+      odysseySdUnsafeToSleep=true;
+    }
     odysseyRecordFaultAt=millis();
   } else {
     odysseyPersistRecordFailure(0,0);
@@ -480,29 +488,24 @@ static void odysseyRecordTask(void*) {
 
   odysseyRecordTake();
 
-  // A disk error marks the live mount unavailable. The take's guard has
-  // unwound at this point, so perform one bounded re-arm before returning to
-  // idle. Preserve the recorder failure stage/bytes for diagnostics.
-  const uint32_t driverFault=odysseyLastDriverWriteFault();
-  const uint8_t driverCommand=uint8_t(driverFault>>24);
-  const uint8_t driverPhase=uint8_t(driverFault>>16);
-  const bool stuckBusyWrite=
-    (driverCommand==24u && driverPhase==4u) ||
-    (driverCommand==25u && (driverPhase==4u || driverPhase==6u || driverPhase==7u));
-  if (!odysseySdReady() && odysseyLastRecordFailureStage() && !stuckBusyWrite) {
-    Serial.println("[SD] post-record failure: re-arming storage for next take");
-    (void)odysseyRecoverSdCard("rearm");
-  } else if (!odysseySdReady() && stuckBusyWrite) {
-    // A card held busy after accepting a sector must NOT be hammered with
-    // CMD0/CMD12/repeated SD.begin while it still has power.
+  // A native write/create/close EIO is a FatFs/VFS errno, NOT an SD
+  // wire-level CMD24/CMD25 result. synapSdWriteFaultCode() encodes faults as
+  // 0x20SS00EE (marker, stage, errno). The former decoder treated 0x20 as
+  // command 32, assumed the card was idle, and immediately issued CMD12/CMD0
+  // after a failed write. A card still BUSY/programming may then latch up
+  // until its power rail is cycled. Do not re-arm a failed, still-powered card
+  // in the recorder task. Keep the FAT volume and every partial take intact.
+  // Recovery is explicitly user-initiated (Check SD / a later touch gesture)
+  // after the bus has had time to settle, or follows a true card power cycle.
+  const uint8_t lastFault=odysseyLastRecordFailureStage();
+  if (!odysseySdReady() && lastFault) {
     odysseySdUnsafeToSleep=true;
-    Serial.printf("[SD] held-busy write fault 0x%08lx; suppress auto rearm until power-cycle\n",
-      static_cast<unsigned long>(driverFault));
+    Serial.printf("[SD] recorder fault stage=%u io=0x%08lx: skipping automatic remount; retain SD files\n",
+      unsigned(lastFault),static_cast<unsigned long>(odysseyLastDriverWriteFault()));
   }
   // An unresolved write/close failure could leave an always-powered SD card
   // inside CMD25 programming. Never allow a later idle timeout or user hold
   // to sleep based solely on the failed mount's "not ready" state.
-  const uint8_t lastFault=odysseyLastRecordFailureStage();
   if (!odysseySdReady() && lastFault>=44u && lastFault!=48u) {
     odysseySdUnsafeToSleep=true;
     Serial.printf("[POWER] C3 SD sleep inhibited: unrecovered record stage=%u\n",unsigned(lastFault));
