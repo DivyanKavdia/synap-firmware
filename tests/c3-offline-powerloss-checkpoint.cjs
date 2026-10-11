@@ -79,12 +79,15 @@ test('periodic 10-second native FatFs checkpoints after completed PCM batches',(
  assert.match(capture,/odysseyPersistRecordFailure\(persistedStage,bytes\)/);
 });
 test('power-interrupted WAV remains discoverable; download restores virtual RIFF header in RAM',()=>{
- const read=transfer.split('static uint8_t readSelected(')[1].split('static uint8_t catalogue(')[0];
+ const read=transfer.split('static uint8_t readWavChunk(')[1].split('static uint8_t readSelected(')[0];
  assert.match(read,/patchVirtualWavHeader\(bytes,size,offset,total\)/);
  const header=transfer.split('static void virtualWavHeader(')[1].split('static void notify',1)[0];
  assert.match(header,/put32le\(h\+40,pcmBytes\)/);
  assert.match(header,/put32le\(h\+4,pcmBytes\+36u\)/);
  assert.match(read,/FILE\* file=fopen\(full,"rb"\)/);
+ assert.match(read,/fclose\(file\)/);
+ assert.match(read,/sdBleReadCache\.valid=true/);
  assert.doesNotMatch(read,/fopen\(full,"wb"\)|ftruncate\(|unlink\(/);
- assert.match(transfer,/if \(stat\(full,&st\)!=0 \|\| !S_ISREG\(st\.st_mode\)/);
+ assert.match(read,/if \(stat\(full,&st\)!=0\)/);
+ assert.match(read,/!S_ISREG\(st\.st_mode\)/);
 });
