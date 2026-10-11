@@ -18,9 +18,9 @@ test('final production S3 source retains core audio, touch, low-power and OTA co
 test('C3 production image uses guarded append-only multi-block offline recording',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);
-  assert.match(c3,/static SPIClass odysseySdSpi\(FSPI\)/);
+  assert.match(c3,/static constexpr spi_host_device_t ODYSSEY_SD_HOST=SPI2_HOST/);
   assert.match(c3,/ODYSSEY_SD_DATA_FREQ_HZ=1000000u/);
-  assert.match(c3,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ/);
+  assert.match(c3,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT,/);
   assert.match(c3,/static void odysseyRecordTake\(\)/);
   assert.match(c3,/OdysseySdGuard storage/);
   assert.match(c3,/file=fopen\(fullPath,"wb"\)/);
@@ -60,7 +60,7 @@ test('C3 production image uses guarded append-only multi-block offline recording
   assert.match(c3,/patchVirtualWavHeader\(bytes,size,offset,total\)/);
   assert.doesNotMatch(c3,/odysseySustainedWriteProbe|\.synap-sustained-write\.tmp/);
   assert.doesNotMatch(c3,/odysseyLegacyRecordTask|file\.write\(reinterpret_cast<const uint8_t\*>\(pcm\)/);
-  assert.doesNotMatch(c3,/esp_vfs_fat_sdspi_mount|ODYSSEY_SD_WAV_RATE/);
+  assert.doesNotMatch(c3,/ODYSSEY_SD_WAV_RATE|esp_vfs_fat_sdcard_format/);
 });
 
 test('1631 C3 worker exposes media-v1 plus BLE-controlled direct Wi-Fi upload',()=>{
