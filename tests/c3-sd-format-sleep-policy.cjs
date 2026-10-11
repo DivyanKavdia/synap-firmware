@@ -10,6 +10,7 @@ const cap=read('firmware/shared/module-capabilities.cpp');
 const power=read('firmware/shared/power.cpp');
 const led=read('firmware/shared/status-led.cpp');
 const runtime=read('firmware/shared/runtime.cpp');
+const ota=read('firmware/shared/ota.cpp');
 const ino=read('synap_esp32s3/synap_esp32s3.ino');
 
 test('only explicitly confirmed operation 19 formats the already mounted FAT card',()=>{
@@ -33,6 +34,7 @@ test('offline C3+SD is awake for touch gestures, but SD-less C3 and manual sleep
   assert.match(power,/enterDeepSleep\("touch-hold"\)/);
   assert.match(sd,/power transition deferred: local recording or format active/);
   assert.match(runtime,/bool odysseySdFormatting\(\);/);
+  assert.match(ota,/odysseyRecording\.load\(\) \|\| OdysseyWifi::busy\(\) \|\| odysseySdFormatting\(\)/);
   assert.match(rec,/odysseySdFormatting\(\) \|\| otaBusy\(\)/);
 });
 
