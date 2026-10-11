@@ -27,7 +27,7 @@ test('C3 SD 1 MHz guarded boot precedes BLE; no silent auto-format',()=>{
   assert.match(sd,/ODYSSEY_SD_DATA_FREQ_HZ=1000000u/);
   assert.match(sd,/ODYSSEY_SD_BOOT_ATTEMPTS=1/);
   assert.match(sd,/odysseySdValidateVfsLocked\(reason,attempt\)/);
-  assert.match(sd,/SD\.begin\(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,/);
+  assert.match(sd,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT,/);
   assert.doesNotMatch(sd,/format_if_mount_failed\s*=\s*true|format_if_empty\s*=\s*true/);
   assert(boot.indexOf('odysseyInitializeSdCardBeforeBle();')<boot.indexOf('initializeBLE();'));
 });
