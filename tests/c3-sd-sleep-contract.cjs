@@ -37,7 +37,7 @@ test('C3 cannot enter deep sleep or reboot on a non-idle SD bus',()=>{
 
 test('C3 SD recorder keeps sleep veto through final batch, fclose, persistent diagnostics and recovery',()=>{
  const take=recorder.split('static void odysseyRecordTake() {')[1].split('static void odysseyRecordTask(void*) {')[0];
- assert.match(take,/odysseyWritePcmBatch\(file,batch,sizeof\(batch\)\)/);
+ assert.match(take,/fwrite\(batch,1,sizeof\(batch\),file\)/);
  assert.match(take,/if \(fclose\(file\)!=0\)/);
  const worker=recorder.split('static void odysseyRecordTask(void*) {')[1].split('bool odysseyPrepareForConnectedStreaming')[0];
  const takeEnd=worker.indexOf('odysseyRecordTake();');
