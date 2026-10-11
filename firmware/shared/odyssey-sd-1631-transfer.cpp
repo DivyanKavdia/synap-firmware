@@ -8,6 +8,12 @@ struct Request {
   uint8_t operation=0;
   char path[64]{};
 };
+// Shipping safety policy: physical C3+SD units have timed out on CMD24/CMD25
+// and become unavailable after FAT unlink/format. Until a verified hardware
+// and SDSPI fix exists, firmware itself must reject ALL BLE filesystem
+// mutators, including commands issued by cached/older PWA clients.
+// Does not gate disconnected recording, catalogue or verified SD reads.
+static constexpr bool ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false;
 static QueueHandle_t requests=nullptr;
 // Keep SD reads protected while BLE is transferring and briefly afterward.
 static std::atomic<bool> sdBleTransferInFlight{false};
@@ -510,6 +516,15 @@ static void worker(void*) {
       continue;
     }
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load()) continue;
+    // Gate before touching FAT, the read cache, catalogue, or any remount.
+    // BAD_COMMAND is the existing media-v1 'unsupported' error: no new ABI.
+    if (!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED &&
+        (request.operation==17u || request.operation==18u || request.operation==19u)) {
+      Serial.printf("[SD] BLE maintenance write refused op=%u; originals preserved\\n",
+        unsigned(request.operation));
+      reply(request,BAD_COMMAND);
+      continue;
+    }
     sdBleTransferInFlight=true;
     sdBleLastTransferAt=millis();
     // Connected remote standby only idles the microphone/CPU; SD media must
@@ -628,9 +643,9 @@ static void worker(void*) {
       case 29: {
         // SD-independent sync trace. This reads only RAM counters from
         // previous op4/op12 requests; it must remain safe after mount loss.
-        char detail[400];
+        char detail[480];
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"reads\":%lu,\"cacheHits\":%lu,\"diskFills\":%lu,\"lastRequestedOffset\":%lu,\"lastOkOffset\":%lu,\"faultOffset\":%lu,\"windowRequests\":%lu,\"mtuFallbacks\":%lu}",
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"reads\":%lu,\"cacheHits\":%lu,\"diskFills\":%lu,\"lastRequestedOffset\":%lu,\"lastOkOffset\":%lu,\"faultOffset\":%lu,\"windowRequests\":%lu,\"mtuFallbacks\":%lu,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireMs\":%lu}",
           unsigned(odysseySdDetectionState()),
           unsigned(odysseySdProbeState()),
           unsigned(sdLastMediaFaultOperation.load()),
@@ -643,7 +658,11 @@ static void worker(void*) {
           static_cast<unsigned long>(sdBleReadLastOkOffset),
           static_cast<unsigned long>(sdBleReadFailureOffset),
           static_cast<unsigned long>(sdBleReadWindowRequests),
-          static_cast<unsigned long>(sdBleReadMtuFallbacks));
+          static_cast<unsigned long>(sdBleReadMtuFallbacks),
+          static_cast<unsigned long>(odysseySdWireFaultCmd()),
+          static_cast<unsigned long>(odysseySdWireFaultError()),
+          static_cast<unsigned long>(odysseySdWireFaultArg()),
+          static_cast<unsigned long>(odysseySdWireFaultElapsedMs()));
         if (n<0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
