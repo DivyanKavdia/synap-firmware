@@ -72,10 +72,10 @@ test('C3 connected BLE uses mbuf-saving ADPCM, central-managed connection timing
   assert.match(ble,/bleServer->startAdvertising\(\)/);
 });
 
-test('Wi-Fi is advertised only if enabled and the shipped C3 feature defaults off',()=>{
+test('C3+SD Wi-Fi is opt-in at runtime and enabled only for the C3 profile',()=>{
   const wifi=shared('odyssey-c3-wifi.cpp'),
     cap=shared('module-capabilities.cpp');
-  assert.match(wifi,/#define SYNAP_C3_WIFI_UPLOAD_ENABLED 0/);
+  assert.match(wifi,/#define SYNAP_C3_WIFI_UPLOAD_ENABLED 1/);
   assert.match(wifi,/#if SYNAP_C3_WIFI_UPLOAD_ENABLED/);
   assert.match(cap,/if \(OdysseyWifi::available\(\)\) p\[16\]\|=2/);
 });
