@@ -26,6 +26,9 @@ test('C3+SD materialization targets unique firmware marker and leaves Chakshu/S3
   assert.doesNotMatch(c3,/SYNAP-ESP32C3-OTA-ID-V3/);
   assert.doesNotMatch(old,/SYNAP-ESP32C3-SD-OTA-ID-V1/);
   assert.match(c3,/#define SYNAP_CHAKSHU 0/);
+  assert.match(c3,/#define SYNAP_C3_WIFI_UPLOAD_ENABLED 1/);
+  assert.match(old,/#define SYNAP_C3_WIFI_UPLOAD_ENABLED 0/);
+  assert(c3.includes('WiFiClientSecure'), 'new source retains verified HTTPS uploader');
 });
 test('new C3+SD factory table has two large OTA slots without flash overlap',()=>{
   const csv=fs.readFileSync('partitions/c3-sd-dual-ota.csv','utf8');
