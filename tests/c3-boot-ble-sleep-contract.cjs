@@ -69,6 +69,6 @@ test('Recorder, OTA identity, SD pin mapping and generated firmware sketch stay 
   assert.match(ino,/if \(bootResetReason==ESP_RST_POWERON\) bootSleepWasLocked=false/);
   assert.match(ino,/bool busy\(\); \/\/ in-flight SD BLE transfer/);
   assert.match(ino,/alignas\(4\) static uint8_t batch\[4096\]/);
-  assert.match(ino,/ODYSSEY_SD_DATA_FREQ_HZ=1000000u/);
+  assert.match(ino,/ODYSSEY_SD_DATA_FREQ_HZ=800000u/);
   assert.match(sd,/esp_vfs_fat_sdspi_mount/); assert.match(sd,/mount\.format_if_mount_failed=false/);
 });
