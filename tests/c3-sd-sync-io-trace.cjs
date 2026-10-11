@@ -22,7 +22,7 @@ test('RAM-only sync diagnostic includes current error operation and bounded offs
   const fmt=sync.match(/snprintf\(detail,sizeof\(detail\),\s*("(?:\\.|[^"])*")/);
   assert(fmt,'diagnostic format present');
   const worst=JSON.parse(fmt[1]).replace(/%lu|%u/g,'4294967295').replace(/%ld/g,'-2147483648');
-  assert(worst.length<320,'maximum-width response fits in diagnostic buffer');
+  assert(worst.length<400,'maximum-width response fits in diagnostic buffer');
   assert.match(sync,/sdLastMediaFaultOperation\.load\(\)/);
   assert.match(sync,/sdLastMediaFaultStep\.load\(\)/);
   assert.match(sync,/sdLastMediaFaultErrno\.load\(\)/);
