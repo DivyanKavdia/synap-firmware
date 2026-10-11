@@ -3,7 +3,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 const root=path.resolve(__dirname,'..');
 const read=p=>fs.readFileSync(path.join(root,p),'utf8');
 
-test('C3 offline recorder is append-only and stages 4 KiB and writes checked 512-byte sectors',()=>{
+test('C3 offline recorder is append-only and writes aligned multi-sector batches',()=>{
   const source=read('firmware/shared/odyssey-sd-1631-recording.cpp');
   assert.doesNotMatch(source,/odysseySustainedWriteProbe|\.synap-sustained-write\.tmp|bytes=64000/);
   const take=source.split('static void odysseyRecordTake() {')[1];
@@ -22,7 +22,7 @@ test('C3 offline recorder is append-only and stages 4 KiB and writes checked 512
   assert.doesNotMatch(take,/fseek\(file,0|ftruncate\(|SD\.format\(/);
   assert.match(take,/alignas\(4\) static uint8_t batch\[4096\]/);
   assert.match(take,/setvbuf\(file,nullptr,_IONBF,0\)/);
-  assert.match(take,/odysseyWritePcmBatch\(file,batch,sizeof\(batch\)\)/);
+  assert.match(take,/fwrite\(batch,1,sizeof\(batch\),file\)/);
   assert.match(take,/memset\(batch\+batchUsed,0,sizeof\(batch\)-batchUsed\)/);
   assert.match(take,/fclose\(file\)/);
   assert.doesNotMatch(take,/uint8_t sector\[512\]|fwrite\(sector/);
