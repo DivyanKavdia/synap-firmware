@@ -496,7 +496,8 @@ static void worker(void*) {
       case 28: {
         // SD-independent FAT diagnostic: opt-in raw sector-0 read on a
         // non-mounted card. Never writes, repairs, formats, or remounts.
-        const OdysseySdRawProbeResult raw=odysseySdRawProbeOnce();
+        odysseySdRawProbeOnce();
+        const OdysseySdRawProbeResult raw=odysseySdRawProbeCached;
         char detail[256];
         const int n=snprintf(detail,sizeof(detail),
           "{\"version\":1,\"status\":%u,\"error\":%ld,\"sectors\":%lu,\"sectorBytes\":%u,\"signature\":%u,\"fatHint\":%u,\"partitionLba\":%lu,\"mountErr\":%ld,\"firstMountErr\":%ld,\"sdState\":%u,\"sdProbe\":%u}",
