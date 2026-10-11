@@ -227,6 +227,49 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
   const int n=snprintf(full,capacity,"%s%s",ODYSSEY_SD_MOUNT_POINT,logical);
   return n>0 && size_t(n)<capacity;
 }
+// C3-only FatFs disk adapter: one 512-byte SD command per sector.
+// Espressif chooses CMD25 for multi-sector writes; after interrupted CMD25,
+// a continuously powered SD controller can remain in a data/stop state.
+// Keep FatFs/VFS unchanged, but restrict the native device transactions to
+// CMD24 (write) and CMD17 (read), each completed by ESP-IDF.
+static BYTE odysseySdNativeDrive=0xff;
+static DSTATUS odysseySdDiskReady(BYTE drive) {
+  return odysseySdNativeCard && drive==odysseySdNativeDrive ? 0 : STA_NOINIT;
+}
+static DRESULT odysseySdDiskRead(BYTE drive,BYTE* data,DWORD sector,UINT count) {
+  if (odysseySdDiskReady(drive) || !data || !count) return RES_NOTRDY;
+  const sdmmc_card_t* card=odysseySdNativeCard;
+  if (card->csd.sector_size!=512u || uint64_t(sector)+count>card->csd.capacity)
+    return RES_PARERR;
+  for (UINT i=0;i<count;++i) {
+    const esp_err_t result=sdmmc_read_sectors(odysseySdNativeCard,
+      data+size_t(i)*512u,size_t(sector)+i,1u);
+    if (result!=ESP_OK) {
+      odysseySdUnsafeToSleep=true;
+      Serial.printf("[SD] CMD17 failed lba=%lu err=0x%x\\n",
+        static_cast<unsigned long>(sector+i),unsigned(result));
+      return RES_ERROR;
+    }
+  }
+  return RES_OK;
+}
+static DRESULT odysseySdDiskWrite(BYTE drive,const BYTE* data,DWORD sector,UINT count) {
+  if (odysseySdDiskReady(drive) || !data || !count) return RES_NOTRDY;
+  const sdmmc_card_t* card=odysseySdNativeCard;
+  if (card->csd.sector_size!=512u || uint64_t(sector)+count>card->csd.capacity)
+    return RES_PARERR;
+  for (UINT i=0;i<count;++i) {
+    const esp_err_t result=sdmmc_write_sectors(odysseySdNativeCard,
+      data+size_t(i)*512u,size_t(sector)+i,1u);
+    if (result!=ESP_OK) {
+      odysseySdUnsafeToSleep=true;
+      Serial.printf("[SD] CMD24 failed lba=%lu err=0x%x; no replay\\n",
+        static_cast<unsigned long>(sector+i),unsigned(result));
+      return RES_ERROR;
+    }
+  }
+  return RES_OK;
+}
 static bool odysseySdReleaseLocked() {
   // Only called while holding OdysseySdGuard. Never unmount while the
   // microphone recorder or an SD media transfer owns an open FILE*.
