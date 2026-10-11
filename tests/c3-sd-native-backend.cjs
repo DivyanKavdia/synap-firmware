@@ -41,7 +41,7 @@ test('Native C3 preserves append-only WAV, durable checkpoints, safe STOP and re
   assert.match(rec,/odysseyStopRequested\.load\(\)/);
   assert.match(rec,/fwrite\(/);
   assert.match(rec,/fclose\(file\)/);
-  assert.match(rec,/OdysseySdGuard guard/);
+  assert.match(rec,/OdysseySdGuard storage/);
   assert.match(transfer,/odysseySdPath\(/);
   assert.match(transfer,/fopen\(full,"rb"\)/);
   assert.match(detect,/sdmmc_get_status\(odysseySdNativeCard\)/);
