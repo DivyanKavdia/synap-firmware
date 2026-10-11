@@ -350,7 +350,11 @@ void powerTick() {
   sampleBattery(false);
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   if (odysseyRecording.load()) {
-    if (batteryCritical()) odysseyStopRequested=true;
+    // The SD file/host stays awake for the WHOLE active take, including
+    // checkpoint and STOP finalization. A confirmed critical battery may
+    // request orderly STOP; do not sleep until the recorder releases SD.
+    if (batteryCritical() && !odysseyStopRequested.exchange(true))
+      Serial.println("[POWER] critical battery requested offline SD STOP");
     return;
   }
   if (OdysseyWifi::busy() || OdysseyTransfer::busy()) return;
@@ -366,6 +370,13 @@ void powerTick() {
   }
   if (!deviceConnected.load() && !streamingEnabled.load() && !otaBusy() &&
       disconnectedAt && uint32_t(millis()-disconnectedAt)>=AUTO_SLEEP_DISCONNECTED_MS) {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+    // On the SD-equipped C3, disconnected means ready for the user's next
+    // offline double tap, not permission to deep-sleep after five minutes.
+    // Standard C3 with no mounted SD retains its legacy 5-minute timeout.
+    // Critical battery and explicit 4-second touch sleep are separate paths.
+    if (odysseySdReady()) return;
+#endif
     enterDeepSleep("disconnected-timeout");
   }
 }

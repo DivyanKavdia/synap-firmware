@@ -552,6 +552,27 @@ static void worker(void*) {
         else if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) error=BUSY;
         else total=clearRecordings();
         break;
+      case 19: {
+        // Destructive full-card format is a standalone PWA-confirmed action,
+        // never a side effect of a failed mount, catalogue, delete or STOP.
+        // Reject unexpected arguments and all unverified-voltage conditions.
+        selectedPath[0]=0;catalogueBuffer="";
+        if (request.offset!=0 || request.path[0]) error=BAD_COMMAND;
+        else if (!storageReady()) error=NO_SD;
+        else if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV) ||
+                 odysseySdUnsafeToSleep.load()) error=BUSY;
+        else {
+          const esp_err_t formatted=odysseyFormatSdCard();
+          if (formatted==ESP_OK) {
+            odysseyClearRecordFailureAfterFormat();
+            Serial.println("[SD] explicit format complete; catalogue invalidated");
+          } else {
+            noteSdMediaFault(19,1,int(formatted));
+            error=IO_ERROR;
+          }
+        }
+        break;
+      }
       // C3 direct Wi-Fi sync control. Configuration is staged in <=60-byte BLE
       // chunks so credentials and short-lived cloud tickets never need a new
       // characteristic or protocol version.
@@ -641,9 +662,8 @@ void initialize() {
 }
 
 void ble(BLEService* service) {
-  // Phase 2 keeps the proven request/response media-v1 transport and adds
-  // BLE-controlled C3 Wi-Fi cloud upload. Notification-window transfer and
-  // destructive full-card format remain unadvertised.
+  // Existing media-v1 BLE transport also accepts an explicit, confirmed
+  // full-card format (op19). Mount/recovery remains strictly non-formatting.
   auto* command=service->createCharacteristic("4fa12354-0000-1000-8000-00805f9b34fb",
     BLECharacteristic::PROPERTY_WRITE|BLECharacteristic::PROPERTY_WRITE_NR);
   command->setCallbacks(new CommandCallbacks());

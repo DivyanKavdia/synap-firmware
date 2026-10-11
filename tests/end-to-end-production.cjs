@@ -60,7 +60,8 @@ test('C3 production image uses guarded append-only multi-block offline recording
   assert.match(c3,/patchVirtualWavHeader\(bytes,size,offset,total\)/);
   assert.doesNotMatch(c3,/odysseySustainedWriteProbe|\.synap-sustained-write\.tmp/);
   assert.doesNotMatch(c3,/odysseyLegacyRecordTask|file\.write\(reinterpret_cast<const uint8_t\*>\(pcm\)/);
-  assert.doesNotMatch(c3,/ODYSSEY_SD_WAV_RATE|esp_vfs_fat_sdcard_format/);
+  assert.doesNotMatch(c3,/ODYSSEY_SD_WAV_RATE/);
+  assert.match(c3,/esp_err_t odysseyFormatSdCard\(\)/);
 });
 
 test('1631 C3 worker exposes media-v1 plus BLE-controlled direct Wi-Fi upload',()=>{
@@ -79,9 +80,9 @@ test('1631 C3 worker exposes media-v1 plus BLE-controlled direct Wi-Fi upload',(
   assert.match(c3,/request\.operation==25/);
   assert.match(c3,/case 26:/);
   assert.match(c3,/p\[16\]\|=2/,'C3 must advertise direct Wi-Fi upload');
-  assert.doesNotMatch(c3,/case 19:/,'full-card format must remain disabled');
+  assert.match(c3,/case 19:/,'full-card format requires a distinct explicit opcode');
   assert.match(c3,/patchVirtualWavHeader\(bytes,size,offset,total\)/);
-  assert.doesNotMatch(c3,/p\[16\]\|=4/,'C3 must not advertise destructive format');
+  assert.match(c3,/p\[16\]\|=4/,'C3 must advertise user-confirmed format only');
 });
 
 test('release retains pinned core but C3 uses native SDSPI, not Arduino patch',()=>{
