@@ -350,7 +350,10 @@ void powerTick() {
   sampleBattery(false);
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   if (odysseyRecording.load()) {
-    if (batteryCritical()) odysseyStopRequested=true;
+    if (batteryCritical() && !odysseyStopRequested.exchange(true))
+      Serial.println("[POWER] trusted critical battery requested offline SD STOP");
+    // No disconnected-idle or critical-battery deep sleep before recorder
+    // fsync/fclose, even if the PWA has never connected.
     return;
   }
   if (OdysseyWifi::busy() || OdysseyTransfer::busy()) return;
@@ -366,6 +369,13 @@ void powerTick() {
   }
   if (!deviceConnected.load() && !streamingEnabled.load() && !otaBusy() &&
       disconnectedAt && uint32_t(millis()-disconnectedAt)>=AUTO_SLEEP_DISCONNECTED_MS) {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+    // An SD-equipped Odyssey is an OFFLINE voice recorder while disconnected.
+    // Do not auto-sleep the C3 after five minutes and strand double-tap START.
+    // SD-less C3 retains the existing five-minute power saver; explicit
+    // four-second touch hold and trusted critical battery remain available.
+    if (odysseySdReady() || odysseySdFormatting()) return;
+#endif
     enterDeepSleep("disconnected-timeout");
   }
 }
