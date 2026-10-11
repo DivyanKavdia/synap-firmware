@@ -91,7 +91,8 @@ test('existing FAT volume uses native SDSPI without redundant FatFs CMD13 gating
   assert.match(detect,/host.max_freq_khz=ODYSSEY_SD_DATA_FREQ_HZ\/1000u/);
   assert.match(detect,/mount.disk_status_check_enable=false/);
   assert.match(detect,/mount.format_if_mount_failed=false/);
-  assert.doesNotMatch(detect,/esp_vfs_fat_sdcard_format\(/);
+  assert.match(detect,/esp_err_t odysseyFormatSdCard\(\)/);
+  assert.doesNotMatch(detect.split('static bool odysseySdBeginLocked() {')[1].split('static bool odysseySdValidateVfsLocked(')[0],/esp_vfs_fat_sdcard_format\(/);
   assert.match(detect,/ODYSSEY_SD_MAX_OPEN_FILES=1/);
 });
 
