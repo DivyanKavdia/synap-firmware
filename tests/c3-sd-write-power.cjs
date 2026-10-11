@@ -59,8 +59,16 @@ test('C3 SD boot mount is ADC-independent and read-only, even without /synap',()
  assert.match(transfer,/FILE\* file=fopen\(full,"rb"\)/);
 });
 
-test('destructive media operations require safe supply; user never sees successful deletion on reject',()=>{
- assert.match(transfer,/static uint8_t removeFile[\s\S]*?if \(!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)\) return BUSY;/);
+test('single-file SD deletion tolerates untrusted ADC; bulk cleanup keeps conservative power gate',()=>{
+ // A failed C3+SD ADC read cannot make a mounted card permanently undeletable.
+ // Explicit single-file deletion still fails closed on a trusted low cell voltage
+ // and on missing, unmounted, or inaccessible FAT, with verified unlink.
+ const remove=transfer.split('static uint8_t removeFile(const char* path) {')[1]
+   .split('static uint16_t clearRecordings()')[0];
+ assert.match(remove,/batteryAvailable\.load\(\) && batteryMillivolts<ODYSSEY_SD_WRITE_START_MIN_MV/);
+ assert.match(remove,/if \(!guard \|\| !storageReady\(\)\) return NO_SD;/);
+ assert.match(remove,/if \(unlink\(full\)!=0 && errno!=ENOENT\) return IO_ERROR;/);
+ assert.match(remove,/if \(stat\(full,&st\)==0\) return IO_ERROR;/);
  assert.match(transfer,/static uint16_t clearRecordings[\s\S]*?if \(!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)\) return 0;/);
  assert.match(transfer,/case 18:[\s\S]*?if \(!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)\) error=BUSY/);
  assert.doesNotMatch(transfer,/SD\.format\(/);
