@@ -68,6 +68,17 @@ static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=1000000u;
 static constexpr spi_host_device_t ODYSSEY_SD_HOST=SPI2_HOST;
 static sdmmc_card_t* odysseySdNativeCard=nullptr;
 static bool odysseySdNativeBusInitialized=false;
+static std::atomic<uint32_t> odysseyNativeIoFault{0};
+// Fault layout 0x20SS00EE (native FatFs stage SS, errno EE).
+// Keep the existing BLE/NVS diagnostic ABI; no Arduino SD driver is linked.
+extern "C" uint32_t synapSdWriteFaultCode() { return odysseyNativeIoFault.load(); }
+extern "C" void synapSdClearWriteFaultCode() { odysseyNativeIoFault=0; }
+void synapSdNoteNativeWriteError(uint8_t stage,int ioError) {
+  const uint32_t code=0x20000000u|(uint32_t(stage)<<16)|
+    uint32_t(ioError>0?ioError&255:EIO);
+  uint32_t expected=0;
+  (void)odysseyNativeIoFault.compare_exchange_strong(expected,code);
+}
 // Preserve the known-good build-1445 lifecycle: one mount attempt per
 // explicit action. Repeating SD.end()/SPI.end()/SD.begin() autonomously on a
 // continuously powered card is itself a state mutation and obscures the first
