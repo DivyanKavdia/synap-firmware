@@ -781,6 +781,55 @@ static bool odysseySdMountLocked(const char* reason,uint8_t attempts) {
   return false;
 }
 
+// Explicit, user-confirmed media op19 ONLY. Never invoked by boot, mount,
+ // sleep, recovery or a write error. Requires an already mounted FAT card;
+ // an unmountable/busy card cannot be force-formatted by this operation.
+esp_err_t odysseyFormatSdCard() {
+  OdysseySdGuard guard(pdMS_TO_TICKS(5000));
+  if (!guard || !odysseySdReady() || !odysseySdNativeCard ||
+      odysseyRecording.load() || odysseySdUnsafeToSleep.load()) {
+    return ESP_ERR_INVALID_STATE;
+  }
+  // FatFs helper formats the currently mounted volume and remounts it.
+  // Keep the existing SPI2 host, card handle, clock and storage mutex;
+  // do not add CMD0/CMD12 probes or a second SD driver.
+  const esp_err_t result=esp_vfs_fat_sdcard_format(
+    ODYSSEY_SD_MOUNT_POINT,odysseySdNativeCard);
+  if (result!=ESP_OK) {
+    odysseySdLastMountError=result;
+    odysseySdBootState=2;
+    odysseySdProbeStage=3;
+    odysseySdUnsafeToSleep=true;
+    Serial.printf("[SD] explicit FAT format failed err=%s; not retrying\\n",
+      esp_err_to_name(result));
+    return result;
+  }
+  if (!odysseySdValidateVfsLocked("format",1)) {
+    odysseySdUnsafeToSleep=true;
+    Serial.println("[SD] format returned OK but VFS verification failed");
+    return ESP_FAIL;
+  }
+  // A newly formatted card must have no Synap directory. If one survived,
+  // never report success and never erase local sync receipts in the PWA.
+  struct stat recordings{};
+  errno=0;
+  if (stat(ODYSSEY_SD_RECORDING_DIR,&recordings)==0 || errno!=ENOENT) {
+    odysseySdVfsStep=14;
+    odysseySdVfsErrno=errno?errno:EIO;
+    odysseySdBootState=2;
+    odysseySdProbeStage=4;
+    odysseySdUnsafeToSleep=true;
+    Serial.println("[SD] format verification failed: old /synap still visible");
+    return ESP_FAIL;
+  }
+  odysseySdLastMountError=ESP_OK;
+  odysseySdBootState=1;
+  odysseySdProbeStage=6;
+  odysseySdUnsafeToSleep=false;
+  Serial.println("[SD] user-confirmed FAT format verified; no Synap files remain");
+  return ESP_OK;
+}
+
 void odysseyDetectSdCard() {
   OdysseySdGuard guard;
   if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return; }
