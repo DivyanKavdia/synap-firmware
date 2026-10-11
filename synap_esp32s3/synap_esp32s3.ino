@@ -4318,7 +4318,7 @@ void odysseyToggleRecording() {
 // the OTA pipeline cannot publish fixes for the existing SD recorder.
 // Never enlarge the OTA partition without a separate migration design.
 #ifndef SYNAP_C3_WIFI_UPLOAD_ENABLED
-#define SYNAP_C3_WIFI_UPLOAD_ENABLED 0
+#define SYNAP_C3_WIFI_UPLOAD_ENABLED 1
 #endif
 #if SYNAP_C3_WIFI_UPLOAD_ENABLED
 #include <WiFi.h>
