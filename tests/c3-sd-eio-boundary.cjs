@@ -5,6 +5,7 @@ const fs=require('node:fs');
 const recording=fs.readFileSync('firmware/shared/odyssey-sd-1631-recording.cpp','utf8');
 const detect=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8');
 const transfer=fs.readFileSync('firmware/shared/odyssey-sd-1631-transfer.cpp','utf8');
+const power=fs.readFileSync('firmware/shared/power.cpp','utf8');
 
 test('a 16,340-byte PCM write failure is at the 16 KiB on-disk boundary',()=>{
   const accepted=16340;
@@ -15,6 +16,15 @@ test('a 16,340-byte PCM write failure is at the 16 KiB on-disk boundary',()=>{
   assert.match(detect,/0x20SS00EE/);
   assert.match(recording,/0x20SS00EE/);
   assert.doesNotMatch(recording,/driverCommand==24u|driverCommand==25u|stuckBusyWrite/);
+});
+
+test('background idle sleep cannot restart a card after a retained write fault',()=>{
+  const sleep=power.split('void enterDeepSleep(const char* reason) {')[1]
+    .split('const uint32_t initialReleaseAt=millis();')[0];
+  assert.match(sleep,/pendingRecordFault=odysseyLastRecordFailureStage\(\)/);
+  assert.match(sleep,/pendingRecordFault>=44u && pendingRecordFault!=48u\) return/);
+  assert(sleep.indexOf('pendingRecordFault>=44u')<sleep.indexOf('odysseyRecoverSdCard("sleep")'),
+    'unresolved write I/O fault must veto background remount');
 });
 
 test('native FatFs error never triggers an automatic CMD12, SD re-arm, or deletion',()=>{
