@@ -472,6 +472,27 @@ static void worker(void*) {
         break;
       case 7:
         error=catalogue(total);
+        // After an SD metadata mutation, a card may still be completing
+        // internal programming. Retry ONE observational catalogue read after
+        // a bounded settle interval before declaring storage unavailable.
+        // No write/delete/reinit/remount is repeated. A partial catalogue
+        // remains an error, never a verified file absence.
+        if (error==IO_ERROR &&
+            (catalogueErrno==EIO || catalogueErrno==ENODEV ||
+             catalogueErrno==ETIMEDOUT) &&
+            request.connection==connectionGeneration.load() &&
+            deviceConnected.load() && !odysseyRecording.load()) {
+          const int firstError=catalogueErrno;
+          const uint8_t firstStep=catalogueStep;
+          Serial.printf("[SD] catalogue transient I/O op7 step=%u errno=%d; one read-only retry\\n",
+            unsigned(firstStep),firstError);
+          vTaskDelay(pdMS_TO_TICKS(120u));
+          if (request.connection==connectionGeneration.load() &&
+              deviceConnected.load() && odysseySdReady()) {
+            error=catalogue(total);
+            if (error==OK) Serial.println("[SD] catalogue recovered without remount or FAT writes");
+          }
+        }
         // ENOMEM/EOVERFLOW means the BLE catalogue is incomplete, not that the
         // SD controller has stopped responding. Fail closed but keep FAT
         // mounted for the user's existing recordings.

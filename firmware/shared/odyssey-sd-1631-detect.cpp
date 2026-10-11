@@ -528,10 +528,13 @@ static bool odysseySdBeginLocked() {
   mount.format_if_mount_failed=false;
   mount.max_files=ODYSSEY_SD_MAX_OPEN_FILES;
   mount.allocation_unit_size=4096; // ignored for an existing FAT filesystem
-  // IDF FAT diskio normally trusts cached card readiness; enable the real
-  // SD status check on this unstable removable-media path. Detect a failed
-  // controller earlier instead of issuing additional FAT metadata writes.
-  mount.disk_status_check_enable=true;
+  // FatFs disk_status_check_enable issues a *separate* CMD13 before ordinary
+  // filesystem operations. A transient post-write/program-busy CMD13 can
+  // return STA_NOINIT and poison reads/catalogue even when the previous
+  // SD sector operation was successful. The native SDSPI read/write paths
+  // already check SD responses and report actual I/O failures. Keep FatFs'
+  // disk status gate off; check CMD13 only at explicit power transitions.
+  mount.disk_status_check_enable=false;
   result=esp_vfs_fat_sdspi_mount(ODYSSEY_SD_MOUNT_POINT,
     &host,&device,&mount,&odysseySdNativeCard);
   if (result!=ESP_OK) {
