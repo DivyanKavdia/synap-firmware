@@ -494,20 +494,24 @@ static void worker(void*) {
         continue;
       }
       case 28: {
-        // SD-independent FAT diagnostic: opt-in raw sector-0 read on a
-        // non-mounted card. Never writes, repairs, formats, or remounts.
+        // Explicit sector0 + bounded FAT VBR inspection, no writes/mounts.
         odysseySdRawProbeOnce();
         const OdysseySdRawProbeResult raw=odysseySdRawProbeCached;
-        char detail[256];
+        char detail[480];
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"status\":%u,\"error\":%ld,\"sectors\":%lu,\"sectorBytes\":%u,\"signature\":%u,\"fatHint\":%u,\"partitionLba\":%lu,\"mountErr\":%ld,\"firstMountErr\":%ld,\"sdState\":%u,\"sdProbe\":%u}",
+          "{\"version\":2,\"status\":%u,\"error\":%ld,\"sectors\":%lu,\"sectorBytes\":%u,\"signature\":%u,\"fatHint\":%u,\"partitionLba\":%lu,\"partitionType\":%u,\"partitionIndex\":%u,\"partitionSectors\":%lu,\"partitionBounds\":%u,\"vbrRead\":%u,\"vbrError\":%ld,\"vbrSignature\":%u,\"bpbPlausible\":%u,\"fatVariant\":%u,\"bpbBytesPerSector\":%u,\"bpbSectorsPerCluster\":%u,\"bpbTotalSectors\":%lu,\"firstMountErr\":%ld}",
           unsigned(raw.status),static_cast<long>(raw.error),
           static_cast<unsigned long>(raw.sectors),unsigned(raw.sectorBytes),
           unsigned(raw.signature),unsigned(raw.fatHint),
           static_cast<unsigned long>(raw.partitionLba),
-          static_cast<long>(odysseySdLastError()),
-          static_cast<long>(odysseySdFirstMountFailureError()),
-          unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()));
+          unsigned(raw.partitionType),unsigned(raw.partitionIndex),
+          static_cast<unsigned long>(raw.partitionSectors),
+          unsigned(raw.partitionBounds),unsigned(raw.vbrRead),
+          static_cast<long>(raw.vbrError),unsigned(raw.vbrSignature),
+          unsigned(raw.bpbPlausible),unsigned(raw.fatVariant),
+          unsigned(raw.bpbBytesPerSector),unsigned(raw.bpbSectorsPerCluster),
+          static_cast<unsigned long>(raw.bpbTotalSectors),
+          static_cast<long>(odysseySdFirstMountFailureError()));
         if (n<=0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
