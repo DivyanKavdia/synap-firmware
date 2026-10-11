@@ -67,8 +67,8 @@ test('single-file SD deletion tolerates untrusted ADC; bulk cleanup keeps conser
    .split('static uint16_t clearRecordings()')[0];
  assert.match(remove,/batteryAvailable\.load\(\) && batteryMillivolts<ODYSSEY_SD_WRITE_START_MIN_MV/);
  assert.match(remove,/if \(!guard \|\| !storageReady\(\)\) return NO_SD;/);
- assert.match(remove,/if \(unlink\(full\)!=0 && errno!=ENOENT\) return IO_ERROR;/);
- assert.match(remove,/if \(stat\(full,&st\)==0\) return IO_ERROR;/);
+ assert.match(remove,/if \(unlink\(full\)!=0 && errno!=ENOENT\) \{[\s\S]*?removeFailureStep=2;return IO_ERROR;/);
+ assert.match(remove,/if \(stat\(full,&st\)==0\) \{[\s\S]*?removeFailureStep=3;return IO_ERROR;/);
  assert.match(transfer,/static uint16_t clearRecordings[\s\S]*?if \(!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)\) return 0;/);
  assert.match(transfer,/case 18:[\s\S]*?if \(!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)\) error=BUSY/);
  assert.doesNotMatch(transfer,/SD\.format\(/);
@@ -123,7 +123,7 @@ test('C3 accepts a freshly formatted readable FAT root with missing /synap and s
  assert.match(list,/if \(directoryErrno==ENOENT\)/);
  assert.match(list,/stat\(odysseySdMountPoint\(\),&root\)==0 && S_ISDIR\(root.st_mode\)/);
  assert.match(list,/catalogueBuffer="\[\]";\s*total=2u;[\s\S]*?return OK;/);
- assert.match(list,/catalogueErrno=directoryErrno;[\s\S]*?return IO_ERROR;/);
+ assert.match(list,/catalogueErrno=directoryErrno\?directoryErrno:EIO;[\s\S]*?return IO_ERROR;/);
  const capture=rec.split('static void odysseyRecordTake() {')[1]
    .split('static void odysseyRecordTask(void*) {')[0];
  assert.match(capture,/stat\(ODYSSEY_SD_RECORDING_DIR,&recordingDir\)/);
