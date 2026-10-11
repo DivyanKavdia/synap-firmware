@@ -63,13 +63,13 @@ int main() {
 `);
  assert.match(output,/PASS power-loss checkpoint helper/);
 });
-test('single early checkpoint only after complete accepted PCM batch under SD mutex; no repeated FAT metadata writes',()=>{
+test('periodic 10-second native FatFs checkpoints after completed PCM batches',()=>{
  const capture=recorder.split('static void odysseyRecordTake() {')[1].split('static void odysseyRecordTask(void*) {')[0];
  assert.match(capture,/OdysseySdGuard storage;/);
  const batch=capture.split('if (batchUsed==sizeof(batch)) {')[1].split('// Capture performs only sequential')[0];
  assert(batch.indexOf('const size_t written=fwrite(batch')<batch.indexOf('bytes+=batchPcmBytes'));
  assert(batch.indexOf('bytes+=batchPcmBytes')<batch.indexOf('odysseyCheckpointWav(file,checkpointErrno)'));
- assert.match(batch,/if \(checkpointedPcmBytes==0u &&[\s\S]*uint32_t\(millis\(\)-lastCheckpointAt\)>=ODYSSEY_SD_CHECKPOINT_INTERVAL_MS\)/);
+  assert.match(batch,/if \(uint32_t\(millis\(\)-lastCheckpointAt\)>=ODYSSEY_SD_CHECKPOINT_INTERVAL_MS\)/);
  assert.match(batch,/if \(checkpointStage\) \{[\s\S]*?failed=true;[\s\S]*?failureStage=checkpointStage;[\s\S]*?break;/);
  assert.match(batch,/odysseyPersistedWriteErrno=uint32_t\(checkpointErrno\)/);
  assert.match(batch,/checkpointedPcmBytes=bytes;/);
