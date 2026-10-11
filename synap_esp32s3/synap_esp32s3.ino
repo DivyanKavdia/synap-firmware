@@ -5238,6 +5238,14 @@ static void worker(void*) {
         if (result!=ESP_OK) {
           error=IO_ERROR;
           noteSdMediaFault(19,1,int(result));
+        } else {
+          // The old recorder error belongs to files that the user explicitly
+          // erased. Clear its NVS fault stage so the PWA sees live probe=6
+          // instead of a stale stage-66 byte after a verified new FAT mount.
+          odysseyPersistRecordFailure(0,0);
+          sdLastMediaFaultOperation=0;
+          sdLastMediaFaultStep=0;
+          sdLastMediaFaultErrno=0;
         }
         break;
       }
