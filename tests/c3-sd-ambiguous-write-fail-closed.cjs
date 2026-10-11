@@ -15,7 +15,10 @@ test('first ambiguous CMD24/CMD25 failure cuts off every subsequent physical com
     'guard must precede the only physical command');
   assert.equal((callback.match(/sdspi_host_do_transaction\(slot,cmd\)/g)||[]).length,1);
   assert.match(callback,/cmd->opcode==24u \|\| cmd->opcode==25u/);
-  assert.match(callback,/cmd->opcode==13u && \(previous==24u \|\| previous==25u\)/);
+  assert.match(callback,/cmd->opcode==13u && odysseyWriteStatusChecksOutstanding.load\(\)!=0/);
+  assert.match(callback,/odysseyWriteStatusChecksOutstanding=2;/);
+  assert.match(callback,/if \(pending\) odysseyWriteStatusChecksOutstanding=uint8_t\(pending-1u\)/);
+  assert.match(callback,/odysseyWriteStatusChecksOutstanding=0;/);
   assert.match(callback,/odysseySdAmbiguousWrite=true;/);
   assert.match(callback,/odysseySdUnsafeToSleep=true;/);
   assert.doesNotMatch(callback,/vTaskDelay|delay\(|spi_device_transmit|sdmmc_send_cmd\(|odysseySdBitBangRecoverLocked/);
@@ -25,7 +28,7 @@ test('SD error latch is never cleared by resetting diagnostics or a new take',()
   const declarations=detect.split('void odysseySdClearWireFault()')[0];
   assert.match(declarations,/static std::atomic<bool> odysseySdAmbiguousWrite\{false\}/);
   const clear=detect.split('void odysseySdClearWireFault() {')[1].split('uint32_t odysseySdWireFaultCmd()')[0];
-  assert.doesNotMatch(clear,/odysseySdAmbiguousWrite/);
+  assert.doesNotMatch(clear,/odysseySdAmbiguousWrite|odysseyWriteStatusChecksOutstanding/);
   const take=record.split('static void odysseyRecordTake() {')[1]
     .split('static void odysseyRecordTask(void*) {')[0];
   assert.match(take,/odysseySdClearWireFault\(\)/);
