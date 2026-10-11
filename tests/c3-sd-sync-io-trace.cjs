@@ -17,12 +17,13 @@ test('C3 sync counters observe existing reads and never change FAT or SPI transa
 });
 test('RAM-only sync diagnostic includes current error operation and bounded offsets',()=>{
   for(const field of ['ioOp','ioStep','ioErr','reads','cacheHits','diskFills',
-    'lastRequestedOffset','lastOkOffset','faultOffset','windowRequests','mtuFallbacks'])
+    'lastRequestedOffset','lastOkOffset','faultOffset','windowRequests','mtuFallbacks',
+    'wireCmd','wireErr','wireArg','wireMs'])
     assert(sync.includes('\\\"'+field+'\\\"'),field);
   const fmt=sync.match(/snprintf\(detail,sizeof\(detail\),\s*("(?:\\.|[^"])*")/);
   assert(fmt,'diagnostic format present');
   const worst=JSON.parse(fmt[1]).replace(/%lu|%u/g,'4294967295').replace(/%ld/g,'-2147483648');
-  assert(worst.length<400,'maximum-width response fits in diagnostic buffer');
+  assert(worst.length<480,'maximum-width response fits in media-v1 reply payload');
   assert.match(sync,/sdLastMediaFaultOperation\.load\(\)/);
   assert.match(sync,/sdLastMediaFaultStep\.load\(\)/);
   assert.match(sync,/sdLastMediaFaultErrno\.load\(\)/);
