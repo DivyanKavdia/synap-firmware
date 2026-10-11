@@ -2794,7 +2794,11 @@ void odysseySdRawProbeOnce() {
           result.status=7;result.error=cardErr;
         } else {
           result.sectors=card.csd.capacity;
-          // The buffer is DMA-aligned; read ONE 512-byte bootBlock only.
+          // The DMA-aligned buffer can hold exactly one 512-byte sector.
+          // Reject unexpected logical sizes instead of risking overflow.
+          if (card.csd.sector_size!=512u) {
+            result.status=8;result.error=ESP_ERR_NOT_SUPPORTED;
+          } else {
           // A successful raw read despite FAT mount failure strongly
           // suggests on-card filesystem/partition metadata trouble.
           alignas(4) uint8_t bootBlock[512]{};
@@ -2810,7 +2814,6 @@ void odysseySdRawProbeOnce() {
             else if (result.signature) {
               // All four MBR entries are inspected. The first sector's
               // "MBR hint" alone does not establish a valid FAT partition.
-              result.fatHint=2;
               const auto u16=[&](size_t off)->uint16_t {
                 return uint16_t(bootBlock[off]) |
                   (uint16_t(bootBlock[off+1])<<8);
@@ -2824,6 +2827,7 @@ void odysseySdRawProbeOnce() {
               for (unsigned entry=0;entry<4;++entry) {
                 const size_t off=446u+16u*entry;
                 const uint8_t type=bootBlock[off+4];
+                if (type!=0) result.fatHint=2;
                 const uint32_t lba=u32(off+8), count=u32(off+12);
                 const bool fatType=type==0x01 || type==0x04 ||
                   type==0x06 || type==0x0b || type==0x0c || type==0x0e;
@@ -2890,6 +2894,7 @@ void odysseySdRawProbeOnce() {
                 }
               }
             }
+          }
           }
         }
         (void)sdspi_host_remove_device(handle);
