@@ -148,6 +148,11 @@ static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=1;
 
 // Native SPI2 SDSPI host owns the bus; FAT keeps the existing POSIX paths.
 static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
+// Do not lose the first native mount-helper return code when subsequent
+// GPIO recovery or cleanup fails. ESP_FAIL often means FAT mount failure,
+// whereas SPI/card protocol failures return their own ESP error codes.
+static std::atomic<int32_t> odysseySdFirstMountFailure{ESP_OK};
+int32_t odysseySdFirstMountFailureError() { return odysseySdFirstMountFailure.load(); }
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
 static std::atomic<uint32_t> odysseySdBeginAttempts{0};
 static std::atomic<uint8_t> odysseySdLastMountReason{0}; // 1=boot,2=op14,3=touch,4=probe
@@ -728,6 +733,8 @@ static bool odysseySdBeginLocked() {
   result=esp_vfs_fat_sdspi_mount(ODYSSEY_SD_MOUNT_POINT,
     &host,&device,&mount,&odysseySdNativeCard);
   if (result!=ESP_OK) {
+    int32_t expected=ESP_OK;
+    (void)odysseySdFirstMountFailure.compare_exchange_strong(expected,int32_t(result));
     odysseySdLastMountError=result;
     odysseySdNativeCard=nullptr; // mount helper releases its own card/device
     Serial.printf("[SD] native SDSPI mount failed err=%s, no format\\n",
