@@ -19,8 +19,10 @@ test('C3 GPIO8 NeoPixel uses the exact shared S3 RGB status engine',()=>{
   assert.match(c3,/deviceState == DeviceState::CONNECTED_IDLE/);
   assert.match(c3,/deviceState == DeviceState::STREAMING/);
   assert.match(c3,/odysseyRecording\.load\(\)/);
-  assert.match(c3,/!odysseyStopRequested\.load\(\).*r=LED_DIM; b=LED_DIM/s,
-    'offline SD recording must pulse purple and stop pulsing as soon as stop is requested');
+  assert.match(c3,/const bool finalizing=odysseyStopRequested\.load\(\)/);
+  assert.match(c3,/finalizing\?550u:1800u/);
+  assert.match(c3,/if \(phase<\(finalizing\?80u:260u\)\) \{ r=LED_DIM\+4; b=LED_DIM\+6; \}/,
+    'purple must continue during STOP finalization and stay visible until the file closes');
   assert.match(c3,/deviceState == DeviceState::STREAMING[\s\S]*g=LED_DIM\+1/,
     'connected BLE streaming remains green');
 });

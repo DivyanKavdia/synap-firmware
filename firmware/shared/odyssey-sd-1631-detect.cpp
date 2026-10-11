@@ -70,6 +70,10 @@ static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=800000u;
 static constexpr spi_host_device_t ODYSSEY_SD_HOST=SPI2_HOST;
 static sdmmc_card_t* odysseySdNativeCard=nullptr;
 static bool odysseySdNativeBusInitialized=false;
+// Formatting is strictly a user-confirmed BLE operation. It is never a mount
+// or recovery fallback and must not overlap a disconnected touch recording.
+static std::atomic<bool> odysseySdFormatInProgress{false};
+bool odysseySdFormatting() { return odysseySdFormatInProgress.load(); }
 static std::atomic<uint32_t> odysseyNativeIoFault{0};
 // ESP-IDF 5.5.1 sdmmc_write_sectors_dma() sends CMD13 after CMD24/25.
 // POSIX EIO loses the originating command and ESP error; capture the first
@@ -828,14 +832,58 @@ bool odysseyRecoverSdCard(const char* reason) {
   return odysseySdMountLocked(reason?reason:"op14",ODYSSEY_SD_RECOVERY_ATTEMPTS);
 }
 
+// Explicit media-v1 operation 19 only. The SD must ALREADY be FAT-mounted;
+// Espressif's documented formatter formats the mounted card and remounts FAT.
+// Never run this from boot, a failed mount, a probe, or automatic recovery.
+// The worker owns BLE-side exclusivity; this guard owns all FAT operations.
+esp_err_t odysseyFormatSdCard() {
+  OdysseySdGuard guard(pdMS_TO_TICKS(1000));
+  if (!guard || !odysseySdReady() || !odysseySdNativeCard ||
+      odysseySdUnsafeToSleep.load() || odysseyRecording.load() ||
+      streamingEnabled.load() || otaBusy() || sleepPending ||
+      odysseySdFormatInProgress.exchange(true)) return ESP_ERR_INVALID_STATE;
+
+  Serial.println("[SD] explicit BLE format: permanently erasing ALL card files");
+  const esp_err_t result=esp_vfs_fat_sdcard_format(
+    ODYSSEY_SD_MOUNT_POINT,odysseySdNativeCard);
+  if (result!=ESP_OK) {
+    // A failed format may have modified FAT; never claim old recordings
+    // survived, and never probe/remount automatically across an unknown state.
+    odysseySdBootState=2;odysseySdProbeStage=3;
+    odysseySdLastMountError=result;
+    odysseySdUnsafeToSleep=true;
+    Serial.printf("[SD] explicit format FAILED err=%s; leave card untouched until manual recovery\\n",
+      esp_err_to_name(result));
+    odysseySdFormatInProgress=false;
+    return result;
+  }
+
+  // esp_vfs_fat_sdcard_format remounts; verify the mounted FAT root before
+  // reporting success. /synap is intentionally not recreated until recording.
+  if (!odysseySdValidateVfsLocked("format",1)) {
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    odysseySdUnsafeToSleep=true;
+    odysseySdFormatInProgress=false;
+    Serial.println("[SD] format returned OK but FAT validation failed");
+    return ESP_FAIL;
+  }
+  odysseySdBootState=1;odysseySdProbeStage=6;
+  odysseySdLastMountError=ESP_OK;
+  odysseySdUnsafeToSleep=false;
+  odysseySdSleepGuardUntil=millis()+5000u;
+  odysseySdFormatInProgress=false;
+  Serial.println("[SD] explicit format VERIFIED: FAT mounted and ready");
+  return ESP_OK;
+}
+
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
   OdysseySdGuard guard(pdMS_TO_TICKS(timeoutMs));
   if (!guard) {
     Serial.println("[SD] power transition deferred: storage busy");
     return false;
   }
-  if (odysseyRecording.load()) {
-    Serial.println("[SD] power transition deferred: local recording active");
+  if (odysseyRecording.load() || odysseySdFormatting()) {
+    Serial.println("[SD] power transition deferred: local recording or format active");
     return false;
   }
   if (odysseySdUnsafeToSleep.load()) {

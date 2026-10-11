@@ -6,9 +6,14 @@ void updateStatusLed(bool force) {
     if (phase<55u || (phase>=180u && phase<235u)) { r=LED_DIM; g=2; }
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   } else if (odysseyRecording.load()) {
-    // Match build 1631 exactly: purple tracks the local recording task.
-    const uint32_t phase=uint32_t(now-odysseyRecordingStartedAt.load())%1800u;
-    if (!odysseyStopRequested.load() && phase<260u) { r=LED_DIM+4; b=LED_DIM+6; }
+    // Purple continues until the recorder actually closes its WAV. A STOP
+    // request (double tap, hold, trusted critical battery) switches to quick
+    // purple pulses while fsync/fclose completes; it cannot silently go dark
+    // during a slow SD transaction.
+    const bool finalizing=odysseyStopRequested.load();
+    const uint32_t phase=uint32_t(now-odysseyRecordingStartedAt.load())%
+      (finalizing?550u:1800u);
+    if (phase<(finalizing?80u:260u)) { r=LED_DIM+4; b=LED_DIM+6; }
   } else if (odysseyRecordFaultAt.load() &&
              uint32_t(now-odysseyRecordFaultAt.load())<6000u) {
     // Two red pulses distinguish missing SD / failed capture from active

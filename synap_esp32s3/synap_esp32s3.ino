@@ -266,6 +266,7 @@ bool odysseySdPowerSafe(uint16_t floorMv) {
 
 void odysseyToggleRecording();
 bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs);
+bool odysseySdFormatting(); // media-v1 op19 exclusively owns the SD volume
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs);
 bool odysseyPrepareSdForCommittedOtaRestart(uint32_t timeoutMs);
 bool odysseySdBusStuckLow(); // confirmed deselected MISO held LOW after failed mount
@@ -634,7 +635,7 @@ void otaTick() {
     otaSession.packet(message.data,message.length,millis(),generation,
       streamingEnabled.load() || batteryCritical()
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-      || odysseyRecording.load() || OdysseyWifi::busy()
+      || odysseyRecording.load() || OdysseyWifi::busy() || odysseySdFormatting()
 #endif
 #if SYNAP_CHAKSHU
       || mediaBusy()
@@ -714,11 +715,11 @@ void encodeModuleCapabilities(uint8_t* p) {
 #if CONFIG_IDF_TARGET_ESP32C3
   if (OdysseyTransfer::available()) {
     p[14]=1;
-    // C3 media-v1 now supports paced, six-chunk BLE notification windows.
-    // Bit 0 enables the client's existing offset-verified window transport;
-    // bit 1 remains BLE-controlled Wi-Fi upload. Full-card format stays off.
+    // Media feature bits: 0=BLE window, 1=Wi-Fi upload, 2=explicit
+    // full-card FAT format (operation 19). No automatic formatting.
     p[16]|=1;
     if (OdysseyWifi::available()) p[16]|=2;
+    p[16]|=4;
     if (odysseySdDetectionState()==1) {
       ready|=SYNAP_CAP_SD;
       if (ready&SYNAP_CAP_AUDIO) ready|=SYNAP_CAP_SDAUDIO;
@@ -750,9 +751,14 @@ void updateStatusLed(bool force) {
     if (phase<55u || (phase>=180u && phase<235u)) { r=LED_DIM; g=2; }
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   } else if (odysseyRecording.load()) {
-    // Match build 1631 exactly: purple tracks the local recording task.
-    const uint32_t phase=uint32_t(now-odysseyRecordingStartedAt.load())%1800u;
-    if (!odysseyStopRequested.load() && phase<260u) { r=LED_DIM+4; b=LED_DIM+6; }
+    // Purple continues until the recorder actually closes its WAV. A STOP
+    // request (double tap, hold, trusted critical battery) switches to quick
+    // purple pulses while fsync/fclose completes; it cannot silently go dark
+    // during a slow SD transaction.
+    const bool finalizing=odysseyStopRequested.load();
+    const uint32_t phase=uint32_t(now-odysseyRecordingStartedAt.load())%
+      (finalizing?550u:1800u);
+    if (phase<(finalizing?80u:260u)) { r=LED_DIM+4; b=LED_DIM+6; }
   } else if (odysseyRecordFaultAt.load() &&
              uint32_t(now-odysseyRecordFaultAt.load())<6000u) {
     // Two red pulses distinguish missing SD / failed capture from active
@@ -1410,7 +1416,10 @@ void powerTick() {
   sampleBattery(false);
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   if (odysseyRecording.load()) {
-    if (batteryCritical()) odysseyStopRequested=true;
+    if (batteryCritical() && !odysseyStopRequested.exchange(true))
+      Serial.println("[POWER] trusted critical battery requested offline SD STOP");
+    // No disconnected-idle or critical-battery deep sleep before recorder
+    // fsync/fclose, even if the PWA has never connected.
     return;
   }
   if (OdysseyWifi::busy() || OdysseyTransfer::busy()) return;
@@ -1426,6 +1435,13 @@ void powerTick() {
   }
   if (!deviceConnected.load() && !streamingEnabled.load() && !otaBusy() &&
       disconnectedAt && uint32_t(millis()-disconnectedAt)>=AUTO_SLEEP_DISCONNECTED_MS) {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+    // An SD-equipped Odyssey is an OFFLINE voice recorder while disconnected.
+    // Do not auto-sleep the C3 after five minutes and strand double-tap START.
+    // SD-less C3 retains the existing five-minute power saver; explicit
+    // four-second touch hold and trusted critical battery remain available.
+    if (odysseySdReady() || odysseySdFormatting()) return;
+#endif
     enterDeepSleep("disconnected-timeout");
   }
 }
@@ -2521,6 +2537,10 @@ static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=800000u;
 static constexpr spi_host_device_t ODYSSEY_SD_HOST=SPI2_HOST;
 static sdmmc_card_t* odysseySdNativeCard=nullptr;
 static bool odysseySdNativeBusInitialized=false;
+// Formatting is strictly a user-confirmed BLE operation. It is never a mount
+// or recovery fallback and must not overlap a disconnected touch recording.
+static std::atomic<bool> odysseySdFormatInProgress{false};
+bool odysseySdFormatting() { return odysseySdFormatInProgress.load(); }
 static std::atomic<uint32_t> odysseyNativeIoFault{0};
 // ESP-IDF 5.5.1 sdmmc_write_sectors_dma() sends CMD13 after CMD24/25.
 // POSIX EIO loses the originating command and ESP error; capture the first
@@ -3279,14 +3299,58 @@ bool odysseyRecoverSdCard(const char* reason) {
   return odysseySdMountLocked(reason?reason:"op14",ODYSSEY_SD_RECOVERY_ATTEMPTS);
 }
 
+// Explicit media-v1 operation 19 only. The SD must ALREADY be FAT-mounted;
+// Espressif's documented formatter formats the mounted card and remounts FAT.
+// Never run this from boot, a failed mount, a probe, or automatic recovery.
+// The worker owns BLE-side exclusivity; this guard owns all FAT operations.
+esp_err_t odysseyFormatSdCard() {
+  OdysseySdGuard guard(pdMS_TO_TICKS(1000));
+  if (!guard || !odysseySdReady() || !odysseySdNativeCard ||
+      odysseySdUnsafeToSleep.load() || odysseyRecording.load() ||
+      streamingEnabled.load() || otaBusy() || sleepPending ||
+      odysseySdFormatInProgress.exchange(true)) return ESP_ERR_INVALID_STATE;
+
+  Serial.println("[SD] explicit BLE format: permanently erasing ALL card files");
+  const esp_err_t result=esp_vfs_fat_sdcard_format(
+    ODYSSEY_SD_MOUNT_POINT,odysseySdNativeCard);
+  if (result!=ESP_OK) {
+    // A failed format may have modified FAT; never claim old recordings
+    // survived, and never probe/remount automatically across an unknown state.
+    odysseySdBootState=2;odysseySdProbeStage=3;
+    odysseySdLastMountError=result;
+    odysseySdUnsafeToSleep=true;
+    Serial.printf("[SD] explicit format FAILED err=%s; leave card untouched until manual recovery\\n",
+      esp_err_to_name(result));
+    odysseySdFormatInProgress=false;
+    return result;
+  }
+
+  // esp_vfs_fat_sdcard_format remounts; verify the mounted FAT root before
+  // reporting success. /synap is intentionally not recreated until recording.
+  if (!odysseySdValidateVfsLocked("format",1)) {
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    odysseySdUnsafeToSleep=true;
+    odysseySdFormatInProgress=false;
+    Serial.println("[SD] format returned OK but FAT validation failed");
+    return ESP_FAIL;
+  }
+  odysseySdBootState=1;odysseySdProbeStage=6;
+  odysseySdLastMountError=ESP_OK;
+  odysseySdUnsafeToSleep=false;
+  odysseySdSleepGuardUntil=millis()+5000u;
+  odysseySdFormatInProgress=false;
+  Serial.println("[SD] explicit format VERIFIED: FAT mounted and ready");
+  return ESP_OK;
+}
+
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
   OdysseySdGuard guard(pdMS_TO_TICKS(timeoutMs));
   if (!guard) {
     Serial.println("[SD] power transition deferred: storage busy");
     return false;
   }
-  if (odysseyRecording.load()) {
-    Serial.println("[SD] power transition deferred: local recording active");
+  if (odysseyRecording.load() || odysseySdFormatting()) {
+    Serial.println("[SD] power transition deferred: local recording or format active");
     return false;
   }
   if (odysseySdUnsafeToSleep.load()) {
@@ -4013,7 +4077,7 @@ void odysseyToggleRecording() {
     return;
   }
   if (deviceConnected.load() || streamingEnabled.load() || OdysseyWifi::busy() ||
-      otaBusy() || sleepPending) return;
+      odysseySdFormatting() || otaBusy() || sleepPending) return;
   if (!odysseySdReady()) {
     Serial.println("[TOUCH] SD unavailable; recording task will recover before capture");
   }
@@ -5159,6 +5223,32 @@ static void worker(void*) {
         else if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) error=BUSY;
         else total=clearRecordings();
         break;
+      case 19: {
+        // Full-card FAT format is NOT Clear Recordings. PWA requires a
+        // separate destructive confirmation; never retry automatically.
+        selectedPath[0]=0;catalogueBuffer="";
+        if (!storageReady()) { error=NO_SD;break; }
+        // The C3+SD divider can report untrusted readings. As with manual
+        // unlink, reject an actually TRUSTED low reading; do not fabricate one.
+        if (batteryAvailable.load() &&
+            batteryMillivolts<ODYSSEY_SD_WRITE_START_MIN_MV) {
+          error=BUSY;break;
+        }
+        const esp_err_t result=odysseyFormatSdCard();
+        if (result!=ESP_OK) {
+          error=IO_ERROR;
+          noteSdMediaFault(19,1,int(result));
+        } else {
+          // The old recorder error belongs to files that the user explicitly
+          // erased. Clear its NVS fault stage so the PWA sees live probe=6
+          // instead of a stale stage-66 byte after a verified new FAT mount.
+          odysseyPersistRecordFailure(0,0);
+          sdLastMediaFaultOperation=0;
+          sdLastMediaFaultStep=0;
+          sdLastMediaFaultErrno=0;
+        }
+        break;
+      }
       // C3 direct Wi-Fi sync control. Configuration is staged in <=60-byte BLE
       // chunks so credentials and short-lived cloud tickets never need a new
       // characteristic or protocol version.
@@ -5248,9 +5338,8 @@ void initialize() {
 }
 
 void ble(BLEService* service) {
-  // Phase 2 keeps the proven request/response media-v1 transport and adds
-  // BLE-controlled C3 Wi-Fi cloud upload. Notification-window transfer and
-  // destructive full-card format remain unadvertised.
+  // C3 retains media-v1 transport. Full-card format is available only through
+  // explicit operation 19 with the PWA's destructive confirmation; never auto-format.
   auto* command=service->createCharacteristic("4fa12354-0000-1000-8000-00805f9b34fb",
     BLECharacteristic::PROPERTY_WRITE|BLECharacteristic::PROPERTY_WRITE_NR);
   command->setCallbacks(new CommandCallbacks());

@@ -9,7 +9,8 @@ test('Native C3 SD disables extra FatFs CMD13 readiness probes but keeps native 
   assert.match(sd,/mount\.disk_status_check_enable=false/);
   assert.match(sd,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT,/);
   assert.match(sd,/mount\.format_if_mount_failed=false/);
-  assert.doesNotMatch(sd,/esp_vfs_fat_sdcard_format\(/);
+  assert.match(sd,/esp_err_t odysseyFormatSdCard\(\)/);
+  assert.equal((sd.match(/esp_vfs_fat_sdcard_format\(/g)||[]).length,1,'format only in explicit op19 backend');
 });
 
 test('Catalogue read retries at most once without repeating writes/remounts',()=>{
