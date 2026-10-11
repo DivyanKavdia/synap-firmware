@@ -493,6 +493,24 @@ static void worker(void*) {
         sdBleTransferInFlight=false;
         continue;
       }
+      case 28: {
+        // SD-independent FAT diagnostic: opt-in raw sector-0 read on a
+        // non-mounted card. Never writes, repairs, formats, or remounts.
+        const OdysseySdRawProbeResult raw=odysseySdRawProbeOnce();
+        char detail[256];
+        const int n=snprintf(detail,sizeof(detail),
+          "{\\"version\\":1,\\"status\\":%u,\\"error\\":%ld,\\"sectors\\":%lu,\\"sectorBytes\\":%u,\\"signature\\":%u,\\"fatHint\\":%u,\\"partitionLba\\":%lu,\\"mountErr\\":%ld,\\"sdState\\":%u,\\"sdProbe\\":%u}",
+          unsigned(raw.status),static_cast<long>(raw.error),
+          static_cast<unsigned long>(raw.sectors),unsigned(raw.sectorBytes),
+          unsigned(raw.signature),unsigned(raw.fatHint),
+          static_cast<unsigned long>(raw.partitionLba),
+          static_cast<long>(odysseySdLastError()),
+          unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()));
+        if (n<=0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
+        reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
+        sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
+        continue;
+      }
       case 4:
         error=readSelected(request.path,request.offset,total,bytes,size);
         if (error==IO_ERROR) odysseySdMarkVfsFailure();
