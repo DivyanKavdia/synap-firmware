@@ -71,6 +71,33 @@ static constexpr spi_host_device_t ODYSSEY_SD_HOST=SPI2_HOST;
 static sdmmc_card_t* odysseySdNativeCard=nullptr;
 static bool odysseySdNativeBusInitialized=false;
 static std::atomic<uint32_t> odysseyNativeIoFault{0};
+// ESP-IDF 5.5.1 sdmmc_write_sectors_dma() sends CMD13 after CMD24/25.
+// POSIX EIO loses the originating command and ESP error; capture the first
+// ACTUAL low-level failure without sending additional commands or retrying
+// writes. These variables are read after the take and persisted separately.
+static std::atomic<uint32_t> odysseyWireCmdPlusOne{0};
+static std::atomic<uint32_t> odysseyWireError{0};
+static std::atomic<uint32_t> odysseyWireArg{0};
+static std::atomic<uint32_t> odysseyWireResponse{0};
+static std::atomic<uint32_t> odysseyWireLastCmd13{0};
+void odysseySdClearWireFault() {
+  odysseyWireCmdPlusOne=0;
+  odysseyWireError=0;
+  odysseyWireArg=0;
+  odysseyWireResponse=0;
+  odysseyWireLastCmd13=0;
+}
+uint32_t odysseySdWireFaultCmd() {
+  const uint32_t code=odysseyWireCmdPlusOne.load();
+  return code?code-1u:UINT32_MAX;
+}
+uint32_t odysseySdWireFaultError() { return odysseyWireError.load(); }
+uint32_t odysseySdWireFaultArg() { return odysseyWireArg.load(); }
+uint32_t odysseySdWireFaultResponse() { return odysseyWireResponse.load(); }
+uint32_t odysseySdLastCmd13Response() { return odysseyWireLastCmd13.load(); }
+// Bind the diagnostic interceptor as a local lambda during mount. Arduino's
+// .ino preprocessor otherwise emits a forward prototype before sdmmc types
+// are in scope, even though the original source includes the right headers.
 // Fault layout 0x20SS00EE (native FatFs stage SS, errno EE).
 // Keep the existing BLE/NVS diagnostic ABI; no Arduino SD driver is linked.
 extern "C" uint32_t synapSdWriteFaultCode() { return odysseyNativeIoFault.load(); }
@@ -521,6 +548,22 @@ static bool odysseySdBeginLocked() {
   sdmmc_host_t host=SDSPI_HOST_DEFAULT();
   host.slot=ODYSSEY_SD_HOST;
   host.max_freq_khz=ODYSSEY_SD_DATA_FREQ_HZ/1000u;
+  // Only observes original Espressif commands, without retries or extra I/O.
+  host.do_transaction=[](int slot,sdmmc_command_t* cmd)->esp_err_t {
+  // Forward unchanged to the pinned ESP-IDF SDSPI implementation.
+  const esp_err_t result=sdspi_host_do_transaction(slot,cmd);
+  if (cmd && cmd->opcode==13u) odysseyWireLastCmd13=cmd->response[0];
+  const esp_err_t error=result!=ESP_OK?result:(cmd?cmd->error:ESP_FAIL);
+  if (cmd && error!=ESP_OK) {
+    uint32_t expected=0;
+    if (odysseyWireCmdPlusOne.compare_exchange_strong(expected,cmd->opcode+1u)) {
+      odysseyWireError=uint32_t(error);
+      odysseyWireArg=cmd->arg;
+      odysseyWireResponse=cmd->response[0];
+    }
+  }
+  return result;
+};
   sdspi_device_config_t device=SDSPI_DEVICE_CONFIG_DEFAULT();
   device.host_id=ODYSSEY_SD_HOST;
   device.gpio_cs=static_cast<gpio_num_t>(ODYSSEY_SD_CS);

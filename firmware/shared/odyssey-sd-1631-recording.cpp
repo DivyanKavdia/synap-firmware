@@ -10,6 +10,18 @@ static std::atomic<uint32_t> odysseyPersistedWriteReturned{0};
 static std::atomic<uint32_t> odysseyPersistedWriteExpected{0};
 static std::atomic<uint32_t> odysseyPersistedWriteFerror{0};
 static std::atomic<uint32_t> odysseyPersistedDriverFault{0};
+// New diagnostic journal does not change the existing last/write ABI.
+static std::atomic<uint32_t> odysseyPersistedWireCmd{UINT32_MAX};
+static std::atomic<uint32_t> odysseyPersistedWireErr{0};
+static std::atomic<uint32_t> odysseyPersistedWireArg{0};
+static std::atomic<uint32_t> odysseyPersistedWireRsp{0};
+static std::atomic<uint32_t> odysseyPersistedWireCmd13{0};
+void odysseySdClearWireFault();
+uint32_t odysseySdWireFaultCmd();
+uint32_t odysseySdWireFaultError();
+uint32_t odysseySdWireFaultArg();
+uint32_t odysseySdWireFaultResponse();
+uint32_t odysseySdLastCmd13Response();
 extern "C" uint32_t synapSdWriteFaultCode();
 extern "C" void synapSdClearWriteFaultCode();
 void synapSdNoteNativeWriteError(uint8_t stage,int ioError);
@@ -49,6 +61,18 @@ static void odysseyLoadPersistedRecordFailure() {
         if (detailLength==sizeof(detail)) odysseyPersistedDriverFault=detail[6];
       }
     }
+    // Only restore command diagnostics when stage AND accepted PCM bytes
+    // match the authoritative older recorder journal; never mix attempts.
+    uint32_t wire[7]{};
+    if (prefs.getBytesLength("wire")==sizeof(wire) &&
+        prefs.getBytes("wire",wire,sizeof(wire))==sizeof(wire) &&
+        wire[0]==record[1] && wire[1]==record[2]) {
+      odysseyPersistedWireCmd=wire[2];
+      odysseyPersistedWireErr=wire[3];
+      odysseyPersistedWireArg=wire[4];
+      odysseyPersistedWireRsp=wire[5];
+      odysseyPersistedWireCmd13=wire[6];
+    }
   }
   prefs.end();
 }
@@ -65,10 +89,20 @@ uint32_t odysseyLastWriteReturned() { odysseyLoadPersistedRecordFailure(); retur
 uint32_t odysseyLastWriteExpected() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteExpected.load(); }
 uint32_t odysseyLastWriteFerror() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteFerror.load(); }
 uint32_t odysseyLastDriverWriteFault() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedDriverFault.load(); }
+uint32_t odysseyLastWireCommand() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireCmd.load(); }
+uint32_t odysseyLastWireError() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireErr.load(); }
+uint32_t odysseyLastWireArgument() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireArg.load(); }
+uint32_t odysseyLastWireResponse() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireRsp.load(); }
+uint32_t odysseyLastWireCmd13() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireCmd13.load(); }
 static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   odysseyPersistedRecordLoaded=true;
   odysseyPersistedRecordStage=stage;
   odysseyPersistedRecordBytes=bytes;
+  odysseyPersistedWireCmd=stage?odysseySdWireFaultCmd():UINT32_MAX;
+  odysseyPersistedWireErr=stage?odysseySdWireFaultError():0u;
+  odysseyPersistedWireArg=stage?odysseySdWireFaultArg():0u;
+  odysseyPersistedWireRsp=stage?odysseySdWireFaultResponse():0u;
+  odysseyPersistedWireCmd13=stage?odysseySdLastCmd13Response():0u;
   if (!stage) {
     odysseyPersistedWriteErrno=0;
     odysseyPersistedWriteReturned=0;
@@ -86,6 +120,11 @@ static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
       odysseyPersistedWriteExpected.load(),odysseyPersistedWriteFerror.load(),
       odysseyPersistedDriverFault.load()};
     (void)prefs.putBytes("write",detail,sizeof(detail));
+    const uint32_t wire[7]={uint32_t(stage),bytes,
+      odysseyPersistedWireCmd.load(),odysseyPersistedWireErr.load(),
+      odysseyPersistedWireArg.load(),odysseyPersistedWireRsp.load(),
+      odysseyPersistedWireCmd13.load()};
+    (void)prefs.putBytes("wire",wire,sizeof(wire));
   }
   const uint32_t record[3]={stage?1u:0u,uint32_t(stage),bytes};
   (void)prefs.putBytes("last",record,sizeof(record));
@@ -169,6 +208,7 @@ static void odysseyCaptureCreateFault(int err,const char* operation,uint8_t stag
 }
 
 static void odysseyRecordTake() {
+  odysseySdClearWireFault();  // first ACTUAL CMD fault of this take
   synapSdClearWriteFaultCode();
   odysseyPersistedDriverFault=0;
   odysseyPersistedWriteErrno=0;

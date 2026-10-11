@@ -2522,6 +2522,33 @@ static constexpr spi_host_device_t ODYSSEY_SD_HOST=SPI2_HOST;
 static sdmmc_card_t* odysseySdNativeCard=nullptr;
 static bool odysseySdNativeBusInitialized=false;
 static std::atomic<uint32_t> odysseyNativeIoFault{0};
+// ESP-IDF 5.5.1 sdmmc_write_sectors_dma() sends CMD13 after CMD24/25.
+// POSIX EIO loses the originating command and ESP error; capture the first
+// ACTUAL low-level failure without sending additional commands or retrying
+// writes. These variables are read after the take and persisted separately.
+static std::atomic<uint32_t> odysseyWireCmdPlusOne{0};
+static std::atomic<uint32_t> odysseyWireError{0};
+static std::atomic<uint32_t> odysseyWireArg{0};
+static std::atomic<uint32_t> odysseyWireResponse{0};
+static std::atomic<uint32_t> odysseyWireLastCmd13{0};
+void odysseySdClearWireFault() {
+  odysseyWireCmdPlusOne=0;
+  odysseyWireError=0;
+  odysseyWireArg=0;
+  odysseyWireResponse=0;
+  odysseyWireLastCmd13=0;
+}
+uint32_t odysseySdWireFaultCmd() {
+  const uint32_t code=odysseyWireCmdPlusOne.load();
+  return code?code-1u:UINT32_MAX;
+}
+uint32_t odysseySdWireFaultError() { return odysseyWireError.load(); }
+uint32_t odysseySdWireFaultArg() { return odysseyWireArg.load(); }
+uint32_t odysseySdWireFaultResponse() { return odysseyWireResponse.load(); }
+uint32_t odysseySdLastCmd13Response() { return odysseyWireLastCmd13.load(); }
+// Bind the diagnostic interceptor as a local lambda during mount. Arduino's
+// .ino preprocessor otherwise emits a forward prototype before sdmmc types
+// are in scope, even though the original source includes the right headers.
 // Fault layout 0x20SS00EE (native FatFs stage SS, errno EE).
 // Keep the existing BLE/NVS diagnostic ABI; no Arduino SD driver is linked.
 extern "C" uint32_t synapSdWriteFaultCode() { return odysseyNativeIoFault.load(); }
@@ -2972,6 +2999,22 @@ static bool odysseySdBeginLocked() {
   sdmmc_host_t host=SDSPI_HOST_DEFAULT();
   host.slot=ODYSSEY_SD_HOST;
   host.max_freq_khz=ODYSSEY_SD_DATA_FREQ_HZ/1000u;
+  // Only observes original Espressif commands, without retries or extra I/O.
+  host.do_transaction=[](int slot,sdmmc_command_t* cmd)->esp_err_t {
+  // Forward unchanged to the pinned ESP-IDF SDSPI implementation.
+  const esp_err_t result=sdspi_host_do_transaction(slot,cmd);
+  if (cmd && cmd->opcode==13u) odysseyWireLastCmd13=cmd->response[0];
+  const esp_err_t error=result!=ESP_OK?result:(cmd?cmd->error:ESP_FAIL);
+  if (cmd && error!=ESP_OK) {
+    uint32_t expected=0;
+    if (odysseyWireCmdPlusOne.compare_exchange_strong(expected,cmd->opcode+1u)) {
+      odysseyWireError=uint32_t(error);
+      odysseyWireArg=cmd->arg;
+      odysseyWireResponse=cmd->response[0];
+    }
+  }
+  return result;
+};
   sdspi_device_config_t device=SDSPI_DEVICE_CONFIG_DEFAULT();
   device.host_id=ODYSSEY_SD_HOST;
   device.gpio_cs=static_cast<gpio_num_t>(ODYSSEY_SD_CS);
@@ -3307,6 +3350,18 @@ static std::atomic<uint32_t> odysseyPersistedWriteReturned{0};
 static std::atomic<uint32_t> odysseyPersistedWriteExpected{0};
 static std::atomic<uint32_t> odysseyPersistedWriteFerror{0};
 static std::atomic<uint32_t> odysseyPersistedDriverFault{0};
+// New diagnostic journal does not change the existing last/write ABI.
+static std::atomic<uint32_t> odysseyPersistedWireCmd{UINT32_MAX};
+static std::atomic<uint32_t> odysseyPersistedWireErr{0};
+static std::atomic<uint32_t> odysseyPersistedWireArg{0};
+static std::atomic<uint32_t> odysseyPersistedWireRsp{0};
+static std::atomic<uint32_t> odysseyPersistedWireCmd13{0};
+void odysseySdClearWireFault();
+uint32_t odysseySdWireFaultCmd();
+uint32_t odysseySdWireFaultError();
+uint32_t odysseySdWireFaultArg();
+uint32_t odysseySdWireFaultResponse();
+uint32_t odysseySdLastCmd13Response();
 extern "C" uint32_t synapSdWriteFaultCode();
 extern "C" void synapSdClearWriteFaultCode();
 void synapSdNoteNativeWriteError(uint8_t stage,int ioError);
@@ -3346,6 +3401,18 @@ static void odysseyLoadPersistedRecordFailure() {
         if (detailLength==sizeof(detail)) odysseyPersistedDriverFault=detail[6];
       }
     }
+    // Only restore command diagnostics when stage AND accepted PCM bytes
+    // match the authoritative older recorder journal; never mix attempts.
+    uint32_t wire[7]{};
+    if (prefs.getBytesLength("wire")==sizeof(wire) &&
+        prefs.getBytes("wire",wire,sizeof(wire))==sizeof(wire) &&
+        wire[0]==record[1] && wire[1]==record[2]) {
+      odysseyPersistedWireCmd=wire[2];
+      odysseyPersistedWireErr=wire[3];
+      odysseyPersistedWireArg=wire[4];
+      odysseyPersistedWireRsp=wire[5];
+      odysseyPersistedWireCmd13=wire[6];
+    }
   }
   prefs.end();
 }
@@ -3362,10 +3429,20 @@ uint32_t odysseyLastWriteReturned() { odysseyLoadPersistedRecordFailure(); retur
 uint32_t odysseyLastWriteExpected() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteExpected.load(); }
 uint32_t odysseyLastWriteFerror() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWriteFerror.load(); }
 uint32_t odysseyLastDriverWriteFault() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedDriverFault.load(); }
+uint32_t odysseyLastWireCommand() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireCmd.load(); }
+uint32_t odysseyLastWireError() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireErr.load(); }
+uint32_t odysseyLastWireArgument() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireArg.load(); }
+uint32_t odysseyLastWireResponse() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireRsp.load(); }
+uint32_t odysseyLastWireCmd13() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireCmd13.load(); }
 static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   odysseyPersistedRecordLoaded=true;
   odysseyPersistedRecordStage=stage;
   odysseyPersistedRecordBytes=bytes;
+  odysseyPersistedWireCmd=stage?odysseySdWireFaultCmd():UINT32_MAX;
+  odysseyPersistedWireErr=stage?odysseySdWireFaultError():0u;
+  odysseyPersistedWireArg=stage?odysseySdWireFaultArg():0u;
+  odysseyPersistedWireRsp=stage?odysseySdWireFaultResponse():0u;
+  odysseyPersistedWireCmd13=stage?odysseySdLastCmd13Response():0u;
   if (!stage) {
     odysseyPersistedWriteErrno=0;
     odysseyPersistedWriteReturned=0;
@@ -3383,6 +3460,11 @@ static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
       odysseyPersistedWriteExpected.load(),odysseyPersistedWriteFerror.load(),
       odysseyPersistedDriverFault.load()};
     (void)prefs.putBytes("write",detail,sizeof(detail));
+    const uint32_t wire[7]={uint32_t(stage),bytes,
+      odysseyPersistedWireCmd.load(),odysseyPersistedWireErr.load(),
+      odysseyPersistedWireArg.load(),odysseyPersistedWireRsp.load(),
+      odysseyPersistedWireCmd13.load()};
+    (void)prefs.putBytes("wire",wire,sizeof(wire));
   }
   const uint32_t record[3]={stage?1u:0u,uint32_t(stage),bytes};
   (void)prefs.putBytes("last",record,sizeof(record));
@@ -3466,6 +3548,7 @@ static void odysseyCaptureCreateFault(int err,const char* operation,uint8_t stag
 }
 
 static void odysseyRecordTake() {
+  odysseySdClearWireFault();  // first ACTUAL CMD fault of this take
   synapSdClearWriteFaultCode();
   odysseyPersistedDriverFault=0;
   odysseyPersistedWriteErrno=0;
@@ -4888,7 +4971,7 @@ static void worker(void*) {
         // Purely read-only snapshot of the LAST recorder error after a
         // reboot. It never calls SD.begin, SD.end, mkdir, fopen or recovery.
         // Clients request this only when capabilities report stage >=40.
-        char detail[400];
+        char detail[480];
         // wrD is a software 0x20SS00EE VFS fault marker, not an observed
         // raw SD command. The failing offset helps isolate FAT cluster-boundary
         // allocation from electrical/busy-wire faults without reading SD.
@@ -4896,7 +4979,7 @@ static void worker(void*) {
         const uint32_t failureOffset=stage>=66u && stage<=70u
           ? odysseyLastRecordFailureBytes()+44u : 0u;
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"wrE\":%lu,\"wrD\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu,\"vfsStep\":%u,\"vfsErrno\":%ld,\"failureOffset\":%lu,\"sdClockKhz\":%lu,\"faultKind\":\"vfs\",\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld}",
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"wrE\":%lu,\"wrD\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu,\"vfsStep\":%u,\"vfsErrno\":%ld,\"failureOffset\":%lu,\"sdClockKhz\":%lu,\"faultKind\":\"vfs\",\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireRsp\":%lu,\"wireR2\":%lu}",
           unsigned(odysseySdDetectionState()),
           unsigned(odysseySdProbeState()),
           unsigned(odysseyLastRecordFailureStage()),
@@ -4912,7 +4995,12 @@ static void worker(void*) {
           static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ/1000u),
           unsigned(sdLastMediaFaultOperation.load()),
           unsigned(sdLastMediaFaultStep.load()),
-          static_cast<long>(sdLastMediaFaultErrno.load()));
+          static_cast<long>(sdLastMediaFaultErrno.load()),
+          static_cast<unsigned long>(odysseyLastWireCommand()),
+          static_cast<unsigned long>(odysseyLastWireError()),
+          static_cast<unsigned long>(odysseyLastWireArgument()),
+          static_cast<unsigned long>(odysseyLastWireResponse()),
+          static_cast<unsigned long>(odysseyLastWireCmd13()));
         if (n<0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();
