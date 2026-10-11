@@ -264,18 +264,18 @@ struct OdysseySdRawProbeResult {
 };
 static bool odysseySdRawProbeAttempted=false;
 static OdysseySdRawProbeResult odysseySdRawProbeCached{};
-OdysseySdRawProbeResult odysseySdRawProbeOnce() {
+void odysseySdRawProbeOnce() {
   OdysseySdGuard guard(pdMS_TO_TICKS(1000));
   OdysseySdRawProbeResult result{};
   if (!guard || odysseySdReady() || odysseySdNativeCard ||
       odysseySdNativeBusInitialized || odysseyRecording.load() ||
       streamingEnabled.load() || otaBusy() || sleepPending || odysseySdFormatting()) {
-    result.status=2;result.error=ESP_ERR_INVALID_STATE;return result;
+    result.status=2;result.error=ESP_ERR_INVALID_STATE;odysseySdRawProbeCached=result;return;
   }
   if (odysseySdControllerBusyLow() || odysseySdBusStuckLow()) {
-    result.status=3;result.error=ESP_ERR_TIMEOUT;return result;
+    result.status=3;result.error=ESP_ERR_TIMEOUT;odysseySdRawProbeCached=result;return;
   }
-  if (odysseySdRawProbeAttempted) return odysseySdRawProbeCached;
+  if (odysseySdRawProbeAttempted) return;
   odysseySdRawProbeAttempted=true;
   result.sectorBytes=512;
   // The unmounted FAT driver has released the native device and SPI bus.
@@ -354,7 +354,7 @@ OdysseySdRawProbeResult odysseySdRawProbeOnce() {
   Serial.printf("[SD] raw sector0 diagnostic status=%u err=%ld sectors=%lu signature=%u FAT-hint=%u (READ ONLY)\\n",
     unsigned(result.status),static_cast<long>(result.error),
     static_cast<unsigned long>(result.sectors),unsigned(result.signature),unsigned(result.fatHint));
-  return result;
+  return;
 }
 const char* odysseySdMountPoint() { return ODYSSEY_SD_MOUNT_POINT; }
 bool odysseySdPath(const char* logical,char* full,size_t capacity) {
