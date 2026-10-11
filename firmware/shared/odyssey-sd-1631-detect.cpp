@@ -148,6 +148,11 @@ static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=1;
 
 // Native SPI2 SDSPI host owns the bus; FAT keeps the existing POSIX paths.
 static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
+// Do not lose the first native mount-helper return code when subsequent
+// GPIO recovery or cleanup fails. ESP_FAIL often means FAT mount failure,
+// whereas SPI/card protocol failures return their own ESP error codes.
+static std::atomic<int32_t> odysseySdFirstMountFailure{ESP_OK};
+int32_t odysseySdFirstMountFailureError() { return odysseySdFirstMountFailure.load(); }
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
 static std::atomic<uint32_t> odysseySdBeginAttempts{0};
 static std::atomic<uint8_t> odysseySdLastMountReason{0}; // 1=boot,2=op14,3=touch,4=probe
@@ -242,6 +247,114 @@ public:
 };
 bool odysseySdReady() {
   return odysseySdBootState.load()==1 && odysseySdProbeStage.load()==6;
+}
+// Operator-initiated, once-per-boot raw sector classification for SD that
+// will not mount after a genuine power cycle. NO FAT calls or card writes.
+// This is not a repair, filesystem scan, or backup of the original card.
+struct OdysseySdRawProbeResult {
+  uint8_t status=0; // 0=not run,1=sector0 read,2=unsafe,3=busy-low,
+                    // 4=bus error,5=host error,6=device error,
+                    // 7=card protocol error,8=raw sector read error
+  int32_t error=0;
+  uint32_t sectors=0;
+  uint32_t partitionLba=0;
+  uint16_t sectorBytes=0;
+  uint8_t signature=0; // 0=no 0x55AA boot signature,1=present
+  uint8_t fatHint=0;   // 0=unknown,1=FAT VBR,2=MBR partition entry
+};
+static bool odysseySdRawProbeAttempted=false;
+static OdysseySdRawProbeResult odysseySdRawProbeCached{};
+void odysseySdRawProbeOnce() {
+  OdysseySdGuard guard(pdMS_TO_TICKS(1000));
+  OdysseySdRawProbeResult result{};
+  if (!guard || odysseySdReady() || odysseySdNativeCard ||
+      odysseySdNativeBusInitialized || odysseyRecording.load() ||
+      streamingEnabled.load() || otaBusy() || sleepPending || odysseySdFormatting()) {
+    result.status=2;result.error=ESP_ERR_INVALID_STATE;odysseySdRawProbeCached=result;return;
+  }
+  if (odysseySdControllerBusyLow() || odysseySdBusStuckLow()) {
+    result.status=3;result.error=ESP_ERR_TIMEOUT;odysseySdRawProbeCached=result;return;
+  }
+  if (odysseySdRawProbeAttempted) return;
+  odysseySdRawProbeAttempted=true;
+  result.sectorBytes=512;
+  // The unmounted FAT driver has released the native device and SPI bus.
+  // Initialize exactly one isolated, read-only SDSPI session at 400 kHz.
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  pinMode(ODYSSEY_SD_CS,OUTPUT);
+  pinMode(ODYSSEY_SD_MISO,INPUT_PULLUP);
+  spi_bus_config_t bus{};
+  bus.mosi_io_num=ODYSSEY_SD_MOSI;
+  bus.miso_io_num=ODYSSEY_SD_MISO;
+  bus.sclk_io_num=ODYSSEY_SD_SCK;
+  bus.quadwp_io_num=-1;
+  bus.quadhd_io_num=-1;
+  bus.max_transfer_sz=1024;
+  esp_err_t err=spi_bus_initialize(ODYSSEY_SD_HOST,&bus,SDSPI_DEFAULT_DMA);
+  if (err!=ESP_OK) {
+    result.status=4;result.error=err;
+  } else {
+    const esp_err_t hostErr=sdspi_host_init();
+    if (hostErr!=ESP_OK) {
+      result.status=5;result.error=hostErr;
+    } else {
+      sdspi_device_config_t device=SDSPI_DEVICE_CONFIG_DEFAULT();
+      device.host_id=ODYSSEY_SD_HOST;
+      device.gpio_cs=static_cast<gpio_num_t>(ODYSSEY_SD_CS);
+      sdspi_dev_handle_t handle=-1;
+      const esp_err_t deviceErr=sdspi_host_init_device(&device,&handle);
+      if (deviceErr!=ESP_OK) {
+        result.status=6;result.error=deviceErr;
+      } else {
+        sdmmc_host_t host=SDSPI_HOST_DEFAULT();
+        host.slot=handle;
+        host.max_freq_khz=400;
+        sdmmc_card_t card{};
+        const esp_err_t cardErr=sdmmc_card_init(&host,&card);
+        if (cardErr!=ESP_OK) {
+          result.status=7;result.error=cardErr;
+        } else {
+          result.sectors=card.csd.capacity;
+          // The buffer is DMA-aligned; read ONE 512-byte bootBlock only.
+          // A successful raw read despite FAT mount failure strongly
+          // suggests on-card filesystem/partition metadata trouble.
+          alignas(4) uint8_t bootBlock[512]{};
+          const esp_err_t readErr=sdmmc_read_sectors(&card,bootBlock,0,1);
+          if (readErr!=ESP_OK) {
+            result.status=8;result.error=readErr;
+          } else {
+            result.status=1;
+            result.signature=(bootBlock[510]==0x55 && bootBlock[511]==0xAA)?1:0;
+            const bool fatVbr=(memcmp(bootBlock+54,"FAT",3)==0 ||
+              memcmp(bootBlock+82,"FAT",3)==0);
+            if (fatVbr) result.fatHint=1;
+            else if (result.signature && bootBlock[450]!=0 &&
+                     bootBlock[454]+bootBlock[455]+bootBlock[456]+bootBlock[457]!=0) {
+              result.fatHint=2;
+              result.partitionLba=uint32_t(bootBlock[454]) |
+                (uint32_t(bootBlock[455])<<8) |
+                (uint32_t(bootBlock[456])<<16) |
+                (uint32_t(bootBlock[457])<<24);
+            }
+          }
+        }
+        (void)sdspi_host_remove_device(handle);
+      }
+      (void)sdspi_host_deinit();
+    }
+    const esp_err_t freeErr=spi_bus_free(ODYSSEY_SD_HOST);
+    if (freeErr!=ESP_OK) {
+      odysseySdUnsafeToSleep=true;
+      if (result.status==1) { result.status=4;result.error=freeErr; }
+    }
+  }
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  odysseySdUnsafeToSleep=true; // do not deep sleep an unverified SD controller
+  odysseySdRawProbeCached=result;
+  Serial.printf("[SD] raw sector0 diagnostic status=%u err=%ld sectors=%lu signature=%u FAT-hint=%u (READ ONLY)\\n",
+    unsigned(result.status),static_cast<long>(result.error),
+    static_cast<unsigned long>(result.sectors),unsigned(result.signature),unsigned(result.fatHint));
+  return;
 }
 const char* odysseySdMountPoint() { return ODYSSEY_SD_MOUNT_POINT; }
 bool odysseySdPath(const char* logical,char* full,size_t capacity) {
@@ -620,6 +733,8 @@ static bool odysseySdBeginLocked() {
   result=esp_vfs_fat_sdspi_mount(ODYSSEY_SD_MOUNT_POINT,
     &host,&device,&mount,&odysseySdNativeCard);
   if (result!=ESP_OK) {
+    int32_t expected=ESP_OK;
+    (void)odysseySdFirstMountFailure.compare_exchange_strong(expected,int32_t(result));
     odysseySdLastMountError=result;
     odysseySdNativeCard=nullptr; // mount helper releases its own card/device
     Serial.printf("[SD] native SDSPI mount failed err=%s, no format\\n",

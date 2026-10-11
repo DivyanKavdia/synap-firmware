@@ -28,7 +28,7 @@ test('timing survives reboot in a separate stage/byte-paired NVS journal without
     assert.match(rec,new RegExp('uint32_t odysseyLast'+field+'\\(\\)'));
 });
 test('BLE op27 includes new raw timing and a bounded fallback with no card access',()=>{
-  const op=tx.split('case 27: {')[1].split('case 4:')[0];
+  const op=tx.split('case 27: {')[1].split('case 28:')[0];
   for(const name of ['wireCmd','wireErr','wireArg','wireMs','wireBudget','wireLen','wirePrev','wireWriteOk'])
     assert(op.includes('\\\"'+name+'\\\"'),name);
   assert.match(op,/char detail\[480\]/);
@@ -39,7 +39,7 @@ test('BLE op27 includes new raw timing and a bounded fallback with no card acces
   assert.match(ino,/prefs\.putBytes\("wtime",timing,sizeof\(timing\)\)/);
 });
 test('op27 concise fallback leaves enough room even for max-width uint32 values',()=>{
-  const op=tx.split('case 27: {')[1].split('case 4:')[0];
+  const op=tx.split('case 27: {')[1].split('case 28:')[0];
   const formats=[...op.matchAll(/snprintf\(detail,sizeof\(detail\),\s*("(?:\\.|[^"])*")/g)];
   assert.equal(formats.length,2);
   const compact=JSON.parse(formats[1][1]);
