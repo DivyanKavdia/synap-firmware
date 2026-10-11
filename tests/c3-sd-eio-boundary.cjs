@@ -22,7 +22,7 @@ test('background idle sleep cannot restart a card after a retained write fault',
   const sleep=power.split('void enterDeepSleep(const char* reason) {')[1]
     .split('const uint32_t initialReleaseAt=millis();')[0];
   assert.match(sleep,/pendingRecordFault=odysseyLastRecordFailureStage\(\)/);
-  assert.match(sleep,/pendingRecordFault>=44u && pendingRecordFault!=48u\) return/);
+  assert.match(sleep,/!odysseySdReady\(\) &&[\s\S]*pendingRecordFault>=44u && pendingRecordFault!=48u\) return/);
   assert(sleep.indexOf('pendingRecordFault>=44u')<sleep.indexOf('odysseyRecoverSdCard("sleep")'),
     'unresolved write I/O fault must veto background remount');
 });
