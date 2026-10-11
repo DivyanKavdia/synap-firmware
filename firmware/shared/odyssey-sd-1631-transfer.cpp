@@ -499,12 +499,13 @@ static void worker(void*) {
         const OdysseySdRawProbeResult raw=odysseySdRawProbeOnce();
         char detail[256];
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"status\":%u,\"error\":%ld,\"sectors\":%lu,\"sectorBytes\":%u,\"signature\":%u,\"fatHint\":%u,\"partitionLba\":%lu,\"mountErr\":%ld,\"sdState\":%u,\"sdProbe\":%u}",
+          "{\"version\":1,\"status\":%u,\"error\":%ld,\"sectors\":%lu,\"sectorBytes\":%u,\"signature\":%u,\"fatHint\":%u,\"partitionLba\":%lu,\"mountErr\":%ld,\"firstMountErr\":%ld,\"sdState\":%u,\"sdProbe\":%u}",
           unsigned(raw.status),static_cast<long>(raw.error),
           static_cast<unsigned long>(raw.sectors),unsigned(raw.sectorBytes),
           unsigned(raw.signature),unsigned(raw.fatHint),
           static_cast<unsigned long>(raw.partitionLba),
           static_cast<long>(odysseySdLastError()),
+          static_cast<long>(odysseySdFirstMountFailureError()),
           unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()));
         if (n<=0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
