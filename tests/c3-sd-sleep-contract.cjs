@@ -77,15 +77,12 @@ test('C3 SD firmware still retains append-only WAV and non-formatting SPI mount'
  assert.match(detect,/odysseySdBeginLocked\(\)/);
 });
 
-test('healthy SD gets CMD13 idle proof before CMD12/CMD25 recovery',()=>{
+test('native C3 checks card status and cleanly unmounts before power transition',()=>{
  const q=detect.split('static uint8_t odysseySdQuiesceLocked(uint32_t budgetMs) {')[1]
    .split('static bool odysseySdBeginLocked()')[0];
- assert.match(q,/idleRun<64u/);
- assert.match(q,/odysseySdBitBangCommand\(13u,0u,0x01u,&status,1u\)/);
- assert.match(q,/if \(r1==0x00u && status==0x00u\)/);
- assert(q.indexOf('odysseySdBitBangCommand(13u')<
-        q.indexOf('odysseySdBitBangStopReadLocked('));
- assert.match(q,/odysseySdBitBangStopWriteLocked/);
+ assert.match(q,/sdmmc_get_status\(odysseySdNativeCard\)/);
+ assert.match(q,/if \(!odysseySdReleaseLocked\(\)\) return 2;/);
+ assert.doesNotMatch(q,/odysseySdBitBangStopWriteLocked\(|odysseySdBitBangStopReadLocked\(/);
  const vfs=detect.split('void odysseySdMarkVfsFailure() {')[1].split('static void odysseySdEnsureMutex()')[0];
  assert.match(vfs,/odysseySdUnsafeToSleep=true;/);
 });

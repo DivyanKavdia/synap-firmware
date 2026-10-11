@@ -1,3 +1,45 @@
+# Current C3+SD implementation — 11 October 2026 (native SDSPI candidate)
+
+**Hardware physically checked on the assembled Odyssey C3+SD board:** R1 =
+**1 MΩ**, R2 = **470 kΩ**. GPIO1 reconstructs battery millivolts using
+1470/470. The archived Rev K *unassembled* BOM says 470k/470k, but the
+actual field assembly has been measured and wins for the C3+SD profile.
+DO NOT switch to x2 merely because SD mount fails; SD activation must never
+depend on the battery ADC status.
+
+**C3-only native migration under test:** the active 1631 detection backend
+now uses ESP-IDF SPI2 + SDSPI + FAT VFS, not Arduino `SD.begin` nor the
+C3 `sd_diskio.cpp` overrides. C3's native bus config is unchanged:
+CS=GPIO0, SCK=GPIO10, MOSI=GPIO21, MISO=GPIO20, runtime 1 MHz; USB
+CDC on boot still avoids UART0 conflicts. `esp_vfs_fat_sdspi_mount()` is
+configured with `format_if_mount_failed=false` and max_files=1. No format,
+delete, new directory or metadata write occurs at boot; existing
+`/odyssey-sd/synap/odyssey_audio_*.wav` recordings remain readable by
+the exact same POSIX/VFS + Media-v1 path.
+
+The offline recording worker continues append-only sequential 4 KiB batches,
+10-second fflush/fsync checkpoints, and a cooperative physical double-tap STOP
+that appends remaining data and closes the file **under the SD mutex**. The
+read/transfer worker remains independent and never opens storage while an
+offline WAV is being recorded. No microphone data is sent through BLE in
+offline mode. WAV headers are virtualized during download, so an interrupted
+take may still expose a valid length-based header after the last successful
+checkpoint. Nothing automatically rewrites existing WAVs after reboot.
+
+For a graceful standby or committed OTA restart the C3 now checks its native
+SD card status and performs `esp_vfs_fat_sdcard_unmount` then `spi_bus_free`.
+The historical raw-byte CMD12/CMD0 recovery is retained solely as an explicit
+fallback when initial mount has failed. Never force-unmount a recorder in
+progress. No FAT implementation, including native SDSPI, can guarantee zero
+damage to sectors being programmed if 3.3V power disappears. A card
+electrically stuck busy may require actual SD rail power removal. Preserve
+all field recordings and do not auto-repair or auto-format FAT.
+
+The earlier 1836/1968/1972 Arduino CMD24/CMD25 discussion below is a
+**historical diagnostic record**, NOT the new C3 native mount design.
+
+---
+
 # Odyssey C3 SD audio — production architecture and recovery reference
 
 **Reviewed: 10 October 2026 (assembled C3+SD divider correction).**

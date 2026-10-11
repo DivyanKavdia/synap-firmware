@@ -42,7 +42,7 @@ test('Field C3+SD 1M/470k reconstructs 4.2V from 1343mV',()=>{
 });
 test('Fresh post-SD mount battery sample precedes FAT write validation',()=>{
  const sd=read('firmware/shared/odyssey-sd-1631-detect.cpp');
- assert.match(sd,/if \(mounted\) \{\s*markOdysseySdBatteryDividerPresent\(\);[\s\S]*?sampleBattery\(true\);/);
+ assert.match(sd,/markOdysseySdBatteryDividerPresent\(\);\s*sampleBattery\(true\);/);
  assert(sd.indexOf('sampleBattery(true);')<sd.indexOf('static bool odysseySdValidateVfsLocked'));
 });
 
