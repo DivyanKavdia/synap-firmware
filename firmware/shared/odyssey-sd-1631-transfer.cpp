@@ -252,7 +252,9 @@ static uint8_t catalogue(uint32_t& total) {
   return OK;
 }
 
+static uint8_t removeFailureStep=0;
 static uint8_t removeFile(const char* path) {
+  removeFailureStep=0;
   selectedPath[0]=0;
   if (!safeWavPath(path)) return BAD_COMMAND;
   // Manual, single-file deletion must not be blocked by the C3+SD's
@@ -266,15 +268,25 @@ static uint8_t removeFile(const char* path) {
   if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
   struct stat st{};
   errno=0;
-  if (stat(full,&st)!=0) return errno==ENOENT?OK:IO_ERROR;
+  if (stat(full,&st)!=0) {
+    if (errno==ENOENT) return OK;
+    removeFailureStep=1;return IO_ERROR; // stat before FAT mutation
+  }
   if (!S_ISREG(st.st_mode)) return FILE_UNAVAILABLE;
   errno=0;
-  if (unlink(full)!=0 && errno!=ENOENT) return IO_ERROR;
+  if (unlink(full)!=0 && errno!=ENOENT) {
+    removeFailureStep=2;return IO_ERROR; // FAT unlink itself
+  }
   // Do not tell the PWA that deletion succeeded until FAT no longer
   // resolves this exact file. No wildcard or automatic cleanup is used.
   errno=0;
-  if (stat(full,&st)==0) return IO_ERROR;
-  return errno==ENOENT?OK:IO_ERROR;
+  if (stat(full,&st)==0) {
+    errno=EIO;removeFailureStep=3;return IO_ERROR; // still present
+  }
+  if (errno!=ENOENT) {
+    removeFailureStep=3;return IO_ERROR; // post-delete directory I/O
+  }
+  return OK;
 }
 
 static uint16_t clearRecordings() {
@@ -481,7 +493,7 @@ static void worker(void*) {
         error=removeFile(request.path);
         if (error==IO_ERROR) {
           const int removeErr=errno?errno:EIO;
-          noteSdMediaFault(17,1,removeErr);
+          noteSdMediaFault(17,removeFailureStep,removeErr);
           errno=removeErr;
           odysseySdMarkVfsFailure();
         }
