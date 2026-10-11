@@ -552,6 +552,24 @@ static void worker(void*) {
         else if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) error=BUSY;
         else total=clearRecordings();
         break;
+      case 19: {
+        // Full-card FAT format is NOT Clear Recordings. PWA requires a
+        // separate destructive confirmation; never retry automatically.
+        selectedPath[0]=0;catalogueBuffer="";
+        if (!storageReady()) { error=NO_SD;break; }
+        // The C3+SD divider can report untrusted readings. As with manual
+        // unlink, reject an actually TRUSTED low reading; do not fabricate one.
+        if (batteryAvailable.load() &&
+            batteryMillivolts<ODYSSEY_SD_WRITE_START_MIN_MV) {
+          error=BUSY;break;
+        }
+        const esp_err_t result=odysseyFormatSdCard();
+        if (result!=ESP_OK) {
+          error=IO_ERROR;
+          noteSdMediaFault(19,1,int(result));
+        }
+        break;
+      }
       // C3 direct Wi-Fi sync control. Configuration is staged in <=60-byte BLE
       // chunks so credentials and short-lived cloud tickets never need a new
       // characteristic or protocol version.
@@ -641,9 +659,8 @@ void initialize() {
 }
 
 void ble(BLEService* service) {
-  // Phase 2 keeps the proven request/response media-v1 transport and adds
-  // BLE-controlled C3 Wi-Fi cloud upload. Notification-window transfer and
-  // destructive full-card format remain unadvertised.
+  // C3 retains media-v1 transport. Full-card format is available only through
+  // explicit operation 19 with the PWA's destructive confirmation; never auto-format.
   auto* command=service->createCharacteristic("4fa12354-0000-1000-8000-00805f9b34fb",
     BLECharacteristic::PROPERTY_WRITE|BLECharacteristic::PROPERTY_WRITE_NR);
   command->setCallbacks(new CommandCallbacks());
