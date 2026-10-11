@@ -56,12 +56,13 @@ test('C3 offline touch aborts safely before remount when MISO is stuck low',()=>
   assert(!veto.includes('odysseyRecoverSdCard('),'must not remount during stuck-low veto');
 });
 
-test('driver busy-write fault still suppresses auto-rearm without formatting or deleting user WAVs',()=>{
+test('native VFS fault keeps the mounted card untouched until deliberate recovery',()=>{
   const task=recording.split('static void odysseyRecordTask(void*) {')[1]
     .split('bool odysseyPrepareForConnectedStreaming')[0];
-  assert.match(task,/driverCommand==24u && driverPhase==4u/);
-  assert.match(task,/driverCommand==25u && \(driverPhase==4u \|\| driverPhase==6u \|\| driverPhase==7u\)/);
-  assert.match(task,/odysseyLastRecordFailureStage\(\) && !stuckBusyWrite/);
-  assert.match(task,/odysseySdUnsafeToSleep=true;/);
+  const afterTake=task.split('odysseyRecordTake();')[1];
+  assert.match(afterTake,/lastFault=odysseyLastRecordFailureStage\(\)/);
+  assert.match(afterTake,/odysseySdUnsafeToSleep=true;/);
+  assert.match(afterTake,/skipping automatic remount/);
+  assert.doesNotMatch(afterTake,/odysseyRecoverSdCard\(/);
   assert.doesNotMatch(task,/SD\.format\(|ftruncate\(|unlink\(/);
 });
