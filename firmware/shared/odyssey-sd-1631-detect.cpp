@@ -261,6 +261,18 @@ struct OdysseySdRawProbeResult {
   uint16_t sectorBytes=0;
   uint8_t signature=0; // 0=no 0x55AA boot signature,1=present
   uint8_t fatHint=0;   // 0=unknown,1=FAT VBR,2=MBR partition entry
+  uint8_t partitionType=0;  // MBR type: 0x0b/0x0c FAT32, 0x04/0x06/0x0e FAT16
+  uint8_t partitionIndex=255;
+  uint8_t partitionBounds=0; // 1 only for a FAT partition within card capacity
+  uint32_t partitionSectors=0;
+  uint8_t vbrRead=0;        // 0=not attempted, 1=read, 2=read error
+  int32_t vbrError=0;
+  uint8_t vbrSignature=0;
+  uint8_t bpbPlausible=0;   // BPB arithmetic only; NOT FAT table validation
+  uint8_t fatVariant=0;     // 12/16/32 based on computed cluster count
+  uint16_t bpbBytesPerSector=0;
+  uint8_t bpbSectorsPerCluster=0;
+  uint32_t bpbTotalSectors=0;
 };
 static bool odysseySdRawProbeAttempted=false;
 static OdysseySdRawProbeResult odysseySdRawProbeCached{};
@@ -328,13 +340,88 @@ void odysseySdRawProbeOnce() {
             const bool fatVbr=(memcmp(bootBlock+54,"FAT",3)==0 ||
               memcmp(bootBlock+82,"FAT",3)==0);
             if (fatVbr) result.fatHint=1;
-            else if (result.signature && bootBlock[450]!=0 &&
-                     bootBlock[454]+bootBlock[455]+bootBlock[456]+bootBlock[457]!=0) {
+            else if (result.signature) {
+              // All four MBR entries are inspected. The first sector's
+              // "MBR hint" alone does not establish a valid FAT partition.
               result.fatHint=2;
-              result.partitionLba=uint32_t(bootBlock[454]) |
-                (uint32_t(bootBlock[455])<<8) |
-                (uint32_t(bootBlock[456])<<16) |
-                (uint32_t(bootBlock[457])<<24);
+              const auto u16=[&](size_t off)->uint16_t {
+                return uint16_t(bootBlock[off]) |
+                  (uint16_t(bootBlock[off+1])<<8);
+              };
+              const auto u32=[&](size_t off)->uint32_t {
+                return uint32_t(bootBlock[off]) |
+                  (uint32_t(bootBlock[off+1])<<8) |
+                  (uint32_t(bootBlock[off+2])<<16) |
+                  (uint32_t(bootBlock[off+3])<<24);
+              };
+              for (unsigned entry=0;entry<4;++entry) {
+                const size_t off=446u+16u*entry;
+                const uint8_t type=bootBlock[off+4];
+                const uint32_t lba=u32(off+8), count=u32(off+12);
+                const bool fatType=type==0x01 || type==0x04 ||
+                  type==0x06 || type==0x0b || type==0x0c || type==0x0e;
+                const bool bounds=fatType && lba!=0 && count!=0 &&
+                  uint64_t(lba)+uint64_t(count)<=uint64_t(result.sectors);
+                if (!bounds) continue;
+                result.partitionType=type;
+                result.partitionIndex=uint8_t(entry);
+                result.partitionLba=lba;
+                result.partitionSectors=count;
+                result.partitionBounds=1;
+                break;
+              }
+              if (result.partitionBounds) {
+                // A second, read-only CMD17 examines only the validated
+                // FAT partition's volume boot record (VBR). Never try a
+                // guessed address or touch FAT allocation tables.
+                const esp_err_t vbrErr=sdmmc_read_sectors(
+                  &card,bootBlock,result.partitionLba,1);
+                if (vbrErr!=ESP_OK) {
+                  result.vbrRead=2;result.vbrError=vbrErr;
+                } else {
+                  result.vbrRead=1;
+                  result.vbrSignature=(bootBlock[510]==0x55 &&
+                    bootBlock[511]==0xAA)?1:0;
+                  const uint16_t bytesPerSector=u16(11);
+                  const uint8_t sectorsPerCluster=bootBlock[13];
+                  const uint16_t reserved=u16(14);
+                  const uint8_t fats=bootBlock[16];
+                  const uint16_t rootEntries=u16(17);
+                  const uint32_t total=u16(19)?uint32_t(u16(19)):u32(32);
+                  const uint32_t fat16=u16(22),fat32=u32(36);
+                  const uint32_t fatSectors=fat16?fat16:fat32;
+                  const bool jump=bootBlock[0]==0xE9 ||
+                    (bootBlock[0]==0xEB && bootBlock[2]==0x90);
+                  const bool powerOfTwo=sectorsPerCluster &&
+                    (sectorsPerCluster&(sectorsPerCluster-1u))==0 &&
+                    sectorsPerCluster<=128;
+                  const uint32_t rootDirSectors=
+                    (uint32_t(rootEntries)*32u+511u)/512u;
+                  const uint64_t overhead=uint64_t(reserved)+
+                    uint64_t(fats)*fatSectors+rootDirSectors;
+                  result.bpbBytesPerSector=bytesPerSector;
+                  result.bpbSectorsPerCluster=sectorsPerCluster;
+                  result.bpbTotalSectors=total;
+                  if (result.vbrSignature && jump &&
+                      bytesPerSector==512 && powerOfTwo &&
+                      reserved>=1 && (fats==1 || fats==2) &&
+                      fatSectors!=0 && total!=0 &&
+                      total<=result.partitionSectors && overhead<total) {
+                    const uint32_t clusters=uint32_t(
+                      (uint64_t(total)-overhead)/sectorsPerCluster);
+                    const uint8_t variant=clusters<4085u?12:
+                      clusters<65525u?16:32;
+                    const bool variantOk=variant==32
+                      ? (fat16==0 && fat32!=0 && rootEntries==0 &&
+                          u32(44)>=2u && u32(44)<uint64_t(clusters)+2u)
+                      : (fat16!=0 && rootEntries!=0);
+                    if (variantOk) {
+                      result.bpbPlausible=1;
+                      result.fatVariant=variant;
+                    }
+                  }
+                }
+              }
             }
           }
         }
