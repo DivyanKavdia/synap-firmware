@@ -56,8 +56,9 @@ test('C3 stale write failures are re-armed before boot mount and before the next
   assert.match(detect,/odysseySdBitBangRecoverLocked\("rearm"\)/);
   assert.match(recorder,/one-gesture offline start: recovering storage before capture/);
   assert.match(recorder,/odysseyRecoverSdCard\("touch"\)/);
-  assert.match(recorder,/post-record failure: re-arming storage for next take/);
-  assert.match(recorder,/odysseyRecoverSdCard\("rearm"\)/);
+  assert.match(recorder,/skipping automatic remount/);
+  const afterTake=recorder.split('  odysseyRecordTake();')[1].split('bool odysseyPrepareForConnectedStreaming')[0];
+  assert.doesNotMatch(afterTake,/odysseyRecoverSdCard\("rearm"\)/);
   assert.doesNotMatch(recorder,/Retry double tap after mount/);
   assert.match(caps,/liveProbe<=6u\?liveProbe:7u/);
   assert.match(caps,/<<3/);
