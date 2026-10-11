@@ -27,6 +27,19 @@ static uint32_t responseConnection=0;
 static char selectedPath[64]{};
 static String catalogueBuffer;
 static int catalogueErrno=0;
+static uint8_t catalogueStep=0;
+// Live media I/O failure is independent of the persisted offline recorder fault.
+// Never present an old stage-66 WAV error as a new sync/delete failure.
+static std::atomic<uint8_t> sdLastMediaFaultOperation{0};
+static std::atomic<uint8_t> sdLastMediaFaultStep{0};
+static std::atomic<int32_t> sdLastMediaFaultErrno{0};
+static void noteSdMediaFault(uint8_t operation,uint8_t step,int error) {
+  sdLastMediaFaultOperation=operation;
+  sdLastMediaFaultStep=step;
+  sdLastMediaFaultErrno=error?error:EIO;
+  Serial.printf("[SD] media fault op=%u step=%u errno=%d (existing WAVs retained)\n",
+    unsigned(operation),unsigned(step),int(sdLastMediaFaultErrno.load()));
+}
 
 enum : uint8_t {
   OK=0,BUSY=1,BAD_COMMAND=2,NO_SD=3,IO_ERROR=7,FILE_UNAVAILABLE=11
@@ -162,6 +175,7 @@ static uint8_t catalogue(uint32_t& total) {
   selectedPath[0]=0;
   catalogueBuffer="";
   catalogueErrno=0;
+  catalogueStep=0;
   OdysseySdGuard guard;
   if (!guard || !storageReady()) return NO_SD;
 
@@ -183,13 +197,14 @@ static uint8_t catalogue(uint32_t& total) {
         return OK;
       }
     }
-    catalogueErrno=directoryErrno;
+    catalogueErrno=directoryErrno?directoryErrno:EIO;
+    catalogueStep=1;
     Serial.printf("[SD] catalogue opendir failed errno=%d path=%s\n",catalogueErrno,directoryPath);
     return IO_ERROR;
   }
 
   if (!catalogueBuffer.reserve(2048)) {
-    catalogueErrno=ENOMEM;closedir(directory);return IO_ERROR;
+    catalogueErrno=ENOMEM;catalogueStep=2;closedir(directory);return IO_ERROR;
   }
   catalogueBuffer="[";
   unsigned count=0;
@@ -197,7 +212,7 @@ static uint8_t catalogue(uint32_t& total) {
     errno=0;
     dirent* entry=readdir(directory);
     if (!entry) {
-      if (errno) catalogueErrno=errno;
+      if (errno) { catalogueErrno=errno;catalogueStep=3; }
       break;
     }
     if (!entry->d_name || !strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
@@ -207,15 +222,29 @@ static uint8_t catalogue(uint32_t& total) {
     char full[96];
     if (!odysseySdPath(logical,full,sizeof(full))) continue;
     struct stat st{};
-    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<0) continue;
+    errno=0;
+    // A failed stat during directory enumeration is NOT proof that the
+    // file was deleted. Returning a partial/empty list could cause PWA
+    // post-delete verification to discard its receipt for a surviving WAV.
+    if (stat(full,&st)!=0) {
+      catalogueErrno=errno?errno:EIO;catalogueStep=4;break;
+    }
+    if (!S_ISREG(st.st_mode)) continue;
+    if (st.st_size<0 || uint64_t(st.st_size)>UINT32_MAX) {
+      catalogueErrno=EOVERFLOW;catalogueStep=5;break;
+    }
+    // A bounded BLE JSON catalogue must never silently omit recording #101.
+    if (count>=100u) { catalogueErrno=EOVERFLOW;catalogueStep=6;break; }
     if (count++) catalogueBuffer+=",";
     catalogueBuffer+="{\"path\":\""+String(logical)+"\",\"bytes\":"+String(uint32_t(st.st_size))+"}";
-    if (count>=100) break;
   }
-  if (closedir(directory)!=0 && !catalogueErrno) catalogueErrno=errno;
+  if (closedir(directory)!=0 && !catalogueErrno) {
+    catalogueErrno=errno?errno:EIO;catalogueStep=7;
+  }
   if (catalogueErrno) {
     catalogueBuffer="";
-    Serial.printf("[SD] catalogue readdir/closedir failed errno=%d\n",catalogueErrno);
+    Serial.printf("[SD] catalogue failed step=%u errno=%d; refuse partial list\n",
+      unsigned(catalogueStep),catalogueErrno);
     return IO_ERROR; // Never send a silently truncated catalogue after an I/O fault.
   }
   catalogueBuffer+="]";
@@ -402,7 +431,7 @@ static void worker(void*) {
         const uint32_t failureOffset=stage>=66u && stage<=70u
           ? odysseyLastRecordFailureBytes()+44u : 0u;
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"wrE\":%lu,\"wrD\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu,\"vfsStep\":%u,\"vfsErrno\":%ld,\"failureOffset\":%lu,\"sdClockKhz\":%lu,\"faultKind\":\"vfs\"}",
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"wrE\":%lu,\"wrD\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu,\"vfsStep\":%u,\"vfsErrno\":%ld,\"failureOffset\":%lu,\"sdClockKhz\":%lu,\"faultKind\":\"vfs\",\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld}",
           unsigned(odysseySdDetectionState()),
           unsigned(odysseySdProbeState()),
           unsigned(odysseyLastRecordFailureStage()),
@@ -415,7 +444,10 @@ static void worker(void*) {
           unsigned(odysseySdVfsStepValue()),
           static_cast<long>(odysseySdVfsErrnoValue()),
           static_cast<unsigned long>(failureOffset),
-          static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ/1000u));
+          static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ/1000u),
+          unsigned(sdLastMediaFaultOperation.load()),
+          unsigned(sdLastMediaFaultStep.load()),
+          static_cast<long>(sdLastMediaFaultErrno.load()));
         if (n<0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();
@@ -428,17 +460,32 @@ static void worker(void*) {
         break;
       case 7:
         error=catalogue(total);
-        // Never auto-unmount/remount a mounted card because a catalogue read
-        // failed. Preserve the observed state for diagnosis; explicit op 14 is
-        // the only connected remount path.
-        if (error==IO_ERROR) odysseySdMarkVfsFailure();
+        // ENOMEM/EOVERFLOW means the BLE catalogue is incomplete, not that the
+        // SD controller has stopped responding. Fail closed but keep FAT
+        // mounted for the user's existing recordings.
+        if (error==IO_ERROR) {
+          noteSdMediaFault(7,catalogueStep,catalogueErrno);
+          if (catalogueErrno!=ENOMEM && catalogueErrno!=EOVERFLOW) {
+            errno=catalogueErrno?catalogueErrno:EIO;
+            odysseySdMarkVfsFailure();
+          }
+        }
         break;
       case 8: total=catalogueBuffer.length();if(!total)error=FILE_UNAVAILABLE;break;
       case 14:
         selectedPath[0]=0;catalogueBuffer="";
         error=odysseyRecoverSdCard("op14")?OK:NO_SD;
         break;
-      case 17: error=removeFile(request.path); break;
+      case 17:
+        errno=0;
+        error=removeFile(request.path);
+        if (error==IO_ERROR) {
+          const int removeErr=errno?errno:EIO;
+          noteSdMediaFault(17,1,removeErr);
+          errno=removeErr;
+          odysseySdMarkVfsFailure();
+        }
+        break;
       case 18:
         selectedPath[0]=0;catalogueBuffer="";
         if(!storageReady())error=NO_SD;
