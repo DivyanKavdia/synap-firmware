@@ -13,7 +13,9 @@ test('C3 BLE WAV sync caches 4KiB CLOSED read chunks rather than reopen per 480-
   assert.match(chunk,/!strcmp\(cache\.path,logical\)/);
   assert.match(chunk,/uint64_t\(offset\)<uint64_t\(cache\.start\)\+cache\.used/);
   assert.match(chunk,/fopen\(full,"rb"\)/);
-  assert.match(chunk,/fread\(sdBleReadCache\.bytes,1,want,file\)/);
+  assert.match(chunk,/const size_t step=std.min/);
+  assert.match(chunk,/fread\\(sdBleReadCache\\.bytes\\+got,1,step,file\\)/);
+  assert.doesNotMatch(chunk,/fread\\(sdBleReadCache\\.bytes,1,want,file\\)/);
   assert.match(chunk,/fclose\(file\)/);
   assert.match(chunk,/sdBleReadCache\.valid=true/);
   assert(chunk.indexOf('fclose(file)')<chunk.indexOf('sdBleReadCache.valid=true'));
