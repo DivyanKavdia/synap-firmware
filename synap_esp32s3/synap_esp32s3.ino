@@ -5072,8 +5072,17 @@ static uint8_t readWavChunk(const char* logical,uint32_t offset,
   const int seekErr=errno;
   size_t got=0;
   if (seekOk) {
-    errno=0;
-    got=fread(sdBleReadCache.bytes,1,want,file);
+    // Avoid requesting large multi-sector CMD18 bursts on hardware whose
+    // controller previously became stuck busy after SD operations. Fill one
+    // 4 KiB cache with at most eight 512-byte fread calls, keeping the WAV
+    // open only during this bounded synchronous loop.
+    while (got<want) {
+      const size_t step=std::min(size_t(512),want-got);
+      errno=0;
+      const size_t amount=fread(sdBleReadCache.bytes+got,1,step,file);
+      got+=amount;
+      if (amount!=step) break;
+    }
   }
   const int readErr=errno;
   errno=0;
