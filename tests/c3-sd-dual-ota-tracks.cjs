@@ -42,6 +42,7 @@ test('new C3+SD factory table has two large OTA slots without flash overlap',()=
     const off=i*32;binary.writeUInt16LE(0x50aa,off);
     binary[off+2]=types[e.type];binary[off+3]=subtypes[e.subtype];
     binary.writeUInt32LE(e.offset,off+4);binary.writeUInt32LE(e.size,off+8);
+    binary.fill(0,off+12,off+28);
     binary.write(e.label,off+12,'ascii');
   });
   assert.equal(verify(binary).length,5);
