@@ -16,12 +16,23 @@ static std::atomic<uint32_t> odysseyPersistedWireErr{0};
 static std::atomic<uint32_t> odysseyPersistedWireArg{0};
 static std::atomic<uint32_t> odysseyPersistedWireRsp{0};
 static std::atomic<uint32_t> odysseyPersistedWireCmd13{0};
+// Additive optional NVS 'wtime' journal; keep old last/write/wire ABI intact.
+static std::atomic<uint32_t> odysseyPersistedWireMs{0};
+static std::atomic<uint32_t> odysseyPersistedWireBudget{0};
+static std::atomic<uint32_t> odysseyPersistedWireLen{0};
+static std::atomic<uint32_t> odysseyPersistedWirePrev{UINT32_MAX};
+static std::atomic<uint32_t> odysseyPersistedWireGoodWrites{0};
 void odysseySdClearWireFault();
 uint32_t odysseySdWireFaultCmd();
 uint32_t odysseySdWireFaultError();
 uint32_t odysseySdWireFaultArg();
 uint32_t odysseySdWireFaultResponse();
 uint32_t odysseySdLastCmd13Response();
+uint32_t odysseySdWireFaultElapsedMs();
+uint32_t odysseySdWireFaultBudgetMs();
+uint32_t odysseySdWireFaultLength();
+uint32_t odysseySdWireFaultPreviousCmd();
+uint32_t odysseySdWireFaultGoodWrites();
 extern "C" uint32_t synapSdWriteFaultCode();
 extern "C" void synapSdClearWriteFaultCode();
 void synapSdNoteNativeWriteError(uint8_t stage,int ioError);
@@ -73,6 +84,16 @@ static void odysseyLoadPersistedRecordFailure() {
       odysseyPersistedWireRsp=wire[5];
       odysseyPersistedWireCmd13=wire[6];
     }
+    uint32_t timing[7]{};
+    if (prefs.getBytesLength("wtime")==sizeof(timing) &&
+        prefs.getBytes("wtime",timing,sizeof(timing))==sizeof(timing) &&
+        timing[0]==record[1] && timing[1]==record[2]) {
+      odysseyPersistedWireMs=timing[2];
+      odysseyPersistedWireBudget=timing[3];
+      odysseyPersistedWireLen=timing[4];
+      odysseyPersistedWirePrev=timing[5];
+      odysseyPersistedWireGoodWrites=timing[6];
+    }
   }
   prefs.end();
 }
@@ -94,6 +115,11 @@ uint32_t odysseyLastWireError() { odysseyLoadPersistedRecordFailure(); return od
 uint32_t odysseyLastWireArgument() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireArg.load(); }
 uint32_t odysseyLastWireResponse() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireRsp.load(); }
 uint32_t odysseyLastWireCmd13() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireCmd13.load(); }
+uint32_t odysseyLastWireMs() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireMs.load(); }
+uint32_t odysseyLastWireBudget() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireBudget.load(); }
+uint32_t odysseyLastWireLen() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireLen.load(); }
+uint32_t odysseyLastWirePrev() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWirePrev.load(); }
+uint32_t odysseyLastWireGoodWrites() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireGoodWrites.load(); }
 static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   odysseyPersistedRecordLoaded=true;
   odysseyPersistedRecordStage=stage;
@@ -103,6 +129,11 @@ static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   odysseyPersistedWireArg=stage?odysseySdWireFaultArg():0u;
   odysseyPersistedWireRsp=stage?odysseySdWireFaultResponse():0u;
   odysseyPersistedWireCmd13=stage?odysseySdLastCmd13Response():0u;
+  odysseyPersistedWireMs=stage?odysseySdWireFaultElapsedMs():0u;
+  odysseyPersistedWireBudget=stage?odysseySdWireFaultBudgetMs():0u;
+  odysseyPersistedWireLen=stage?odysseySdWireFaultLength():0u;
+  odysseyPersistedWirePrev=stage?odysseySdWireFaultPreviousCmd():UINT32_MAX;
+  odysseyPersistedWireGoodWrites=stage?odysseySdWireFaultGoodWrites():0u;
   if (!stage) {
     odysseyPersistedWriteErrno=0;
     odysseyPersistedWriteReturned=0;
@@ -125,6 +156,11 @@ static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
       odysseyPersistedWireArg.load(),odysseyPersistedWireRsp.load(),
       odysseyPersistedWireCmd13.load()};
     (void)prefs.putBytes("wire",wire,sizeof(wire));
+    const uint32_t timing[7]={uint32_t(stage),bytes,
+      odysseyPersistedWireMs.load(),odysseyPersistedWireBudget.load(),
+      odysseyPersistedWireLen.load(),odysseyPersistedWirePrev.load(),
+      odysseyPersistedWireGoodWrites.load()};
+    (void)prefs.putBytes("wtime",timing,sizeof(timing));
   }
   const uint32_t record[3]={stage?1u:0u,uint32_t(stage),bytes};
   (void)prefs.putBytes("last",record,sizeof(record));

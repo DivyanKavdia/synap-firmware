@@ -442,8 +442,8 @@ static void worker(void*) {
         const uint8_t stage=odysseyLastRecordFailureStage();
         const uint32_t failureOffset=stage>=66u && stage<=70u
           ? odysseyLastRecordFailureBytes()+44u : 0u;
-        const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"wrE\":%lu,\"wrD\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu,\"vfsStep\":%u,\"vfsErrno\":%ld,\"failureOffset\":%lu,\"sdClockKhz\":%lu,\"faultKind\":\"vfs\",\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireRsp\":%lu,\"wireR2\":%lu}",
+        int n=snprintf(detail,sizeof(detail),
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"wrE\":%lu,\"wrD\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu,\"vfsStep\":%u,\"vfsErrno\":%ld,\"failureOffset\":%lu,\"sdClockKhz\":%lu,\"faultKind\":\"vfs\",\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireRsp\":%lu,\"wireR2\":%lu,\"wireMs\":%lu,\"wireBudget\":%lu,\"wireLen\":%lu,\"wirePrev\":%lu,\"wireWriteOk\":%lu}",
           unsigned(odysseySdDetectionState()),
           unsigned(odysseySdProbeState()),
           unsigned(odysseyLastRecordFailureStage()),
@@ -464,7 +464,29 @@ static void worker(void*) {
           static_cast<unsigned long>(odysseyLastWireError()),
           static_cast<unsigned long>(odysseyLastWireArgument()),
           static_cast<unsigned long>(odysseyLastWireResponse()),
-          static_cast<unsigned long>(odysseyLastWireCmd13()));
+          static_cast<unsigned long>(odysseyLastWireCmd13()),
+          static_cast<unsigned long>(odysseyLastWireMs()),
+          static_cast<unsigned long>(odysseyLastWireBudget()),
+          static_cast<unsigned long>(odysseyLastWireLen()),
+          static_cast<unsigned long>(odysseyLastWirePrev()),
+          static_cast<unsigned long>(odysseyLastWireGoodWrites()));
+        // Always return meaningful native fault context, even if future
+        // counters reach their maximum uint32 decimal width. BLE op27 must
+        // never truncate a JSON payload or silently lose the recorder error.
+        if (n>=int(sizeof(detail))) {
+          n=snprintf(detail,sizeof(detail),
+            "{\"version\":1,\"recordStage\":%u,\"recordBytes\":%lu,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireMs\":%lu,\"wireBudget\":%lu,\"wireLen\":%lu,\"wirePrev\":%lu,\"wireWriteOk\":%lu}",
+            unsigned(stage),
+            static_cast<unsigned long>(odysseyLastRecordFailureBytes()),
+            static_cast<unsigned long>(odysseyLastWireCommand()),
+            static_cast<unsigned long>(odysseyLastWireError()),
+            static_cast<unsigned long>(odysseyLastWireArgument()),
+            static_cast<unsigned long>(odysseyLastWireMs()),
+            static_cast<unsigned long>(odysseyLastWireBudget()),
+            static_cast<unsigned long>(odysseyLastWireLen()),
+            static_cast<unsigned long>(odysseyLastWirePrev()),
+            static_cast<unsigned long>(odysseyLastWireGoodWrites()));
+        }
         if (n<0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();

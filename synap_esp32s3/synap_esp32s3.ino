@@ -2531,12 +2531,28 @@ static std::atomic<uint32_t> odysseyWireError{0};
 static std::atomic<uint32_t> odysseyWireArg{0};
 static std::atomic<uint32_t> odysseyWireResponse{0};
 static std::atomic<uint32_t> odysseyWireLastCmd13{0};
+// Field-facing context for the FIRST native transaction failure. All fields
+// are observed in the existing command callback; no extra card I/O or retries.
+static std::atomic<uint32_t> odysseyWireElapsedMs{0};
+static std::atomic<uint32_t> odysseyWireBudgetMs{0};
+static std::atomic<uint32_t> odysseyWireDataLength{0};
+static std::atomic<uint32_t> odysseyWirePriorCmd{UINT32_MAX};
+static std::atomic<uint32_t> odysseyWirePriorSuccessCmd{UINT32_MAX};
+static std::atomic<uint32_t> odysseyWireGoodWrites{0};
+static std::atomic<uint32_t> odysseyWireWritesAtFailure{0};
 void odysseySdClearWireFault() {
   odysseyWireCmdPlusOne=0;
   odysseyWireError=0;
   odysseyWireArg=0;
   odysseyWireResponse=0;
   odysseyWireLastCmd13=0;
+  odysseyWireElapsedMs=0;
+  odysseyWireBudgetMs=0;
+  odysseyWireDataLength=0;
+  odysseyWirePriorCmd=UINT32_MAX;
+  odysseyWirePriorSuccessCmd=UINT32_MAX;
+  odysseyWireGoodWrites=0;
+  odysseyWireWritesAtFailure=0;
 }
 uint32_t odysseySdWireFaultCmd() {
   const uint32_t code=odysseyWireCmdPlusOne.load();
@@ -2546,6 +2562,11 @@ uint32_t odysseySdWireFaultError() { return odysseyWireError.load(); }
 uint32_t odysseySdWireFaultArg() { return odysseyWireArg.load(); }
 uint32_t odysseySdWireFaultResponse() { return odysseyWireResponse.load(); }
 uint32_t odysseySdLastCmd13Response() { return odysseyWireLastCmd13.load(); }
+uint32_t odysseySdWireFaultElapsedMs() { return odysseyWireElapsedMs.load(); }
+uint32_t odysseySdWireFaultBudgetMs() { return odysseyWireBudgetMs.load(); }
+uint32_t odysseySdWireFaultLength() { return odysseyWireDataLength.load(); }
+uint32_t odysseySdWireFaultPreviousCmd() { return odysseyWirePriorSuccessCmd.load(); }
+uint32_t odysseySdWireFaultGoodWrites() { return odysseyWireWritesAtFailure.load(); }
 // Bind the diagnostic interceptor as a local lambda during mount. Arduino's
 // .ino preprocessor otherwise emits a forward prototype before sdmmc types
 // are in scope, even though the original source includes the right headers.
@@ -3001,8 +3022,12 @@ static bool odysseySdBeginLocked() {
   host.max_freq_khz=ODYSSEY_SD_DATA_FREQ_HZ/1000u;
   // Only observes original Espressif commands, without retries or extra I/O.
   host.do_transaction=[](int slot,sdmmc_command_t* cmd)->esp_err_t {
-  // Forward unchanged to the pinned ESP-IDF SDSPI implementation.
+  // Stopwatch surrounds the EXACT original native transaction. Duration
+  // near cmd->timeout_ms suggests write-program busy; a short failure may be
+  // command/data-response related. No extra SD command or delay is added.
+  const uint32_t startedAt=millis();
   const esp_err_t result=sdspi_host_do_transaction(slot,cmd);
+  const uint32_t elapsed=uint32_t(millis()-startedAt);
   if (cmd && cmd->opcode==13u) odysseyWireLastCmd13=cmd->response[0];
   const esp_err_t error=result!=ESP_OK?result:(cmd?cmd->error:ESP_FAIL);
   if (cmd && error!=ESP_OK) {
@@ -3011,7 +3036,17 @@ static bool odysseySdBeginLocked() {
       odysseyWireError=uint32_t(error);
       odysseyWireArg=cmd->arg;
       odysseyWireResponse=cmd->response[0];
+      odysseyWireElapsedMs=elapsed;
+      odysseyWireBudgetMs=cmd->timeout_ms;
+      odysseyWireDataLength=cmd->datalen;
+      odysseyWirePriorSuccessCmd=odysseyWirePriorCmd.load();
+      odysseyWireWritesAtFailure=odysseyWireGoodWrites.load();
     }
+  } else if (cmd && error==ESP_OK && !odysseyWireCmdPlusOne.load()) {
+    // Count completed commands, NOT guaranteed durable sectors. CMD13/FatFs
+    // still own post-program validation. Stop updating on first failure.
+    odysseyWirePriorCmd=cmd->opcode;
+    if (cmd->opcode==24u || cmd->opcode==25u) ++odysseyWireGoodWrites;
   }
   return result;
 };
@@ -3356,12 +3391,23 @@ static std::atomic<uint32_t> odysseyPersistedWireErr{0};
 static std::atomic<uint32_t> odysseyPersistedWireArg{0};
 static std::atomic<uint32_t> odysseyPersistedWireRsp{0};
 static std::atomic<uint32_t> odysseyPersistedWireCmd13{0};
+// Additive optional NVS 'wtime' journal; keep old last/write/wire ABI intact.
+static std::atomic<uint32_t> odysseyPersistedWireMs{0};
+static std::atomic<uint32_t> odysseyPersistedWireBudget{0};
+static std::atomic<uint32_t> odysseyPersistedWireLen{0};
+static std::atomic<uint32_t> odysseyPersistedWirePrev{UINT32_MAX};
+static std::atomic<uint32_t> odysseyPersistedWireGoodWrites{0};
 void odysseySdClearWireFault();
 uint32_t odysseySdWireFaultCmd();
 uint32_t odysseySdWireFaultError();
 uint32_t odysseySdWireFaultArg();
 uint32_t odysseySdWireFaultResponse();
 uint32_t odysseySdLastCmd13Response();
+uint32_t odysseySdWireFaultElapsedMs();
+uint32_t odysseySdWireFaultBudgetMs();
+uint32_t odysseySdWireFaultLength();
+uint32_t odysseySdWireFaultPreviousCmd();
+uint32_t odysseySdWireFaultGoodWrites();
 extern "C" uint32_t synapSdWriteFaultCode();
 extern "C" void synapSdClearWriteFaultCode();
 void synapSdNoteNativeWriteError(uint8_t stage,int ioError);
@@ -3413,6 +3459,16 @@ static void odysseyLoadPersistedRecordFailure() {
       odysseyPersistedWireRsp=wire[5];
       odysseyPersistedWireCmd13=wire[6];
     }
+    uint32_t timing[7]{};
+    if (prefs.getBytesLength("wtime")==sizeof(timing) &&
+        prefs.getBytes("wtime",timing,sizeof(timing))==sizeof(timing) &&
+        timing[0]==record[1] && timing[1]==record[2]) {
+      odysseyPersistedWireMs=timing[2];
+      odysseyPersistedWireBudget=timing[3];
+      odysseyPersistedWireLen=timing[4];
+      odysseyPersistedWirePrev=timing[5];
+      odysseyPersistedWireGoodWrites=timing[6];
+    }
   }
   prefs.end();
 }
@@ -3434,6 +3490,11 @@ uint32_t odysseyLastWireError() { odysseyLoadPersistedRecordFailure(); return od
 uint32_t odysseyLastWireArgument() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireArg.load(); }
 uint32_t odysseyLastWireResponse() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireRsp.load(); }
 uint32_t odysseyLastWireCmd13() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireCmd13.load(); }
+uint32_t odysseyLastWireMs() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireMs.load(); }
+uint32_t odysseyLastWireBudget() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireBudget.load(); }
+uint32_t odysseyLastWireLen() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireLen.load(); }
+uint32_t odysseyLastWirePrev() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWirePrev.load(); }
+uint32_t odysseyLastWireGoodWrites() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireGoodWrites.load(); }
 static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   odysseyPersistedRecordLoaded=true;
   odysseyPersistedRecordStage=stage;
@@ -3443,6 +3504,11 @@ static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   odysseyPersistedWireArg=stage?odysseySdWireFaultArg():0u;
   odysseyPersistedWireRsp=stage?odysseySdWireFaultResponse():0u;
   odysseyPersistedWireCmd13=stage?odysseySdLastCmd13Response():0u;
+  odysseyPersistedWireMs=stage?odysseySdWireFaultElapsedMs():0u;
+  odysseyPersistedWireBudget=stage?odysseySdWireFaultBudgetMs():0u;
+  odysseyPersistedWireLen=stage?odysseySdWireFaultLength():0u;
+  odysseyPersistedWirePrev=stage?odysseySdWireFaultPreviousCmd():UINT32_MAX;
+  odysseyPersistedWireGoodWrites=stage?odysseySdWireFaultGoodWrites():0u;
   if (!stage) {
     odysseyPersistedWriteErrno=0;
     odysseyPersistedWriteReturned=0;
@@ -3465,6 +3531,11 @@ static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
       odysseyPersistedWireArg.load(),odysseyPersistedWireRsp.load(),
       odysseyPersistedWireCmd13.load()};
     (void)prefs.putBytes("wire",wire,sizeof(wire));
+    const uint32_t timing[7]={uint32_t(stage),bytes,
+      odysseyPersistedWireMs.load(),odysseyPersistedWireBudget.load(),
+      odysseyPersistedWireLen.load(),odysseyPersistedWirePrev.load(),
+      odysseyPersistedWireGoodWrites.load()};
+    (void)prefs.putBytes("wtime",timing,sizeof(timing));
   }
   const uint32_t record[3]={stage?1u:0u,uint32_t(stage),bytes};
   (void)prefs.putBytes("last",record,sizeof(record));
@@ -4978,8 +5049,8 @@ static void worker(void*) {
         const uint8_t stage=odysseyLastRecordFailureStage();
         const uint32_t failureOffset=stage>=66u && stage<=70u
           ? odysseyLastRecordFailureBytes()+44u : 0u;
-        const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"wrE\":%lu,\"wrD\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu,\"vfsStep\":%u,\"vfsErrno\":%ld,\"failureOffset\":%lu,\"sdClockKhz\":%lu,\"faultKind\":\"vfs\",\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireRsp\":%lu,\"wireR2\":%lu}",
+        int n=snprintf(detail,sizeof(detail),
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"wrE\":%lu,\"wrD\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu,\"vfsStep\":%u,\"vfsErrno\":%ld,\"failureOffset\":%lu,\"sdClockKhz\":%lu,\"faultKind\":\"vfs\",\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireRsp\":%lu,\"wireR2\":%lu,\"wireMs\":%lu,\"wireBudget\":%lu,\"wireLen\":%lu,\"wirePrev\":%lu,\"wireWriteOk\":%lu}",
           unsigned(odysseySdDetectionState()),
           unsigned(odysseySdProbeState()),
           unsigned(odysseyLastRecordFailureStage()),
@@ -5000,7 +5071,29 @@ static void worker(void*) {
           static_cast<unsigned long>(odysseyLastWireError()),
           static_cast<unsigned long>(odysseyLastWireArgument()),
           static_cast<unsigned long>(odysseyLastWireResponse()),
-          static_cast<unsigned long>(odysseyLastWireCmd13()));
+          static_cast<unsigned long>(odysseyLastWireCmd13()),
+          static_cast<unsigned long>(odysseyLastWireMs()),
+          static_cast<unsigned long>(odysseyLastWireBudget()),
+          static_cast<unsigned long>(odysseyLastWireLen()),
+          static_cast<unsigned long>(odysseyLastWirePrev()),
+          static_cast<unsigned long>(odysseyLastWireGoodWrites()));
+        // Always return meaningful native fault context, even if future
+        // counters reach their maximum uint32 decimal width. BLE op27 must
+        // never truncate a JSON payload or silently lose the recorder error.
+        if (n>=int(sizeof(detail))) {
+          n=snprintf(detail,sizeof(detail),
+            "{\"version\":1,\"recordStage\":%u,\"recordBytes\":%lu,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireMs\":%lu,\"wireBudget\":%lu,\"wireLen\":%lu,\"wirePrev\":%lu,\"wireWriteOk\":%lu}",
+            unsigned(stage),
+            static_cast<unsigned long>(odysseyLastRecordFailureBytes()),
+            static_cast<unsigned long>(odysseyLastWireCommand()),
+            static_cast<unsigned long>(odysseyLastWireError()),
+            static_cast<unsigned long>(odysseyLastWireArgument()),
+            static_cast<unsigned long>(odysseyLastWireMs()),
+            static_cast<unsigned long>(odysseyLastWireBudget()),
+            static_cast<unsigned long>(odysseyLastWireLen()),
+            static_cast<unsigned long>(odysseyLastWirePrev()),
+            static_cast<unsigned long>(odysseyLastWireGoodWrites()));
+        }
         if (n<0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();

@@ -22,12 +22,13 @@ test('C3 persisted stage 70 diagnostics migrate from legacy NVS and survive soft
 #include <vector>
 #include <cstdio>
 #include <iostream>
-static std::vector<uint8_t> saved, extra, wireJournal;
+static std::vector<uint8_t> saved, extra, wireJournal, timeJournal;
 struct Preferences {
   bool begin(const char*,bool){return true;}
   std::vector<uint8_t>& bucket(const char* k){
     if(std::strcmp(k,"write")==0)return extra;
     if(std::strcmp(k,"wire")==0)return wireJournal;
+    if(std::strcmp(k,"wtime")==0)return timeJournal;
     return saved;
   }
   size_t getBytesLength(const char* k){return bucket(k).size();}
@@ -47,6 +48,11 @@ uint32_t odysseySdWireFaultError(){return 0;}
 uint32_t odysseySdWireFaultArg(){return 0;}
 uint32_t odysseySdWireFaultResponse(){return 0;}
 uint32_t odysseySdLastCmd13Response(){return 0;}
+uint32_t odysseySdWireFaultElapsedMs(){return 5000;}
+uint32_t odysseySdWireFaultBudgetMs(){return 5000;}
+uint32_t odysseySdWireFaultLength(){return 4096;}
+uint32_t odysseySdWireFaultPreviousCmd(){return 13;}
+uint32_t odysseySdWireFaultGoodWrites(){return 8;}
 static void resetLoaded(){
   odysseyPersistedRecordLoaded=false;
   odysseyPersistedRecordStage=0;odysseyPersistedRecordBytes=0;
@@ -56,6 +62,9 @@ static void resetLoaded(){
   odysseyPersistedWireCmd=UINT32_MAX;
   odysseyPersistedWireErr=0;odysseyPersistedWireArg=0;
   odysseyPersistedWireRsp=0;odysseyPersistedWireCmd13=0;
+  odysseyPersistedWireMs=0;odysseyPersistedWireBudget=0;
+  odysseyPersistedWireLen=0;odysseyPersistedWirePrev=UINT32_MAX;
+  odysseyPersistedWireGoodWrites=0;
 }
 int main(){
   uint32_t old[3]={1,70,2040u*1024u};
@@ -75,6 +84,7 @@ int main(){
   assert(saved.size()==3u*sizeof(uint32_t));
   assert(extra.size()==7u*sizeof(uint32_t));
   assert(wireJournal.size()==7u*sizeof(uint32_t));
+  assert(timeJournal.size()==7u*sizeof(uint32_t));
   uint32_t retained[3]{};std::memcpy(retained,saved.data(),sizeof(retained));
   assert(retained[0]==1&&retained[1]==70&&retained[2]==2040u*1024u);
   resetLoaded();
@@ -85,12 +95,19 @@ int main(){
   assert(odysseyLastWriteExpected()==4096);
   assert(odysseyLastWriteFerror()==1);
   assert(odysseyLastDriverWriteFault()==((25u<<24)|(5u<<16)|(2u<<8)|0x0Bu));
+  assert(odysseyLastWireMs()==5000);
+  assert(odysseyLastWireBudget()==5000);
+  assert(odysseyLastWireLen()==4096);
+  assert(odysseyLastWirePrev()==13);
+  assert(odysseyLastWireGoodWrites()==8);
 
   odysseyPersistRecordFailure(0,0);
   resetLoaded();
   assert(odysseyLastRecordFailureStage()==0);
   assert(odysseyLastWriteExpected()==0);
   assert(odysseyLastDriverWriteFault()==0);
+  assert(odysseyLastWireMs()==0);
+  assert(odysseyLastWireGoodWrites()==0);
   std::cout<<"PASS C3 SD write diagnostics\n";
 }
 `);

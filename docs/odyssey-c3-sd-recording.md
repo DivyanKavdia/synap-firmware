@@ -176,3 +176,79 @@ after an unexpected shutdown. A sudden power interruption may still lose
 the tail recorded after the checkpoint. Read the **current source** and
 `ODYSSEY_C3_SD_AUDIO.md` for the up-to-date policy. Physical qualification
 is required before treating the candidate as field-proven.
+
+## October 11, 2026 — authoritative native SDSPI path and confirmed SD timeouts
+
+**Important: the Arduino SD/CMD24 patch and the no-checkpoint policy described
+earlier in this historical document are no longer the production path.** Refer
+to `firmware/shared/odyssey-sd-1631-detect.cpp` and
+`odyssey-sd-1631-recording.cpp` for the live implementation:
+
+- C3 ESP-IDF 5.5.x SDSPI on SPI2, CS=GPIO0, CLK=GPIO10, MOSI=GPIO21,
+  MISO=GPIO20; initialized at 400 kHz, runtime capped to **800 kHz**.
+- One mounted FatFs VFS at `/odyssey-sd`, one open file and one SD guard.
+  Mount never formats automatically; read-only VFS validation at boot.
+- Offline PCM16 16 kHz mono is sequentially appended in **4096-byte**
+  batches; no preallocation and no backward WAV header rewrite.
+- **Periodic real `fsync` every 10 seconds** after a complete batch;
+  at STOP the trailing batch is zero-padded, file is closed and verified.
+- BLE media-v1 overlays a virtual correct WAV header for offline sync.
+  Existing captures are never erased without an explicit user request.
+- The raw native command callback passively records the first failed
+  `sdspi_host_do_transaction` and exposes it through BLE media operation 27.
+
+### Observed hardware failure sequence
+
+| Device build | Recorder result | First low-level fault | Notes |
+| --- | --- | --- | --- |
+| 2028 | ~3,235,796 PCM bytes accepted before failed 4 KiB write | CMD25, ESP_ERR_TIMEOUT (0x107), LBA argument 62042 | card unavailable until later power cycle |
+| 2036 | immediate failure, 0 PCM bytes accepted, failure offset 44 | CMD24, ESP_ERR_TIMEOUT (0x107), LBA argument 61898 | isolated 512-byte writer made first take fail; rolled back |
+| 2038 | reverted 2036 write-size experiment | native ESP-IDF CMD25 path restored | *short-take recovery candidate; long-form reliability not established* |
+
+The two failing addresses are only 144 512-byte sectors (73,728 bytes)
+apart *if* the SDHC logical-block address mode is in use. This could simply
+reflect nearby FAT allocations, a problematic media region, or card-side
+programming delay; it **does not prove** a particular electrical fault.
+Inspect card geometry before interpreting addresses as bytes.
+
+### Additional passive first-fault telemetry
+
+The independent additive `sd-recdiag/wtime` NVS journal is paired with
+the authoritative failure stage and accepted PCM bytes, like the existing
+`wire` journal. BLE media operation 27 now includes:
+
+| Field | Meaning |
+| --- | --- |
+| `wireCmd`, `wireErr`, `wireArg` | first actual failed native SD opcode/error/argument |
+| `wireMs` | elapsed wall time *inside the original* SDSPI transaction |
+| `wireBudget` | the transaction's original `timeout_ms` budget |
+| `wireLen` | native command data length in bytes |
+| `wirePrev` | last successful native command opcode before the fault |
+| `wireWriteOk` | successful native CMD24/CMD25 commands before the first fault, *not a durability guarantee* |
+
+A timeout close to the command's original budget **suggests** the
+transaction waited for card programming/ready; a much faster timeout may
+indicate missing command/data responses. The elapsed time alone cannot
+prove the exact internal phase of the Espressif driver. Do not add
+independent recovery commands or retry uncertain writes while measuring.
+
+BLE's 480-byte media payload bound is preserved; when a long diagnostic
+snapshot cannot fit, the recorder replies with a compact but valid JSON
+containing the first-fault command and timings.
+
+### Qualification and retention contract
+
+1. Keep the device fully power-cycled before a controlled new test. An ESP
+   software reboot does **not** prove that an independently powered SD rail
+   has reset; never claim a reset happened from `resetText: Power on` alone.
+2. Confirm `sdDetectionState=1` and `sdLiveProbeState=6` before recording.
+3. After a short take, run 3–5 minutes offline. Do **not** erase SD originals
+   until their entire WAV is downloaded, imported, and audibly validated.
+4. On failure, capture BLE media operation 27 with `wireMs`, `wireBudget`,
+   `wireLen`, `wirePrev`, `wireWriteOk` and the unchanged legacy fields.
+5. If SD goes busy-low, avoid repeated automatic mounts or writes. Preserve
+   existing FAT and prioritize data retrieval on the next safe mount.
+
+Do not classify an automated build/test as proof that the sealed physical
+C3+SD module can record continuously. Native SDSPI controller/card timing
+remains a field qualification gate.
