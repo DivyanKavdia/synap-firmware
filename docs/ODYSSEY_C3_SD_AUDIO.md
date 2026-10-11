@@ -1273,3 +1273,63 @@ microSD can never corrupt on interrupted writes. Robust future hardware
 should provide an SD power switch/supervisor, measured 3.3V rail, hold-up
 capacitor and stable external pullups. Continue preserving the original card
 and avoid unconditional fsck/format/delete on boot.
+
+## Post-build-2042 candidate: explicit format and offline sleep protection
+
+**Known-good physical baseline:** OTA build 2042, source commit
+`d9b2c3342d013145b8d08de5dbeffb96ba80437c`. Changes below are a
+candidate until compiled and physically qualified on a C3+SD; do not infer
+deployment from a source commit or passing CI.
+
+- Existing PWA **Format SD Card** UI is enabled by media feature bit 2 and
+  dispatches media-v1 op19 only after the user confirms permanent loss of
+  *all* SD card contents, including non-Synap files. This differs from op18,
+  which only clears Synap-owned recordings.
+- Formatter is **explicit-only**, uses the already mounted ESP-IDF SDSPI/FatFs
+  card and storage mutex, requires a trusted battery above 3.9 V, rejects
+  recording/transfer/OTA/unsafe states, and never retries a failed format.
+  The native formatter must return success AND the FAT root must validate with
+  no old `/synap` directory. A successful explicit format resets historical
+  recording fault diagnostics and the PWA removes sync receipts only after a
+  separate read-only empty catalogue verification.
+- A card that **cannot mount** is deliberately not force-formatted: it may be
+  trapped in SD controller BUSY or have an electrical fault. Format is not a
+  substitute for physical SD power-cycle diagnosis.
+- **Connected idle:** BLE stays accessible; standby only turns off
+  microphone/CPU work. Connected streaming, BLE SD transfer, Wi-Fi upload and
+  OTA veto deep sleep. Explicit long touch requests sleep after safe SD
+  quiescence.
+- **Disconnected with a ready SD:** C3 stays awake and touch-ready beyond the
+  previous 300-second auto-deep-sleep threshold; this is a conscious battery
+  trade-off. **Standard C3 without mounted SD** keeps the 300-second timeout.
+- **Offline recording:** the record-active flag keeps active CPU, SD mutex,
+  microphone and FAT session owned through STOP and flush, with deep sleep
+  vetoed. Checkpoint every 10s and 4096-byte aligned append are unchanged.
+  Critical battery requests a graceful STOP but never directly sleeps the
+  device before recorder finalization.
+- **LED:** purple pulses repeat every 1800ms without time limit while record
+  is active. If STOP was requested but finalization is still running, amber
+  pulses instead of a misleading dark LED. Two red pulses after task exit
+  indicate failed recording. Purple ceasing alone cannot prove the WAV saved
+  successfully; read the SD catalogue and stage/bytes diagnostics.
+
+### Physical acceptance matrix
+
+| Scenario | Acceptance |
+| --- | --- |
+| BLE connected idle >7min | BLE remains available; SD catalogue readable |
+| BLE connected recording | PWA audio works; no offline SD writes/sleep |
+| Disconnect, SD present, idle >7min | Remains responsive to normal double tap; no automatic deep sleep |
+| Offline SD recording 3, 7, 20+ min | Repeated purple heartbeat, growing WAV, normal STOP and verified sync |
+| Reconnect BLE during offline SD take | Purple persists until STOP; no forced remount or accidental live capture |
+| Double tap STOP | Amber during pending finalization, then idle, WAV verified |
+| Trusted critical battery while recording | Graceful STOP; no SD sleep before release |
+| Four-second manual sleep | No live recording or SD transfer interrupted; idle card quiesces |
+| Format nonempty mounted card | Explicit warning, user confirmation, format, empty catalogue; no automatic remount |
+| Format while recording/transfer/unsafe or with untrusted battery | BUSY/NO_SD; no FAT mutation; recordings retained |
+
+If purple stops before the user's STOP, immediately inspect whether a subsequent
+catalogue shows the WAV grew through that timestamp. Distinguish LED display
+loss from recorder task exit/stop-request versus FAT write failures (read-only
+media diagnostic op27). Do not change the physically tested CMD25 batch writer
+without independent evidence.
