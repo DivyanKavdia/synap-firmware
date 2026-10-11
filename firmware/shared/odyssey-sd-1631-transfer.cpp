@@ -128,6 +128,11 @@ static OdysseySdBleReadCache sdBleReadCache;
 static uint8_t sdBleReadFailureStep=0; // 1=stat,2=open,3=seek,4=read,5=close
 static int sdBleReadFailureErrno=0;
 static uint32_t sdBleReadCacheHits=0,sdBleReadDiskFills=0;
+// Counters are media-worker-owned, RAM-only and updated by existing reads.
+// A diagnostic request NEVER probes, reads or modifies the physical SD card.
+static uint32_t sdBleReadRequests=0,sdBleReadLastRequestedOffset=0;
+static uint32_t sdBleReadLastOkOffset=0,sdBleReadFailureOffset=0;
+static uint32_t sdBleReadWindowRequests=0,sdBleReadMtuFallbacks=0;
 static void invalidateBleReadCache() {
   sdBleReadCache.valid=false;
   sdBleReadCache.path[0]=0;
@@ -136,6 +141,8 @@ static uint8_t readWavChunk(const char* logical,uint32_t offset,
     uint32_t& total,uint8_t* bytes,size_t& size) {
   sdBleReadFailureStep=0;
   sdBleReadFailureErrno=0;
+  ++sdBleReadRequests;
+  sdBleReadLastRequestedOffset=offset;
   if (!safeWavPath(logical) || !bytes) return BAD_COMMAND;
   OdysseySdGuard guard;
   if (!guard || !storageReady()) {
@@ -155,6 +162,7 @@ static uint8_t readWavChunk(const char* logical,uint32_t offset,
     memcpy(bytes,cache.bytes+(offset-cache.start),size);
     patchVirtualWavHeader(bytes,size,offset,total);
     ++sdBleReadCacheHits;
+    sdBleReadLastOkOffset=offset+uint32_t(size);
     return OK;
   }
   invalidateBleReadCache();
@@ -233,6 +241,7 @@ static uint8_t readWavChunk(const char* logical,uint32_t offset,
   size=std::min(size_t(480),size_t(available));
   memcpy(bytes,sdBleReadCache.bytes+(offset-base),size);
   patchVirtualWavHeader(bytes,size,offset,total);
+  sdBleReadLastOkOffset=offset+uint32_t(size);
   return OK;
 }
 
@@ -428,10 +437,12 @@ static void notifySdWindow(const Request& request,uint8_t kind,uint8_t error,
 }
 
 static void streamSdWindow(const Request& request) {
+  ++sdBleReadWindowRequests;
   // Older/small-MTU Bluefy connections fall back to op4 without overlong BLE
   // notifications. A 16-byte empty-window completion tells the PWA to fall back.
   const uint16_t capacity=attValueCapacity.load();
   if (capacity<496u || !streamCharacteristic || !request.path[0]) {
+    ++sdBleReadMtuFallbacks;
     notifySdWindow(request,2,0,0,request.offset);
     return;
   }
@@ -449,6 +460,7 @@ static void streamSdWindow(const Request& request) {
     error=readSelected(request.path,offset,total,chunk,length);
     if (error!=OK || !length || length>chunkCapacity) {
       if (error==IO_ERROR) {
+        sdBleReadFailureOffset=sdBleReadLastRequestedOffset;
         noteSdMediaFault(12,sdBleReadFailureStep,sdBleReadFailureErrno);
         errno=sdBleReadFailureErrno?sdBleReadFailureErrno:EIO;
         odysseySdMarkVfsFailure();
@@ -613,9 +625,34 @@ static void worker(void*) {
         sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
         continue;
       }
+      case 29: {
+        // SD-independent sync trace. This reads only RAM counters from
+        // previous op4/op12 requests; it must remain safe after mount loss.
+        char detail[400];
+        const int n=snprintf(detail,sizeof(detail),
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"reads\":%lu,\"cacheHits\":%lu,\"diskFills\":%lu,\"lastRequestedOffset\":%lu,\"lastOkOffset\":%lu,\"faultOffset\":%lu,\"windowRequests\":%lu,\"mtuFallbacks\":%lu}",
+          unsigned(odysseySdDetectionState()),
+          unsigned(odysseySdProbeState()),
+          unsigned(sdLastMediaFaultOperation.load()),
+          unsigned(sdLastMediaFaultStep.load()),
+          static_cast<long>(sdLastMediaFaultErrno.load()),
+          static_cast<unsigned long>(sdBleReadRequests),
+          static_cast<unsigned long>(sdBleReadCacheHits),
+          static_cast<unsigned long>(sdBleReadDiskFills),
+          static_cast<unsigned long>(sdBleReadLastRequestedOffset),
+          static_cast<unsigned long>(sdBleReadLastOkOffset),
+          static_cast<unsigned long>(sdBleReadFailureOffset),
+          static_cast<unsigned long>(sdBleReadWindowRequests),
+          static_cast<unsigned long>(sdBleReadMtuFallbacks));
+        if (n<0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
+        reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
+        sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
+        continue;
+      }
       case 4:
         error=readSelected(request.path,request.offset,total,bytes,size);
         if (error==IO_ERROR) {
+          sdBleReadFailureOffset=sdBleReadLastRequestedOffset;
           noteSdMediaFault(4,sdBleReadFailureStep,sdBleReadFailureErrno);
           errno=sdBleReadFailureErrno?sdBleReadFailureErrno:EIO;
           odysseySdMarkVfsFailure();
