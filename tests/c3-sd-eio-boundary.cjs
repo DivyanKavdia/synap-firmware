@@ -86,10 +86,10 @@ test('microphone-only and zero-audio failures do not invalidate a healthy SD',()
   assert.doesNotMatch(segment,/remove\(|unlink\(|format/);
 });
 
-test('existing FAT volume uses lower-speed SDSPI and status checks without formatting',()=>{
+test('existing FAT volume uses native SDSPI without redundant FatFs CMD13 gating or formatting',()=>{
   assert.match(detect,/ODYSSEY_SD_DATA_FREQ_HZ=800000u/);
   assert.match(detect,/host.max_freq_khz=ODYSSEY_SD_DATA_FREQ_HZ\/1000u/);
-  assert.match(detect,/mount.disk_status_check_enable=true/);
+  assert.match(detect,/mount.disk_status_check_enable=false/);
   assert.match(detect,/mount.format_if_mount_failed=false/);
   assert.doesNotMatch(detect,/esp_vfs_fat_sdcard_format\(/);
   assert.match(detect,/ODYSSEY_SD_MAX_OPEN_FILES=1/);
