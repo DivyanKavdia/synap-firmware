@@ -3506,6 +3506,29 @@ static uint8_t odysseyBatchWriteFailureStage(int error) {
 // sequential append-only WAV open. The transfer path synthesizes its WAV
 // header from the resulting file length after an interrupted power cycle.
 // Only invoke after a successful, complete 4 KiB batch under OdysseySdGuard.
+// Field logs on build 2028 identify a real ESP_ERR_TIMEOUT (0x107) on
+// CMD25, with the card remaining BUSY-low until a physical power cycle.
+// Retain the 4 KiB PCM staging buffer, but present one 512-byte sector to
+// FatFs per unbuffered fwrite. IDF's sdmmc_write_sectors_dma() then selects
+// CMD24 (single-block) rather than CMD25 + multiblock stop-token handling.
+// Fail on the *first* short sector; never replay ambiguous writes. The caller
+// counts PCM only after all eight sectors completed. FAT and existing files
+// are never formatted, truncated or deleted by this workaround.
+static constexpr size_t ODYSSEY_SD_SECTOR_WRITE_BYTES=512u;
+static size_t odysseyWritePcmBatch(FILE* file,const uint8_t* data,size_t length) {
+  if (!file || !data || length%ODYSSEY_SD_SECTOR_WRITE_BYTES!=0) {
+    errno=EINVAL;
+    return 0;
+  }
+  size_t done=0;
+  while (done<length) {
+    errno=0;
+    const size_t written=fwrite(data+done,1,ODYSSEY_SD_SECTOR_WRITE_BYTES,file);
+    done+=written;
+    if (written!=ODYSSEY_SD_SECTOR_WRITE_BYTES) return done;
+  }
+  return done;
+}
 static constexpr uint32_t ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=10000u;
 static uint8_t odysseyCheckpointWav(FILE* file,int& savedErrno) {
   savedErrno=0;
@@ -3564,9 +3587,8 @@ static void odysseyRecordTake() {
   char logicalPath[64]{};
   char fullPath[96]{};
   uint8_t header[44];
-  // Keep the batch out of the 8 KiB recorder task stack. A 4 KiB aligned
-  // write gives FatFs eight contiguous sectors, routing Arduino SD through
-  // CMD25 + ACMD23 instead of the fragile one-sector CMD24 loop.
+  // Assemble PCM in 4 KiB outside the 8 KiB task stack, then write each
+  // 512-byte sector as an independent checked CMD24. Do not emit CMD25.
   alignas(4) static uint8_t batch[4096];
   size_t batchUsed=0;
   uint32_t batchPcmBytes=0;
@@ -3601,7 +3623,7 @@ static void odysseyRecordTake() {
 
   if (!failed) {
     // Append-only recording: create a normal zero-length file and let each
-    // successful 4 KiB CMD25 batch extend it naturally. No preallocation means
+    // successfully completed sector extend it. No preallocation means
     // STOP never needs to truncate a 32 MiB logical extent.
     snprintf(logicalPath,sizeof(logicalPath),"/synap/odyssey_audio_%08lx_%08lx.wav",
       static_cast<unsigned long>(esp_random()),static_cast<unsigned long>(esp_random()));
@@ -3660,7 +3682,7 @@ static void odysseyRecordTake() {
         remaining-=take;
         if (batchUsed==sizeof(batch)) {
           errno=0;
-          const size_t written=fwrite(batch,1,sizeof(batch),file);
+          const size_t written=odysseyWritePcmBatch(file,batch,sizeof(batch));
           if (written!=sizeof(batch)) {
             const int writeError=errno;
             odysseyPersistedWriteErrno=writeError>0?uint32_t(writeError):0u;
@@ -3678,8 +3700,8 @@ static void odysseyRecordTake() {
           bytes+=batchPcmBytes;
           batchUsed=0;
           batchPcmBytes=0;
-          // This is an explicit SD write test: trust the actual complete
-          // 4KiB batch result, not uncalibrated battery ADC readings.
+          // Only eight successful 512-byte writes commit a full 4 KiB
+          // batch. Never trust uncalibrated battery ADC as write evidence.
           // Every 10 seconds sync FAT/file-length metadata. An unexpected
           // power cut loses at most the unsynced tail in the normal case;
           // FAT sectors in flight can still tear on a sudden rail collapse.
@@ -3708,8 +3730,8 @@ static void odysseyRecordTake() {
         }
       }
 
-      // Capture performs only sequential 4 KiB writes through native SDSPI.
-      // Card command selection and completion belong to ESP-IDF FatFs.
+      // Capture performs only sequential 512-byte VFS writes through native
+      // SDSPI, without multiblock CMD25. FatFs owns all metadata writes.
       // The first batch carries a provisional WAV header; no random rewrite
       // is attempted while the card is in this recording session.
     }
@@ -3721,9 +3743,8 @@ static void odysseyRecordTake() {
 
   if (file) {
     if (!failed && batchUsed) {
-      // Preserve the multi-block path through STOP: pad the tail to one full
-      // 4 KiB batch. This adds at most 128 ms of trailing silence and avoids a
-      // final single-sector CMD24 write.
+      // Pad trailing PCM to one full 4 KiB staging batch. This adds at most
+      // 128 ms of silence, and all eight 512-byte sectors use CMD24.
       memset(batch+batchUsed,0,sizeof(batch)-batchUsed);
       errno=0;
       const size_t written=fwrite(batch,1,sizeof(batch),file);
