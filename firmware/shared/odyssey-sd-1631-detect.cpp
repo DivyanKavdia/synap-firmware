@@ -1,9 +1,7 @@
-// Odyssey SD storage.
-// C3 mounts through the stock Arduino-ESP32 SD SPI path and uses FAT/VFS at runtime; S3 keeps its legacy one-shot detection.
-// Hardware pins remain device-profile controlled and are never remapped here.
+// C3 native ESP-IDF SDSPI + FatFs/VFS storage backend.
+// No Arduino SD/SPI implementation is linked to the Odyssey C3 mount path.
+// S3 detection-only stays on Arduino SD/SPI; Chakshu is independent.
 #if !SYNAP_CHAKSHU
-#include <SPI.h>
-#include <SD.h>
 #if CONFIG_IDF_TARGET_ESP32C3
 #include <cerrno>
 #include <cstdio>
@@ -12,7 +10,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "esp_err.h"
+#include "esp_vfs_fat.h"
+#include "driver/spi_master.h"
+#include "driver/sdspi_host.h"
+#include "sdmmc_cmd.h"
 uint8_t odysseyLastRecordFailureStage();
+#else
+#include <SPI.h>
+#include <SD.h>
 #endif
 
 #if CONFIG_IDF_TARGET_ESP32C3
@@ -57,9 +62,12 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 #if CONFIG_IDF_TARGET_ESP32C3
 static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
-// Arduino-ESP32 3.3.5 always initializes the card at 400 kHz internally.
-// This is the post-init runtime data clock retained by the SD driver.
+// SDSPI follows the card's initialization clock automatically, then caps
+// its data clock to 1 MHz to reduce susceptibility to marginal wiring.
 static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=1000000u;
+static constexpr spi_host_device_t ODYSSEY_SD_HOST=SPI2_HOST;
+static sdmmc_card_t* odysseySdNativeCard=nullptr;
+static bool odysseySdNativeBusInitialized=false;
 // Preserve the known-good build-1445 lifecycle: one mount attempt per
 // explicit action. Repeating SD.end()/SPI.end()/SD.begin() autonomously on a
 // continuously powered card is itself a state mutation and obscures the first
@@ -73,10 +81,7 @@ static constexpr uint32_t ODYSSEY_SD_QUIESCE_BUDGET_MS=250u;
 // Match the last independently observed healthy build (1445) exactly.
 static constexpr size_t ODYSSEY_SD_MAX_OPEN_FILES=1;
 
-// Restore the exact Arduino-ESP32 3.3.5 stock SD initialization used by the
-// known-good Odyssey C3 build 1445. Runtime recording/sync continues to use
-// the current guarded POSIX/VFS implementation after the mount succeeds.
-static SPIClass odysseySdSpi(FSPI);
+// Native SPI2 SDSPI host owns the bus; FAT keeps the existing POSIX paths.
 static std::atomic<int32_t> odysseySdLastMountError{ESP_OK};
 static std::atomic<uint32_t> odysseySdMountAttempts{0};
 static std::atomic<uint32_t> odysseySdBeginAttempts{0};
@@ -171,14 +176,33 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
   const int n=snprintf(full,capacity,"%s%s",ODYSSEY_SD_MOUNT_POINT,logical);
   return n>0 && size_t(n)<capacity;
 }
-static void odysseySdReleaseLocked() {
-  SD.end();
-  odysseySdSpi.end();
-  // Exact 1445 teardown: only deassert CS. Do not preconfigure SCK/MOSI/MISO
-  // before the next SPIClass::begin(), because this diagnostic build is
-  // intentionally testing the old known-good ownership sequence.
+static bool odysseySdReleaseLocked() {
+  // Only called while holding OdysseySdGuard. Never unmount while the
+  // microphone recorder or an SD media transfer owns an open FILE*.
+  if (odysseySdNativeCard) {
+    const esp_err_t result=esp_vfs_fat_sdcard_unmount(
+      ODYSSEY_SD_MOUNT_POINT,odysseySdNativeCard);
+    if (result!=ESP_OK) {
+      odysseySdLastMountError=result;
+      odysseySdUnsafeToSleep=true;
+      Serial.printf("[SD] native unmount rejected err=%s\\n",esp_err_to_name(result));
+      return false;
+    }
+    odysseySdNativeCard=nullptr;
+  }
+  if (odysseySdNativeBusInitialized) {
+    const esp_err_t busResult=spi_bus_free(ODYSSEY_SD_HOST);
+    if (busResult!=ESP_OK) {
+      odysseySdLastMountError=busResult;
+      odysseySdUnsafeToSleep=true;
+      Serial.printf("[SD] SPI2 bus teardown rejected err=%s\\n",esp_err_to_name(busResult));
+      return false;
+    }
+    odysseySdNativeBusInitialized=false;
+  }
   digitalWrite(ODYSSEY_SD_CS,HIGH);
   pinMode(ODYSSEY_SD_CS,OUTPUT);
+  return true;
 }
 
 static uint8_t odysseySdBitBangTransfer(uint8_t out) {
@@ -475,17 +499,50 @@ static uint8_t odysseySdQuiesceLocked(uint32_t budgetMs) {
 }
 
 static bool odysseySdBeginLocked() {
+  // ESP-IDF SDSPI host, not Arduino SD.begin(). The card is never formatted
+  // or repartitioned, including after failed mount or watchdog reset.
   ++odysseySdBeginAttempts;
-  odysseySdSpi.begin(ODYSSEY_SD_SCK,ODYSSEY_SD_MISO,ODYSSEY_SD_MOSI,ODYSSEY_SD_CS);
-  const bool mounted=SD.begin(ODYSSEY_SD_CS,odysseySdSpi,ODYSSEY_SD_DATA_FREQ_HZ,
-    ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_MAX_OPEN_FILES,false);
-  if (mounted) {
-    markOdysseySdBatteryDividerPresent();
-    // Re-sample under the field C3+SD 1M/470k profile before any VFS FAT
-    // write probe. Implausible ADC measurements remain read-only.
-    sampleBattery(true);
-  } else odysseySdReleaseLocked();
-  return mounted;
+  if (!odysseySdReleaseLocked()) return false;
+  digitalWrite(ODYSSEY_SD_CS,HIGH);
+  pinMode(ODYSSEY_SD_CS,OUTPUT);
+  pinMode(ODYSSEY_SD_MISO,INPUT_PULLUP); // idle-high during deselection
+  spi_bus_config_t bus{};
+  bus.mosi_io_num=ODYSSEY_SD_MOSI;
+  bus.miso_io_num=ODYSSEY_SD_MISO;
+  bus.sclk_io_num=ODYSSEY_SD_SCK;
+  bus.quadwp_io_num=-1;
+  bus.quadhd_io_num=-1;
+  bus.max_transfer_sz=4096+512;
+  esp_err_t result=spi_bus_initialize(ODYSSEY_SD_HOST,&bus,SDSPI_DEFAULT_DMA);
+  if (result!=ESP_OK) {
+    odysseySdLastMountError=result;
+    Serial.printf("[SD] native SPI2 bus init failed err=%s\\n",esp_err_to_name(result));
+    return false;
+  }
+  odysseySdNativeBusInitialized=true;
+  sdmmc_host_t host=SDSPI_HOST_DEFAULT();
+  host.slot=ODYSSEY_SD_HOST;
+  host.max_freq_khz=ODYSSEY_SD_DATA_FREQ_HZ/1000u;
+  sdspi_device_config_t device=SDSPI_DEVICE_CONFIG_DEFAULT();
+  device.host_id=ODYSSEY_SD_HOST;
+  device.gpio_cs=static_cast<gpio_num_t>(ODYSSEY_SD_CS);
+  esp_vfs_fat_sdmmc_mount_config_t mount{};
+  mount.format_if_mount_failed=false;
+  mount.max_files=ODYSSEY_SD_MAX_OPEN_FILES;
+  mount.allocation_unit_size=4096;
+  result=esp_vfs_fat_sdspi_mount(ODYSSEY_SD_MOUNT_POINT,
+    &host,&device,&mount,&odysseySdNativeCard);
+  if (result!=ESP_OK) {
+    odysseySdLastMountError=result;
+    odysseySdNativeCard=nullptr; // mount helper releases its own card/device
+    Serial.printf("[SD] native SDSPI mount failed err=%s, no format\\n",
+      esp_err_to_name(result));
+    (void)odysseySdReleaseLocked(); // free bus after mount's cleanup
+    return false;
+  }
+  markOdysseySdBatteryDividerPresent();
+  sampleBattery(true); // telemetry only, NEVER SD admission
+  return true;
 }
 
 static bool odysseySdValidateVfsLocked(const char* reason,uint8_t attempt) {
@@ -564,15 +621,8 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   odysseySdLastMountReason=odysseySdMountReasonCode(reason);
   ++odysseySdMountAttempts;
   odysseySdVfsStep=0;odysseySdVfsErrno=0;
-  odysseySdReleaseLocked();
-
-  // digitalWrite BEFORE pinMode, which is the order build 1445 used. The
-  // reverse drives the pin from the output register's reset value - low - for
-  // the microseconds until the digitalWrite lands, so every mount attempt
-  // opened with a CS glitch the known-good lifecycle never produced.
-  digitalWrite(ODYSSEY_SD_CS,HIGH);
-  pinMode(ODYSSEY_SD_CS,OUTPUT);
-  Serial.printf("[SD] %s attempt %u Arduino SPI init at %lu Hz, pins CS=%d SCK=%d MOSI=%d MISO=%d\n",
+  if (!odysseySdReleaseLocked()) return false;
+  Serial.printf("[SD] %s attempt %u native ESP-IDF SDSPI at %lu Hz, pins CS=%d SCK=%d MOSI=%d MISO=%d\\n",
     reason,unsigned(attempt),static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ),
     ODYSSEY_SD_CS,ODYSSEY_SD_SCK,ODYSSEY_SD_MOSI,ODYSSEY_SD_MISO);
 
@@ -601,12 +651,10 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
     }
   }
 
-  const uint8_t type=SD.cardType();
-  if (type==CARD_NONE) {
+  if (!odysseySdNativeCard) {
     odysseySdLastMountError=ESP_ERR_NOT_FOUND;
     odysseySdBootState=3;odysseySdProbeStage=0;
-    Serial.printf("[SD] %s attempt %u mounted bus but card type is NONE\n",reason,unsigned(attempt));
-    odysseySdReleaseLocked();
+    (void)odysseySdReleaseLocked();
     return false;
   }
 
@@ -624,9 +672,10 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   // A complete mount plus writable VFS validation is the explicit recovery
   // that makes a previously failed sleep quiesce safe to attempt again.
   odysseySdUnsafeToSleep=false;
-  const char* label=type==CARD_MMC?"MMC":type==CARD_SD?"SDSC":type==CARD_SDHC?"SDHC/SDXC":"unknown";
-  Serial.printf("[SD] ready via proven Arduino SPI path: %s, %llu MiB, %lu Hz\n",
-    label,static_cast<unsigned long long>(SD.cardSize()/(1024ULL*1024ULL)),
+  const uint64_t bytes=uint64_t(odysseySdNativeCard->csd.capacity)*
+    uint64_t(odysseySdNativeCard->csd.sector_size);
+  Serial.printf("[SD] native SDSPI FAT ready capacity=%llu MiB clock=%lu Hz\\n",
+    static_cast<unsigned long long>(bytes/(1024ULL*1024ULL)),
     static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ));
   return true;
 }
