@@ -2843,6 +2843,28 @@ static uint8_t odysseySdBitBangRecoverLocked(const char* reason) {
 
   odysseySdSampleRawLocked();
 
+  // Observed in the field after stage 66: MISO is HIGH when CS is released,
+  // but ~1023/1024 response bytes are 0x00 while selected. This is a card
+  // continuously asserting BUSY, NOT an idle SPI command interface. Injecting
+  // CMD12/CMD0/0xFD at this point cannot safely reset a card programming its
+  // own NAND. Preserve the media and request a real SD power-rail cycle.
+  if (odysseySdRawZero.load()>=1000u && odysseySdRawFF.load()<=2u) {
+    odysseySdBitBangCmd12=0xFF;
+    odysseySdBitBangCmd12Ready=0;
+    odysseySdBitBangDrainBytes=0;
+    odysseySdBitBangStopState=3;
+    odysseySdBitBangCmd0=0xFF;
+    odysseySdBitBangCmd8=0xFF;
+    odysseySdBitBangR7=0;
+    odysseySdUnsafeToSleep=true;
+    digitalWrite(ODYSSEY_SD_CS,HIGH);
+    digitalWrite(ODYSSEY_SD_SCK,LOW);
+    digitalWrite(ODYSSEY_SD_MOSI,HIGH);
+    Serial.printf("[SD] %s sustained selected-busy 0x00 (%u/1024); suppress CMD12/CMD0, cycle SD rail\\n",
+      reason,unsigned(odysseySdRawZero.load()));
+    return 0xFF;
+  }
+
   // The historical failure was first observed after catalogue/read activity.
   // Drain the open-ended CMD18 stream after CMD12 instead of trying to parse
   // an R1 byte out of data that may still be arriving from the card.
@@ -3128,27 +3150,24 @@ bool odysseyInitializeSdCardBeforeBle() {
   OdysseySdGuard guard;
   if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return false; }
 
-  // A persisted recorder write failure means the continuously-powered card may
-  // have survived the MCU reset inside a data/program state. Re-arm the SD
-  // protocol before the first Arduino SD.begin() instead of asking the same
-  // stale card state to answer a fresh host immediately.
+  // A retained FAT write EIO survives MCU reset but not necessarily a
+  // real SD power reset. Warm/OTA reboot cannot reset the continuously-powered
+  // card. Do not send CMD0/CMD12 or even a new mount while its controller may
+  // still be programming. A true cold power-on may try one normal mount,
+  // followed only by guarded/passive recovery. User op14 remains explicit.
   const uint8_t previousRecordStage=odysseyLastRecordFailureStage();
   const bool previousStorageFault=previousRecordStage>=44u && previousRecordStage!=48u;
   if (previousStorageFault) {
-    // Historical EIO survives MCU resets. Never clear it until a new mount
-    // succeeds. Cold power-on first tries ordinary SD.begin; an SD card whose
-    // rail actually cycled should already have reset. Warm/OTA boots perform
-    // one bounded, non-formatting protocol re-arm for a potentially powered
-    // card left mid-command. A normal mount failure still triggers recovery.
     odysseySdUnsafeToSleep=true;
     if (bootResetReason!=ESP_RST_POWERON) {
-      Serial.printf("[SD] warm boot re-arm after recorder stage=%u\\n",unsigned(previousRecordStage));
-      (void)odysseySdBitBangRecoverLocked("rearm");
-      delay(20);
-    } else {
-      Serial.printf("[SD] cold boot first tries fresh SD.begin after old stage=%u\\n",
+      odysseySdBootState=2;
+      odysseySdProbeStage=previousRecordStage;
+      Serial.printf("[SD] warm boot deferred: historical record stage=%u, SD rail not known to have reset\\n",
         unsigned(previousRecordStage));
+      return false;
     }
+    Serial.printf("[SD] cold CPU power-on: try one SD mount after retained stage=%u\\n",
+      unsigned(previousRecordStage));
   }
 
   const bool ready=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
