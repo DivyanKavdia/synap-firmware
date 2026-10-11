@@ -167,6 +167,13 @@ static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   prefs.end();
 }
 
+// Explicitly erase stale recorder failure metadata ONLY after a verified
+// user-requested full-card format. Ordinary mount, recover and catalogue never
+// clear this forensic journal.
+void odysseyClearRecordFailureAfterFormat() {
+  odysseyPersistRecordFailure(0,0);
+}
+
 static void odysseyWavHeader(uint8_t* h,uint32_t bytes) {
   memset(h,0,44);
   memcpy(h,"RIFF",4);put32le(h+4,bytes+36);
