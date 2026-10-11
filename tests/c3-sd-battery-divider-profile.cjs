@@ -57,7 +57,7 @@ test('C3 boot restores divider profile BEFORE initial battery read and SD.begin'
   assert(bootFlow.indexOf('restoreOdysseySdBatteryDividerProfile();')>=0);
   assert(bootFlow.indexOf('restoreOdysseySdBatteryDividerProfile();')<bootFlow.indexOf('sampleBattery(true);'));
   assert(bootFlow.indexOf('restoreOdysseySdBatteryDividerProfile();')<bootFlow.indexOf('odysseyInitializeSdCardBeforeBle();'));
-  assert.match(detect,/if \(mounted\) \{\s*markOdysseySdBatteryDividerPresent\(\)/);
+  assert.match(detect,/markOdysseySdBatteryDividerPresent\(\);\s*sampleBattery\(true\)/);
   const okay=detect.indexOf('persistOdysseySdBatteryDividerProfile();');
   assert(okay>0 && okay<detect.indexOf('odysseySdLastMountError=ESP_OK;',okay));
   assert(detect.indexOf('if (!odysseySdValidateVfsLocked(')<okay);
