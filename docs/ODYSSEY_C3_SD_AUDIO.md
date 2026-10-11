@@ -1,5 +1,39 @@
 # Current C3+SD implementation — 11 October 2026 (native SDSPI candidate)
 
+## 11 October 2026 — stage-66 EIO mitigation (PR #186; physical verification pending)
+
+The field recorder stopped at `recordBytes=16340`, which with the 44-byte
+WAV header equals precisely 16,384 on-card bytes. The next 4,096-byte
+unbuffered FatFs write returned zero and `errno=EIO` (recordStage 66).
+A 16 KiB FAT cluster-boundary allocation is a **hypothesis**, not verified
+card geometry. Diagnostic `wrD=0x20420005` is a synthesized
+`0x20SS00EE` POSIX fault marker, NOT a captured SPI CMD24/CMD25 response.
+The former recorder incorrectly parsed it as a wire command and immediately
+restarted native SDSPI, potentially issuing CMD12/CMD0 to a programming card.
+
+The proposed mitigation does not automatically remount after any recorder
+I/O failure; it retains existing WAV data and defers remount until a deliberate
+Check SD or a later explicit offline touch. Empty/aborted microphone-only
+takes do not invalidate a still-working FAT mount. Native data rate is capped
+at **800 kHz** (16 kHz PCM16 mono requires 32 kB/s), and IDF's
+`disk_status_check_enable` is enabled for actual removable-media status
+checks. No FAT reformat, truncation, preallocation, bulk deletion, partition
+change or destructive recovery occurs. Read-only operation 27 adds
+`failureOffset`, `sdClockKhz` and `faultKind=vfs` to prove precisely where
+the next attempted 4 KiB write failed.
+
+**Validation:** Build and CI are necessary but not enough. With SD recordings
+backed up, test on the real device: a full cold power cycle that also cycles
+the SD card rail; BLE disconnected; double-tap START; record for at least
+60 seconds; double-tap STOP; reconnect; inspect operation 27 and the SD
+catalogue; verify WAV length and sync without deleting the SD original.
+If the new fault remains at 16,384 bytes even at 800 kHz, distinguish bad
+FAT cluster allocation from missing 10 kΩ SPI pull-ups, card failure and
+SD-3.3V rail droop. The C3 battery GPIO1 ADC does not measure SD 3.3V.
+Repeated CMD0/CMD12 attempts on a busy powered card should be avoided.
+
+
+
 **Hardware physically checked on the assembled Odyssey C3+SD board:** R1 =
 **1 MΩ**, R2 = **470 kΩ**. GPIO1 reconstructs battery millivolts using
 1470/470. The archived Rev K *unassembled* BOM says 470k/470k, but the
@@ -10,7 +44,7 @@ depend on the battery ADC status.
 **C3-only native migration under test:** the active 1631 detection backend
 now uses ESP-IDF SPI2 + SDSPI + FAT VFS, not Arduino `SD.begin` nor the
 C3 `sd_diskio.cpp` overrides. C3's native bus config is unchanged:
-CS=GPIO0, SCK=GPIO10, MOSI=GPIO21, MISO=GPIO20, runtime 1 MHz; USB
+CS=GPIO0, SCK=GPIO10, MOSI=GPIO21, MISO=GPIO20, runtime 800 kHz in this branch; USB
 CDC on boot still avoids UART0 conflicts. `esp_vfs_fat_sdspi_mount()` is
 configured with `format_if_mount_failed=false` and max_files=1. No format,
 delete, new directory or metadata write occurs at boot; existing
