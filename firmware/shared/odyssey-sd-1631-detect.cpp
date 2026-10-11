@@ -62,9 +62,11 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 #if CONFIG_IDF_TARGET_ESP32C3
 static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
-// SDSPI follows the card's initialization clock automatically, then caps
-// its data clock to 1 MHz to reduce susceptibility to marginal wiring.
-static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=1000000u;
+// SDSPI keeps its standard 400 kHz card initialization clock. Cap data
+// transfers at 800 kHz rather than 1 MHz on the sealed C3+SD carrier:
+// reduced signal-edge stress with enough theoretical bandwidth for 16 kHz
+// mono PCM (32 kB/s) and metadata writes. Never change the FAT format.
+static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=800000u;
 static constexpr spi_host_device_t ODYSSEY_SD_HOST=SPI2_HOST;
 static sdmmc_card_t* odysseySdNativeCard=nullptr;
 static bool odysseySdNativeBusInitialized=false;
@@ -494,7 +496,11 @@ static bool odysseySdBeginLocked() {
   esp_vfs_fat_sdmmc_mount_config_t mount{};
   mount.format_if_mount_failed=false;
   mount.max_files=ODYSSEY_SD_MAX_OPEN_FILES;
-  mount.allocation_unit_size=4096;
+  mount.allocation_unit_size=4096; // ignored for an existing FAT filesystem
+  // IDF FAT diskio normally trusts cached card readiness; enable the real
+  // SD status check on this unstable removable-media path. Detect a failed
+  // controller earlier instead of issuing additional FAT metadata writes.
+  mount.disk_status_check_enable=true;
   result=esp_vfs_fat_sdspi_mount(ODYSSEY_SD_MOUNT_POINT,
     &host,&device,&mount,&odysseySdNativeCard);
   if (result!=ESP_OK) {
