@@ -95,21 +95,9 @@ uint32_t odysseySdWireFaultError() { return odysseyWireError.load(); }
 uint32_t odysseySdWireFaultArg() { return odysseyWireArg.load(); }
 uint32_t odysseySdWireFaultResponse() { return odysseyWireResponse.load(); }
 uint32_t odysseySdLastCmd13Response() { return odysseyWireLastCmd13.load(); }
-static esp_err_t odysseyTracedSdspiTransaction(int slot,sdmmc_command_t* cmd) {
-  // Forward unchanged to the pinned ESP-IDF SDSPI implementation.
-  const esp_err_t result=sdspi_host_do_transaction(slot,cmd);
-  if (cmd && cmd->opcode==13u) odysseyWireLastCmd13=cmd->response[0];
-  const esp_err_t error=result!=ESP_OK?result:(cmd?cmd->error:ESP_FAIL);
-  if (cmd && error!=ESP_OK) {
-    uint32_t expected=0;
-    if (odysseyWireCmdPlusOne.compare_exchange_strong(expected,cmd->opcode+1u)) {
-      odysseyWireError=uint32_t(error);
-      odysseyWireArg=cmd->arg;
-      odysseyWireResponse=cmd->response[0];
-    }
-  }
-  return result;
-}
+// Bind the diagnostic interceptor as a local lambda during mount. Arduino's
+// .ino preprocessor otherwise emits a forward prototype before sdmmc types
+// are in scope, even though the original source includes the right headers.
 // Fault layout 0x20SS00EE (native FatFs stage SS, errno EE).
 // Keep the existing BLE/NVS diagnostic ABI; no Arduino SD driver is linked.
 extern "C" uint32_t synapSdWriteFaultCode() { return odysseyNativeIoFault.load(); }
@@ -560,7 +548,22 @@ static bool odysseySdBeginLocked() {
   sdmmc_host_t host=SDSPI_HOST_DEFAULT();
   host.slot=ODYSSEY_SD_HOST;
   host.max_freq_khz=ODYSSEY_SD_DATA_FREQ_HZ/1000u;
-  host.do_transaction=&odysseyTracedSdspiTransaction; // observation only
+  // Only observes original Espressif commands, without retries or extra I/O.
+  host.do_transaction=[](int slot,sdmmc_command_t* cmd)->esp_err_t {
+  // Forward unchanged to the pinned ESP-IDF SDSPI implementation.
+  const esp_err_t result=sdspi_host_do_transaction(slot,cmd);
+  if (cmd && cmd->opcode==13u) odysseyWireLastCmd13=cmd->response[0];
+  const esp_err_t error=result!=ESP_OK?result:(cmd?cmd->error:ESP_FAIL);
+  if (cmd && error!=ESP_OK) {
+    uint32_t expected=0;
+    if (odysseyWireCmdPlusOne.compare_exchange_strong(expected,cmd->opcode+1u)) {
+      odysseyWireError=uint32_t(error);
+      odysseyWireArg=cmd->arg;
+      odysseyWireResponse=cmd->response[0];
+    }
+  }
+  return result;
+};
   sdspi_device_config_t device=SDSPI_DEVICE_CONFIG_DEFAULT();
   device.host_id=ODYSSEY_SD_HOST;
   device.gpio_cs=static_cast<gpio_num_t>(ODYSSEY_SD_CS);
