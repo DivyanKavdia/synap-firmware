@@ -80,12 +80,28 @@ static std::atomic<uint32_t> odysseyWireError{0};
 static std::atomic<uint32_t> odysseyWireArg{0};
 static std::atomic<uint32_t> odysseyWireResponse{0};
 static std::atomic<uint32_t> odysseyWireLastCmd13{0};
+// Field-facing context for the FIRST native transaction failure. All fields
+// are observed in the existing command callback; no extra card I/O or retries.
+static std::atomic<uint32_t> odysseyWireElapsedMs{0};
+static std::atomic<uint32_t> odysseyWireBudgetMs{0};
+static std::atomic<uint32_t> odysseyWireDataLength{0};
+static std::atomic<uint32_t> odysseyWirePriorCmd{UINT32_MAX};
+static std::atomic<uint32_t> odysseyWirePriorSuccessCmd{UINT32_MAX};
+static std::atomic<uint32_t> odysseyWireGoodWrites{0};
+static std::atomic<uint32_t> odysseyWireWritesAtFailure{0};
 void odysseySdClearWireFault() {
   odysseyWireCmdPlusOne=0;
   odysseyWireError=0;
   odysseyWireArg=0;
   odysseyWireResponse=0;
   odysseyWireLastCmd13=0;
+  odysseyWireElapsedMs=0;
+  odysseyWireBudgetMs=0;
+  odysseyWireDataLength=0;
+  odysseyWirePriorCmd=UINT32_MAX;
+  odysseyWirePriorSuccessCmd=UINT32_MAX;
+  odysseyWireGoodWrites=0;
+  odysseyWireWritesAtFailure=0;
 }
 uint32_t odysseySdWireFaultCmd() {
   const uint32_t code=odysseyWireCmdPlusOne.load();
@@ -95,6 +111,11 @@ uint32_t odysseySdWireFaultError() { return odysseyWireError.load(); }
 uint32_t odysseySdWireFaultArg() { return odysseyWireArg.load(); }
 uint32_t odysseySdWireFaultResponse() { return odysseyWireResponse.load(); }
 uint32_t odysseySdLastCmd13Response() { return odysseyWireLastCmd13.load(); }
+uint32_t odysseySdWireFaultElapsedMs() { return odysseyWireElapsedMs.load(); }
+uint32_t odysseySdWireFaultBudgetMs() { return odysseyWireBudgetMs.load(); }
+uint32_t odysseySdWireFaultLength() { return odysseyWireDataLength.load(); }
+uint32_t odysseySdWireFaultPreviousCmd() { return odysseyWirePriorSuccessCmd.load(); }
+uint32_t odysseySdWireFaultGoodWrites() { return odysseyWireWritesAtFailure.load(); }
 // Bind the diagnostic interceptor as a local lambda during mount. Arduino's
 // .ino preprocessor otherwise emits a forward prototype before sdmmc types
 // are in scope, even though the original source includes the right headers.
@@ -550,8 +571,12 @@ static bool odysseySdBeginLocked() {
   host.max_freq_khz=ODYSSEY_SD_DATA_FREQ_HZ/1000u;
   // Only observes original Espressif commands, without retries or extra I/O.
   host.do_transaction=[](int slot,sdmmc_command_t* cmd)->esp_err_t {
-  // Forward unchanged to the pinned ESP-IDF SDSPI implementation.
+  // Stopwatch surrounds the EXACT original native transaction. Duration
+  // near cmd->timeout_ms suggests write-program busy; a short failure may be
+  // command/data-response related. No extra SD command or delay is added.
+  const uint32_t startedAt=millis();
   const esp_err_t result=sdspi_host_do_transaction(slot,cmd);
+  const uint32_t elapsed=uint32_t(millis()-startedAt);
   if (cmd && cmd->opcode==13u) odysseyWireLastCmd13=cmd->response[0];
   const esp_err_t error=result!=ESP_OK?result:(cmd?cmd->error:ESP_FAIL);
   if (cmd && error!=ESP_OK) {
@@ -560,7 +585,17 @@ static bool odysseySdBeginLocked() {
       odysseyWireError=uint32_t(error);
       odysseyWireArg=cmd->arg;
       odysseyWireResponse=cmd->response[0];
+      odysseyWireElapsedMs=elapsed;
+      odysseyWireBudgetMs=cmd->timeout_ms;
+      odysseyWireDataLength=cmd->datalen;
+      odysseyWirePriorSuccessCmd=odysseyWirePriorCmd.load();
+      odysseyWireWritesAtFailure=odysseyWireGoodWrites.load();
     }
+  } else if (cmd && error==ESP_OK && !odysseyWireCmdPlusOne.load()) {
+    // Count completed commands, NOT guaranteed durable sectors. CMD13/FatFs
+    // still own post-program validation. Stop updating on first failure.
+    odysseyWirePriorCmd=cmd->opcode;
+    if (cmd->opcode==24u || cmd->opcode==25u) ++odysseyWireGoodWrites;
   }
   return result;
 };
