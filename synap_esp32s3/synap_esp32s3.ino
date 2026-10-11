@@ -266,6 +266,7 @@ bool odysseySdPowerSafe(uint16_t floorMv) {
 
 void odysseyToggleRecording();
 bool odysseyPrepareForConnectedStreaming(uint32_t timeoutMs);
+bool odysseySdFormatting(); // media-v1 op19 exclusively owns the SD volume
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs);
 bool odysseyPrepareSdForCommittedOtaRestart(uint32_t timeoutMs);
 bool odysseySdBusStuckLow(); // confirmed deselected MISO held LOW after failed mount
