@@ -4990,9 +4990,124 @@ static uint8_t selectFile(const char* path,uint32_t& total) {
   return OK;
 }
 
-static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& total,uint8_t* bytes,size_t& size) {
-  // New clients make every chunk self-describing. This prevents catalogue
-  // refreshes or another client from replacing the selected file mid-transfer.
+// BLE SD downloads are sequential, but the transport has a 480-byte reply
+// ceiling. The old path fopen/fseek/fread/fclose'd for EVERY 480-byte request.
+// A 1 MiB WAV triggered >2,000 FAT directory traversals. Cache one already
+// CLOSED 4 KiB read; no file handle or mutex survives across BLE waits.
+// This is READ-ONLY, never used by local offline recording.
+static constexpr uint32_t ODYSSEY_SD_BLE_READ_CACHE_BYTES=4096u;
+struct OdysseySdBleReadCache {
+  bool valid=false;
+  uint32_t connection=0,total=0,start=0,used=0;
+  char path[64]{};
+  alignas(4) uint8_t bytes[ODYSSEY_SD_BLE_READ_CACHE_BYTES]{};
+};
+static OdysseySdBleReadCache sdBleReadCache;
+static uint8_t sdBleReadFailureStep=0; // 1=stat,2=open,3=seek,4=read,5=close
+static int sdBleReadFailureErrno=0;
+static uint32_t sdBleReadCacheHits=0,sdBleReadDiskFills=0;
+static void invalidateBleReadCache() {
+  sdBleReadCache.valid=false;
+  sdBleReadCache.path[0]=0;
+}
+static uint8_t readWavChunk(const char* logical,uint32_t offset,
+    uint32_t& total,uint8_t* bytes,size_t& size) {
+  sdBleReadFailureStep=0;
+  sdBleReadFailureErrno=0;
+  if (!safeWavPath(logical) || !bytes) return BAD_COMMAND;
+  OdysseySdGuard guard;
+  if (!guard || !storageReady()) {
+    invalidateBleReadCache();
+    return NO_SD;
+  }
+  char full[96];
+  if (!fullPath(logical,full,sizeof(full))) return BAD_COMMAND;
+  const uint32_t generation=connectionGeneration.load();
+  const auto& cache=sdBleReadCache;
+  if (cache.valid && cache.connection==generation &&
+      !strcmp(cache.path,logical) && offset>=cache.start &&
+      uint64_t(offset)<uint64_t(cache.start)+cache.used) {
+    total=cache.total;
+    const uint32_t available=cache.used-(offset-cache.start);
+    size=std::min(size_t(480),size_t(available));
+    memcpy(bytes,cache.bytes+(offset-cache.start),size);
+    patchVirtualWavHeader(bytes,size,offset,total);
+    ++sdBleReadCacheHits;
+    return OK;
+  }
+  invalidateBleReadCache();
+  struct stat st{};
+  errno=0;
+  if (stat(full,&st)!=0) {
+    const int err=errno;
+    if (err==EIO || err==ENODEV || err==ETIMEDOUT) {
+      sdBleReadFailureStep=1;
+      sdBleReadFailureErrno=err;
+      errno=err;
+      return IO_ERROR;
+    }
+    return FILE_UNAVAILABLE;
+  }
+  if (!S_ISREG(st.st_mode) || st.st_size<=0 ||
+      uint64_t(st.st_size)>UINT32_MAX) return FILE_UNAVAILABLE;
+  total=uint32_t(st.st_size);
+  if (offset>=total) return FILE_UNAVAILABLE;
+  const uint32_t base=(offset/ODYSSEY_SD_BLE_READ_CACHE_BYTES)*
+    ODYSSEY_SD_BLE_READ_CACHE_BYTES;
+  // C3's long file offsets are signed; the app limits WAV downloads to
+  // 64 MiB, but reject impossible offsets instead of seeking backwards.
+  if (base>2147483647u) return FILE_UNAVAILABLE;
+  const size_t want=std::min(size_t(ODYSSEY_SD_BLE_READ_CACHE_BYTES),
+    size_t(total-base));
+  errno=0;
+  FILE* file=fopen(full,"rb");
+  if (!file) {
+    const int err=errno?errno:EIO;
+    if (err==ENOENT) return FILE_UNAVAILABLE;
+    sdBleReadFailureStep=2;sdBleReadFailureErrno=err;errno=err;
+    return IO_ERROR;
+  }
+  errno=0;
+  const bool seekOk=fseek(file,long(base),SEEK_SET)==0;
+  const int seekErr=errno;
+  size_t got=0;
+  if (seekOk) {
+    errno=0;
+    got=fread(sdBleReadCache.bytes,1,want,file);
+  }
+  const int readErr=errno;
+  errno=0;
+  const int closeResult=fclose(file);
+  const int closeErr=errno;
+  if (!seekOk || got!=want || closeResult!=0) {
+    const int err=!seekOk ? (seekErr?seekErr:EIO) :
+      got!=want ? (readErr?readErr:EIO) :
+      (closeErr?closeErr:EIO);
+    sdBleReadFailureStep=!seekOk?3:got!=want?4:5;
+    sdBleReadFailureErrno=err;
+    errno=err;
+    invalidateBleReadCache();
+    return IO_ERROR;
+  }
+  // Cache is published only after fclose succeeds and the entire bounded
+  // window has been read. Read errors never expose partial SD bytes.
+  sdBleReadCache.connection=generation;
+  sdBleReadCache.total=total;
+  sdBleReadCache.start=base;
+  sdBleReadCache.used=uint32_t(want);
+  snprintf(sdBleReadCache.path,sizeof(sdBleReadCache.path),"%s",logical);
+  sdBleReadCache.valid=true;
+  ++sdBleReadDiskFills;
+  const uint32_t available=uint32_t(want)-(offset-base);
+  size=std::min(size_t(480),size_t(available));
+  memcpy(bytes,sdBleReadCache.bytes+(offset-base),size);
+  patchVirtualWavHeader(bytes,size,offset,total);
+  return OK;
+}
+
+static uint8_t readSelected(const char* requestedPath,uint32_t offset,
+    uint32_t& total,uint8_t* bytes,size_t& size) {
+  // Explicit path never depends on a previous request's selected file.
   if (requestedPath && requestedPath[0]) {
     if (!strcmp(requestedPath,"@catalogue")) {
       total=catalogueBuffer.length();
@@ -5002,26 +5117,10 @@ static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& 
       return OK;
     }
     if (!safeWavPath(requestedPath)) return BAD_COMMAND;
-    if (offset==0) Serial.printf("[SD] transfer begin path=%s\n",requestedPath);
-    OdysseySdGuard guard;
-    if (!guard || !storageReady()) return NO_SD;
-    char full[96];
-    if (!fullPath(requestedPath,full,sizeof(full))) return BAD_COMMAND;
-    struct stat st{};
-    if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
-      return FILE_UNAVAILABLE;
-    total=uint32_t(st.st_size);
-    if (offset>=total) return FILE_UNAVAILABLE;
-    size=std::min(size_t(480),size_t(total-offset));
-    FILE* file=fopen(full,"rb");
-    if (!file) return FILE_UNAVAILABLE;
-    const bool ok=fseek(file,long(offset),SEEK_SET)==0 && fread(bytes,1,size,file)==size;
-    fclose(file);
-    if (ok) patchVirtualWavHeader(bytes,size,offset,total);
-    return ok?OK:IO_ERROR;
+    if (offset==0) Serial.printf("[SD] transfer begin path=%s\\n",requestedPath);
+    return readWavChunk(requestedPath,offset,total,bytes,size);
   }
-
-  // Legacy clients still use the selected-file/catalogue state.
+  // Preserve legacy selected-file or RAM-backed catalogue semantics.
   if (!selectedPath[0]) {
     total=catalogueBuffer.length();
     if (!total || offset>=total) return FILE_UNAVAILABLE;
@@ -5029,24 +5128,7 @@ static uint8_t readSelected(const char* requestedPath,uint32_t offset,uint32_t& 
     memcpy(bytes,catalogueBuffer.c_str()+offset,size);
     return OK;
   }
-
-  OdysseySdGuard guard;
-  if (!guard || !storageReady()) return NO_SD;
-  char full[96];
-  if (!fullPath(selectedPath,full,sizeof(full))) return BAD_COMMAND;
-  struct stat st{};
-  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0 || uint64_t(st.st_size)>UINT32_MAX)
-    return FILE_UNAVAILABLE;
-  total=uint32_t(st.st_size);
-  if (offset>=total) return FILE_UNAVAILABLE;
-  size=std::min(size_t(480),size_t(total-offset));
-
-  FILE* file=fopen(full,"rb");
-  if (!file) return FILE_UNAVAILABLE;
-  const bool ok=fseek(file,long(offset),SEEK_SET)==0 && fread(bytes,1,size,file)==size;
-  fclose(file);
-  if (ok) patchVirtualWavHeader(bytes,size,offset,total);
-  return ok?OK:IO_ERROR;
+  return readWavChunk(selectedPath,offset,total,bytes,size);
 }
 
 static uint8_t catalogue(uint32_t& total) {
@@ -5235,7 +5317,12 @@ static void streamSdWindow(const Request& request) {
     size_t length=0;
     error=readSelected(request.path,offset,total,chunk,length);
     if (error!=OK || !length || length>chunkCapacity) {
-      if (error==IO_ERROR) odysseySdMarkVfsFailure();
+      if (error==IO_ERROR) {
+        noteSdMediaFault(12,sdBleReadFailureStep,sdBleReadFailureErrno);
+        errno=sdBleReadFailureErrno?sdBleReadFailureErrno:EIO;
+        odysseySdMarkVfsFailure();
+        invalidateBleReadCache();
+      }
       if (error==OK) error=BAD_COMMAND;
       notifySdWindow(request,2,error,fullSize,offset);
       return;
@@ -5397,7 +5484,12 @@ static void worker(void*) {
       }
       case 4:
         error=readSelected(request.path,request.offset,total,bytes,size);
-        if (error==IO_ERROR) odysseySdMarkVfsFailure();
+        if (error==IO_ERROR) {
+          noteSdMediaFault(4,sdBleReadFailureStep,sdBleReadFailureErrno);
+          errno=sdBleReadFailureErrno?sdBleReadFailureErrno:EIO;
+          odysseySdMarkVfsFailure();
+          invalidateBleReadCache();
+        }
         break;
       case 7:
         error=catalogue(total);
@@ -5435,10 +5527,12 @@ static void worker(void*) {
         break;
       case 8: total=catalogueBuffer.length();if(!total)error=FILE_UNAVAILABLE;break;
       case 14:
+        invalidateBleReadCache();
         selectedPath[0]=0;catalogueBuffer="";
         error=odysseyRecoverSdCard("op14")?OK:NO_SD;
         break;
       case 17:
+        invalidateBleReadCache();
         errno=0;
         error=removeFile(request.path);
         if (error==IO_ERROR) {
@@ -5449,12 +5543,14 @@ static void worker(void*) {
         }
         break;
       case 18:
+        invalidateBleReadCache();
         selectedPath[0]=0;catalogueBuffer="";
         if(!storageReady())error=NO_SD;
         else if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) error=BUSY;
         else total=clearRecordings();
         break;
       case 19: {
+        invalidateBleReadCache();
         // Full-card FAT format is NOT Clear Recordings. PWA requires a
         // separate destructive confirmation; never retry automatically.
         selectedPath[0]=0;catalogueBuffer="";
