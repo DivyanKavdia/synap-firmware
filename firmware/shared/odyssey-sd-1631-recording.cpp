@@ -12,6 +12,7 @@ static std::atomic<uint32_t> odysseyPersistedWriteFerror{0};
 static std::atomic<uint32_t> odysseyPersistedDriverFault{0};
 extern "C" uint32_t synapSdWriteFaultCode();
 extern "C" void synapSdClearWriteFaultCode();
+void synapSdNoteNativeWriteError(uint8_t stage,int ioError);
 
 static void odysseyLoadPersistedRecordFailure() {
   if (odysseyPersistedRecordLoaded.exchange(true)) return;
@@ -160,6 +161,7 @@ static void odysseyCaptureCreateFault(int err,const char* operation,uint8_t stag
   odysseyPersistedWriteReturned=0;
   odysseyPersistedWriteExpected=0;
   odysseyPersistedWriteFerror=0;
+  synapSdNoteNativeWriteError(stage,err);
   odysseyPersistedDriverFault=synapSdWriteFaultCode();
   Serial.printf("[SD] %s failed stage=%u errno=%d driverFault=0x%08lx\\n",
     operation,unsigned(stage),err,
@@ -285,6 +287,7 @@ static void odysseyRecordTake() {
             odysseyPersistedWriteReturned=uint32_t(written);
             odysseyPersistedWriteExpected=sizeof(batch);
             odysseyPersistedWriteFerror=ferror(file)?1u:0u;
+            synapSdNoteNativeWriteError(odysseyBatchWriteFailureStage(writeError),writeError);
             odysseyPersistedDriverFault=synapSdWriteFaultCode();
             failed=true;failureStage=odysseyBatchWriteFailureStage(writeError);
             Serial.printf("[SD] PCM batch write failed errno=%d stage=%u wrote=%u pcm=%lu\n",
@@ -297,14 +300,11 @@ static void odysseyRecordTake() {
           batchPcmBytes=0;
           // This is an explicit SD write test: trust the actual complete
           // 4KiB batch result, not uncalibrated battery ADC readings.
-          // One early directory/file-length checkpoint makes the take visible
-          // after interruption. Repeating f_sync every ten seconds repeatedly
-          // writes a FAT sector; the field device failed after ~2 minutes on
-          // CMD25 STOP for that metadata sector. Keep sequential 4KiB audio
-          // writes and defer further metadata until the user's STOP/fclose.
-          // A sudden power loss may lose PCM appended after this checkpoint.
-          if (checkpointedPcmBytes==0u &&
-              uint32_t(millis()-lastCheckpointAt)>=ODYSSEY_SD_CHECKPOINT_INTERVAL_MS) {
+          // Every 10 seconds sync FAT/file-length metadata. An unexpected
+          // power cut loses at most the unsynced tail in the normal case;
+          // FAT sectors in flight can still tear on a sudden rail collapse.
+          // The native SDSPI host owns write completion and timeout checks.
+          if (uint32_t(millis()-lastCheckpointAt)>=ODYSSEY_SD_CHECKPOINT_INTERVAL_MS) {
             int checkpointErrno=0;
             const uint8_t checkpointStage=odysseyCheckpointWav(file,checkpointErrno);
             if (checkpointStage) {
@@ -312,7 +312,8 @@ static void odysseyRecordTake() {
               odysseyPersistedWriteReturned=0;
               odysseyPersistedWriteExpected=0;
               odysseyPersistedWriteFerror=ferror(file)?1u:0u;
-              odysseyPersistedDriverFault=synapSdWriteFaultCode();
+              synapSdNoteNativeWriteError(checkpointStage,checkpointErrno);
+            odysseyPersistedDriverFault=synapSdWriteFaultCode();
               failed=true;
               failureStage=checkpointStage;
               Serial.printf("[SD] WAV checkpoint failed stage=%u errno=%d pcm=%lu lastSynced=%lu\n",
@@ -327,8 +328,8 @@ static void odysseyRecordTake() {
         }
       }
 
-      // Capture performs only sequential 4 KiB writes. Each full batch is
-      // sector aligned and FatFs issues a multi-sector disk_write (CMD25).
+      // Capture performs only sequential 4 KiB writes through native SDSPI.
+      // Card command selection and completion belong to ESP-IDF FatFs.
       // The first batch carries a provisional WAV header; no random rewrite
       // is attempted while the card is in this recording session.
     }
@@ -352,6 +353,7 @@ static void odysseyRecordTake() {
         odysseyPersistedWriteReturned=uint32_t(written);
         odysseyPersistedWriteExpected=sizeof(batch);
         odysseyPersistedWriteFerror=ferror(file)?1u:0u;
+            synapSdNoteNativeWriteError(odysseyBatchWriteFailureStage(writeError),writeError);
             odysseyPersistedDriverFault=synapSdWriteFaultCode();
         failed=true;failureStage=odysseyBatchWriteFailureStage(writeError);
         Serial.printf("[SD] final PCM batch failed errno=%d stage=%u wrote=%u expected=%u\n",
