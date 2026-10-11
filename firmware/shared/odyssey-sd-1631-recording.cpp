@@ -407,7 +407,7 @@ static void odysseyRecordTake() {
       // 128 ms of silence, and all eight 512-byte sectors use CMD24.
       memset(batch+batchUsed,0,sizeof(batch)-batchUsed);
       errno=0;
-      const size_t written=fwrite(batch,1,sizeof(batch),file);
+      const size_t written=odysseyWritePcmBatch(file,batch,sizeof(batch));
       if (written!=sizeof(batch)) {
         const int writeError=errno;
         odysseyPersistedWriteErrno=writeError>0?uint32_t(writeError):0u;
