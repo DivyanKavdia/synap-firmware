@@ -11,7 +11,7 @@ test('shipping C3 BLE SD maintenance is fail-closed BEFORE any FAT operation',()
   assert(guard>=0 && mutation>guard,'reject destructive commands before worker enters switch');
   for(const op of [17,18,19])
     assert(worker.slice(guard,mutation).includes('request.operation=='+op+'u'),'block media operation '+op);
-  const refusal=worker.slice(guard,mutation);
+  const refusal=worker.slice(guard,worker.indexOf('sdBleTransferInFlight=true;',guard));
   assert.match(refusal,/reply\(request,BAD_COMMAND\)/);
   assert.match(refusal,/continue;/);
   assert(!/odysseyRecoverSdCard|unlink\(|clearRecordings\(|odysseyFormatSdCard\(/.test(refusal),
