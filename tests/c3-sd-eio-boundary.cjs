@@ -6,6 +6,7 @@ const recording=fs.readFileSync('firmware/shared/odyssey-sd-1631-recording.cpp',
 const detect=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8');
 const transfer=fs.readFileSync('firmware/shared/odyssey-sd-1631-transfer.cpp','utf8');
 const power=fs.readFileSync('firmware/shared/power.cpp','utf8');
+const {nativeTest}=require('./support/native.cjs');
 
 test('a 16,340-byte PCM write failure is at the 16 KiB on-disk boundary',()=>{
   const accepted=16340;
@@ -25,6 +26,43 @@ test('background idle sleep cannot restart a card after a retained write fault',
   assert.match(sleep,/!odysseySdReady\(\) &&[\s\S]*pendingRecordFault>=44u && pendingRecordFault!=48u\) return/);
   assert(sleep.indexOf('pendingRecordFault>=44u')<sleep.indexOf('odysseyRecoverSdCard("sleep")'),
     'unresolved write I/O fault must veto background remount');
+});
+
+test('selected BUSY-low is separate from deselected stuck-low and vetoes new WAVs',()=>{
+  const fn=detect.split('bool odysseySdControllerBusyLow() {')[1]
+    .split('uint16_t odysseySdRawFFCount()')[0];
+  assert(fn);
+  const code=[
+    '#include <atomic>',
+    '#include <cstdint>',
+    '#include <cassert>',
+    '#include <iostream>',
+    'std::atomic<uint8_t> odysseySdBootState{2};',
+    'std::atomic<int16_t> odysseySdBitBangCsHigh{1};',
+    'std::atomic<int16_t> odysseySdBitBangCsLow{1};',
+    'std::atomic<uint16_t> odysseySdRawZero{1023};',
+    'std::atomic<uint16_t> odysseySdRawFF{0};',
+    'bool odysseySdControllerBusyLow() {',fn,
+    'int main(){',
+    'assert(odysseySdControllerBusyLow());',
+    'odysseySdBitBangCsHigh=0;assert(!odysseySdControllerBusyLow());',
+    'odysseySdBitBangCsHigh=1;odysseySdRawFF=64;assert(!odysseySdControllerBusyLow());',
+    'odysseySdRawFF=0;odysseySdRawZero=10;assert(!odysseySdControllerBusyLow());',
+    'odysseySdRawZero=1023;odysseySdBootState=1;assert(!odysseySdControllerBusyLow());',
+    'std::cout<<"PASS selected busy-low veto\\n";',
+    '}'
+  ].join('\\n');
+  assert.match(nativeTest(code),/PASS selected busy-low veto/);
+  const task=recording.split('static void odysseyRecordTask(void*) {')[1]
+    .split('bool odysseyPrepareForConnectedStreaming')[0];
+  const veto=task.split('if (!odysseySdReady() && odysseySdControllerBusyLow()) {')[1]
+    .split('if (!odysseySdReady()) {')[0];
+  assert.match(veto,/odysseyRecording=false/);
+  assert.match(veto,/vTaskDelete\(nullptr\)/);
+  assert.doesNotMatch(veto,/odysseyRecoverSdCard|fopen\(|fwrite\(/);
+  const recovery=detect.split('bool odysseyRecoverSdCard(const char* reason) {')[1]
+    .split('bool odysseyPrepareSdForPowerTransition')[0];
+  assert(recovery.indexOf('odysseySdControllerBusyLow()')<recovery.indexOf('odysseySdReleaseLocked()'));
 });
 
 test('native FatFs error never triggers an automatic CMD12, SD re-arm, or deletion',()=>{
