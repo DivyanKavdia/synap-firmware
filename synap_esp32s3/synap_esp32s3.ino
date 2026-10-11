@@ -4610,14 +4610,26 @@ static uint8_t catalogue(uint32_t& total) {
 static uint8_t removeFile(const char* path) {
   selectedPath[0]=0;
   if (!safeWavPath(path)) return BAD_COMMAND;
-  if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) return BUSY;
+  // Manual, single-file deletion must not be blocked by the C3+SD's
+  // independently reported untrusted battery ADC (batteryAvailable=false).
+  // Still reject a *trusted* low-voltage measurement. Never attempt FAT
+  // changes when the card is not mounted/ready or an SD take owns the lock.
+  if (batteryAvailable.load() && batteryMillivolts<ODYSSEY_SD_WRITE_START_MIN_MV) return BUSY;
   OdysseySdGuard guard;
   if (!guard || !storageReady()) return NO_SD;
   char full[96];
   if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
   struct stat st{};
-  if (stat(full,&st)!=0 || !S_ISREG(st.st_mode)) return FILE_UNAVAILABLE;
-  return unlink(full)==0?OK:IO_ERROR;
+  errno=0;
+  if (stat(full,&st)!=0) return errno==ENOENT?OK:IO_ERROR;
+  if (!S_ISREG(st.st_mode)) return FILE_UNAVAILABLE;
+  errno=0;
+  if (unlink(full)!=0 && errno!=ENOENT) return IO_ERROR;
+  // Do not tell the PWA that deletion succeeded until FAT no longer
+  // resolves this exact file. No wildcard or automatic cleanup is used.
+  errno=0;
+  if (stat(full,&st)==0) return IO_ERROR;
+  return errno==ENOENT?OK:IO_ERROR;
 }
 
 static uint16_t clearRecordings() {
