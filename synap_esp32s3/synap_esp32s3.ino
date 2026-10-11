@@ -2547,6 +2547,9 @@ static std::atomic<uint32_t> odysseyWireWritesAtFailure{0};
 // This latch is intentionally NOT cleared by the per-take telemetry reset:
 // only a real loss of power to the SD controller establishes a fresh session.
 static std::atomic<bool> odysseySdAmbiguousWrite{false};
+// ESP-IDF 5.5.1 performs up to TWO CMD13 probes after a successful sector
+// write. Keep both in the uncertain-completion window until each succeeds.
+static std::atomic<uint8_t> odysseyWriteStatusChecksOutstanding{0};
 void odysseySdClearWireFault() {
   odysseyWireCmdPlusOne=0;
   odysseyWireError=0;
@@ -3048,11 +3051,10 @@ static bool odysseySdBeginLocked() {
   if (cmd && cmd->opcode==13u) odysseyWireLastCmd13=cmd->response[0];
   const esp_err_t error=result!=ESP_OK?result:(cmd?cmd->error:ESP_FAIL);
   if (cmd && error!=ESP_OK) {
-    // A failing first CMD13 immediately after a successful data command
-    // also leaves programming status uncertain. Do not infer completion.
-    const uint32_t previous=odysseyWirePriorCmd.load();
+    // Either of the two post-write CMD13 checks may fail; a successful
+    // first status response does not establish completed programming.
     if (cmd->opcode==24u || cmd->opcode==25u ||
-        (cmd->opcode==13u && (previous==24u || previous==25u))) {
+        (cmd->opcode==13u && odysseyWriteStatusChecksOutstanding.load()!=0)) {
       odysseySdAmbiguousWrite=true;
       odysseySdUnsafeToSleep=true;
     }
@@ -3071,7 +3073,15 @@ static bool odysseySdBeginLocked() {
     // Count completed commands, NOT guaranteed durable sectors. CMD13/FatFs
     // still own post-program validation. Stop updating on first failure.
     odysseyWirePriorCmd=cmd->opcode;
-    if (cmd->opcode==24u || cmd->opcode==25u) ++odysseyWireGoodWrites;
+    if (cmd->opcode==24u || cmd->opcode==25u) {
+      ++odysseyWireGoodWrites;
+      odysseyWriteStatusChecksOutstanding=2;
+    } else if (cmd->opcode==13u) {
+      const uint8_t pending=odysseyWriteStatusChecksOutstanding.load();
+      if (pending) odysseyWriteStatusChecksOutstanding=uint8_t(pending-1u);
+    } else {
+      odysseyWriteStatusChecksOutstanding=0;
+    }
   }
   return result;
 };
