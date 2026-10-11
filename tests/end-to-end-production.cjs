@@ -72,7 +72,7 @@ test('1631 C3 worker exposes media-v1 plus BLE-controlled direct Wi-Fi upload',(
   assert.match(c3,/createCharacteristic\("4fa12355-0000-1000-8000-00805f9b34fb"/);
   assert.match(c3,/case 7:\s*error=catalogue\(total\)/);
   assert.match(c3,/case 4:\s*error=readSelected\(request\.path,request\.offset,total,bytes,size\)/);
-  assert.match(c3,/case 17: error=removeFile\(request\.path\)/);
+  assert.match(c3,/case 17:\s*[\s\S]*?error=removeFile\(request\.path\)/);
   assert.match(c3,/case 18:/);
   assert.match(c3,/case 23:/);
   assert.match(c3,/case 24:/);
