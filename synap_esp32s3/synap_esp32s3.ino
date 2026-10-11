@@ -2782,26 +2782,26 @@ OdysseySdRawProbeResult odysseySdRawProbeOnce() {
           result.status=7;result.error=cardErr;
         } else {
           result.sectors=card.csd.capacity;
-          // The buffer is DMA-aligned; read ONE 512-byte sector only.
+          // The buffer is DMA-aligned; read ONE 512-byte bootBlock only.
           // A successful raw read despite FAT mount failure strongly
           // suggests on-card filesystem/partition metadata trouble.
-          alignas(4) uint8_t sector[512]{};
-          const esp_err_t readErr=sdmmc_read_sectors(&card,sector,0,1);
+          alignas(4) uint8_t bootBlock[512]{};
+          const esp_err_t readErr=sdmmc_read_sectors(&card,bootBlock,0,1);
           if (readErr!=ESP_OK) {
             result.status=8;result.error=readErr;
           } else {
             result.status=1;
-            result.signature=(sector[510]==0x55 && sector[511]==0xAA)?1:0;
-            const bool fatVbr=(memcmp(sector+54,"FAT",3)==0 ||
-              memcmp(sector+82,"FAT",3)==0);
+            result.signature=(bootBlock[510]==0x55 && bootBlock[511]==0xAA)?1:0;
+            const bool fatVbr=(memcmp(bootBlock+54,"FAT",3)==0 ||
+              memcmp(bootBlock+82,"FAT",3)==0);
             if (fatVbr) result.fatHint=1;
-            else if (result.signature && sector[450]!=0 &&
-                     sector[454]+sector[455]+sector[456]+sector[457]!=0) {
+            else if (result.signature && bootBlock[450]!=0 &&
+                     bootBlock[454]+bootBlock[455]+bootBlock[456]+bootBlock[457]!=0) {
               result.fatHint=2;
-              result.partitionLba=uint32_t(sector[454]) |
-                (uint32_t(sector[455])<<8) |
-                (uint32_t(sector[456])<<16) |
-                (uint32_t(sector[457])<<24);
+              result.partitionLba=uint32_t(bootBlock[454]) |
+                (uint32_t(bootBlock[455])<<8) |
+                (uint32_t(bootBlock[456])<<16) |
+                (uint32_t(bootBlock[457])<<24);
             }
           }
         }
