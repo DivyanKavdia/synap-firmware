@@ -435,7 +435,7 @@ static void worker(void*) {
         // Purely read-only snapshot of the LAST recorder error after a
         // reboot. It never calls SD.begin, SD.end, mkdir, fopen or recovery.
         // Clients request this only when capabilities report stage >=40.
-        char detail[400];
+        char detail[480];
         // wrD is a software 0x20SS00EE VFS fault marker, not an observed
         // raw SD command. The failing offset helps isolate FAT cluster-boundary
         // allocation from electrical/busy-wire faults without reading SD.
@@ -443,7 +443,7 @@ static void worker(void*) {
         const uint32_t failureOffset=stage>=66u && stage<=70u
           ? odysseyLastRecordFailureBytes()+44u : 0u;
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"wrE\":%lu,\"wrD\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu,\"vfsStep\":%u,\"vfsErrno\":%ld,\"failureOffset\":%lu,\"sdClockKhz\":%lu,\"faultKind\":\"vfs\",\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld}",
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"wrE\":%lu,\"wrD\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu,\"vfsStep\":%u,\"vfsErrno\":%ld,\"failureOffset\":%lu,\"sdClockKhz\":%lu,\"faultKind\":\"vfs\",\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireRsp\":%lu,\"wireR2\":%lu}",
           unsigned(odysseySdDetectionState()),
           unsigned(odysseySdProbeState()),
           unsigned(odysseyLastRecordFailureStage()),
@@ -459,7 +459,12 @@ static void worker(void*) {
           static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ/1000u),
           unsigned(sdLastMediaFaultOperation.load()),
           unsigned(sdLastMediaFaultStep.load()),
-          static_cast<long>(sdLastMediaFaultErrno.load()));
+          static_cast<long>(sdLastMediaFaultErrno.load()),
+          static_cast<unsigned long>(odysseyLastWireCommand()),
+          static_cast<unsigned long>(odysseyLastWireError()),
+          static_cast<unsigned long>(odysseyLastWireArgument()),
+          static_cast<unsigned long>(odysseyLastWireResponse()),
+          static_cast<unsigned long>(odysseyLastWireCmd13()));
         if (n<0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();
