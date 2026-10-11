@@ -91,7 +91,7 @@ test('C3 restores the SD sleep veto from retained recorder write failure',()=>{
  const start=detect.split('bool odysseyInitializeSdCardBeforeBle() {')[1].split('bool odysseyRecoverSdCard(')[0];
  assert.match(start,/previousRecordStage>=44u && previousRecordStage!=48u/);
  const latch=start.indexOf('odysseySdUnsafeToSleep=true;');
- const recovery=start.indexOf('odysseySdBitBangRecoverLocked("rearm")');
+ const recovery=start.indexOf('warm boot deferred');
  const mount=start.indexOf('odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS)');
  assert(latch>=0 && latch<recovery && recovery<mount);
  const block=detect.split('static bool odysseySdMountOnceLocked(')[1].split('static bool odysseySdMountLocked(')[0];
