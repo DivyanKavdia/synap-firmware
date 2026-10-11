@@ -19,7 +19,7 @@ test('C3 production image uses guarded append-only multi-block offline recording
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/#define SYNAP_TOUCH_PIN 3/);
   assert.match(c3,/static constexpr spi_host_device_t ODYSSEY_SD_HOST=SPI2_HOST/);
-  assert.match(c3,/ODYSSEY_SD_DATA_FREQ_HZ=1000000u/);
+  assert.match(c3,/ODYSSEY_SD_DATA_FREQ_HZ=800000u/);
   assert.match(c3,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT,/);
   assert.match(c3,/static void odysseyRecordTake\(\)/);
   assert.match(c3,/OdysseySdGuard storage/);

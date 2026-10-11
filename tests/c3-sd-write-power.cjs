@@ -100,13 +100,14 @@ test('offline gesture reaches real C3 SD writes and verifies WAV after fclose',(
  assert.match(rec,/xTaskCreate\(odysseyRecordTask/);
 });
 
-test('held-busy CMD24/CMD25 failure does not trigger automatic remount',()=>{
- const task=rec.split('static void odysseyRecordTask(void\*) {')[1].split('bool odysseyPrepareForConnectedStreaming')[0];
- assert.match(task,/driverCommand==24u && driverPhase==4u/);
- assert.match(task,/driverCommand==25u && \(driverPhase==4u \|\| driverPhase==6u \|\| driverPhase==7u\)/);
- assert.match(task,/!stuckBusyWrite\) \{/);
- assert.match(task,/odysseySdUnsafeToSleep=true;/);
- assert.doesNotMatch(task,/SD\.format\(|remove\(|unlink\(/);
+test('native VFS EIO never forces a card rearm while programming may still be busy',()=>{
+ const task=rec.split('static void odysseyRecordTask(void*) {')[1].split('bool odysseyPrepareForConnectedStreaming')[0];
+ const afterTake=task.split('odysseyRecordTake();')[1];
+ assert.match(afterTake,/const uint8_t lastFault=odysseyLastRecordFailureStage\(\);/);
+ assert.match(afterTake,/skipping automatic remount/);
+ assert.match(afterTake,/odysseySdUnsafeToSleep=true;/);
+ assert.doesNotMatch(afterTake,/odysseyRecoverSdCard\(|driverCommand==24u|driverCommand==25u/);
+ assert.doesNotMatch(afterTake,/SD\.format\(|remove\(|unlink\(/);
 });
 
 test('C3 accepts a freshly formatted readable FAT root with missing /synap and stale recorder NVS',()=>{
@@ -133,13 +134,15 @@ test('C3 accepts a freshly formatted readable FAT root with missing /synap and s
  assert(task.indexOf('odysseySdBusStuckLow()')<task.indexOf('odysseyRecordTake()'));
 });
 
-test('power-loss boot policy: fresh C3 POWERON tries mount before raw SD protocol re-arm',()=>{
+test('retained FAT EIO defers SD commands on warm boot; cold boot attempts one mount',()=>{
  const bootFn=sd.split('bool odysseyInitializeSdCardBeforeBle() {')[1].split('bool odysseyRecoverSdCard(')[0];
  assert.match(bootFn,/previousStorageFault/);
  assert.match(bootFn,/bootResetReason!=ESP_RST_POWERON/);
- assert.match(bootFn,/odysseySdBitBangRecoverLocked\("rearm"\)/);
+ assert.match(bootFn,/warm boot deferred/);
+ assert.match(bootFn,/return false;/);
  assert.match(bootFn,/odysseySdMountLocked\("boot",ODYSSEY_SD_BOOT_ATTEMPTS\)/);
- assert(bootFn.indexOf('bootResetReason!=ESP_RST_POWERON')<bootFn.indexOf('odysseySdBitBangRecoverLocked("rearm")'));
+ assert(bootFn.indexOf('return false;')<bootFn.indexOf('odysseySdMountLocked("boot"'));
+ assert.doesNotMatch(bootFn,/odysseySdBitBangRecoverLocked\("rearm"\)/);
  assert.match(sd,/if \(!mounted\) \{[\s\S]*?odysseySdBitBangRecoverLocked\(reason\)/);
  assert.doesNotMatch(bootFn,/SD\.format\(|formatIfMountFailed/);
 });

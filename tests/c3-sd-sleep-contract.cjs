@@ -41,7 +41,7 @@ test('C3 SD recorder keeps sleep veto through final batch, fclose, persistent di
  assert.match(take,/if \(fclose\(file\)!=0\)/);
  const worker=recorder.split('static void odysseyRecordTask(void*) {')[1].split('bool odysseyPrepareForConnectedStreaming')[0];
  const takeEnd=worker.indexOf('odysseyRecordTake();');
- const recoverEnd=worker.indexOf('odysseyRecoverSdCard("rearm")');
+ const recoverEnd=worker.indexOf('skipping automatic remount');
  const settle=worker.lastIndexOf('odysseySdSleepGuardUntil=finalizedAt+5000u;');
  const idle=worker.lastIndexOf('odysseyRecording=false;');
  assert(takeEnd>=0 && recoverEnd>takeEnd && settle>recoverEnd && idle>settle);
@@ -73,7 +73,7 @@ test('all automatic and touch-triggered sleep entries defer until recording fina
 test('C3 SD firmware still retains append-only WAV and non-formatting SPI mount',()=>{
  assert.match(recorder,/alignas\(4\) static uint8_t batch\[4096\]/);
  assert.doesNotMatch(recorder,/fseek\(file,0|ftruncate\(/);
- assert.match(detect,/ODYSSEY_SD_DATA_FREQ_HZ=1000000u/);
+ assert.match(detect,/ODYSSEY_SD_DATA_FREQ_HZ=800000u/);
  assert.match(detect,/odysseySdBeginLocked\(\)/);
 });
 
@@ -91,7 +91,7 @@ test('C3 restores the SD sleep veto from retained recorder write failure',()=>{
  const start=detect.split('bool odysseyInitializeSdCardBeforeBle() {')[1].split('bool odysseyRecoverSdCard(')[0];
  assert.match(start,/previousRecordStage>=44u && previousRecordStage!=48u/);
  const latch=start.indexOf('odysseySdUnsafeToSleep=true;');
- const recovery=start.indexOf('odysseySdBitBangRecoverLocked("rearm")');
+ const recovery=start.indexOf('warm boot deferred');
  const mount=start.indexOf('odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS)');
  assert(latch>=0 && latch<recovery && recovery<mount);
  const block=detect.split('static bool odysseySdMountOnceLocked(')[1].split('static bool odysseySdMountLocked(')[0];

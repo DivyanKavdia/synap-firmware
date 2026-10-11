@@ -394,9 +394,15 @@ static void worker(void*) {
         // Purely read-only snapshot of the LAST recorder error after a
         // reboot. It never calls SD.begin, SD.end, mkdir, fopen or recovery.
         // Clients request this only when capabilities report stage >=40.
-        char detail[340];
+        char detail[400];
+        // wrD is a software 0x20SS00EE VFS fault marker, not an observed
+        // raw SD command. The failing offset helps isolate FAT cluster-boundary
+        // allocation from electrical/busy-wire faults without reading SD.
+        const uint8_t stage=odysseyLastRecordFailureStage();
+        const uint32_t failureOffset=stage>=66u && stage<=70u
+          ? odysseyLastRecordFailureBytes()+44u : 0u;
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"wrE\":%lu,\"wrD\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu,\"vfsStep\":%u,\"vfsErrno\":%ld}",
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"wrE\":%lu,\"wrD\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu,\"vfsStep\":%u,\"vfsErrno\":%ld,\"failureOffset\":%lu,\"sdClockKhz\":%lu,\"faultKind\":\"vfs\"}",
           unsigned(odysseySdDetectionState()),
           unsigned(odysseySdProbeState()),
           unsigned(odysseyLastRecordFailureStage()),
@@ -407,7 +413,9 @@ static void worker(void*) {
           static_cast<unsigned long>(odysseyLastWriteExpected()),
           static_cast<unsigned long>(odysseyLastWriteFerror()),
           unsigned(odysseySdVfsStepValue()),
-          static_cast<long>(odysseySdVfsErrnoValue()));
+          static_cast<long>(odysseySdVfsErrnoValue()),
+          static_cast<unsigned long>(failureOffset),
+          static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ/1000u));
         if (n<0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();

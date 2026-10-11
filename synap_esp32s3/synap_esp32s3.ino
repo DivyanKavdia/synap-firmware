@@ -1283,6 +1283,13 @@ void enterDeepSleep(const char* reason) {
 
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   if (odysseySdUnsafeToSleep.load()) {
+    // A native FAT write/close fault has unknown card-programming state.
+    // Even if a later ADC sample becomes trusted, never issue background
+    // CMD12/CMD0 or re-mount merely to enter sleep. Only an explicit user
+    // action or a genuine SD power cycle may re-arm the card after this fault.
+    const uint8_t pendingRecordFault=odysseyLastRecordFailureStage();
+    if (!odysseySdReady() &&
+        pendingRecordFault>=44u && pendingRecordFault!=48u) return;
     // Do not autonomously repeat destructive reinitialization on a proven
     // held-LOW SD bus. Explicit op14 or a disconnected double-tap can retry;
     // a verified mount is still required before entering deep sleep.
@@ -2506,9 +2513,11 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 #if CONFIG_IDF_TARGET_ESP32C3
 static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
-// SDSPI follows the card's initialization clock automatically, then caps
-// its data clock to 1 MHz to reduce susceptibility to marginal wiring.
-static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=1000000u;
+// SDSPI keeps its standard 400 kHz card initialization clock. Cap data
+// transfers at 800 kHz rather than 1 MHz on the sealed C3+SD carrier:
+// reduced signal-edge stress with enough theoretical bandwidth for 16 kHz
+// mono PCM (32 kB/s) and metadata writes. Never change the FAT format.
+static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=800000u;
 static constexpr spi_host_device_t ODYSSEY_SD_HOST=SPI2_HOST;
 static sdmmc_card_t* odysseySdNativeCard=nullptr;
 static bool odysseySdNativeBusInitialized=false;
@@ -2582,6 +2591,15 @@ uint16_t odysseySdRawZeroCount() { return odysseySdRawZero.load(); }
 bool odysseySdBusStuckLow() {
   return odysseySdBootState.load()!=1 &&
     odysseySdBitBangCsHigh.load()==0 && odysseySdRawZero.load()>=900u;
+}
+// Field signature: CS-high DO releases normally, but the selected card
+// drives 0x00 continuously (~1023/1024 bytes) and cannot accept CMD0.
+// Refuse repeated mount/recover attempts until an actual card rail reset.
+bool odysseySdControllerBusyLow() {
+  return odysseySdBootState.load()!=1 &&
+    odysseySdBitBangCsHigh.load()==1 &&
+    odysseySdBitBangCsLow.load()==1 &&
+    odysseySdRawZero.load()>=1000u && odysseySdRawFF.load()<=2u;
 }
 uint16_t odysseySdRawFFCount() { return odysseySdRawFF.load(); }
 uint16_t odysseySdRawFECount() { return odysseySdRawFE.load(); }
@@ -2835,6 +2853,28 @@ static uint8_t odysseySdBitBangRecoverLocked(const char* reason) {
 
   odysseySdSampleRawLocked();
 
+  // Observed in the field after stage 66: MISO is HIGH when CS is released,
+  // but ~1023/1024 response bytes are 0x00 while selected. This is a card
+  // continuously asserting BUSY, NOT an idle SPI command interface. Injecting
+  // CMD12/CMD0/0xFD at this point cannot safely reset a card programming its
+  // own NAND. Preserve the media and request a real SD power-rail cycle.
+  if (odysseySdRawZero.load()>=1000u && odysseySdRawFF.load()<=2u) {
+    odysseySdBitBangCmd12=0xFF;
+    odysseySdBitBangCmd12Ready=0;
+    odysseySdBitBangDrainBytes=0;
+    odysseySdBitBangStopState=3;
+    odysseySdBitBangCmd0=0xFF;
+    odysseySdBitBangCmd8=0xFF;
+    odysseySdBitBangR7=0;
+    odysseySdUnsafeToSleep=true;
+    digitalWrite(ODYSSEY_SD_CS,HIGH);
+    digitalWrite(ODYSSEY_SD_SCK,LOW);
+    digitalWrite(ODYSSEY_SD_MOSI,HIGH);
+    Serial.printf("[SD] %s sustained selected-busy 0x00 (%u/1024); suppress CMD12/CMD0, cycle SD rail\\n",
+      reason,unsigned(odysseySdRawZero.load()));
+    return 0xFF;
+  }
+
   // The historical failure was first observed after catalogue/read activity.
   // Drain the open-ended CMD18 stream after CMD12 instead of trying to parse
   // an R1 byte out of data that may still be arriving from the card.
@@ -2938,7 +2978,11 @@ static bool odysseySdBeginLocked() {
   esp_vfs_fat_sdmmc_mount_config_t mount{};
   mount.format_if_mount_failed=false;
   mount.max_files=ODYSSEY_SD_MAX_OPEN_FILES;
-  mount.allocation_unit_size=4096;
+  mount.allocation_unit_size=4096; // ignored for an existing FAT filesystem
+  // IDF FAT diskio normally trusts cached card readiness; enable the real
+  // SD status check on this unstable removable-media path. Detect a failed
+  // controller earlier instead of issuing additional FAT metadata writes.
+  mount.disk_status_check_enable=true;
   result=esp_vfs_fat_sdspi_mount(ODYSSEY_SD_MOUNT_POINT,
     &host,&device,&mount,&odysseySdNativeCard);
   if (result!=ESP_OK) {
@@ -3116,27 +3160,24 @@ bool odysseyInitializeSdCardBeforeBle() {
   OdysseySdGuard guard;
   if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return false; }
 
-  // A persisted recorder write failure means the continuously-powered card may
-  // have survived the MCU reset inside a data/program state. Re-arm the SD
-  // protocol before the first Arduino SD.begin() instead of asking the same
-  // stale card state to answer a fresh host immediately.
+  // A retained FAT write EIO survives MCU reset but not necessarily a
+  // real SD power reset. Warm/OTA reboot cannot reset the continuously-powered
+  // card. Do not send CMD0/CMD12 or even a new mount while its controller may
+  // still be programming. A true cold power-on may try one normal mount,
+  // followed only by guarded/passive recovery. User op14 remains explicit.
   const uint8_t previousRecordStage=odysseyLastRecordFailureStage();
   const bool previousStorageFault=previousRecordStage>=44u && previousRecordStage!=48u;
   if (previousStorageFault) {
-    // Historical EIO survives MCU resets. Never clear it until a new mount
-    // succeeds. Cold power-on first tries ordinary SD.begin; an SD card whose
-    // rail actually cycled should already have reset. Warm/OTA boots perform
-    // one bounded, non-formatting protocol re-arm for a potentially powered
-    // card left mid-command. A normal mount failure still triggers recovery.
     odysseySdUnsafeToSleep=true;
     if (bootResetReason!=ESP_RST_POWERON) {
-      Serial.printf("[SD] warm boot re-arm after recorder stage=%u\\n",unsigned(previousRecordStage));
-      (void)odysseySdBitBangRecoverLocked("rearm");
-      delay(20);
-    } else {
-      Serial.printf("[SD] cold boot first tries fresh SD.begin after old stage=%u\\n",
+      odysseySdBootState=2;
+      odysseySdProbeStage=previousRecordStage;
+      Serial.printf("[SD] warm boot deferred: historical record stage=%u, SD rail not known to have reset\\n",
         unsigned(previousRecordStage));
+      return false;
     }
+    Serial.printf("[SD] cold CPU power-on: try one SD mount after retained stage=%u\\n",
+      unsigned(previousRecordStage));
   }
 
   const bool ready=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
@@ -3147,6 +3188,11 @@ bool odysseyInitializeSdCardBeforeBle() {
 bool odysseyRecoverSdCard(const char* reason) {
   OdysseySdGuard guard(pdMS_TO_TICKS(5000));
   if (!guard) return false;
+  if (odysseySdControllerBusyLow()) {
+    odysseySdUnsafeToSleep=true;
+    Serial.println("[SD] recovery refused: selected SD still drives sustained busy-low, cycle SD power");
+    return false;
+  }
   odysseySdBootState=0;odysseySdProbeStage=0;
   odysseySdReleaseLocked();
   return odysseySdMountLocked(reason?reason:"op14",ODYSSEY_SD_RECOVERY_ATTEMPTS);
@@ -3674,8 +3720,16 @@ static void odysseyRecordTake() {
   if (failed || bytes==0) {
     const uint8_t persistedStage=failureStage?failureStage:40;
     odysseyPersistRecordFailure(persistedStage,bytes);
-    odysseySdBootState=2;
-    odysseySdProbeStage=persistedStage;
+    // Mic failure (43) and an empty, user-stopped take (48) do not establish
+    // that the SD card failed. Keep a still-mounted FAT volume accessible so
+    // the user can delete incomplete WAVs. Only storage/verify faults revoke
+    // SD readiness. Never remove or format a failed recording automatically.
+    const bool storageFailure=persistedStage!=43u && persistedStage!=48u;
+    if (storageFailure) {
+      odysseySdBootState=2;
+      odysseySdProbeStage=persistedStage;
+      odysseySdUnsafeToSleep=true;
+    }
     odysseyRecordFaultAt=millis();
   } else {
     odysseyPersistRecordFailure(0,0);
@@ -3707,6 +3761,23 @@ static void odysseyRecordTask(void*) {
     vTaskDelete(nullptr);
     return;
   }
+  if (!odysseySdReady() && odysseySdControllerBusyLow()) {
+    // The last passive probe saw CS-high MISO released but a selected
+    // controller responding 0x00 continuously. A new mount cannot restore
+    // a card stuck internally BUSY. Never create another empty WAV or
+    // hammer the continuously-powered SD with CMD0/CMD12.
+    const uint32_t finalizedAt=millis();
+    odysseyRecordFaultAt=finalizedAt;
+    odysseySdSleepGuardUntil=finalizedAt+5000u;
+    disconnectedAt=finalizedAt;
+    odysseyRecording=false;
+    odysseyStopRequested=false;
+    applyCpuPowerProfile(false);
+    updateStatusLed(true);
+    Serial.println("[SD] offline start blocked: controller busy-low; power-cycle SD rail");
+    vTaskDelete(nullptr);
+    return;
+  }
   if (!odysseySdReady()) {
     Serial.println("[SD] one-gesture offline start: recovering storage before capture");
     if (!odysseyRecoverSdCard("touch")) {
@@ -3728,29 +3799,24 @@ static void odysseyRecordTask(void*) {
 
   odysseyRecordTake();
 
-  // A disk error marks the live mount unavailable. The take's guard has
-  // unwound at this point, so perform one bounded re-arm before returning to
-  // idle. Preserve the recorder failure stage/bytes for diagnostics.
-  const uint32_t driverFault=odysseyLastDriverWriteFault();
-  const uint8_t driverCommand=uint8_t(driverFault>>24);
-  const uint8_t driverPhase=uint8_t(driverFault>>16);
-  const bool stuckBusyWrite=
-    (driverCommand==24u && driverPhase==4u) ||
-    (driverCommand==25u && (driverPhase==4u || driverPhase==6u || driverPhase==7u));
-  if (!odysseySdReady() && odysseyLastRecordFailureStage() && !stuckBusyWrite) {
-    Serial.println("[SD] post-record failure: re-arming storage for next take");
-    (void)odysseyRecoverSdCard("rearm");
-  } else if (!odysseySdReady() && stuckBusyWrite) {
-    // A card held busy after accepting a sector must NOT be hammered with
-    // CMD0/CMD12/repeated SD.begin while it still has power.
+  // A native write/create/close EIO is a FatFs/VFS errno, NOT an SD
+  // wire-level CMD24/CMD25 result. synapSdWriteFaultCode() encodes faults as
+  // 0x20SS00EE (marker, stage, errno). The former decoder treated 0x20 as
+  // command 32, assumed the card was idle, and immediately issued CMD12/CMD0
+  // after a failed write. A card still BUSY/programming may then latch up
+  // until its power rail is cycled. Do not re-arm a failed, still-powered card
+  // in the recorder task. Keep the FAT volume and every partial take intact.
+  // Recovery is explicitly user-initiated (Check SD / a later touch gesture)
+  // after the bus has had time to settle, or follows a true card power cycle.
+  const uint8_t lastFault=odysseyLastRecordFailureStage();
+  if (!odysseySdReady() && lastFault) {
     odysseySdUnsafeToSleep=true;
-    Serial.printf("[SD] held-busy write fault 0x%08lx; suppress auto rearm until power-cycle\n",
-      static_cast<unsigned long>(driverFault));
+    Serial.printf("[SD] recorder fault stage=%u io=0x%08lx: skipping automatic remount; retain SD files\n",
+      unsigned(lastFault),static_cast<unsigned long>(odysseyLastDriverWriteFault()));
   }
   // An unresolved write/close failure could leave an always-powered SD card
   // inside CMD25 programming. Never allow a later idle timeout or user hold
   // to sleep based solely on the failed mount's "not ready" state.
-  const uint8_t lastFault=odysseyLastRecordFailureStage();
   if (!odysseySdReady() && lastFault>=44u && lastFault!=48u) {
     odysseySdUnsafeToSleep=true;
     Serial.printf("[POWER] C3 SD sleep inhibited: unrecovered record stage=%u\n",unsigned(lastFault));
@@ -4778,9 +4844,15 @@ static void worker(void*) {
         // Purely read-only snapshot of the LAST recorder error after a
         // reboot. It never calls SD.begin, SD.end, mkdir, fopen or recovery.
         // Clients request this only when capabilities report stage >=40.
-        char detail[340];
+        char detail[400];
+        // wrD is a software 0x20SS00EE VFS fault marker, not an observed
+        // raw SD command. The failing offset helps isolate FAT cluster-boundary
+        // allocation from electrical/busy-wire faults without reading SD.
+        const uint8_t stage=odysseyLastRecordFailureStage();
+        const uint32_t failureOffset=stage>=66u && stage<=70u
+          ? odysseyLastRecordFailureBytes()+44u : 0u;
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"wrE\":%lu,\"wrD\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu,\"vfsStep\":%u,\"vfsErrno\":%ld}",
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"recordStage\":%u,\"recordBytes\":%lu,\"wrE\":%lu,\"wrD\":%lu,\"wrN\":%lu,\"wrX\":%lu,\"wrF\":%lu,\"vfsStep\":%u,\"vfsErrno\":%ld,\"failureOffset\":%lu,\"sdClockKhz\":%lu,\"faultKind\":\"vfs\"}",
           unsigned(odysseySdDetectionState()),
           unsigned(odysseySdProbeState()),
           unsigned(odysseyLastRecordFailureStage()),
@@ -4791,7 +4863,9 @@ static void worker(void*) {
           static_cast<unsigned long>(odysseyLastWriteExpected()),
           static_cast<unsigned long>(odysseyLastWriteFerror()),
           unsigned(odysseySdVfsStepValue()),
-          static_cast<long>(odysseySdVfsErrnoValue()));
+          static_cast<long>(odysseySdVfsErrnoValue()),
+          static_cast<unsigned long>(failureOffset),
+          static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ/1000u));
         if (n<0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();

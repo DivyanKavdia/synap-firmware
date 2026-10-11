@@ -24,7 +24,7 @@ test('C3 contract tests track the actual assembled 1631 production runtime, not 
 
 test('C3 SD 1 MHz guarded boot precedes BLE; no silent auto-format',()=>{
   const boot=shared('boot.cpp'),sd=shared('odyssey-sd-1631-detect.cpp');
-  assert.match(sd,/ODYSSEY_SD_DATA_FREQ_HZ=1000000u/);
+  assert.match(sd,/ODYSSEY_SD_DATA_FREQ_HZ=800000u/);
   assert.match(sd,/ODYSSEY_SD_BOOT_ATTEMPTS=1/);
   assert.match(sd,/odysseySdValidateVfsLocked\(reason,attempt\)/);
   assert.match(sd,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT,/);
