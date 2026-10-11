@@ -15,7 +15,7 @@ test('C3 cannot enter deep sleep or reboot on a non-idle SD bus',()=>{
  const prepare=detect.split('bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {')[1].split('// Odyssey S3 remains detection-only')[0];
  assert.match(prepare,/OdysseySdGuard guard\(pdMS_TO_TICKS\(timeoutMs\)\)/);
  assert.match(prepare,/if \(!guard\) \{[\s\S]*?return false;/);
- assert.match(prepare,/if \(odysseyRecording\.load\(\)\) \{[\s\S]*?return false;/);
+ assert.match(prepare,/if \(odysseyRecording\.load\(\) \|\| odysseySdFormatting\(\)\) \{[\s\S]*?return false;/);
  assert.match(prepare,/odysseySdQuiesceLocked\(ODYSSEY_SD_QUIESCE_BUDGET_MS\)/);
  assert.match(prepare,/if \(odysseySdUnsafeToSleep\.load\(\)\)/);
  assert.match(prepare,/if \(idle!=1\) \{[\s\S]*?odysseySdUnsafeToSleep=true;[\s\S]*?return false;\s*\}/);
@@ -56,7 +56,8 @@ test('C3 SD recorder keeps sleep veto through final batch, fclose, persistent di
 
 test('all automatic and touch-triggered sleep entries defer until recording finalized and SD settled',()=>{
  const tick=power.split('void powerTick() {')[1].split('void pollTouchControl() {')[0];
- assert.match(tick,/if \(odysseyRecording\.load\(\)\) \{\s*if \(batteryCritical\(\)\) odysseyStopRequested=true;\s*return;/);
+ assert.match(tick,/if \(odysseyRecording\.load\(\)\) \{[\s\S]*?batteryCritical\(\) && !odysseyStopRequested\.exchange\(true\)[\s\S]*?return;/);
+  assert.match(tick,/if \(odysseySdReady\(\) \|\| odysseySdFormatting\(\)\) return;/);
  assert.match(tick,/if \(OdysseyWifi::busy\(\) \|\| OdysseyTransfer::busy\(\)\) return;/);
  assert.match(tick,/odysseySdSleepGuardUntil\.load\(\)/);
  assert.match(tick,/enterDeepSleep\("critical-battery"\)/);
