@@ -5,7 +5,7 @@ const fs=require('node:fs');
 const detect=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8');
 const transfer=fs.readFileSync('firmware/shared/odyssey-sd-1631-transfer.cpp','utf8');
 const sketch=fs.readFileSync('synap_esp32s3/synap_esp32s3.ino','utf8');
-const fn=detect.split('OdysseySdRawProbeResult odysseySdRawProbeOnce() {')[1]
+const fn=detect.split('void odysseySdRawProbeOnce() {')[1]
   .split('const char* odysseySdMountPoint()')[0];
 const op=transfer.split('case 28: {')[1].split('case 4:')[0];
 
