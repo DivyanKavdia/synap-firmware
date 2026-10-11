@@ -14,6 +14,8 @@
 #include "driver/spi_master.h"
 #include "driver/sdspi_host.h"
 #include "sdmmc_cmd.h"
+#include "diskio_impl.h"
+#include "diskio_sdmmc.h"
 uint8_t odysseyLastRecordFailureStage();
 #else
 #include <SPI.h>
