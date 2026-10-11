@@ -134,13 +134,15 @@ test('C3 accepts a freshly formatted readable FAT root with missing /synap and s
  assert(task.indexOf('odysseySdBusStuckLow()')<task.indexOf('odysseyRecordTake()'));
 });
 
-test('power-loss boot policy: fresh C3 POWERON tries mount before raw SD protocol re-arm',()=>{
+test('retained FAT EIO defers SD commands on warm boot; cold boot attempts one mount',()=>{
  const bootFn=sd.split('bool odysseyInitializeSdCardBeforeBle() {')[1].split('bool odysseyRecoverSdCard(')[0];
  assert.match(bootFn,/previousStorageFault/);
  assert.match(bootFn,/bootResetReason!=ESP_RST_POWERON/);
- assert.match(bootFn,/odysseySdBitBangRecoverLocked\("rearm"\)/);
+ assert.match(bootFn,/warm boot deferred/);
+ assert.match(bootFn,/return false;/);
  assert.match(bootFn,/odysseySdMountLocked\("boot",ODYSSEY_SD_BOOT_ATTEMPTS\)/);
- assert(bootFn.indexOf('bootResetReason!=ESP_RST_POWERON')<bootFn.indexOf('odysseySdBitBangRecoverLocked("rearm")'));
+ assert(bootFn.indexOf('return false;')<bootFn.indexOf('odysseySdMountLocked("boot"'));
+ assert.doesNotMatch(bootFn,/odysseySdBitBangRecoverLocked\("rearm"\)/);
  assert.match(sd,/if \(!mounted\) \{[\s\S]*?odysseySdBitBangRecoverLocked\(reason\)/);
  assert.doesNotMatch(bootFn,/SD\.format\(|formatIfMountFailed/);
 });
