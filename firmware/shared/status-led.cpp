@@ -6,9 +6,15 @@ void updateStatusLed(bool force) {
     if (phase<55u || (phase>=180u && phase<235u)) { r=LED_DIM; g=2; }
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   } else if (odysseyRecording.load()) {
-    // Match build 1631 exactly: purple tracks the local recording task.
+    // While writing, a purple heartbeat means the SD recording task is
+    // still active; it has NO recording-length timeout. An orange pulse
+    // after STOP means the same task is finalizing/fsyncing (not asleep).
+    // The indicator goes dark only when the recorder releases its lease.
     const uint32_t phase=uint32_t(now-odysseyRecordingStartedAt.load())%1800u;
-    if (!odysseyStopRequested.load() && phase<260u) { r=LED_DIM+4; b=LED_DIM+6; }
+    if (phase<260u) {
+      if (odysseyStopRequested.load()) { r=LED_DIM+4;g=2; }
+      else { r=LED_DIM+4; b=LED_DIM+6; }
+    }
   } else if (odysseyRecordFaultAt.load() &&
              uint32_t(now-odysseyRecordFaultAt.load())<6000u) {
     // Two red pulses distinguish missing SD / failed capture from active
