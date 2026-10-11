@@ -499,7 +499,7 @@ static void worker(void*) {
         const OdysseySdRawProbeResult raw=odysseySdRawProbeOnce();
         char detail[256];
         const int n=snprintf(detail,sizeof(detail),
-          "{\\"version\\":1,\\"status\\":%u,\\"error\\":%ld,\\"sectors\\":%lu,\\"sectorBytes\\":%u,\\"signature\\":%u,\\"fatHint\\":%u,\\"partitionLba\\":%lu,\\"mountErr\\":%ld,\\"sdState\\":%u,\\"sdProbe\\":%u}",
+          "{\"version\":1,\"status\":%u,\"error\":%ld,\"sectors\":%lu,\"sectorBytes\":%u,\"signature\":%u,\"fatHint\":%u,\"partitionLba\":%lu,\"mountErr\":%ld,\"sdState\":%u,\"sdProbe\":%u}",
           unsigned(raw.status),static_cast<long>(raw.error),
           static_cast<unsigned long>(raw.sectors),unsigned(raw.sectorBytes),
           unsigned(raw.signature),unsigned(raw.fatHint),
