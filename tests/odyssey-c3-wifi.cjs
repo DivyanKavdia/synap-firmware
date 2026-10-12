@@ -65,6 +65,12 @@ test('Wi-Fi upload owns SD and blocks recording OTA sleep and CPU downclock',()=
   assert.match(ota,/odysseyRecording\.load\(\) \|\| OdysseyWifi::busy\(\)/);
 });
 
+test('large-slot Wi-Fi OTA starts safely idle and retains original SD recordings',()=>{
+  assert.match(wifi,/setStatus\(IDLE,false,0,0,0,"Wi-Fi idle; SD originals retained\."\)/);
+  assert.match(wifi,/bool available\(\) \{ return true; \}/);
+  assert.match(wifi,/if \(busy\(\) \|\| odysseyRecording\.load\(\)/);
+});
+
 test('Wi-Fi failure leaves SD source intact and powers radio down',()=>{
   assert.match(wifi,/SD original kept/);
   assert.match(wifi,/WiFi\.disconnect\(true,false\)/);
