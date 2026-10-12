@@ -58,7 +58,7 @@ test('large-slot OTA specialization is same target as already-installed 2119 C3'
   assert.equal(upgrade.productMarker,legacy.productMarker);
   assert.notEqual(upgrade.manifestPath,legacy.manifestPath);
   assert.notEqual(upgrade.manifestPath,next.manifestPath);
-  const sketch=materialize(assemble(),upgrade);
+  const sketch=materialize(assemble(),upgrade.id);
   assert.match(sketch,/SYNAP-ESP32C3-OTA-ID-V3/);
   assert.match(sketch,/#define SYNAP_C3_WIFI_UPLOAD_ENABLED 1/);
   assert.match(sketch,/SYNAP-FW:esp32c3-supermini-4m:/);
