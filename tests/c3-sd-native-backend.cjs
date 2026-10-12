@@ -31,7 +31,7 @@ test('C3 boots without ADC gate, read-only FAT check and never formats automatic
     .split('static uint8_t odysseySdMountReasonCode')[0];
   assert.doesNotMatch(validation,/fopen\(|fwrite\(|unlink\(|mkdir\(|fflush\(|remove\(/);
   assert.match(validation,/directoryErrno==ENOENT/);
-  assert.match(boot,/restoreOdysseySdBatteryDividerProfile\(\);\s*sampleBattery\(true\);\s*odysseyInitializeSdCardBeforeBle\(\)/);
+  assert.match(boot,/restoreOdysseySdBatteryDividerProfile\(\);\s*sampleBattery\(true\)/);\n  assert(boot.indexOf('initializeBLE();')<boot.indexOf('odysseyInitializeSdCardBeforeBle();'));
   assert.doesNotMatch(detect,/odysseySdPowerSafe\(/);
 });
 
