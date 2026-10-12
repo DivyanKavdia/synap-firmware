@@ -46,7 +46,8 @@ int main(){
 
 test('C3 SD boot mount is ADC-independent and read-only, even without /synap',()=>{
  const validate=sd.split('static bool odysseySdValidateVfsLocked(')[1].split('static uint8_t odysseySdMountReasonCode')[0];
- assert.match(boot,/restoreOdysseySdBatteryDividerProfile\(\);\s*sampleBattery\(true\)/);\n assert(boot.indexOf('initializeBLE();')<boot.indexOf('odysseyInitializeSdCardBeforeBle();'));
+ assert.match(boot,/restoreOdysseySdBatteryDividerProfile\(\);\s*sampleBattery\(true\)/);
+ assert(boot.indexOf('initializeBLE();')<boot.indexOf('odysseyInitializeSdCardBeforeBle();'));
  assert.doesNotMatch(validate,/odysseySdPowerSafe\(|batteryAvailable|batteryMillivolts/);
  assert.doesNotMatch(validate,/mkdir\(|fopen\(|unlink\(|remove\(|fflush\(|fsync\(|fputc\(/);
  assert.match(validate,/if \(directoryErrno==ENOENT\)/);
