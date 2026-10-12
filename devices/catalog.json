@@ -121,6 +121,65 @@
       }
     },
     {
+      "id": "esp32c3-supermini-4m-sd",
+      "family": "esp32c3",
+      "board": "ESP32-C3 SuperMini + microSD",
+      "chip": 5,
+      "flashBytes": 4194304,
+      "psramBytes": 0,
+      "partition": "c3-sd-dual-ota",
+      "slotSize": 1966080,
+      "productMarker": "SYNAP-ESP32C3-SD-OTA-ID-V1",
+      "manifestPath": "targets/esp32c3-supermini-4m-sd/latest.json",
+      "releasePrefix": "targets/esp32c3-supermini-4m-sd/",
+      "sourceName": "synap_esp32c3_sd.ino",
+      "moduleId": 2,
+      "name": "Synap Odyssey C3+SD",
+      "adapter": "esp32c3",
+      "advertisingName": "synap",
+      "features": [
+        "audio",
+        "sd",
+        "settings",
+        "touch",
+        "battery",
+        "standby",
+        "sdAudio"
+      ],
+      "hardware": {
+        "microphone": "i2s",
+        "bclk": 4,
+        "ws": 5,
+        "data": 6,
+        "touch": 3,
+        "battery": 1,
+        "led": 8,
+        "ledDriver": "neopixel",
+        "idleMHz": 80,
+        "activeMHz": 160,
+        "batteryAdcMv": 1,
+        "batteryCellMv": 2,
+        "batteryFullMv": 4150,
+        "batteryAttenuation": "ADC_11db",
+        "batteryCutoff": true,
+        "sdDetection": {
+          "cs": 0,
+          "sck": 10,
+          "mosi": 21,
+          "miso": 20
+        },
+        "sdBatteryCalibration": {
+          "batteryAdcMv": 470,
+          "batteryCellMv": 1470,
+          "batteryFullMv": 4200
+        }
+      },
+      "protocols": {
+        "media": 1
+      },
+      "assetStem": "esp32c3-sd"
+    },
+    {
       "id": "xiao-esp32s3-sense-8m",
       "family": "esp32s3",
       "assetStem": "chakshu",

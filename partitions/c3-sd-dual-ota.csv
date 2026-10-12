@@ -1,0 +1,8 @@
+# New-production Odyssey C3+SD ONLY; never flash onto legacy sealed C3 devices.
+# 4 MiB flash; dual OTA slots, external microSD for audio (no internal SPIFFS).
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x4000,
+otadata,  data, ota,     0xd000,   0x2000,
+phy_init, data, phy,     0xf000,   0x1000,
+app0,     app,  ota_0,   0x10000,  0x1E0000,
+app1,     app,  ota_1,   0x200000, 0x1E0000,

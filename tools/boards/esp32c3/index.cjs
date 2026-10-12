@@ -20,6 +20,12 @@ function materializeC3(source,target){
     'applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu() || odysseyRecording.load());',
     'C3 SD capture CPU profile');
 
+  // The new factory-provisioned C3+SD has larger OTA slots. Keep verified
+  // Wi-Fi/TLS out of the legacy 1.25MiB C3 image and encode the difference
+  // in the exact source artifact instead of a hidden compiler-only flag.
+  if(target.id==='esp32c3-supermini-4m-sd')
+    out=replaceOnce(out,'#define SYNAP_C3_WIFI_UPLOAD_ENABLED 0',
+      '#define SYNAP_C3_WIFI_UPLOAD_ENABLED 1','new C3+SD Wi-Fi specialization');
   if(out.includes(PRIMARY_TARGET))throw Error('C3 source still contains the S3 target identity');
   if(out.includes('SYNAP-ESP32S3-OTA-ID-V3'))throw Error('C3 source still contains the S3 product marker');
   if(out.includes('esp_sleep_enable_ext1_wakeup'))throw Error('C3 source still contains unsupported EXT1 wake');
