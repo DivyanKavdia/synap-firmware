@@ -309,8 +309,22 @@ void otaTick() {
 #endif
     );
     otaSession.tick(millis(),connectionGeneration.load(),deviceConnected.load());
-    // Every command, including a retry, needs an ACK; it also carries capability/state changes.
+    // Every packet updates the readable cumulative offset. On C3, the PWA
+    // sends two data packets per ACK window: avoid an extra GATT notification
+    // for every flash write while preserving notifications at window boundaries.
+    // BEGIN, RESUME, FINISH, COMMIT and error transitions always notify.
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+    static uint8_t c3DataInWindow=0;
+    const bool isData=message.length>9 && message.data[0]==2;
+    if (!isData || otaSession.state!=Synap::RECEIVING) c3DataInWindow=0;
+    else ++c3DataInWindow;
+    const bool notifyNow=!isData || otaSession.state!=Synap::RECEIVING ||
+      c3DataInWindow>=2;
+    otaPublish(notifyNow);
+    if (notifyNow) c3DataInWindow=0;
+#else
     otaPublish(true);
+#endif
     statusPending=false;
     if (otaSession.state==Synap::FAILED || otaSession.state==Synap::COMMITTED) break;
   }
