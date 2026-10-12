@@ -72,7 +72,7 @@ test('only 1.875MiB OTA slots can receive large-slot Wi-Fi binary',()=>{
   const bytes=Buffer.alloc(1500000,0);
   bytes[0]=0xe9;bytes.writeUInt16LE(5,12);bytes.writeUInt32LE(0xABCD5432,32);
   bytes.write(upgrade.productMarker,64);
-  bytes.write('SYNAP-FW:'+original+':synap-os1-build'+build+':'+build+'\\0',100);
+  bytes.write('SYNAP-FW:'+original+':synap-os1-build'+build+':'+build+String.fromCharCode(0),100);
   assert.doesNotThrow(()=>validate(bytes,build,upgrade.id));
   assert.throws(()=>validate(bytes,build,original),/OTA slot/);
   const m=createManifest(bytes,build,'a'.repeat(40),'ota-test',upgrade.id);
