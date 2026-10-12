@@ -4546,8 +4546,14 @@ static bool saveCredentialsFromConfig() {
   const size_t b=prefs.putString("pass",password);
   prefs.end();
   if (!a || (password[0] && !b)) return false;
+  // NVS acknowledgement must be verified by reading both values back; the
+  // UI intentionally clears its password field after saving for privacy.
+  char verifySsid[33]{},verifyPassword[64]{};
+  const bool verified=readCredentials(verifySsid,sizeof(verifySsid),
+    verifyPassword,sizeof(verifyPassword)) &&
+    strcmp(ssid,verifySsid)==0 && strcmp(password,verifyPassword)==0;
   refreshConfigured();
-  return true;
+  return verified;
 }
 
 bool forget() {
