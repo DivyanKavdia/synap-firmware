@@ -70,7 +70,7 @@ function materializeBle(source) {
   replace('      const uint32_t rejectedBefore=notifyRejected.load();\n      // In the pinned Arduino BLE library, onStatus runs before notify returns.\n      // SUCCESS_NOTIFY means queued locally, not persisted by the phone.\n      audioCharacteristic->notify();\n      if(notifyRejected.load()==rejectedBefore) { accepted=true;break; }',
     '      if(sendChakshuAudio(packet,AUDIO_HEADER_BYTES+length)) { accepted=true;break; }','Native audio acceptance');
   // Required capture state must exist before the first client can send START.
-  replace('  initializeBLE();\n  initializeRecovery();',
+  replace('  Serial.println("[BLE] initialization beginning");\n  initializeBLE();\n  Serial.println("[BLE] GATT initialized; advertising start requested");\n#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU\n  // Advertise before potentially slow or failing SD initialization. A missing,\n  // corrupt, or unresponsive card must never hide recovery/OTA over Bluetooth.\n  Serial.println("[SD] beginning optional boot mount after BLE advertising");\n  odysseyInitializeSdCardBeforeBle();\n  sampleBattery(true);\n  Serial.println("[SD] optional boot mount returned; BLE remains initialized");\n#endif\n  initializeRecovery();',
     '  initializeRecovery();','Prepare recovery before advertising');
   replace('    fatalSetup("[FATAL] task allocation failed");\n  }\n}',
     '    fatalSetup("[FATAL] task allocation failed");\n  }\n  initializeBLE();\n}','Advertise after capture tasks are ready');
