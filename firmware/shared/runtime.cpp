@@ -112,7 +112,11 @@ constexpr uint16_t BATTERY_CRITICAL_MV = 3400;
 constexpr uint8_t BATTERY_EVENT_MAGIC = 0xB7;
 constexpr uint8_t BATTERY_EVENT_VERSION = 2;
 // Short, dim status pulses limit the onboard WS2812's battery load.
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+constexpr uint8_t LED_DIM = 16;
+#else
 constexpr uint8_t LED_DIM = 4;
+#endif
 
 enum class DeviceState : uint8_t { DISCONNECTED=0, CONNECTED_IDLE=1, STREAMING=2, ERROR=3 };
 enum class ErrorCode : uint8_t {
