@@ -22,14 +22,14 @@ test('C3 contract tests track the actual assembled 1631 production runtime, not 
   assert(!active.includes('odyssey-sd-transfer.cpp'));
 });
 
-test('C3 SD 1 MHz guarded boot precedes BLE; no silent auto-format',()=>{
+test('C3 SD 1 MHz guarded boot follows BLE advertising; no silent auto-format',()=>{
   const boot=shared('boot.cpp'),sd=shared('odyssey-sd-1631-detect.cpp');
   assert.match(sd,/ODYSSEY_SD_DATA_FREQ_HZ=800000u/);
   assert.match(sd,/ODYSSEY_SD_BOOT_ATTEMPTS=1/);
   assert.match(sd,/odysseySdValidateVfsLocked\(reason,attempt\)/);
   assert.match(sd,/esp_vfs_fat_sdspi_mount\(ODYSSEY_SD_MOUNT_POINT,/);
   assert.doesNotMatch(sd,/format_if_mount_failed\s*=\s*true|format_if_empty\s*=\s*true/);
-  assert(boot.indexOf('odysseyInitializeSdCardBeforeBle();')<boot.indexOf('initializeBLE();'));
+  assert(boot.indexOf('initializeBLE();')<boot.indexOf('odysseyInitializeSdCardBeforeBle();'));
 });
 
 test('offline double tap owns SD WAV and BLE START waits for recorder finalize',()=>{
