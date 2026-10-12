@@ -530,12 +530,19 @@ static void worker(void*) {
     // Connected remote standby only idles the microphone/CPU; SD media must
     // remain readable for verified sync and recovery without a forced wake.
     // Wi-Fi status must remain readable over BLE while the uploader owns SD.
-    if (request.operation==25) {
+    if (request.operation==25 || request.operation==21) {
       char detail[480];
-      const size_t n=OdysseyWifi::encode(detail,sizeof(detail));
+      const size_t n=request.operation==21
+        ?OdysseyWifiAp::encode(detail,sizeof(detail))
+        :OdysseyWifi::encode(detail,sizeof(detail));
       reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),n);
       sdBleLastTransferAt=millis();
       sdBleTransferInFlight=false;
+      continue;
+    }
+    if(request.operation==22) {
+      reply(request,OdysseyWifiAp::stop()?OK:BUSY);
+      sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
       continue;
     }
     if (odysseyRecording.load() || streamingEnabled.load() || OdysseyWifi::busy() ||
@@ -554,6 +561,7 @@ static void worker(void*) {
         sdBleTransferInFlight=false;
         continue;
       case 16: error=OK; break;
+      case 20: error=OdysseyWifiAp::begin()?OK:BUSY; break;
       case 27: {
         // Purely read-only snapshot of the LAST recorder error after a
         // reboot. It never calls SD.begin, SD.end, mkdir, fopen or recovery.
