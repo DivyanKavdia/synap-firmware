@@ -4875,7 +4875,9 @@ size_t encode(char* output,size_t capacity) {
 
 void initialize() {
   refreshConfigured();
-  setStatus(IDLE,false,0,0,0,"Wi-Fi idle.");
+  // Expose the safe default after a large-slot OTA upgrade: uploads are
+  // opt-in, and firmware never deletes the audio originals from microSD.
+  setStatus(IDLE,false,0,0,0,"Wi-Fi idle; SD originals retained.");
 }
 
 } // namespace OdysseyWifi
