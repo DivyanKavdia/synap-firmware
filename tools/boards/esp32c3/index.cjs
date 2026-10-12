@@ -23,13 +23,19 @@ function materializeC3(source,target){
   // The new factory-provisioned C3+SD has larger OTA slots. Keep verified
   // Wi-Fi/TLS out of the legacy 1.25MiB C3 image and encode the difference
   // in the exact source artifact instead of a hidden compiler-only flag.
-  if(target.id==='esp32c3-supermini-4m-sd')
+  if(target.id==='esp32c3-supermini-4m-sd' || target.id==='esp32c3-supermini-4m-sd-ota')
     out=replaceOnce(out,'#define SYNAP_C3_WIFI_UPLOAD_ENABLED 0',
       '#define SYNAP_C3_WIFI_UPLOAD_ENABLED 1','new C3+SD Wi-Fi specialization');
+  // Application-only OTA for already-large slots must preserve the identity
+  // and product marker recognized by the installed legacy C3 updater.
+  // This is intentionally NOT the independent factory C3+SD identity.
+  const firmwareTarget=target.firmwareTarget||target.id;
+  if(target.firmwareTarget)
+    out=out.split(`SYNAP-FW:${target.id}:`).join(`SYNAP-FW:${firmwareTarget}:`);
   if(out.includes(PRIMARY_TARGET))throw Error('C3 source still contains the S3 target identity');
   if(out.includes('SYNAP-ESP32S3-OTA-ID-V3'))throw Error('C3 source still contains the S3 product marker');
   if(out.includes('esp_sleep_enable_ext1_wakeup'))throw Error('C3 source still contains unsupported EXT1 wake');
-  if(!out.includes(`"SYNAP-FW:${target.id}:" SYNAP_VERSION`))throw Error('C3 firmware identity was not materialized');
+  if(!out.includes(`"SYNAP-FW:${firmwareTarget}:" SYNAP_VERSION`))throw Error('C3 firmware identity was not materialized');
   if(!out.includes(target.productMarker))throw Error('C3 OTA marker was not materialized');
   if(!out.includes('p[21]!=5 || p[22]!=0'))throw Error('C3 chip image check was not materialized');
   if(!out.includes('esp_deep_sleep_enable_gpio_wakeup'))throw Error('C3 GPIO deep-sleep wake is unavailable');
