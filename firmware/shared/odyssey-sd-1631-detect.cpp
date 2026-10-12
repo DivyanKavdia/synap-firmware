@@ -788,7 +788,12 @@ static bool odysseySdBeginLocked() {
   const uint32_t elapsed=uint32_t(millis()-startedAt);
   if (cmd && cmd->opcode==13u) odysseyWireLastCmd13=cmd->response[0];
   const esp_err_t error=result!=ESP_OK?result:(cmd?cmd->error:ESP_FAIL);
-  if (cmd && error!=ESP_OK) {
+  // SDIO CMD52 is used during ESP-IDF card discovery. Ordinary memory
+  // cards are allowed to time out on this OPTIONAL probe, and a successful
+  // mount must not carry it as the first recording/write failure.
+  const bool expectedIoProbe = cmd && cmd->opcode==52u &&
+    (error==ESP_ERR_TIMEOUT || error==ESP_ERR_NOT_SUPPORTED || error==ESP_ERR_INVALID_CRC);
+  if (cmd && error!=ESP_OK && !expectedIoProbe) {
     uint32_t expected=0;
     if (odysseyWireCmdPlusOne.compare_exchange_strong(expected,cmd->opcode+1u)) {
       odysseyWireError=uint32_t(error);
