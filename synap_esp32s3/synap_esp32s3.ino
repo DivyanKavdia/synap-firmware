@@ -762,7 +762,7 @@ void updateStatusLed(bool force) {
     const bool finalizing=odysseyStopRequested.load();
     const uint32_t phase=uint32_t(now-odysseyRecordingStartedAt.load())%
       (finalizing?550u:1800u);
-    if (phase<(finalizing?150u:330u)) { r=LED_DIM; b=LED_DIM; }
+    if (phase<(finalizing?80u:260u)) { r=LED_DIM+4; b=LED_DIM+6; }
   } else if (odysseyRecordFaultAt.load() &&
              uint32_t(now-odysseyRecordFaultAt.load())<6000u) {
     // Two red pulses distinguish missing SD / failed capture from active
