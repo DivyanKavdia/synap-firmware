@@ -44,10 +44,11 @@ jobs:
           SYNAP_ARDUINO_BLE_SRC="$HOME/.arduino15/packages/esp32/hardware/esp32/3.3.5/libraries/BLE/src" SYNAP_NIMBLE_SRC="$HOME/Arduino/libraries/NimBLE-Arduino/src" node --test tests/*.cjs
       - name: Prepare auditable S3, C3 and Chakshu production sources
         run: |
-          mkdir -p prepared/synap_esp32s3 prepared/synap_esp32c3 prepared/synap_esp32c3_sd prepared/synap_chakshu
+          mkdir -p prepared/synap_esp32s3 prepared/synap_esp32c3 prepared/synap_esp32c3_sd prepared/synap_esp32c3_sd_ota prepared/synap_chakshu
           cp synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32s3/synap_esp32s3.ino
           node tools/materialize-target.cjs esp32c3-supermini-4m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3/synap_esp32c3.ino
           node tools/materialize-target.cjs esp32c3-supermini-4m-sd prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3_sd/synap_esp32c3_sd.ino
+          node tools/materialize-target.cjs esp32c3-supermini-4m-sd-ota prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3_sd_ota/synap_esp32c3_sd_ota.ino
           cp partitions/c3-sd-dual-ota.csv prepared/synap_esp32c3_sd/partitions.csv
           node tools/materialize-target.cjs xiao-esp32s3-sense-8m prepared/synap_esp32s3/synap_esp32s3.ino prepared/synap_chakshu/synap_chakshu.ino
           test "$(git status --porcelain -- synap_esp32s3)" = ""
@@ -65,7 +66,7 @@ jobs:
         run: |
           build=$((1000 + RUN_NUMBER))
           test "$build" -le 65535
-          mkdir -p compiled-chakshu bundle/xiao-esp32s3-sense-8m compiled-s3 compiled-c3 compiled-c3-sd bundle/esp32s3-fh4r2-qspi-4m bundle/esp32c3-supermini-4m bundle/esp32c3-supermini-4m-sd bundle/source-sync
+          mkdir -p compiled-chakshu bundle/xiao-esp32s3-sense-8m compiled-s3 compiled-c3 compiled-c3-sd compiled-c3-sd-ota bundle/esp32s3-fh4r2-qspi-4m bundle/esp32c3-supermini-4m bundle/esp32c3-supermini-4m-sd bundle/esp32c3-supermini-4m-sd-ota bundle/source-sync
           arduino-cli compile --fqbn 'esp32:esp32:esp32s3:FlashSize=4M,PartitionScheme=default,PSRAM=enabled,USBMode=hwcdc,CDCOnBoot=cdc' --build-property "compiler.cpp.extra_flags=-DSYNAP_BUILD=$build -DUSE_REAL_I2S_MIC=1" --output-dir compiled-s3 prepared/synap_esp32s3
           arduino-cli compile --fqbn 'esp32:esp32:esp32s3:FlashSize=8M,PartitionScheme=default_8MB,PSRAM=opi,USBMode=hwcdc,CDCOnBoot=cdc' --build-property "compiler.optimization_flags=-Oz -ffunction-sections -fdata-sections" --build-property "compiler.c.extra_flags=-fno-unwind-tables -fno-asynchronous-unwind-tables" --build-property "compiler.cpp.extra_flags=-fno-unwind-tables -fno-asynchronous-unwind-tables -DSYNAP_BUILD=$build -DUSE_REAL_I2S_MIC=1" --build-property "compiler.c.elf.extra_flags=-Wl,--gc-sections" --output-dir compiled-chakshu prepared/synap_chakshu
           # C3 now uses ESP-IDF native SDSPI/FatFs, not patched Arduino SD.
@@ -81,11 +82,17 @@ jobs:
           arduino-cli compile --fqbn 'esp32:esp32:esp32c3:FlashSize=4M,PartitionScheme=default,CDCOnBoot=cdc' --build-property 'upload.maximum_size=1966080' --build-property "compiler.optimization_flags=-Oz -ffunction-sections -fdata-sections" --build-property "compiler.c.extra_flags=-fno-unwind-tables -fno-asynchronous-unwind-tables" --build-property "compiler.cpp.extra_flags=-fno-unwind-tables -fno-asynchronous-unwind-tables -DSYNAP_BUILD=$build -DUSE_REAL_I2S_MIC=1" --build-property "compiler.c.elf.extra_flags=-Wl,--gc-sections" --output-dir compiled-c3-sd prepared/synap_esp32c3_sd
           test "$(stat -c%s compiled-c3-sd/synap_esp32c3_sd.ino.bin)" -le 1966080
           node tools/verify-c3-sd-layout.cjs compiled-c3-sd/synap_esp32c3_sd.ino.partitions.bin
+          # Opt-in application-only OTA. Preserve existing C3 identity and product
+          # marker; do not install/change the device's pre-provisioned partition table.
+          arduino-cli compile --fqbn 'esp32:esp32:esp32c3:FlashSize=4M,PartitionScheme=default,CDCOnBoot=cdc' --build-property 'upload.maximum_size=1966080' --build-property "compiler.optimization_flags=-Oz -ffunction-sections -fdata-sections" --build-property "compiler.c.extra_flags=-fno-unwind-tables -fno-asynchronous-unwind-tables" --build-property "compiler.cpp.extra_flags=-fno-unwind-tables -fno-asynchronous-unwind-tables -DSYNAP_BUILD=$build -DUSE_REAL_I2S_MIC=1" --build-property "compiler.c.elf.extra_flags=-Wl,--gc-sections" --output-dir compiled-c3-sd-ota prepared/synap_esp32c3_sd_ota
+          test "$(stat -c%s compiled-c3-sd-ota/synap_esp32c3_sd_ota.ino.bin)" -le 1966080
+          test "$(stat -c%s compiled-c3-sd-ota/synap_esp32c3_sd_ota.ino.bin)" -gt 1310720
           test "$(stat -c%s compiled-chakshu/synap_chakshu.ino.bin)" -le 3342336
           node tools/release.cjs compiled-chakshu/synap_chakshu.ino.bin "$build" "$GITHUB_SHA" bundle/xiao-esp32s3-sense-8m "$SYNAP_RELEASE_BRANCH" prepared/synap_chakshu/synap_chakshu.ino xiao-esp32s3-sense-8m
           node tools/release.cjs compiled-s3/synap_esp32s3.ino.bin "$build" "$GITHUB_SHA" bundle/esp32s3-fh4r2-qspi-4m "$SYNAP_RELEASE_BRANCH" prepared/synap_esp32s3/synap_esp32s3.ino esp32s3-fh4r2-qspi-4m
           node tools/release.cjs compiled-c3/synap_esp32c3.ino.bin "$build" "$GITHUB_SHA" bundle/esp32c3-supermini-4m "$SYNAP_RELEASE_BRANCH" prepared/synap_esp32c3/synap_esp32c3.ino esp32c3-supermini-4m
           node tools/release.cjs compiled-c3-sd/synap_esp32c3_sd.ino.bin "$build" "$GITHUB_SHA" bundle/esp32c3-supermini-4m-sd "$SYNAP_RELEASE_BRANCH" prepared/synap_esp32c3_sd/synap_esp32c3_sd.ino esp32c3-supermini-4m-sd
+          node tools/release.cjs compiled-c3-sd-ota/synap_esp32c3_sd_ota.ino.bin "$build" "$GITHUB_SHA" bundle/esp32c3-supermini-4m-sd-ota "$SYNAP_RELEASE_BRANCH" prepared/synap_esp32c3_sd_ota/synap_esp32c3_sd_ota.ino esp32c3-supermini-4m-sd-ota
           s3_factory="$(find compiled-s3 -maxdepth 1 -type f -name '*.merged.bin' -print -quit)"
           c3_factory="$(find compiled-c3 -maxdepth 1 -type f -name '*.merged.bin' -print -quit)"
           c3sd_factory="$(find compiled-c3-sd -maxdepth 1 -type f -name '*.merged.bin' -print -quit)"
@@ -102,6 +109,7 @@ jobs:
           cp prepared/synap_esp32s3/synap_esp32s3.ino bundle/source-sync/synap_esp32s3.ino
           cp prepared/synap_esp32c3/synap_esp32c3.ino bundle/source-sync/synap_esp32c3.ino
           cp prepared/synap_esp32c3_sd/synap_esp32c3_sd.ino bundle/source-sync/synap_esp32c3_sd.ino
+          cp prepared/synap_esp32c3_sd_ota/synap_esp32c3_sd_ota.ino bundle/source-sync/synap_esp32c3_sd_ota.ino
       - uses: actions/upload-artifact@v4
         with:
           name: verified-firmware
@@ -160,6 +168,11 @@ jobs:
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: bundle/esp32c3-supermini-4m-sd/firmware.bin
+      - name: Attest opt-in existing large-slot C3+SD Wi-Fi firmware with GitHub OIDC
+        if: steps.current.outputs.release == 'true'
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: bundle/esp32c3-supermini-4m-sd-ota/firmware.bin
       - name: Attest Chakshu firmware with GitHub OIDC
         if: steps.current.outputs.release == 'true'
         uses: actions/attest-build-provenance@v3

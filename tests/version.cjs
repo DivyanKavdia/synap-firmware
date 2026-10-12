@@ -12,7 +12,7 @@ test('compiled S3 and C3 BLE identities use the same OS1 release name and numeri
     for(const build of [0,1194,65535]){
       const result=nativeTest(`#include <cstdint>\n#include <cstdio>\n${identity}\nint main(){std::puts(SYNAP_FIRMWARE_ID);}\n`,[`-DSYNAP_BUILD=${build}`]);
       const version=build?versionForBuild(build):'synap-os1-build0';
-      assert.equal(result.trim(),`SYNAP-FW:${target}:${version}:${build}`);
+      assert.equal(result.trim(),`SYNAP-FW:${TARGETS[target].firmwareTarget||target}:${version}:${build}`);
     }
   }
   for(const build of [0,503,65536,1194.5,'1194',NaN])assert.throws(()=>versionForBuild(build),/counter/);

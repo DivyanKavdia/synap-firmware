@@ -15,7 +15,7 @@ function validate(bytes,build,targetId=PRIMARY_TARGET) {
   if(bytes.length<288||bytes.length>config.slotSize) throw Error('Application exceeds default OTA slot or is truncated');
   if(bytes[0]!==0xe9||bytes.readUInt16LE(12)!==config.chip||bytes.readUInt32LE(32)!==0xabcd5432)
     throw Error(`Not a ${config.board} application image`);
-  for(const marker of [config.productMarker,`SYNAP-FW:${config.id}:${version}:${build}\0`]) {
+  for(const marker of [config.productMarker,`SYNAP-FW:${config.firmwareTarget||config.id}:${version}:${build}\0`]) {
     if(!bytes.includes(Buffer.from(marker))) throw Error('Missing exact compatibility/build marker');
   }
   return crypto.createHash('sha256').update(bytes).digest('hex');
@@ -30,7 +30,7 @@ function createManifest(bytes,build,commit,branch='ota-test',targetId=PRIMARY_TA
   const version=versionForBuild(build);
   const manifest={schema:production?3:2,version,build,target:config.id,protocol:3,chip:config.chip,
     flashBytes:config.flashBytes,psramBytes:config.psramBytes,partition:config.partition,size:bytes.length,sha256,commit,
-    identity:`SYNAP-FW:${config.id}:${version}:${build}`,
+    identity:`SYNAP-FW:${config.firmwareTarget||config.id}:${version}:${build}`,
     url:`https://raw.githubusercontent.com/${repository}/${branch}/${artifact}`,channel};
   if(production) manifest.provenance={provider:'github-actions',repository,workflow};
   return manifest;

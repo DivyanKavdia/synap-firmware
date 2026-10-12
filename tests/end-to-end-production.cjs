@@ -89,7 +89,7 @@ test('1631 C3 worker exposes media-v1 plus BLE-controlled direct Wi-Fi upload',(
 test('release retains pinned core but C3 uses native SDSPI, not Arduino patch',()=>{
   const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
   const compileLines=workflow.split('\n').filter(line=>line.includes('arduino-cli compile'));
-  assert.equal(compileLines.length,4,'S3, legacy C3, new C3+SD and Chakshu remain independently compiled');
+  assert.equal(compileLines.length,5,'S3, legacy C3, factory C3+SD, large-slot Wi-Fi C3+SD and Chakshu compile independently');
   assert(compileLines.every(line=>line.includes('-DUSE_REAL_I2S_MIC=1')));
   assert.match(workflow,/arduino-cli core install esp32:esp32@3\.3\.5/);
   assert.doesNotMatch(workflow,/node tools\/patch-arduino-sd\.cjs/);
