@@ -10,7 +10,16 @@ function assemble() {
 if(require.main===module) {
   const output=path.join(root,'synap_esp32s3/synap_esp32s3.ino'),source=assemble();
   if(process.argv.includes('--check')) {
-    if(fs.readFileSync(output,'utf8')!==source)throw Error('Regenerate the Arduino source: node tools/assemble-source.cjs');
+    const installed=fs.readFileSync(output,'utf8');
+    if(installed!==source) {
+      let index=0;
+      while(index<Math.min(installed.length,source.length)&&installed[index]===source[index])++index;
+      console.error('Assembled source first mismatch at '+index+
+        ' checkedIn='+JSON.stringify(installed.slice(index,index+100))+
+        ' generated='+JSON.stringify(source.slice(index,index+100))+
+        ' lengths='+installed.length+'/'+source.length);
+      throw Error('Regenerate the Arduino source: node tools/assemble-source.cjs');
+    }
   } else fs.writeFileSync(output,source);
 }
 module.exports={assemble};
