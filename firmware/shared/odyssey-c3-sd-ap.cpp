@@ -3,7 +3,6 @@
 // This intentionally never writes, deletes, remounts, or formats the SD.
 // The separate cloud STA uploader remains available for compatibility.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-namespace OdysseyWifiAp {
 #if SYNAP_C3_WIFI_UPLOAD_ENABLED
 #include <WebServer.h>
 #include <WiFi.h>
@@ -11,6 +10,9 @@ namespace OdysseyWifiAp {
 #include <sys/stat.h>
 #include <new>
 #include "esp_system.h"
+#endif
+namespace OdysseyWifiAp {
+#if SYNAP_C3_WIFI_UPLOAD_ENABLED
 
 static constexpr uint32_t IDLE_MS=180000u, MAX_MS=900000u;
 static constexpr size_t AP_STACK=12288;
