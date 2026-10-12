@@ -18,6 +18,7 @@
 #include <limits.h>
 #include <time.h>
 
+namespace OdysseyWifiAp { bool busy(); }
 namespace OdysseyWifi {
 
 // Google Trust Services GTS Root R1 (current digitalSignature root).
@@ -140,7 +141,7 @@ static void refreshConfigured() {
 }
 
 bool available() { return true; }
-bool busy() { return uploadBusy.load(); }
+bool busy() { return uploadBusy.load() || OdysseyWifiAp::busy(); }
 
 static bool safeWavPath(const char* path) {
   if (!path || strncmp(path,"/synap/",7)!=0) return false;
@@ -208,8 +209,14 @@ static bool saveCredentialsFromConfig() {
   const size_t b=prefs.putString("pass",password);
   prefs.end();
   if (!a || (password[0] && !b)) return false;
+  // NVS acknowledgement must be verified by reading both values back; the
+  // UI intentionally clears its password field after saving for privacy.
+  char verifySsid[33]{},verifyPassword[64]{};
+  const bool verified=readCredentials(verifySsid,sizeof(verifySsid),
+    verifyPassword,sizeof(verifyPassword)) &&
+    strcmp(ssid,verifySsid)==0 && strcmp(password,verifyPassword)==0;
   refreshConfigured();
-  return true;
+  return verified;
 }
 
 bool forget() {
