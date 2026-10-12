@@ -1,0 +1,61 @@
+name: C3 Wi-Fi size profile (no publish)
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/c3-wifi-size-lab.yml'
+      - 'firmware/**'
+      - 'tools/**'
+      - 'synap_esp32s3/**'
+      - '.github/workflows/firmware.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  c3-size-profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+        with:
+          version: 1.3.1
+      - name: Install pinned Arduino ESP32 and BLE libraries
+        run: |
+          arduino-cli config init
+          arduino-cli config set network.connection_timeout 600s
+          arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32@3.3.5 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli lib install "Adafruit NeoPixel@1.15.2"
+          arduino-cli lib install "NimBLE-Arduino@2.3.6"
+      - name: Build profiling image with unchanged production partition table
+        run: |
+          mkdir -p prepared/c3-size compiled-c3-size
+          node tools/materialize-target.cjs esp32c3-supermini-4m synap_esp32s3/synap_esp32s3.ino prepared/c3-size/c3-size.ino
+          node tools/patch-arduino-ble.cjs "$HOME/.arduino15/packages/esp32/hardware/esp32/3.3.5/libraries/BLE/src"
+          sd_driver="$HOME/.arduino15/packages/esp32/hardware/esp32/3.3.5/libraries/SD/src/sd_diskio.cpp"
+          node tools/patch-arduino-sd.cjs "$sd_driver"
+          arduino-cli compile --fqbn 'esp32:esp32:esp32c3:FlashSize=4M,PartitionScheme=default,CDCOnBoot=cdc' \
+            --build-property "upload.maximum_size=1835008" \
+            --build-property "compiler.optimization_flags=-Oz -ffunction-sections -fdata-sections" \
+            --build-property "compiler.c.extra_flags=-fno-unwind-tables -fno-asynchronous-unwind-tables" \
+            --build-property "compiler.cpp.extra_flags=-fno-unwind-tables -fno-asynchronous-unwind-tables -DSYNAP_BUILD=1999 -DUSE_REAL_I2S_MIC=1 -DSYNAP_C3_WIFI_UPLOAD_ENABLED=1" \
+            --build-property "compiler.c.elf.extra_flags=-Wl,--gc-sections" \
+            --output-dir compiled-c3-size prepared/c3-size
+          echo "Actual OTA slot maximum: 1310720 bytes"
+          find compiled-c3-size -maxdepth 1 -type f -printf '%f %s bytes\n'
+          nm_tool="$(find "$HOME/.arduino15/packages/esp32/tools" -type f -name 'riscv32-esp-elf-nm' -print -quit)"
+          if [ -n "$nm_tool" ]; then
+            "$nm_tool" -C --print-size --size-sort compiled-c3-size/c3-size.ino.elf | tail -100 > compiled-c3-size/largest-symbols.txt
+            tail -60 compiled-c3-size/largest-symbols.txt
+          fi
+          map="$(find compiled-c3-size -maxdepth 1 -type f -name '*.map' -print -quit)"
+          if [ -n "$map" ]; then
+            cp "$map" compiled-c3-size/linker-map.txt
+            echo "Largest flash-contributing archive input lines:"
+            grep -E '\.a\(.*\.o\)' "$map" | sort -k2,2r | head -60 || true
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: c3-https-size-analysis-no-production
+          path: compiled-c3-size/
+          if-no-files-found: error
