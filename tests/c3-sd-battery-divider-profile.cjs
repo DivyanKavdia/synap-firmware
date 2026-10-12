@@ -56,7 +56,7 @@ test('C3 boot restores divider profile BEFORE initial battery read and SD.begin'
   const bootFlow=boot.slice(boot.indexOf('OdysseyTransfer::initialize();'),boot.indexOf('initializeBLE();'));
   assert(bootFlow.indexOf('restoreOdysseySdBatteryDividerProfile();')>=0);
   assert(bootFlow.indexOf('restoreOdysseySdBatteryDividerProfile();')<bootFlow.indexOf('sampleBattery(true);'));
-  assert(bootFlow.indexOf('restoreOdysseySdBatteryDividerProfile();')<bootFlow.indexOf('odysseyInitializeSdCardBeforeBle();'));
+  assert(boot.indexOf('restoreOdysseySdBatteryDividerProfile();')<boot.indexOf('odysseyInitializeSdCardBeforeBle();'));
   assert.match(detect,/markOdysseySdBatteryDividerPresent\(\);\s*sampleBattery\(true\)/);
   const okay=detect.indexOf('persistOdysseySdBatteryDividerProfile();');
   assert(okay>0 && okay<detect.indexOf('odysseySdLastMountError=ESP_OK;',okay));

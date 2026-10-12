@@ -148,7 +148,11 @@ constexpr uint16_t BATTERY_CRITICAL_MV = 3400;
 constexpr uint8_t BATTERY_EVENT_MAGIC = 0xB7;
 constexpr uint8_t BATTERY_EVENT_VERSION = 2;
 // Short, dim status pulses limit the onboard WS2812's battery load.
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+constexpr uint8_t LED_DIM = 16;
+#else
 constexpr uint8_t LED_DIM = 4;
+#endif
 
 enum class DeviceState : uint8_t { DISCONNECTED=0, CONNECTED_IDLE=1, STREAMING=2, ERROR=3 };
 enum class ErrorCode : uint8_t {
@@ -642,8 +646,22 @@ void otaTick() {
 #endif
     );
     otaSession.tick(millis(),connectionGeneration.load(),deviceConnected.load());
-    // Every command, including a retry, needs an ACK; it also carries capability/state changes.
+    // Every packet updates the readable cumulative offset. On C3, the PWA
+    // sends two data packets per ACK window: avoid an extra GATT notification
+    // for every flash write while preserving notifications at window boundaries.
+    // BEGIN, RESUME, FINISH, COMMIT and error transitions always notify.
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+    static uint8_t c3DataInWindow=0;
+    const bool isData=message.length>9 && message.data[0]==2;
+    if (!isData || otaSession.state!=Synap::RECEIVING) c3DataInWindow=0;
+    else ++c3DataInWindow;
+    const bool notifyNow=!isData || otaSession.state!=Synap::RECEIVING ||
+      c3DataInWindow>=2;
+    otaPublish(notifyNow);
+    if (notifyNow) c3DataInWindow=0;
+#else
     otaPublish(true);
+#endif
     statusPending=false;
     if (otaSession.state==Synap::FAILED || otaSession.state==Synap::COMMITTED) break;
   }
@@ -748,7 +766,7 @@ void updateStatusLed(bool force) {
   uint8_t r=0,g=0,b=0;
   if (otaBusy()) {
     const uint32_t phase=now%1400u;
-    if (phase<55u || (phase>=180u && phase<235u)) { r=LED_DIM; g=2; }
+    if (phase<140u || (phase>=290u && phase<430u)) { r=LED_DIM; g=LED_DIM/2; }
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   } else if (odysseyRecording.load()) {
     // Purple continues until the recorder actually closes its WAV. A STOP
@@ -772,7 +790,7 @@ void updateStatusLed(bool force) {
     const uint32_t phase=now%5000u;
     if (phase<40u || (phase>=180u && phase<220u)) r=LED_DIM;
   } else if (deviceState == DeviceState::DISCONNECTED) {
-    if (now%5000u<35u) r=LED_DIM;
+    if (now%5000u<180u) r=LED_DIM;
   } else if (deviceState == DeviceState::CONNECTED_IDLE) {
     // Three visible green acknowledgements confirm the PWA/BLE connection.
     // Connected idle stays dark after the burst to conserve battery.
@@ -780,9 +798,15 @@ void updateStatusLed(bool force) {
     const uint32_t elapsed=uint32_t(now-connectedAt);
     if (connectedAt && elapsed<1500u && elapsed%500u<180u) g=LED_DIM+5;
   } else if (deviceState == DeviceState::STREAMING) {
-    if (now%1800u<45u) g=LED_DIM+1;
+    if (now%1800u<150u) {
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+      b=LED_DIM; // Blue = live BLE audio on Odyssey C3.
+#else
+      g=LED_DIM+1;
+#endif
+    }
   } else {
-    if (now%1200u<70u) { r=LED_DIM; b=LED_DIM; }
+    if (now%1200u<160u) { r=LED_DIM; b=LED_DIM; }
   }
   const uint32_t pattern=(uint32_t(r)<<16)|(uint32_t(g)<<8)|b;
   if (!force && pattern==lastLedPattern) return;
@@ -5902,14 +5926,21 @@ void setup() {
   // or falsely trip the critical-battery sleep guard.
   restoreOdysseySdBatteryDividerProfile();
   sampleBattery(true);
-  odysseyInitializeSdCardBeforeBle();
-  // Refresh telemetry after SD detection; standard C3 without SD stays x2.
-  sampleBattery(true);
 #else
   // Odyssey S3 remains a detection-only target.
   odysseyDetectSdCard();
 #endif
+  Serial.println("[BLE] initialization beginning");
   initializeBLE();
+  Serial.println("[BLE] GATT initialized; advertising start requested");
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  // Advertise before potentially slow or failing SD initialization. A missing,
+  // corrupt, or unresponsive card must never hide recovery/OTA over Bluetooth.
+  Serial.println("[SD] beginning optional boot mount after BLE advertising");
+  odysseyInitializeSdCardBeforeBle();
+  sampleBattery(true);
+  Serial.println("[SD] optional boot mount returned; BLE remains initialized");
+#endif
   initializeRecovery();
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   // C3 STOP gesture remains available if BLE control/media processing stalls.
