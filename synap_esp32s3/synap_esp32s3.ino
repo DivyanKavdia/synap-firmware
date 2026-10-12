@@ -274,7 +274,6 @@ bool odysseySdFormatting(); // media-v1 op19 exclusively owns the SD volume
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs);
 bool odysseyPrepareSdForCommittedOtaRestart(uint32_t timeoutMs);
 bool odysseySdBusStuckLow(); // confirmed deselected MISO held LOW after failed mount
-namespace OdysseyWifiAp { bool busy(); }
 namespace OdysseyWifi {
 void initialize();
 bool available();
@@ -4356,6 +4355,7 @@ void odysseyToggleRecording() {
 #include <limits.h>
 #include <time.h>
 
+namespace OdysseyWifiAp { bool busy(); }
 namespace OdysseyWifi {
 
 // Google Trust Services GTS Root R1 (current digitalSignature root).
