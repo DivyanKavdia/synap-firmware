@@ -2584,6 +2584,16 @@ static std::atomic<uint32_t> odysseyWirePriorCmd{UINT32_MAX};
 static std::atomic<uint32_t> odysseyWirePriorSuccessCmd{UINT32_MAX};
 static std::atomic<uint32_t> odysseyWireGoodWrites{0};
 static std::atomic<uint32_t> odysseyWireWritesAtFailure{0};
+// Once a native CMD24/CMD25 transaction fails, it is impossible to know which
+// sectors the card accepted or whether it is still PROGRAM-busy. Espressif's
+// sdmmc_write_sectors_dma() otherwise issues CMD13 and ACMD22 on that same
+// failed path. Block those follow-on commands at the sole host boundary.
+// This latch is intentionally NOT cleared by the per-take telemetry reset:
+// only a real loss of power to the SD controller establishes a fresh session.
+static std::atomic<bool> odysseySdAmbiguousWrite{false};
+// ESP-IDF 5.5.1 performs up to TWO CMD13 probes after a successful sector
+// write. Keep both in the uncertain-completion window until each succeeds.
+static std::atomic<uint8_t> odysseyWriteStatusChecksOutstanding{0};
 void odysseySdClearWireFault() {
   odysseyWireCmdPlusOne=0;
   odysseyWireError=0;
@@ -3245,6 +3255,12 @@ static uint8_t odysseySdQuiesceLocked(uint32_t budgetMs) {
 }
 
 static bool odysseySdBeginLocked() {
+  // Reinitializing the ESP32 host does NOT reset a continuously powered SD.
+  if (odysseySdAmbiguousWrite.load()) {
+    odysseySdUnsafeToSleep=true;
+    Serial.println("[SD] native mount veto: unresolved ambiguous write, reset SD rail");
+    return false;
+  }
   // ESP-IDF SDSPI host, not Arduino SD.begin(). The card is never formatted
   // or repartitioned, including after failed mount or watchdog reset.
   ++odysseySdBeginAttempts;
@@ -3274,12 +3290,23 @@ static bool odysseySdBeginLocked() {
   // Stopwatch surrounds the EXACT original native transaction. Duration
   // near cmd->timeout_ms suggests write-program busy; a short failure may be
   // command/data-response related. No extra SD command or delay is added.
+  // A failed multi-block write may leave CMD25 open with unknown card state.
+  // Reject every subsequent command locally: no status probe, ACMD22, retry,
+  // metadata write, or mount command may reach the same powered card.
+  if (odysseySdAmbiguousWrite.load()) return ESP_ERR_INVALID_STATE;
   const uint32_t startedAt=millis();
   const esp_err_t result=sdspi_host_do_transaction(slot,cmd);
   const uint32_t elapsed=uint32_t(millis()-startedAt);
   if (cmd && cmd->opcode==13u) odysseyWireLastCmd13=cmd->response[0];
   const esp_err_t error=result!=ESP_OK?result:(cmd?cmd->error:ESP_FAIL);
   if (cmd && error!=ESP_OK) {
+    // Either of the two post-write CMD13 checks may fail; a successful
+    // first status response does not establish completed programming.
+    if (cmd->opcode==24u || cmd->opcode==25u ||
+        (cmd->opcode==13u && odysseyWriteStatusChecksOutstanding.load()!=0)) {
+      odysseySdAmbiguousWrite=true;
+      odysseySdUnsafeToSleep=true;
+    }
     uint32_t expected=0;
     if (odysseyWireCmdPlusOne.compare_exchange_strong(expected,cmd->opcode+1u)) {
       odysseyWireError=uint32_t(error);
@@ -3295,7 +3322,15 @@ static bool odysseySdBeginLocked() {
     // Count completed commands, NOT guaranteed durable sectors. CMD13/FatFs
     // still own post-program validation. Stop updating on first failure.
     odysseyWirePriorCmd=cmd->opcode;
-    if (cmd->opcode==24u || cmd->opcode==25u) ++odysseyWireGoodWrites;
+    if (cmd->opcode==24u || cmd->opcode==25u) {
+      ++odysseyWireGoodWrites;
+      odysseyWriteStatusChecksOutstanding=2;
+    } else if (cmd->opcode==13u) {
+      const uint8_t pending=odysseyWriteStatusChecksOutstanding.load();
+      if (pending) odysseyWriteStatusChecksOutstanding=uint8_t(pending-1u);
+    } else {
+      odysseyWriteStatusChecksOutstanding=0;
+    }
   }
   return result;
 };
@@ -3401,6 +3436,15 @@ static uint8_t odysseySdMountReasonCode(const char* reason) {
 }
 
 static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
+  // Do not fall through to the raw GPIO CMD12/CMD0 recovery on an ambiguous
+  // native write: even a 'read-only' remount sends commands to that card.
+  if (odysseySdAmbiguousWrite.load()) {
+    odysseySdUnsafeToSleep=true;
+    odysseySdBootState=2;
+    odysseySdProbeStage=66;
+    Serial.println("[SD] refusing native or bit-bang remount after uncertain write");
+    return false;
+  }
   odysseySdBootState=0;
   odysseySdProbeStage=0;
   odysseySdLastMountReason=odysseySdMountReasonCode(reason);
@@ -3520,6 +3564,12 @@ bool odysseyInitializeSdCardBeforeBle() {
 bool odysseyRecoverSdCard(const char* reason) {
   OdysseySdGuard guard(pdMS_TO_TICKS(5000));
   if (!guard) return false;
+  // The gesture/op14 must not bypass the host-level no-more-commands latch.
+  if (odysseySdAmbiguousWrite.load()) {
+    odysseySdUnsafeToSleep=true;
+    Serial.println("[SD] recovery refused: ambiguous CMD24/CMD25; real SD power reset required");
+    return false;
+  }
   if (odysseySdControllerBusyLow()) {
     odysseySdUnsafeToSleep=true;
     Serial.println("[SD] recovery refused: selected SD still drives sustained busy-low, cycle SD power");
