@@ -155,6 +155,11 @@ jobs:
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: bundle/esp32c3-supermini-4m/firmware.bin
+      - name: Attest factory-only C3+SD Wi-Fi firmware with GitHub OIDC
+        if: steps.current.outputs.release == 'true'
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: bundle/esp32c3-supermini-4m-sd/firmware.bin
       - name: Attest Chakshu firmware with GitHub OIDC
         if: steps.current.outputs.release == 'true'
         uses: actions/attest-build-provenance@v3
