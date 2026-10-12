@@ -5902,14 +5902,21 @@ void setup() {
   // or falsely trip the critical-battery sleep guard.
   restoreOdysseySdBatteryDividerProfile();
   sampleBattery(true);
-  odysseyInitializeSdCardBeforeBle();
-  // Refresh telemetry after SD detection; standard C3 without SD stays x2.
-  sampleBattery(true);
 #else
   // Odyssey S3 remains a detection-only target.
   odysseyDetectSdCard();
 #endif
+  Serial.println("[BLE] initialization beginning");
   initializeBLE();
+  Serial.println("[BLE] GATT initialized; advertising start requested");
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  // Advertise before potentially slow or failing SD initialization. A missing,
+  // corrupt, or unresponsive card must never hide recovery/OTA over Bluetooth.
+  Serial.println("[SD] beginning optional boot mount after BLE advertising");
+  odysseyInitializeSdCardBeforeBle();
+  sampleBattery(true);
+  Serial.println("[SD] optional boot mount returned; BLE remains initialized");
+#endif
   initializeRecovery();
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   // C3 STOP gesture remains available if BLE control/media processing stalls.
