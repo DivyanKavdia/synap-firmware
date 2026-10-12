@@ -18,6 +18,7 @@
 #include <limits.h>
 #include <time.h>
 
+namespace OdysseyWifiAp { bool busy(); }
 namespace OdysseyWifi {
 
 // Google Trust Services GTS Root R1 (current digitalSignature root).
@@ -140,7 +141,7 @@ static void refreshConfigured() {
 }
 
 bool available() { return true; }
-bool busy() { return uploadBusy.load(); }
+bool busy() { return uploadBusy.load() || OdysseyWifiAp::busy(); }
 
 static bool safeWavPath(const char* path) {
   if (!path || strncmp(path,"/synap/",7)!=0) return false;
