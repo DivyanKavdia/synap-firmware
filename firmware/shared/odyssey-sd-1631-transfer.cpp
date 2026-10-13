@@ -331,8 +331,8 @@ static uint8_t catalogue(uint32_t& total) {
       }
       if (count>=100u) {catalogueErrno=EOVERFLOW;catalogueStep=6;break;}
       if (count++) catalogueBuffer+=",";
-      catalogueBuffer+="{\\\"path\\\":\\\""+String(logical)+
-        "\\\",\\\"bytes\\\":"+String(uint32_t(st.st_size))+"}";
+      catalogueBuffer+="{\"path\":\""+String(logical)+
+        "\",\"bytes\":"+String(uint32_t(st.st_size))+"}";
     }
     if (closedir(directory)!=0 && !catalogueErrno) {
       catalogueErrno=errno?errno:EIO;catalogueStep=7;
