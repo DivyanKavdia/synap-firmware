@@ -53,3 +53,23 @@ test('legacy station credential save verifies NVS readback without exposing pass
   assert.match(wifi,/strcmp\(password,verifyPassword\)==0/);
   assert.doesNotMatch(wifi,/Serial\.printf\([^)]*password/);
 });
+
+test('private C3 page optionally sends bounded WAV chunks to a known HTTPS PWA opener',()=>{
+  for(const src of [ap,ino]){
+    assert.match(src,/const channel=query\.get\('bridge'\)/);
+    assert.match(src,/const target=query\.get\('origin'\)/);
+    assert.match(src,/window\.opener\.postMessage/);
+    assert.match(src,/event\.origin!==target/);
+    assert.match(src,/event\.source!==window\.opener/);
+    assert.match(src,/16384/);
+    assert.match(src,/await expect\('begin'/);
+    assert.match(src,/await expect\('chunk'/);
+    assert.match(src,/await expect\('end'/);
+    assert.match(src,/fetch\(link\.href,\{cache:'no-store'\}\)/);
+    assert.match(src,/if\(!link \|\| !enabled \|\| !ready\)return/);
+    assert.match(src,/href='\/file\?key=/);
+  }
+  assert.match(ap,/script-src 'unsafe-inline'; connect-src 'self'/);
+  assert.match(ap,/if\(remaining \|\| sent!=44\)client\.stop\(\)/);
+  assert.doesNotMatch(ap,/\bfwrite\s*\(|\bunlink\s*\(|\bremove\s*\(|sdcard_format|esp_vfs_fat_sdspi_mount/);
+});
