@@ -2947,9 +2947,29 @@ void odysseySdRawProbeOnce() {
   return;
 }
 const char* odysseySdMountPoint() { return ODYSSEY_SD_MOUNT_POINT; }
+// Canonical root capture name is exactly 8.3: R + 7 uppercase hex + .WAV.
+// This avoids the fragile mkdir(/synap) CMD24 and long filename writes on
+// first use of a freshly formatted FAT card. Historical /synap files remain
+// addressable without ever moving or deleting them.
+bool odysseySdRootWavName(const char* name) {
+  if (!name || strlen(name)!=12u || name[0]!='R' ||
+      strcmp(name+8,".WAV")!=0) return false;
+  for (size_t i=1;i<8;++i) {
+    const char ch=name[i];
+    if (!((ch>='0'&&ch<='9')||(ch>='A'&&ch<='F'))) return false;
+  }
+  return true;
+}
 bool odysseySdPath(const char* logical,char* full,size_t capacity) {
   if (!logical || logical[0]!='/' || !full || capacity<2) return false;
   if (strstr(logical,"..")) return false;
+  // Keep the same stable media-v1 wire path used by Synap's receipts and
+  // BLE/Wi-Fi transfer while only changing the *physical* FAT directory.
+  if (strncmp(logical,"/synap/",7)==0 &&
+      odysseySdRootWavName(logical+7)) {
+    const int n=snprintf(full,capacity,"%s/%s",ODYSSEY_SD_MOUNT_POINT,logical+7);
+    return n>0 && size_t(n)<capacity;
+  }
   const int n=snprintf(full,capacity,"%s%s",ODYSSEY_SD_MOUNT_POINT,logical);
   return n>0 && size_t(n)<capacity;
 }
@@ -3976,46 +3996,38 @@ static void odysseyRecordTake() {
   if (!storage || !odysseySdReady()) { failed=true;failureStage=40; }
 
   if (!failed) {
-    // This folder is initialized only by an explicit disconnected double-tap,
-    // never by mounting, listing or boot-time probes; mutex remains owned.
-    struct stat recordingDir{};
-    if (stat(ODYSSEY_SD_RECORDING_DIR,&recordingDir)!=0) {
-      const int directoryErrno=errno;
-      if (directoryErrno!=ENOENT ||
-          mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) {
-        const int savedErrno=errno?errno:EIO;
-        // Stage 76 = mkdir failed; 77 = directory stat failed for an
-        // unexpected errno. Both were previously misreported as stage 49.
-        failed=true;failureStage=directoryErrno==ENOENT?76u:77u;
-        odysseyCaptureCreateFault(savedErrno,"mkdir /synap",failureStage);
-      } else {
-        Serial.println("[SD] offline gesture initialized /synap directory");
+    // No mkdir, long-filename allocation, preallocation, or root probe writes.
+    // New capture files use FAT 8.3 root entries. This removes the precise
+    // stage-76 directory creation operation that timed out on the field card.
+    // The stable *logical* media path is still /synap/Rxxxxxxx.WAV.
+    for(uint8_t attempt=0;attempt<16u && !failed && !file;++attempt) {
+      snprintf(logicalPath,sizeof(logicalPath),"/synap/R%07lX.WAV",
+        static_cast<unsigned long>(esp_random()&0x0fffffffu));
+      if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) {
+        failed=true;failureStage=41;break;
       }
-    } else if (!S_ISDIR(recordingDir.st_mode)) {
-      failed=true;failureStage=78;
-      odysseyCaptureCreateFault(ENOTDIR,"/synap not directory",failureStage);
-    }
-  }
-
-  if (!failed) {
-    // Append-only recording: create a normal zero-length file and let each
-    // successful 4 KiB CMD25 batch extend it naturally. No preallocation means
-    // STOP never needs to truncate a 32 MiB logical extent.
-    snprintf(logicalPath,sizeof(logicalPath),"/synap/odyssey_audio_%08lx_%08lx.wav",
-      static_cast<unsigned long>(esp_random()),static_cast<unsigned long>(esp_random()));
-    if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) {
-      failed=true;failureStage=41;
-    } else {
+      struct stat exists{};
+      errno=0;
+      if (stat(fullPath,&exists)==0) continue; // collision; never overwrite
+      if (errno!=ENOENT) {
+        failed=true;failureStage=77;
+        odysseyCaptureCreateFault(errno?errno:EIO,"root WAV stat",failureStage);
+        break;
+      }
       errno=0;
       file=fopen(fullPath,"wb");
       if (!file) {
         const int openError=errno;
         failed=true;failureStage=odysseyCreateFailureStage(openError);
-        odysseyCaptureCreateFault(openError,"fopen WAV",failureStage);
-        Serial.printf("[SD] WAV create failed path=%s\n",fullPath);
+        odysseyCaptureCreateFault(openError,"root WAV fopen",failureStage);
+        Serial.printf("[SD] 8.3 root WAV create failed path=%s\\n",fullPath);
       } else if (setvbuf(file,nullptr,_IONBF,0)!=0) {
         failed=true;failureStage=42;
       }
+    }
+    if (!failed && !file) { // RNG collision exhausted; do not open/truncate
+      failed=true;failureStage=41;
+      odysseyCaptureCreateFault(EEXIST,"root WAV random name collisions",failureStage);
     }
   }
 
@@ -5065,17 +5077,27 @@ static void page() {
     " When opened from Synap, tap a recording to import it directly into Memories."
     " If the browser bridge is unavailable, the link downloads a WAV as a fallback.</p>"
     "<p id=bridgeStatus aria-live=polite>Waiting for the Synap import bridge; downloads remain available.</p><ul>");
-  DIR* directory=opendir(ODYSSEY_SD_RECORDING_DIR);
   size_t shown=0;
-  if(directory) {
+  // New FAT-root 8.3 WAVs and legacy /synap WAVs share one media URL API.
+  // Both directories are observed read-only under the AP's SD mutex lease.
+  const char* const dirs[2]={odysseySdMountPoint(),ODYSSEY_SD_RECORDING_DIR};
+  for(uint8_t scan=0;scan<2 && !stopRequested.load();++scan) {
+    DIR* directory=opendir(dirs[scan]);
+    if(!directory) {
+      if(scan==0u || errno!=ENOENT)
+        apServer->sendContent("<li>One SD directory is unavailable; recordings were not changed.</li>");
+      continue;
+    }
     struct dirent* entry=nullptr;
     while((entry=readdir(directory))!=nullptr && shown<250 &&
           !stopRequested.load() && uint32_t(millis()-startedAt)<MAX_MS) {
       const char* name=entry->d_name;
-      if (!name || strlen(name)>55u) continue;
+      if(!name || strlen(name)>55u)continue;
+      if(scan==0u ? !odysseySdRootWavName(name)
+                  : odysseySdRootWavName(name)) continue;
       char logical[64]{},full[96]{};
       snprintf(logical,sizeof(logical),"/synap/%s",name);
-      if (!safeWav(logical) || !odysseySdPath(logical,full,sizeof(full)))continue;
+      if(!safeWav(logical)||!odysseySdPath(logical,full,sizeof(full)))continue;
       struct stat st{};
       if(stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<44)continue;
       char line[260];
@@ -5086,8 +5108,6 @@ static void page() {
       vTaskDelay(1);
     }
     closedir(directory);
-  } else {
-    apServer->sendContent("</ul><p>SD directory unavailable; no files changed.</p><ul>");
   }
   if(!shown)apServer->sendContent("<li>No compatible WAV files found.</li>");
   apServer->sendContent("</ul><p>Hotspot closes after 3 minutes idle, at most 15 minutes.</p>"
@@ -5603,78 +5623,69 @@ static uint8_t readSelected(const char* requestedPath,uint32_t offset,
 static uint8_t catalogue(uint32_t& total) {
   selectedPath[0]=0;
   catalogueBuffer="";
-  catalogueErrno=0;
-  catalogueStep=0;
+  catalogueErrno=0;catalogueStep=0;
   OdysseySdGuard guard;
   if (!guard || !storageReady()) return NO_SD;
-
-  char directoryPath[96];
-  if (!odysseySdPath("/synap",directoryPath,sizeof(directoryPath))) {
-    catalogueErrno=EINVAL; return IO_ERROR;
-  }
-  DIR* directory=opendir(directoryPath);
-  if (!directory) {
-    const int directoryErrno=errno;
-    if (directoryErrno==ENOENT) {
-      // ENOENT is normal on a formatted, as-yet-uninitialized Synap card.
-      // Check the real FAT root again so mount loss is not reported as empty.
-      struct stat root{};
-      if (stat(odysseySdMountPoint(),&root)==0 && S_ISDIR(root.st_mode)) {
-        catalogueBuffer="[]";
-        total=2u;
-        Serial.println("[SD] catalogue empty: mounted FAT root, /synap not created yet");
-        return OK;
-      }
-    }
-    catalogueErrno=directoryErrno?directoryErrno:EIO;
-    catalogueStep=1;
-    Serial.printf("[SD] catalogue opendir failed errno=%d path=%s\n",catalogueErrno,directoryPath);
-    return IO_ERROR;
-  }
-
   if (!catalogueBuffer.reserve(2048)) {
-    catalogueErrno=ENOMEM;catalogueStep=2;closedir(directory);return IO_ERROR;
+    catalogueErrno=ENOMEM;catalogueStep=2;return IO_ERROR;
   }
   catalogueBuffer="[";
   unsigned count=0;
-  for (;;) {
+  // Index the FAT root's compact Rxxxxxxx.WAV files first, then legacy
+  // /synap recordings. Both retain their existing logical /synap/... paths.
+  // Missing legacy directory is normal on a new/empty card. No mkdir/write.
+  const char* const dirs[2]={odysseySdMountPoint(),ODYSSEY_SD_RECORDING_DIR};
+  for (uint8_t scan=0;scan<2 && !catalogueErrno;++scan) {
     errno=0;
-    dirent* entry=readdir(directory);
-    if (!entry) {
-      if (errno) { catalogueErrno=errno;catalogueStep=3; }
-      break;
+    DIR* directory=opendir(dirs[scan]);
+    if (!directory) {
+      const int directoryErrno=errno;
+      if (scan==1u && directoryErrno==ENOENT) continue;
+      catalogueErrno=directoryErrno?directoryErrno:EIO;
+      catalogueStep=1;break;
     }
-    if (!entry->d_name || !strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
-    char logical[64];
-    const int n=snprintf(logical,sizeof(logical),"/synap/%s",entry->d_name);
-    if (n<=0 || size_t(n)>=sizeof(logical) || !safeWavPath(logical)) continue;
-    char full[96];
-    if (!odysseySdPath(logical,full,sizeof(full))) continue;
-    struct stat st{};
-    errno=0;
-    // A failed stat during directory enumeration is NOT proof that the
-    // file was deleted. Returning a partial/empty list could cause PWA
-    // post-delete verification to discard its receipt for a surviving WAV.
-    if (stat(full,&st)!=0) {
-      catalogueErrno=errno?errno:EIO;catalogueStep=4;break;
+    for (;;) {
+      errno=0;
+      dirent* entry=readdir(directory);
+      if (!entry) {
+        if (errno) {catalogueErrno=errno;catalogueStep=3;}
+        break;
+      }
+      const char* name=entry->d_name;
+      if (!name || !strcmp(name,".") || !strcmp(name,"..")) continue;
+      // Disjoint file namespaces prevent two filesystem entries from
+      // resolving to the same media-v1 logical file identifier.
+      if (scan==0u ? !odysseySdRootWavName(name)
+                    : odysseySdRootWavName(name)) continue;
+      char logical[64]{};
+      const int n=snprintf(logical,sizeof(logical),"/synap/%s",name);
+      if (n<=0 || size_t(n)>=sizeof(logical) ||
+          !safeWavPath(logical)) continue;
+      char full[96]{};
+      if (!odysseySdPath(logical,full,sizeof(full))) continue;
+      struct stat st{};
+      errno=0;
+      if (stat(full,&st)!=0) {
+        catalogueErrno=errno?errno:EIO;catalogueStep=4;break;
+      }
+      if (!S_ISREG(st.st_mode)) continue;
+      if (st.st_size<0 || uint64_t(st.st_size)>UINT32_MAX) {
+        catalogueErrno=EOVERFLOW;catalogueStep=5;break;
+      }
+      if (count>=100u) {catalogueErrno=EOVERFLOW;catalogueStep=6;break;}
+      if (count++) catalogueBuffer+=",";
+      catalogueBuffer+="{\"path\":\""+String(logical)+
+        "\",\"bytes\":"+String(uint32_t(st.st_size))+"}";
     }
-    if (!S_ISREG(st.st_mode)) continue;
-    if (st.st_size<0 || uint64_t(st.st_size)>UINT32_MAX) {
-      catalogueErrno=EOVERFLOW;catalogueStep=5;break;
+    if (closedir(directory)!=0 && !catalogueErrno) {
+      catalogueErrno=errno?errno:EIO;catalogueStep=7;
     }
-    // A bounded BLE JSON catalogue must never silently omit recording #101.
-    if (count>=100u) { catalogueErrno=EOVERFLOW;catalogueStep=6;break; }
-    if (count++) catalogueBuffer+=",";
-    catalogueBuffer+="{\"path\":\""+String(logical)+"\",\"bytes\":"+String(uint32_t(st.st_size))+"}";
-  }
-  if (closedir(directory)!=0 && !catalogueErrno) {
-    catalogueErrno=errno?errno:EIO;catalogueStep=7;
   }
   if (catalogueErrno) {
     catalogueBuffer="";
-    Serial.printf("[SD] catalogue failed step=%u errno=%d; refuse partial list\n",
+    Serial.printf("[SD] catalogue failed step=%u errno=%d; existing WAVs retained\\n",
       unsigned(catalogueStep),catalogueErrno);
-    return IO_ERROR; // Never send a silently truncated catalogue after an I/O fault.
+    return IO_ERROR; // Never publish a partial list after a read fault.
   }
   catalogueBuffer+="]";
   total=catalogueBuffer.length();
