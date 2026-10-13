@@ -280,78 +280,69 @@ static uint8_t readSelected(const char* requestedPath,uint32_t offset,
 static uint8_t catalogue(uint32_t& total) {
   selectedPath[0]=0;
   catalogueBuffer="";
-  catalogueErrno=0;
-  catalogueStep=0;
+  catalogueErrno=0;catalogueStep=0;
   OdysseySdGuard guard;
   if (!guard || !storageReady()) return NO_SD;
-
-  char directoryPath[96];
-  if (!odysseySdPath("/synap",directoryPath,sizeof(directoryPath))) {
-    catalogueErrno=EINVAL; return IO_ERROR;
-  }
-  DIR* directory=opendir(directoryPath);
-  if (!directory) {
-    const int directoryErrno=errno;
-    if (directoryErrno==ENOENT) {
-      // ENOENT is normal on a formatted, as-yet-uninitialized Synap card.
-      // Check the real FAT root again so mount loss is not reported as empty.
-      struct stat root{};
-      if (stat(odysseySdMountPoint(),&root)==0 && S_ISDIR(root.st_mode)) {
-        catalogueBuffer="[]";
-        total=2u;
-        Serial.println("[SD] catalogue empty: mounted FAT root, /synap not created yet");
-        return OK;
-      }
-    }
-    catalogueErrno=directoryErrno?directoryErrno:EIO;
-    catalogueStep=1;
-    Serial.printf("[SD] catalogue opendir failed errno=%d path=%s\n",catalogueErrno,directoryPath);
-    return IO_ERROR;
-  }
-
   if (!catalogueBuffer.reserve(2048)) {
-    catalogueErrno=ENOMEM;catalogueStep=2;closedir(directory);return IO_ERROR;
+    catalogueErrno=ENOMEM;catalogueStep=2;return IO_ERROR;
   }
   catalogueBuffer="[";
   unsigned count=0;
-  for (;;) {
+  // Index the FAT root's compact Rxxxxxxx.WAV files first, then legacy
+  // /synap recordings. Both retain their existing logical /synap/... paths.
+  // Missing legacy directory is normal on a new/empty card. No mkdir/write.
+  const char* const dirs[2]={odysseySdMountPoint(),ODYSSEY_SD_RECORDING_DIR};
+  for (uint8_t scan=0;scan<2 && !catalogueErrno;++scan) {
     errno=0;
-    dirent* entry=readdir(directory);
-    if (!entry) {
-      if (errno) { catalogueErrno=errno;catalogueStep=3; }
-      break;
+    DIR* directory=opendir(dirs[scan]);
+    if (!directory) {
+      const int directoryErrno=errno;
+      if (scan==1u && directoryErrno==ENOENT) continue;
+      catalogueErrno=directoryErrno?directoryErrno:EIO;
+      catalogueStep=1;break;
     }
-    if (!entry->d_name || !strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
-    char logical[64];
-    const int n=snprintf(logical,sizeof(logical),"/synap/%s",entry->d_name);
-    if (n<=0 || size_t(n)>=sizeof(logical) || !safeWavPath(logical)) continue;
-    char full[96];
-    if (!odysseySdPath(logical,full,sizeof(full))) continue;
-    struct stat st{};
-    errno=0;
-    // A failed stat during directory enumeration is NOT proof that the
-    // file was deleted. Returning a partial/empty list could cause PWA
-    // post-delete verification to discard its receipt for a surviving WAV.
-    if (stat(full,&st)!=0) {
-      catalogueErrno=errno?errno:EIO;catalogueStep=4;break;
+    for (;;) {
+      errno=0;
+      dirent* entry=readdir(directory);
+      if (!entry) {
+        if (errno) {catalogueErrno=errno;catalogueStep=3;}
+        break;
+      }
+      const char* name=entry->d_name;
+      if (!name || !strcmp(name,".") || !strcmp(name,"..")) continue;
+      // Disjoint file namespaces prevent two filesystem entries from
+      // resolving to the same media-v1 logical file identifier.
+      if (scan==0u ? !odysseySdRootWavName(name)
+                    : odysseySdRootWavName(name)) continue;
+      char logical[64]{};
+      const int n=snprintf(logical,sizeof(logical),"/synap/%s",name);
+      if (n<=0 || size_t(n)>=sizeof(logical) ||
+          !safeWavPath(logical)) continue;
+      char full[96]{};
+      if (!odysseySdPath(logical,full,sizeof(full))) continue;
+      struct stat st{};
+      errno=0;
+      if (stat(full,&st)!=0) {
+        catalogueErrno=errno?errno:EIO;catalogueStep=4;break;
+      }
+      if (!S_ISREG(st.st_mode)) continue;
+      if (st.st_size<0 || uint64_t(st.st_size)>UINT32_MAX) {
+        catalogueErrno=EOVERFLOW;catalogueStep=5;break;
+      }
+      if (count>=100u) {catalogueErrno=EOVERFLOW;catalogueStep=6;break;}
+      if (count++) catalogueBuffer+=",";
+      catalogueBuffer+="{\\\"path\\\":\\\""+String(logical)+
+        "\\\",\\\"bytes\\\":"+String(uint32_t(st.st_size))+"}";
     }
-    if (!S_ISREG(st.st_mode)) continue;
-    if (st.st_size<0 || uint64_t(st.st_size)>UINT32_MAX) {
-      catalogueErrno=EOVERFLOW;catalogueStep=5;break;
+    if (closedir(directory)!=0 && !catalogueErrno) {
+      catalogueErrno=errno?errno:EIO;catalogueStep=7;
     }
-    // A bounded BLE JSON catalogue must never silently omit recording #101.
-    if (count>=100u) { catalogueErrno=EOVERFLOW;catalogueStep=6;break; }
-    if (count++) catalogueBuffer+=",";
-    catalogueBuffer+="{\"path\":\""+String(logical)+"\",\"bytes\":"+String(uint32_t(st.st_size))+"}";
-  }
-  if (closedir(directory)!=0 && !catalogueErrno) {
-    catalogueErrno=errno?errno:EIO;catalogueStep=7;
   }
   if (catalogueErrno) {
     catalogueBuffer="";
-    Serial.printf("[SD] catalogue failed step=%u errno=%d; refuse partial list\n",
+    Serial.printf("[SD] catalogue failed step=%u errno=%d; existing WAVs retained\\n",
       unsigned(catalogueStep),catalogueErrno);
-    return IO_ERROR; // Never send a silently truncated catalogue after an I/O fault.
+    return IO_ERROR; // Never publish a partial list after a read fault.
   }
   catalogueBuffer+="]";
   total=catalogueBuffer.length();
