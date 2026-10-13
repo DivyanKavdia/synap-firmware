@@ -19,7 +19,7 @@ test('empty FAT cards create recording directly in root 8.3 entry with no mkdir'
   assert.doesNotMatch(take,/\brmdir\s*\(/);
   assert.doesNotMatch(take,/\bunlink\s*\(/);
   assert.match(take,/odysseySdWriteTimeoutQuarantined\(\)/);
-  assert.match(take,/ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=60000u/);
+  assert.match(capture,/ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=60000u/);
 });
 
 test('root files are strictly R plus uppercase seven hex with a .WAV suffix',()=>{
