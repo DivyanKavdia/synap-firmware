@@ -11,7 +11,7 @@ test('C3 FatFs checkpoints use genuine POSIX fsync, not fflush-only or filesyste
  const end=recorder.indexOf('// Explicit disconnected double-tap is the sole entry',start);
  assert(start>=0&&end>start);
  const helper=recorder.slice(start,end);
- assert.match(helper,/ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=10000u/);
+ assert.match(helper,/ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=60000u/);
  assert.match(helper,/if \(fflush\(file\)!=0\)/);
  assert.match(helper,/const int fd=fileno\(file\)/);
  assert.match(helper,/if \(fsync\(fd\)!=0\)/);
@@ -47,7 +47,7 @@ ${helper}
 #undef fileno
 #undef fsync
 int main() {
- assert(ODYSSEY_SD_CHECKPOINT_INTERVAL_MS==10000);
+ assert(ODYSSEY_SD_CHECKPOINT_INTERVAL_MS==60000);
  FILE* f=reinterpret_cast<FILE*>(uintptr_t(1));
  int error=0;
  mode=0;assert(odysseyCheckpointWav(f,error)==0&&error==0);
