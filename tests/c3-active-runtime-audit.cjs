@@ -57,7 +57,7 @@ test('BLE and SD media safely resume by ID and offset; never delete on transfer'
   assert.match(media,/case 4:\s*error=readSelected\(request\.path,request\.offset,total,bytes,size\)/);
   assert.match(media,/case 17:\s*[\s\S]*?error=removeFile\(request\.path\)/);
   assert.match(media,/case 18:/);
-  assert.match(media,/if \(count>=100u\) \{ catalogueErrno=EOVERFLOW;catalogueStep=6;break; \}/);
+  assert.match(media,/if \(count>=100u\) \{catalogueErrno=EOVERFLOW;catalogueStep=6;break;\}/);
   assert.match(media,/uint32_t\(millis\(\)-last\)<15000u/);
   assert.match(cap,/p\[16\]\|=1/);
   assert.match(cap,/if \(OdysseyWifi::available\(\)\) p\[16\]\|=2/);
