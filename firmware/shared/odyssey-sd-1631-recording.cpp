@@ -557,7 +557,7 @@ static void odysseyRecordTask(void*) {
     odysseyLastWireError()==uint32_t(ESP_ERR_TIMEOUT) &&
     (odysseyLastWireCommand()==24u || odysseyLastWireCommand()==25u ||
       (odysseyLastWireCommand()==13u &&
-        (odysseyLastWirePreviousCmd()==24u || odysseyLastWirePreviousCmd()==25u)));
+        (odysseyLastWirePrev()==24u || odysseyLastWirePrev()==25u)));
   if (!odysseySdReady() &&
       (odysseySdWriteTimeoutQuarantined() ||
        (previousProgramTimeout && esp_reset_reason()!=ESP_RST_POWERON))) {
