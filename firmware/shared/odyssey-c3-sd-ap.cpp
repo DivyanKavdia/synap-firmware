@@ -78,17 +78,27 @@ static void page() {
     " When opened from Synap, tap a recording to import it directly into Memories."
     " If the browser bridge is unavailable, the link downloads a WAV as a fallback.</p>"
     "<p id=bridgeStatus aria-live=polite>Waiting for the Synap import bridge; downloads remain available.</p><ul>");
-  DIR* directory=opendir(ODYSSEY_SD_RECORDING_DIR);
   size_t shown=0;
-  if(directory) {
+  // New FAT-root 8.3 WAVs and legacy /synap WAVs share one media URL API.
+  // Both directories are observed read-only under the AP's SD mutex lease.
+  const char* const dirs[2]={odysseySdMountPoint(),ODYSSEY_SD_RECORDING_DIR};
+  for(uint8_t scan=0;scan<2 && !stopRequested.load();++scan) {
+    DIR* directory=opendir(dirs[scan]);
+    if(!directory) {
+      if(scan==0u || errno!=ENOENT)
+        apServer->sendContent("<li>One SD directory is unavailable; recordings were not changed.</li>");
+      continue;
+    }
     struct dirent* entry=nullptr;
     while((entry=readdir(directory))!=nullptr && shown<250 &&
           !stopRequested.load() && uint32_t(millis()-startedAt)<MAX_MS) {
       const char* name=entry->d_name;
-      if (!name || strlen(name)>55u) continue;
+      if(!name || strlen(name)>55u)continue;
+      if(scan==0u ? !odysseySdRootWavName(name)
+                  : odysseySdRootWavName(name)) continue;
       char logical[64]{},full[96]{};
       snprintf(logical,sizeof(logical),"/synap/%s",name);
-      if (!safeWav(logical) || !odysseySdPath(logical,full,sizeof(full)))continue;
+      if(!safeWav(logical)||!odysseySdPath(logical,full,sizeof(full)))continue;
       struct stat st{};
       if(stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<44)continue;
       char line[260];
@@ -99,8 +109,6 @@ static void page() {
       vTaskDelay(1);
     }
     closedir(directory);
-  } else {
-    apServer->sendContent("</ul><p>SD directory unavailable; no files changed.</p><ul>");
   }
   if(!shown)apServer->sendContent("<li>No compatible WAV files found.</li>");
   apServer->sendContent("</ul><p>Hotspot closes after 3 minutes idle, at most 15 minutes.</p>"
