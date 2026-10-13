@@ -456,9 +456,29 @@ void odysseySdRawProbeOnce() {
   return;
 }
 const char* odysseySdMountPoint() { return ODYSSEY_SD_MOUNT_POINT; }
+// Canonical root capture name is exactly 8.3: R + 7 uppercase hex + .WAV.
+// This avoids the fragile mkdir(/synap) CMD24 and long filename writes on
+// first use of a freshly formatted FAT card. Historical /synap files remain
+// addressable without ever moving or deleting them.
+bool odysseySdRootWavName(const char* name) {
+  if (!name || strlen(name)!=12u || name[0]!='R' ||
+      strcmp(name+8,".WAV")!=0) return false;
+  for (size_t i=1;i<8;++i) {
+    const char ch=name[i];
+    if (!((ch>='0'&&ch<='9')||(ch>='A'&&ch<='F'))) return false;
+  }
+  return true;
+}
 bool odysseySdPath(const char* logical,char* full,size_t capacity) {
   if (!logical || logical[0]!='/' || !full || capacity<2) return false;
   if (strstr(logical,"..")) return false;
+  // Keep the same stable media-v1 wire path used by Synap's receipts and
+  // BLE/Wi-Fi transfer while only changing the *physical* FAT directory.
+  if (strncmp(logical,"/synap/",7)==0 &&
+      odysseySdRootWavName(logical+7)) {
+    const int n=snprintf(full,capacity,"%s/%s",ODYSSEY_SD_MOUNT_POINT,logical+7);
+    return n>0 && size_t(n)<capacity;
+  }
   const int n=snprintf(full,capacity,"%s%s",ODYSSEY_SD_MOUNT_POINT,logical);
   return n>0 && size_t(n)<capacity;
 }
