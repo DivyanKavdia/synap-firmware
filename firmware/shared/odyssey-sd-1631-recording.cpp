@@ -464,15 +464,31 @@ static void odysseyRecordTake() {
     // early checkpointed prefix is guaranteed to be discoverable.
     // The on-card header stays provisional; transfer synthesizes the true WAV
     // header from file size after a clean stop OR interrupted power cycle.
-    errno=0;
-    if (fclose(file)!=0) {
-      const int closeErrno=errno;
+    // The LAST padded 4 KiB write occurs after the earlier timeout gate.
+    // It can itself time out inside CMD25/CMD13. Never follow such a failure
+    // with fclose(), which may issue another FatFs directory/CMD24 write to
+    // a controller that is still busy programming. Keep the VFS descriptor
+    // stranded until the genuine SD power cycle; no further SD I/O is safe.
+    if (odysseySdWriteTimeoutQuarantined()) {
       failed=true;
-      if (!failureStage) failureStage=47;
-      if (!odysseyPersistedWriteErrno.load())
-        odysseyCaptureCreateFault(closeErrno,"fclose WAV",failureStage);
+      if (!failureStage) failureStage=79;
+      if (!odysseyPersistedWriteErrno.load()) odysseyPersistedWriteErrno=EIO;
+      odysseySdBootState=2;
+      odysseySdProbeStage=failureStage;
+      odysseySdUnsafeToSleep=true;
+      file=nullptr;
+      Serial.println("[SD] final PCM write timed out: skip unsafe fclose; card quarantined");
+    } else {
+      errno=0;
+      if (fclose(file)!=0) {
+        const int closeErrno=errno;
+        failed=true;
+        if (!failureStage) failureStage=47;
+        if (!odysseyPersistedWriteErrno.load())
+          odysseyCaptureCreateFault(closeErrno,"fclose WAV",failureStage);
+      }
+      file=nullptr;
     }
-    file=nullptr;
   }
 
   if (!failed && bytes==0) failureStage=48;
