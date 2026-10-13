@@ -11,7 +11,8 @@ test('C3 offline recorder is append-only and writes aligned multi-sector batches
   assert.match(take,/file=fopen\(fullPath,"wb"\)/);
   assert.doesNotMatch(take,/odysseySdReserveRecordingFile|esp_vfs_fat_create_contiguous_file|ftruncate\(|odysseyFinalizeWav|fseek\(file,0/);
   // No random seeks/stat checks during the write session: only after close.
-  assert(take.indexOf('stat(fullPath')>take.indexOf('if (fclose(file)!=0)'));
+  assert(take.indexOf('stat(fullPath,&persisted')>take.indexOf('if (fclose(file)!=0)'));
+  assert(take.indexOf('stat(fullPath,&exists')<take.indexOf('file=fopen(fullPath,"wb")'));
   assert.match(take,/fopen\(fullPath,"rb"\)/);
   assert.match(take,/failureStage=74/);
   assert.match(take,/failureStage=75/);
@@ -85,12 +86,11 @@ test('C3 transfer synthesizes a valid virtual WAV header for append-only files',
   assert.match(transfer,/patchVirtualWavHeader\(bytes,size,offset,total\)/);
 });
 
-test('C3 FAT mkdir and WAV fopen errors preserve the FIRST core SD write fault',()=>{
+test('C3 FAT root WAV create/close errors preserve first physical SD write fault',()=>{
  const rec=read('firmware/shared/odyssey-sd-1631-recording.cpp');
- assert.match(rec,/odysseyCaptureCreateFault\(savedErrno,"mkdir \/synap",failureStage\)/);
- assert.match(rec,/failureStage=directoryErrno==ENOENT\?76u:77u/);
- assert.match(rec,/failureStage=78/);
- assert.match(rec,/odysseyCaptureCreateFault\(openError,"fopen WAV",failureStage\)/);
+ assert.doesNotMatch(rec,/mkdir\(ODYSSEY_SD_RECORDING_DIR,0755\)/);
+ assert.match(rec,/odysseyCaptureCreateFault\(openError,"root WAV fopen",failureStage\)/);
+ assert.match(rec,/odysseyCaptureCreateFault\(errno\?errno:EIO,"root WAV stat",failureStage\)/);
  assert.match(rec,/odysseyPersistedDriverFault=synapSdWriteFaultCode\(\)/);
  assert.match(rec,/odysseyPersistedWriteErrno=err>0/);
  assert.match(rec,/odysseyCaptureCreateFault\(closeErrno,"fclose WAV",failureStage\)/);
