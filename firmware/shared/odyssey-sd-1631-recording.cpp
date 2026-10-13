@@ -278,46 +278,38 @@ static void odysseyRecordTake() {
   if (!storage || !odysseySdReady()) { failed=true;failureStage=40; }
 
   if (!failed) {
-    // This folder is initialized only by an explicit disconnected double-tap,
-    // never by mounting, listing or boot-time probes; mutex remains owned.
-    struct stat recordingDir{};
-    if (stat(ODYSSEY_SD_RECORDING_DIR,&recordingDir)!=0) {
-      const int directoryErrno=errno;
-      if (directoryErrno!=ENOENT ||
-          mkdir(ODYSSEY_SD_RECORDING_DIR,0755)!=0) {
-        const int savedErrno=errno?errno:EIO;
-        // Stage 76 = mkdir failed; 77 = directory stat failed for an
-        // unexpected errno. Both were previously misreported as stage 49.
-        failed=true;failureStage=directoryErrno==ENOENT?76u:77u;
-        odysseyCaptureCreateFault(savedErrno,"mkdir /synap",failureStage);
-      } else {
-        Serial.println("[SD] offline gesture initialized /synap directory");
+    // No mkdir, long-filename allocation, preallocation, or root probe writes.
+    // New capture files use FAT 8.3 root entries. This removes the precise
+    // stage-76 directory creation operation that timed out on the field card.
+    // The stable *logical* media path is still /synap/Rxxxxxxx.WAV.
+    for(uint8_t attempt=0;attempt<16u && !failed && !file;++attempt) {
+      snprintf(logicalPath,sizeof(logicalPath),"/synap/R%07lX.WAV",
+        static_cast<unsigned long>(esp_random()&0x0fffffffu));
+      if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) {
+        failed=true;failureStage=41;break;
       }
-    } else if (!S_ISDIR(recordingDir.st_mode)) {
-      failed=true;failureStage=78;
-      odysseyCaptureCreateFault(ENOTDIR,"/synap not directory",failureStage);
-    }
-  }
-
-  if (!failed) {
-    // Append-only recording: create a normal zero-length file and let each
-    // successful 4 KiB CMD25 batch extend it naturally. No preallocation means
-    // STOP never needs to truncate a 32 MiB logical extent.
-    snprintf(logicalPath,sizeof(logicalPath),"/synap/odyssey_audio_%08lx_%08lx.wav",
-      static_cast<unsigned long>(esp_random()),static_cast<unsigned long>(esp_random()));
-    if (!odysseySdPath(logicalPath,fullPath,sizeof(fullPath))) {
-      failed=true;failureStage=41;
-    } else {
+      struct stat exists{};
+      errno=0;
+      if (stat(fullPath,&exists)==0) continue; // collision; never overwrite
+      if (errno!=ENOENT) {
+        failed=true;failureStage=77;
+        odysseyCaptureCreateFault(errno?errno:EIO,"root WAV stat",failureStage);
+        break;
+      }
       errno=0;
       file=fopen(fullPath,"wb");
       if (!file) {
         const int openError=errno;
         failed=true;failureStage=odysseyCreateFailureStage(openError);
-        odysseyCaptureCreateFault(openError,"fopen WAV",failureStage);
-        Serial.printf("[SD] WAV create failed path=%s\n",fullPath);
+        odysseyCaptureCreateFault(openError,"root WAV fopen",failureStage);
+        Serial.printf("[SD] 8.3 root WAV create failed path=%s\\n",fullPath);
       } else if (setvbuf(file,nullptr,_IONBF,0)!=0) {
         failed=true;failureStage=42;
       }
+    }
+    if (!failed && !file) { // RNG collision exhausted; do not open/truncate
+      failed=true;failureStage=41;
+      odysseyCaptureCreateFault(EEXIST,"root WAV random name collisions",failureStage);
     }
   }
 
