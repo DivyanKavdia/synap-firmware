@@ -1,0 +1,70 @@
+name: Build C3 large OTA migration image (not published)
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/c3-large-ota-migration.yml'
+      - 'firmware/partitions/odyssey-c3-large-ota.csv'
+      - 'tools/check-c3-large-partition.cjs'
+      - 'docs/ODYSSEY_C3_LARGE_OTA_MIGRATION.md'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  migration-factory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+        with:
+          version: 1.3.1
+      - name: Verify fixed 4 MiB flash geometry
+        run: node tools/check-c3-large-partition.cjs
+      - name: Install C3 pinned toolchain
+        run: |
+          arduino-cli config init
+          arduino-cli config set network.connection_timeout 600s
+          arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32@3.3.5 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli lib install "Adafruit NeoPixel@1.15.2"
+          arduino-cli lib install "NimBLE-Arduino@2.3.6"
+      - name: Generate C3-only source and custom partition table
+        run: |
+          node tools/assemble-source.cjs --check
+          mkdir -p prepared/synap_esp32c3_migration compiled-c3-migration migration-bundle
+          node tools/materialize-target.cjs esp32c3-supermini-4m synap_esp32s3/synap_esp32s3.ino prepared/synap_esp32c3_migration/synap_esp32c3_migration.ino
+          cp firmware/partitions/odyssey-c3-large-ota.csv prepared/synap_esp32c3_migration/partitions.csv
+          node tools/patch-arduino-ble.cjs "$HOME/.arduino15/packages/esp32/hardware/esp32/3.3.5/libraries/BLE/src"
+          sd_driver="$HOME/.arduino15/packages/esp32/hardware/esp32/3.3.5/libraries/SD/src/sd_diskio.cpp"
+          node tools/patch-arduino-sd.cjs "$sd_driver"
+          grep -q SYNAP_SD_CMD24_BUSY_FIX "$sd_driver"
+      - name: Compile SD/BLE/Wi-Fi image for 1.75 MiB OTA slots
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          build=$((1000 + RUN_NUMBER))
+          arduino-cli compile --fqbn 'esp32:esp32:esp32c3:FlashSize=4M,PartitionScheme=default,CDCOnBoot=cdc' \
+            --build-property "upload.maximum_size=1835008" \
+            --build-property "compiler.optimization_flags=-Oz -ffunction-sections -fdata-sections" \
+            --build-property "compiler.c.extra_flags=-fno-unwind-tables -fno-asynchronous-unwind-tables" \
+            --build-property "compiler.cpp.extra_flags=-fno-unwind-tables -fno-asynchronous-unwind-tables -DSYNAP_BUILD=$build -DUSE_REAL_I2S_MIC=1 -DSYNAP_C3_WIFI_UPLOAD_ENABLED=1" \
+            --build-property "compiler.c.elf.extra_flags=-Wl,--gc-sections" \
+            --output-dir compiled-c3-migration prepared/synap_esp32c3_migration
+          firmware=compiled-c3-migration/synap_esp32c3_migration.ino.bin
+          partitions=compiled-c3-migration/synap_esp32c3_migration.ino.partitions.bin
+          test -s "$firmware"
+          test -s "$partitions"
+          test "$(stat -c%s "$firmware")" -le 1835008
+          cp "$firmware" migration-bundle/firmware.bin
+          cp "$partitions" migration-bundle/partitions.bin
+          merged="$(find compiled-c3-migration -maxdepth 1 -type f -name '*.merged.bin' -print -quit)"
+          test -n "$merged"
+          cp "$merged" migration-bundle/factory.bin
+          cp prepared/synap_esp32c3_migration/partitions.csv migration-bundle/partitions.csv
+          cp docs/ODYSSEY_C3_LARGE_OTA_MIGRATION.md migration-bundle/FLASHING-INSTRUCTIONS.md
+          printf 'firmware_bytes=%s\nslot_bytes=1835008\n' "$(stat -c%s "$firmware")" > migration-bundle/build-info.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: c3-large-dual-ota-wired-migration
+          path: migration-bundle/
+          if-no-files-found: error
