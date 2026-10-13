@@ -202,7 +202,11 @@ static uint8_t odysseyBatchWriteFailureStage(int error) {
 // sequential append-only WAV open. The transfer path synthesizes its WAV
 // header from the resulting file length after an interrupted power cycle.
 // Only invoke after a successful, complete 4 KiB batch under OdysseySdGuard.
-static constexpr uint32_t ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=10000u;
+// Fewer FAT directory/FSInfo CMD24 metadata writes while audio is active.
+// Ten-second f_sync was a regular single-sector write stressor on the
+// affected C3+SD carrier. This trades a longer unsynced tail (up to ~60 s)
+// for substantially fewer controller program-busy transitions.
+static constexpr uint32_t ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=60000u;
 static uint8_t odysseyCheckpointWav(FILE* file,int& savedErrno) {
   savedErrno=0;
   errno=0;
@@ -332,13 +336,20 @@ static void odysseyRecordTake() {
     int16_t pcm[SAMPLES_PER_FRAME];
     while (!failed && !odysseyStopRequested.load()) {
       size_t received=0;
-      uint8_t emptyReads=0;
+      uint32_t noAudioSince=millis();
       while (received<sizeof(raw) && !odysseyStopRequested.load()) {
         const size_t count=microphoneI2S.readBytes(reinterpret_cast<char*>(raw)+received,sizeof(raw)-received);
         if (!count) {
-          if (++emptyReads>=3) { failed=true;failureStage=43; break; }
+          // A stalled SDSPI write or task scheduling delay can briefly
+          // starve I2S; three zero reads (often <250 ms) were treated as a
+          // fatal microphone error. Allow one second before abandoning a take.
+          if (uint32_t(millis()-noAudioSince)>=1000u) {
+            failed=true;failureStage=43;break;
+          }
+          vTaskDelay(1);
         } else {
-          received+=count;emptyReads=0;
+          received+=count;
+          noAudioSince=millis();
         }
       }
       if (failed || odysseyStopRequested.load()) break;
@@ -415,6 +426,21 @@ static void odysseyRecordTake() {
   failed=true;failureStage=43;
 #endif
 
+  if (file && odysseySdWriteTimeoutQuarantined()) {
+    // NEVER fclose/f_sync after a timed-out CMD24/CMD25. FatFs fclose can
+    // itself write directory/FAT sectors, injecting new commands into a card
+    // still asserting BUSY and turning one write failure into permanent loss
+    // of SD responsiveness. Leave the descriptor in RAM until a real rail
+    // power-cycle/restart; no other FAT access is permitted.
+    failed=true;
+    if (!failureStage) failureStage=79; // physical program timeout
+    if (!odysseyPersistedWriteErrno.load()) odysseyPersistedWriteErrno=EIO;
+    odysseySdBootState=2;
+    odysseySdProbeStage=failureStage;
+    odysseySdUnsafeToSleep=true;
+    file=nullptr;
+    Serial.println("[SD] CMD24/CMD25 timeout: skip unsafe fclose, quarantine card until SD power-cycle; retain WAV prefix");
+  }
   if (file) {
     if (!failed && batchUsed) {
       // Preserve the multi-block path through STOP: pad the tail to one full
@@ -527,6 +553,28 @@ static void odysseyRecordTask(void*) {
   // One physical double-tap owns recovery + recording. If the previous take
   // left storage unavailable, recover it here after leaving the touch/control
   // task rather than forcing the user to perform a separate recovery gesture.
+  const bool previousProgramTimeout =
+    odysseyLastWireError()==uint32_t(ESP_ERR_TIMEOUT) &&
+    (odysseyLastWireCommand()==24u || odysseyLastWireCommand()==25u ||
+      (odysseyLastWireCommand()==13u &&
+        (odysseyLastWirePrev()==24u || odysseyLastWirePrev()==25u)));
+  if (!odysseySdReady() &&
+      (odysseySdWriteTimeoutQuarantined() ||
+       (previousProgramTimeout && esp_reset_reason()!=ESP_RST_POWERON))) {
+    // Warm reset does not reset the always-powered SD rail. Do not remount
+    // after a recorded NAND program timeout; it risks compounding failure.
+    const uint32_t finalizedAt=millis();
+    odysseyRecordFaultAt=finalizedAt;
+    odysseySdSleepGuardUntil=finalizedAt+5000u;
+    disconnectedAt=finalizedAt;
+    odysseyRecording=false;
+    odysseyStopRequested=false;
+    applyCpuPowerProfile(false);
+    updateStatusLed(true);
+    Serial.println("[SD] offline start refused: prior timed-out CMD24/CMD25; power-cycle SD, never automatic remount");
+    vTaskDelete(nullptr);
+    return;
+  }
   if (!odysseySdReady() && odysseySdBusStuckLow()) {
     // A card that drives MISO LOW with CS high cannot recover through
     // repeated CMD0/CMD12 remount attempts on the same powered SD rail.
