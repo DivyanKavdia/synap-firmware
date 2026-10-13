@@ -552,7 +552,20 @@ static void worker(void*) {
         sdBleTransferInFlight=false;
         continue;
       case 16: error=OK; break;
-      case 20: error=OdysseyWifiAp::begin()?OK:BUSY; break;
+      case 20: {
+        // Return SSID, WPA password and private URL in the SAME BLE response
+        // that arms SoftAP; an extra op21 round trip may never complete once
+        // Wi-Fi starts sharing radio and C3 internal heap with Bluetooth.
+        if(!OdysseyWifiAp::begin()) {error=BUSY;break;}
+        char detail[480]{};
+        const size_t n=OdysseyWifiAp::encode(detail,sizeof(detail));
+        if(!n) {error=IO_ERROR;break;}
+        reply(request,OK,uint32_t(n),0,
+          reinterpret_cast<const uint8_t*>(detail),n);
+        sdBleLastTransferAt=millis();
+        sdBleTransferInFlight=false;
+        continue;
+      }
       case 27: {
         // Purely read-only snapshot of the LAST recorder error after a
         // reboot. It never calls SD.begin, SD.end, mkdir, fopen or recovery.
