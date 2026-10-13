@@ -269,7 +269,6 @@ static void serveSession() {
     apServer->handleClient();
     vTaskDelay(pdMS_TO_TICKS(5));
   }
-  shutDown();
 }
 // Start Wi-Fi only after the op20 ACK and op21 hotspot credentials have
 // reached Bluefy. ESP32-C3 SoftAP and BLE share radio and constrained heap.
@@ -304,7 +303,7 @@ static bool activateAp() {
 static void apTask(void*) {
   // The BLE media response is read over a separate GATT characteristic;
   // allow both startup requests to complete before enabling Wi-Fi.
-  vTaskDelay(pdMS_TO_TICKS(2200));
+  vTaskDelay(pdMS_TO_TICKS(4000));
   if(!stopRequested.load() && activateAp()) serveSession();
   else Serial.println("[C3-AP] startup cancelled/failed; no SD changes");
   shutDown();
