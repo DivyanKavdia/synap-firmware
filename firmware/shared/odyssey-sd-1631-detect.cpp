@@ -93,6 +93,13 @@ static std::atomic<uint32_t> odysseyWirePriorCmd{UINT32_MAX};
 static std::atomic<uint32_t> odysseyWirePriorSuccessCmd{UINT32_MAX};
 static std::atomic<uint32_t> odysseyWireGoodWrites{0};
 static std::atomic<uint32_t> odysseyWireWritesAtFailure{0};
+// A timed-out CMD24/CMD25 (or its immediately following CMD13) can leave the
+// always-powered SD controller busy/programming. No further filesystem I/O,
+// unmount or same-rail recovery is permitted before a real power cycle.
+static std::atomic<bool> odysseySdTimedOutWriteQuarantined{false};
+bool odysseySdWriteTimeoutQuarantined() {
+  return odysseySdTimedOutWriteQuarantined.load();
+}
 void odysseySdClearWireFault() {
   odysseyWireCmdPlusOne=0;
   odysseyWireError=0;
@@ -788,6 +795,13 @@ static bool odysseySdBeginLocked() {
   const uint32_t elapsed=uint32_t(millis()-startedAt);
   if (cmd && cmd->opcode==13u) odysseyWireLastCmd13=cmd->response[0];
   const esp_err_t error=result!=ESP_OK?result:(cmd?cmd->error:ESP_FAIL);
+  const uint32_t prior=odysseyWirePriorCmd.load();
+  if (cmd && error==ESP_ERR_TIMEOUT &&
+      (cmd->opcode==24u || cmd->opcode==25u ||
+       (cmd->opcode==13u && (prior==24u || prior==25u)))) {
+    odysseySdTimedOutWriteQuarantined=true;
+    odysseySdUnsafeToSleep=true;
+  }
   // SDIO CMD52 is used during ESP-IDF card discovery. Ordinary memory
   // cards are allowed to time out on this OPTIONAL probe, and a successful
   // mount must not carry it as the first recording/write failure.
@@ -971,6 +985,7 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   // A complete mount plus writable VFS validation is the explicit recovery
   // that makes a previously failed sleep quiesce safe to attempt again.
   odysseySdUnsafeToSleep=false;
+  odysseySdTimedOutWriteQuarantined=false; // only a verified fresh mount clears quarantine
   const uint64_t bytes=uint64_t(odysseySdNativeCard->csd.capacity)*
     uint64_t(odysseySdNativeCard->csd.sector_size);
   Serial.printf("[SD] native SDSPI FAT ready capacity=%llu MiB clock=%lu Hz\\n",
@@ -1032,6 +1047,14 @@ bool odysseyInitializeSdCardBeforeBle() {
   return ready;
 }
 bool odysseyRecoverSdCard(const char* reason) {
+  // A failed program/write timeout is not a permission to reset SPI or issue
+  // CMD0/CMD12 to a card still programming NAND. A true rail power cycle
+  // (cold boot, card removal) is required; preserve its existing FAT data.
+  if (odysseySdWriteTimeoutQuarantined()) {
+    odysseySdUnsafeToSleep=true;
+    Serial.println("[SD] recovery refused after CMD24/CMD25 timeout: SD power-cycle required; recordings retained");
+    return false;
+  }
   OdysseySdGuard guard(pdMS_TO_TICKS(5000));
   if (!guard) return false;
   if (odysseySdControllerBusyLow()) {
