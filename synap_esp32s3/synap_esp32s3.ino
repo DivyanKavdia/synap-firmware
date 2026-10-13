@@ -4969,7 +4969,7 @@ static bool authorized() {
   apServer->sendHeader("Referrer-Policy","no-referrer");
   apServer->sendHeader("X-Content-Type-Options","nosniff");
   apServer->sendHeader("Content-Security-Policy",
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'");
+    "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'");
   const Info current=snapshot();
   if (!current.active || apServer->arg("key")!=current.key) {
     apServer->send(403,"text/plain","Use the private link displayed in Synap.");
@@ -4991,7 +4991,9 @@ static void page() {
     "a{color:#155f4a}button{font:inherit;padding:10px;border-radius:9px}"
     "</style><h1>Synap C3 recordings</h1>"
     "<p>Download WAV files directly to this device. No SD data is deleted."
-    " When finished, reconnect to your normal network to import recordings into Synap.</p><ul>");
+    " When opened from Synap, tap a recording to import it directly into Memories."
+    " If the browser bridge is unavailable, the link downloads a WAV as a fallback.</p>"
+    "<p id=bridgeStatus aria-live=polite>Waiting for the Synap import bridge; downloads remain available.</p><ul>");
   DIR* directory=opendir(ODYSSEY_SD_RECORDING_DIR);
   size_t shown=0;
   if(directory) {
@@ -5007,8 +5009,8 @@ static void page() {
       if(stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<44)continue;
       char line[260];
       const int n=snprintf(line,sizeof(line),
-        "<li><a href='/file?key=%s&amp;path=%s'>%s</a> (%lu bytes)</li>",
-        current.key,logical,name,static_cast<unsigned long>(st.st_size));
+        "<li><a data-path='%s' href='/file?key=%s&amp;path=%s'>%s</a> (%lu bytes)</li>",
+        logical,current.key,logical,name,static_cast<unsigned long>(st.st_size));
       if(n>0 && size_t(n)<sizeof(line)){apServer->sendContent(String(line));++shown;}
       vTaskDelay(1);
     }
@@ -5020,7 +5022,88 @@ static void page() {
   apServer->sendContent("</ul><p>Hotspot closes after 3 minutes idle, at most 15 minutes.</p>"
     "<form method=post action='/stop?key=");
   apServer->sendContent(String(current.key));
-  apServer->sendContent("'><button>Finish downloads</button></form></html>");
+  apServer->sendContent("'><button>Finish downloads</button></form>");
+
+  apServer->sendContent(R"JS(<script>
+(function(){
+'use strict';
+const query=new URLSearchParams(location.search);
+const channel=query.get('bridge')||'';
+const target=query.get('origin')||'';
+const status=document.getElementById('bridgeStatus');
+const enabled=/^[a-f0-9]{32}$/.test(channel) &&
+  /^https:\/\/[a-z0-9.-]+(?::[0-9]{2,5})?$/.test(target) && !!window.opener;
+let ready=false,serial=0,active=false;
+const outstanding=new Map();
+function say(msg){status.textContent=msg;}
+function send(action,details={},buffer){
+  const message={type:'synap:c3-ap',version:1,channel,action,...details};
+  if(buffer)window.opener.postMessage({...message,buffer},target,[buffer]);
+  else window.opener.postMessage(message,target);
+}
+function expect(action,details={},buffer,timeoutMs=20000){
+  return new Promise((resolve,reject)=>{
+    const seq=++serial;
+    const timer=setTimeout(()=>{outstanding.delete(seq);reject(Error('Synap bridge did not acknowledge '+action));},timeoutMs);
+    outstanding.set(seq,{resolve,reject,timer});
+    try{send(action,{...details,seq},buffer);}
+    catch(e){clearTimeout(timer);outstanding.delete(seq);reject(e);}
+  });
+}
+if(enabled){
+  window.addEventListener('message',event=>{
+    const data=event.data;
+    if(event.origin!==target || event.source!==window.opener ||
+       !data || data.type!=='synap:c3-ack' || data.version!==1 || data.channel!==channel)return;
+    if(data.action==='ready'){ready=true;say('Synap connected. Tap a WAV to save and verify it directly in Synap Memories.');return;}
+    const pending=outstanding.get(data.seq);
+    if(!pending)return;
+    outstanding.delete(data.seq);clearTimeout(pending.timer);
+    data.ok?pending.resolve(data):pending.reject(Error(data.error||'Synap import failed'));
+  });
+  send('hello',{seq:0});
+  setTimeout(()=>{if(!ready)say('Direct import unavailable in this browser session. Tap WAV links to download safely instead.');},8000);
+}
+document.addEventListener('click',async event=>{
+  const link=event.target.closest('a[data-path]');
+  if(!link || !enabled || !ready)return;
+  event.preventDefault();
+  if(active){say('Finish the current recording before selecting another.');return;}
+  active=true;
+  const path=link.dataset.path;
+  try{
+    say('Reading '+path+' from pendant over Wi-Fi…');
+    const response=await fetch(link.href,{cache:'no-store'});
+    if(!response.ok || !response.body)throw Error('Local SD read failed: HTTP '+response.status);
+    const size=Number(response.headers.get('content-length'));
+    if(!Number.isSafeInteger(size) || size<44 || size>67108864)
+      throw Error('Invalid WAV length; original was not changed');
+    await expect('begin',{path,size});
+    let received=0;
+    const reader=response.body.getReader();
+    while(true){
+      const block=await reader.read();
+      if(block.done)break;
+      const bytes=block.value;
+      for(let offset=0;offset<bytes.byteLength;offset+=16384){
+        const packet=bytes.slice(offset,offset+16384);
+        const length=packet.byteLength;
+        await expect('chunk',{path,offset:received},packet.buffer);
+        received+=length;
+        say('Transferring '+path+' · '+Math.round(received/size*100)+'%');
+      }
+    }
+    if(received!==size)throw Error('Incomplete SD transfer; original retained');
+    await expect('end',{path,size},null,180000);
+    say('Verified and saved in Synap Memories. SD original retained. You can select another recording.');
+  }catch(e){
+    try{send('cancel',{seq:++serial,path});}catch(_){}
+    say('Direct import failed: '+e.message+'. The SD original is unchanged. Retry or use the WAV download link.');
+  }finally{active=false;}
+});
+})();
+</script>)JS");
+  apServer->sendContent("</html>");
   apServer->sendContent("");
   lastActivityAt=millis();
 }
