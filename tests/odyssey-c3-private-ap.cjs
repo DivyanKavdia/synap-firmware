@@ -36,7 +36,9 @@ test('C3 AP operations stay outside existing busy gate and retain BLE OTA exclus
   assert(worker);
   assert(worker.indexOf('request.operation==21')<worker.indexOf('if (odysseyRecording.load() || streamingEnabled.load() || OdysseyWifi::busy()'));
   assert(worker.indexOf('request.operation==22')<worker.indexOf('if (odysseyRecording.load() || streamingEnabled.load() || OdysseyWifi::busy()'));
-  assert.match(worker,/case 20: error=OdysseyWifiAp::begin\(\)\?OK:BUSY/);
+  assert.match(worker,/case 20: \{/);
+  assert.match(worker,/if\(!OdysseyWifiAp::begin\(\)\)/);
+  assert.match(worker,/reply\(request,OK,uint32_t\(n\),0/);
   assert.match(worker,/OdysseyWifiAp::encode\(detail,sizeof\(detail\)\)/);
   assert.match(worker,/OdysseyWifiAp::stop\(\)\?OK:BUSY/);
 });
