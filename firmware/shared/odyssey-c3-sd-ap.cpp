@@ -24,7 +24,7 @@ struct Info {
 };
 static Info apInfo;
 static portMUX_TYPE apMux=portMUX_INITIALIZER_UNLOCKED;
-static std::atomic<bool> apActive{false}, stopRequested{false};
+static std::atomic<bool> apActive{false}, stopRequested{false}, apServing{false};
 static WebServer* apServer=nullptr;
 static uint32_t startedAt=0,lastActivityAt=0;
 
@@ -253,6 +253,7 @@ static void shutDown() {
   WiFi.softAPdisconnect(true);
   WiFi.mode(WIFI_OFF);
   store(Info{});
+  apServing=false;
   apActive=false;
   stopRequested=false;
 }
@@ -270,9 +271,43 @@ static void serveSession() {
   }
   shutDown();
 }
+// Start Wi-Fi only after the op20 ACK and op21 hotspot credentials have
+// reached Bluefy. ESP32-C3 SoftAP and BLE share radio and constrained heap.
+static bool activateAp() {
+  if(stopRequested.load() || OdysseyWifi::busy() || !odysseySdReady() ||
+     odysseyRecording.load() || streamingEnabled.load() || otaBusy() ||
+     sleepPending || batteryCritical())return false;
+  const Info next=snapshot();
+  WiFi.persistent(false);
+  if(!WiFi.mode(WIFI_AP) ||
+     !WiFi.softAPConfig(IPAddress(192,168,4,1),IPAddress(192,168,4,1),
+                        IPAddress(255,255,255,0)) ||
+     !WiFi.softAP(next.ssid,next.password,1,false,1))return false;
+  apServer=new(std::nothrow) WebServer(80);
+  if(!apServer)return false;
+  apServer->on("/",HTTP_GET,page);
+  apServer->on("/file",HTTP_GET,file);
+  apServer->on("/stop",HTTP_POST,[] {
+    if(authorized()){
+      apServer->send(200,"text/plain","Downloads finished. Return to Synap.");
+      stopRequested=true;
+    }
+  });
+  apServer->onNotFound([]{apServer->send(404,"text/plain","Open your private Synap link.");});
+  apServer->begin();
+  startedAt=lastActivityAt=millis();
+  apServing=true;
+  Serial.printf("[C3-AP] hotspot online freeHeap=%lu\n",
+    static_cast<unsigned long>(ESP.getFreeHeap()));
+  return true;
+}
 static void apTask(void*) {
-  // Return from RAII scope before FreeRTOS self-deletion.
-  serveSession();
+  // The BLE media response is read over a separate GATT characteristic;
+  // allow both startup requests to complete before enabling Wi-Fi.
+  vTaskDelay(pdMS_TO_TICKS(2200));
+  if(!stopRequested.load() && activateAp()) serveSession();
+  else Serial.println("[C3-AP] startup cancelled/failed; no SD changes");
+  shutDown();
   vTaskDelete(nullptr);
 }
 bool begin() {
@@ -287,31 +322,15 @@ bool begin() {
     snprintf(next.key+i*2,3,"%02x",randomBytes[i+16]);
   }
   stopRequested=false;
-  WiFi.persistent(false);
-  if(!WiFi.mode(WIFI_AP) ||
-     !WiFi.softAPConfig(IPAddress(192,168,4,1),IPAddress(192,168,4,1),
-                        IPAddress(255,255,255,0)) ||
-     !WiFi.softAP(next.ssid,next.password,1,false,1)){
-    WiFi.softAPdisconnect(true);WiFi.mode(WIFI_OFF);return false;
-  }
-  apServer=new(std::nothrow) WebServer(80);
-  if(!apServer){WiFi.softAPdisconnect(true);WiFi.mode(WIFI_OFF);return false;}
   next.active=true;
   store(next);
-  apServer->on("/",HTTP_GET,page);
-  apServer->on("/file",HTTP_GET,file);
-  apServer->on("/stop",HTTP_POST,[] {
-    if(authorized()){
-      apServer->send(200,"text/plain","Downloads finished. Return to Synap.");
-      stopRequested=true;
-    }
-  });
-  apServer->onNotFound([]{apServer->send(404,"text/plain","Open your private Synap link.");});
-  apServer->begin();
-  startedAt=lastActivityAt=millis();
+  // GATT op21 sees this staged response before the SoftAP radio starts.
   apActive=true;
+  apServing=false;
   if(xTaskCreate(apTask,"c3-sd-ap",AP_STACK,nullptr,1,nullptr)!=pdPASS) {
-    shutDown();return false;
+    store(Info{});
+    apActive=false;
+    return false;
   }
   return true;
 }
@@ -324,9 +343,9 @@ size_t encode(char* output,size_t capacity) {
   const Info current=snapshot();
   const int n=current.active?
     snprintf(output,capacity,
-      "{\"active\":true,\"ssid\":\"%s\",\"password\":\"%s\","
+      "{\"active\":true,\"starting\":%s,\"ssid\":\"%s\",\"password\":\"%s\","
       "\"url\":\"http://192.168.4.1/?key=%s\",\"idleSeconds\":180}",
-      current.ssid,current.password,current.key):
+      apServing.load()?"false":"true",current.ssid,current.password,current.key):
     snprintf(output,capacity,"{\"active\":false}");
   return n>0 && size_t(n)<capacity?size_t(n):0;
 }
