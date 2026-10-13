@@ -85,7 +85,8 @@ test('offline gesture reaches real C3 SD writes and verifies WAV after fclose',(
  assert.match(task,/odysseyRecoverSdCard\("touch"\)/);
  assert(task.indexOf('odysseyRecordTake();')>task.indexOf('odysseyRecoverSdCard("touch")'));
  assert.match(take,/OdysseySdGuard storage;/);
- assert.match(take,/mkdir\(ODYSSEY_SD_RECORDING_DIR,0755\)/);
+ assert.doesNotMatch(take,/mkdir\(/);
+ assert.match(take,/R%07lX\.WAV/);
  assert.doesNotMatch(take,/odysseySdPowerSafe\(/);
  assert.match(take,/file=fopen\(fullPath,"wb"\)/);
  assert.match(take,/fwrite\(batch,1,sizeof\(batch\),file\)/);
@@ -111,26 +112,24 @@ test('native VFS EIO never forces a card rearm while programming may still be bu
  assert.doesNotMatch(afterTake,/SD\.format\(|remove\(|unlink\(/);
 });
 
-test('C3 accepts a freshly formatted readable FAT root with missing /synap and stale recorder NVS',()=>{
+test('C3 mounts an empty FAT root, catalogs root WAVs, and never mkdir on first recording',()=>{
  const validate=sd.split('static bool odysseySdValidateVfsLocked(')[1]
    .split('static uint8_t odysseySdMountReasonCode')[0];
- const missing=validate.split('if (directoryErrno==ENOENT)')[1];
- assert(missing);
- assert.match(missing,/odysseySdVfsStep=13;odysseySdVfsErrno=ENOENT;/);
- assert.match(missing,/return true;/);
+ assert.match(validate,/if \(directoryErrno==ENOENT\)/);
+ assert.match(validate,/odysseySdVfsStep=13;odysseySdVfsErrno=ENOENT;/);
  assert.doesNotMatch(validate,/mkdir\(ODYSSEY_SD_RECORDING_DIR/);
  const list=transfer.split('static uint8_t catalogue(uint32_t& total) {')[1]
    .split('static uint8_t removeFile(')[0];
- assert.match(list,/if \(directoryErrno==ENOENT\)/);
- assert.match(list,/stat\(odysseySdMountPoint\(\),&root\)==0 && S_ISDIR\(root.st_mode\)/);
- assert.match(list,/catalogueBuffer="\[\]";\s*total=2u;[\s\S]*?return OK;/);
- assert.match(list,/catalogueErrno=directoryErrno\?directoryErrno:EIO;[\s\S]*?return IO_ERROR;/);
- const capture=rec.split('static void odysseyRecordTake() {')[1]
+ assert.match(list,/odysseySdMountPoint\(\),ODYSSEY_SD_RECORDING_DIR/);
+ assert.match(list,/scan==1u && directoryErrno==ENOENT/);
+ assert.match(list,/odysseySdRootWavName\(name\)/);
+ assert.doesNotMatch(list,/mkdir\(/);
+ const take=rec.split('static void odysseyRecordTake() {')[1]
    .split('static void odysseyRecordTask(void*) {')[0];
- assert.match(capture,/stat\(ODYSSEY_SD_RECORDING_DIR,&recordingDir\)/);
- assert.match(capture,/mkdir\(ODYSSEY_SD_RECORDING_DIR,0755\)/);
- assert(capture.indexOf('mkdir(ODYSSEY_SD_RECORDING_DIR,0755)')<
-        capture.indexOf('file=fopen(fullPath,"wb")'));
+ assert.doesNotMatch(take,/mkdir\(/);
+ assert.match(take,/R%07lX\.WAV/);
+ assert.match(take,/stat\(fullPath,&exists\)/);
+ assert(take.indexOf('stat(fullPath,&exists)')<take.indexOf('file=fopen(fullPath,"wb")'));
  const task=rec.split('static void odysseyRecordTask(void*) {')[1];
  assert(task.indexOf('odysseySdBusStuckLow()')<task.indexOf('odysseyRecordTake()'));
 });
