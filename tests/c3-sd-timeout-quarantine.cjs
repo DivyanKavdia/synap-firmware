@@ -1,0 +1,46 @@
+'use strict';
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs');
+const detector=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8');
+const recording=fs.readFileSync('firmware/shared/odyssey-sd-1631-recording.cpp','utf8');
+const transfer=fs.readFileSync('firmware/shared/odyssey-sd-1631-transfer.cpp','utf8');
+const ino=fs.readFileSync('synap_esp32s3/synap_esp32s3.ino','utf8');
+
+test('C3 quarantines a physical CMD24/25 program timeout without reset or remount',()=>{
+  for(const source of [detector,ino]) {
+    assert.match(source,/odysseySdTimedOutWriteQuarantined=true/);
+    assert.match(source,/cmd->opcode==24u \|\| cmd->opcode==25u/);
+    assert.match(source,/cmd->opcode==13u && \(prior==24u \|\| prior==25u\)/);
+    assert.match(source,/if \(odysseySdWriteTimeoutQuarantined\(\)\) \{/);
+    assert.match(source,/recovery refused after CMD24\/CMD25 timeout/);
+    assert.match(source,/odysseySdTimedOutWriteQuarantined=false/);
+  }
+  const recovery=detector.split('bool odysseyRecoverSdCard(const char* reason) {')[1].split('esp_err_t odysseyFormatSdCard()')[0];
+  assert(recovery.indexOf('if (odysseySdWriteTimeoutQuarantined())')<
+    recovery.indexOf('odysseySdReleaseLocked()'),'blocked BEFORE teardown or new CMD0');
+});
+test('first SD write-timeout abort never fclose nor attempt a second write on stuck card',()=>{
+  for(const source of [recording,ino]){
+    const take=source.split('static void odysseyRecordTake() {')[1].split('static void odysseyRecordTask(void*) {')[0];
+    assert(take);
+    assert.match(take,/if \(file && odysseySdWriteTimeoutQuarantined\(\)\) \{/);
+    assert.match(take,/file=nullptr/);
+    const quarantine=take.indexOf('if (file && odysseySdWriteTimeoutQuarantined())');
+    const close=take.indexOf('if (fclose(file)!=0)');
+    assert(quarantine>=0 && quarantine<close,'quarantine before potentially blocking fclose');
+    assert.match(take,/odysseySdUnsafeToSleep=true/);
+    assert.match(take,/odysseySdBootState=2/);
+    assert.match(take,/odysseyPersistRecordFailure\(persistedStage,bytes\)/);
+    assert.match(source,/previousProgramTimeout && esp_reset_reason\(\)!=ESP_RST_POWERON/);
+  }
+});
+test('reduce forced FAT metadata updates, tolerate brief I2S starvation, never erase SD files',()=>{
+  for(const source of [recording,ino]){
+    assert.match(source,/ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=60000u/);
+    assert.match(source,/uint32_t\(millis\(\)-noAudioSince\)>=1000u/);
+  }
+  assert.match(transfer,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
+  const worker=transfer.split('static void worker(void*) {')[1];
+  assert(worker.indexOf('!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED')<worker.indexOf('case 17:'));
+  assert.match(worker,/request.operation==17u \|\| request.operation==18u \|\| request.operation==19u/);
+  assert.match(worker,/reply\(request,BAD_COMMAND\)/);
+});
