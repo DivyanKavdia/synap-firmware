@@ -30,11 +30,12 @@ test('a failed AP startup is inspectable via read-only BLE op21 after the link r
  }
 });
 test('Bluedroid auto advertising cannot race a staged C3 SoftAP startup',()=>{
- const original=ble.split('#if defined(CONFIG_BLUEDROID_ENABLED)')[1]||ble;
  for(const source of [ble,ino]){
   const control=source.split('void controlTask(void* parameter) {')[1].split('#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU\n// SYNAP_C3_INDEPENDENT_TOUCH_STOP')[0];
   assert.match(control,/restartAdvertising && !deviceConnected\.load\(\)/);
-  assert.match(control,/&& !OdysseyWifi::busy\(\)/);
+  assert.match(control,/bleAutoAdvertiseAllowed\(\)/);
+  assert.match(source,/static bool bleAutoAdvertiseAllowed\(\)/);
+  assert.match(source,/return !OdysseyWifi::busy\(\)/);
   assert.match(control,/bleServer->startAdvertising\(\)/);
  }
  assert.match(ap,/void shutDown\(\)/);
