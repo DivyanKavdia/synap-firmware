@@ -14,6 +14,10 @@ test('ESP32-C3 hotspot quiesces idle BLE and stops advertisements before startin
     assert.match(pause,/uint32_t\(millis\(\)-began\)<2000u/);
     assert.match(pause,/return false;/);
     assert(enable.indexOf('pauseBleForWifi()')<enable.indexOf('WiFi.mode(WIFI_AP)'));
+    // The composite OdysseyWifi::busy() includes OdysseyWifiAp::busy().
+    // Calling it after begin() arms apActive would always block SoftAP.
+    assert.doesNotMatch(enable,/if\s*\([^)]*OdysseyWifi::busy\(\)/);
+    assert.match(enable,/!odysseySdReady\(\)/);
     assert.match(source,/vTaskDelay\(pdMS_TO_TICKS\(4000\)\)/);
   }
 });
