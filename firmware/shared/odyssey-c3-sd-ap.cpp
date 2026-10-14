@@ -279,7 +279,8 @@ static bool pauseBleForWifi() {
 static void resumeBleAfterWifi() {
   if (!bleServer) return;
 #if defined(CONFIG_NIMBLE_ENABLED)
-  bleServer->advertiseOnDisconnect(true);
+  // Only the C3 AP shutdown path should reenable post-disconnect advertising.
+  if (!apActive.load()) bleServer->advertiseOnDisconnect(true);
 #endif
   if (!deviceConnected.load()) {
     bleServer->startAdvertising();
