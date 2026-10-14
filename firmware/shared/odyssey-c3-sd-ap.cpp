@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <new>
 #include "esp_system.h"
+#include "esp_heap_caps.h"
 #endif
 namespace OdysseyWifiAp {
 #if SYNAP_C3_WIFI_UPLOAD_ENABLED
@@ -27,6 +28,19 @@ static portMUX_TYPE apMux=portMUX_INITIALIZER_UNLOCKED;
 static std::atomic<bool> apActive{false}, stopRequested{false}, apServing{false};
 static WebServer* apServer=nullptr;
 static uint32_t startedAt=0,lastActivityAt=0;
+// Retain the latest failed start in RAM so op21 can diagnose an AP which
+// never broadcast. These counters do not touch or remount the SD card.
+static std::atomic<uint8_t> lastStartFailure{0};
+static std::atomic<uint32_t> failedHeap{0},failedLargestBlock{0};
+static void noteStartFailure(uint8_t stage) {
+  const uint32_t freeHeap=ESP.getFreeHeap();
+  const uint32_t largest=heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  failedHeap=freeHeap;failedLargestBlock=largest;lastStartFailure=stage;
+  Serial.printf("[C3-AP] startup failure stage=%u freeHeap=%lu largest=%lu BLE=%u SD=%u OTA=%u\n",
+    unsigned(stage),static_cast<unsigned long>(freeHeap),
+    static_cast<unsigned long>(largest),unsigned(deviceConnected.load()),
+    unsigned(odysseySdReady()),unsigned(otaBusy()));
+}
 
 static Info snapshot() {
   Info copy;
@@ -302,7 +316,7 @@ static void serveSession() {
   // One SD mutex lease across a session: no concurrent FAT operations,
   // offline recording, remounts, OTA, deletion or formatting.
   OdysseySdGuard sd(pdMS_TO_TICKS(1500));
-  if(!sd || !odysseySdReady())return;
+  if(!sd || !odysseySdReady()) {noteStartFailure(8);return;}
   while(!stopRequested.load() &&
         uint32_t(millis()-startedAt)<MAX_MS &&
         uint32_t(millis()-lastActivityAt)<IDLE_MS &&
@@ -317,18 +331,32 @@ static bool activateAp() {
   // OdysseyWifi::busy() deliberately includes THIS AP session. begin() has
   // already acquired AP ownership; rechecking the composite flag here would
   // reject every deferred startup before the radio is ever enabled.
-  if(stopRequested.load() || !odysseySdReady() ||
-     odysseyRecording.load() || streamingEnabled.load() || otaBusy() ||
-     sleepPending || batteryCritical())return false;
+  if(stopRequested.load()) {noteStartFailure(1);return false;}
+  if(!odysseySdReady() || odysseyRecording.load() ||
+     streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) {
+    noteStartFailure(2);return false;
+  }
   const Info next=snapshot();
-  if (!pauseBleForWifi()) return false;
+  if (!pauseBleForWifi()) {noteStartFailure(3);return false;}
   WiFi.persistent(false);
-  if(!WiFi.mode(WIFI_AP) ||
-     !WiFi.softAPConfig(IPAddress(192,168,4,1),IPAddress(192,168,4,1),
-                        IPAddress(255,255,255,0)) ||
-     !WiFi.softAP(next.ssid,next.password,1,false,1))return false;
+  if(!WiFi.mode(WIFI_AP)) {noteStartFailure(4);return false;}
+  // The core's SoftAP default is already 192.168.4.1/24. Avoid the extra
+  // softAPConfig DHCP/netif transition, which can abort an otherwise healthy
+  // AP before its SSID is ever broadcast.
+  if(!WiFi.softAP(next.ssid,next.password,1,false,1)) {
+    noteStartFailure(5);return false;
+  }
+  const IPAddress expected(192,168,4,1);
+  // esp-netif comes up asynchronously on some Arduino-ESP32 revisions.
+  // Wait briefly for the default gateway rather than treating the first
+  // 0.0.0.0 read as permanent AP failure.
+  for(uint8_t attempt=0;attempt<10u && WiFi.softAPIP()!=expected;++attempt)
+    vTaskDelay(pdMS_TO_TICKS(50));
+  if(WiFi.softAPIP()!=expected) {
+    noteStartFailure(6);return false;
+  }
   apServer=new(std::nothrow) WebServer(80);
-  if(!apServer)return false;
+  if(!apServer){noteStartFailure(7);return false;}
   apServer->on("/",HTTP_GET,page);
   apServer->on("/file",HTTP_GET,file);
   apServer->on("/stop",HTTP_POST,[] {
@@ -366,12 +394,14 @@ bool begin() {
     snprintf(next.key+i*2,3,"%02x",randomBytes[i+16]);
   }
   stopRequested=false;
+  lastStartFailure=0;failedHeap=0;failedLargestBlock=0;
   next.active=true;
   store(next);
   // GATT op21 sees this staged response before the SoftAP radio starts.
   apActive=true;
   apServing=false;
   if(xTaskCreate(apTask,"c3-sd-ap",AP_STACK,nullptr,1,nullptr)!=pdPASS) {
+    noteStartFailure(9);
     store(Info{});
     apActive=false;
     return false;
@@ -390,7 +420,11 @@ size_t encode(char* output,size_t capacity) {
       "{\"active\":true,\"starting\":%s,\"ssid\":\"%s\",\"password\":\"%s\","
       "\"url\":\"http://192.168.4.1/?key=%s\",\"idleSeconds\":180}",
       apServing.load()?"false":"true",current.ssid,current.password,current.key):
-    snprintf(output,capacity,"{\"active\":false}");
+    snprintf(output,capacity,
+      "{\"active\":false,\"failure\":%u,\"freeHeap\":%lu,\"largestBlock\":%lu}",
+      unsigned(lastStartFailure.load()),
+      static_cast<unsigned long>(failedHeap.load()),
+      static_cast<unsigned long>(failedLargestBlock.load()));
   return n>0 && size_t(n)<capacity?size_t(n):0;
 }
 #else

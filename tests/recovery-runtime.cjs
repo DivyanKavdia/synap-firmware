@@ -6,7 +6,7 @@ test('bounded recovery uses the production ring and negotiated ownership; unsafe
   const code=source.slice(source.indexOf('// Optional recovery protocol.'),source.indexOf('void stopStreaming(ErrorCode reason) {'));
   const stop=source.slice(source.indexOf('void stopStreaming(ErrorCode reason) {'),source.indexOf('bool configureTransportFromPeerMtu() {'));
   const start=source.slice(source.indexOf('void startStreaming(uint8_t version) {'),source.indexOf('void queueEvent(EventType type, uint8_t command, uint8_t version, uint32_t stream) {'));
-  const commands=source.slice(source.indexOf('void processCommand(uint8_t command, uint8_t version) {'),source.indexOf('void reconcileConnection() {'));
+  const commands=source.slice(source.indexOf('void processCommand(uint8_t command, uint8_t version) {'),source.indexOf('// Keep the C3 Wi-Fi guard outside Bluedroid'));
   assert.match(nativeTest(fs.readFileSync(path.join(__dirname,'recovery-runtime.cpp'),'utf8').replace('// INSERT RECOVERY',code)
     .replace('// INSERT RECORDING COMMANDS',stop+start+commands)),/PASS recovery/);
 });
