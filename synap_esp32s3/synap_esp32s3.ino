@@ -5042,7 +5042,7 @@ namespace OdysseyWifiAp {
 #if SYNAP_C3_WIFI_UPLOAD_ENABLED
 
 static constexpr uint32_t IDLE_MS=180000u, MAX_MS=900000u;
-static constexpr size_t AP_STACK=12288;
+static constexpr size_t AP_STACK=4096; // Staging task only; Wi-Fi runs after reboot, without BLE
 struct Info {
   bool active=false;
   char ssid[24]{};
@@ -5054,6 +5054,23 @@ static portMUX_TYPE apMux=portMUX_INITIALIZER_UNLOCKED;
 static std::atomic<bool> apActive{false}, stopRequested{false}, apServing{false};
 static WebServer* apServer=nullptr;
 static uint32_t startedAt=0,lastActivityAt=0;
+// Warm ESP.restart preserves RTC_DATA_ATTR but not ordinary heap. Consume
+// this one-shot handoff only on ESP_RST_SW; a panic, brownout or power cycle
+// returns to the normal BLE/OTA boot, never traps the pendant in an AP loop.
+static constexpr uint32_t AP_REBOOT_MAGIC=0x534E4150u;
+struct RtcHandoff {
+  // No constructors, in-class initializers or STL objects: RTC_DATA_ATTR
+  // must not be zeroed again by C++ global initialization after esp_restart.
+  uint32_t magic,inverse;
+  char ssid[24],password[33],key[33];
+};
+RTC_DATA_ATTR static RtcHandoff rtcHandoff;
+RTC_DATA_ATTR static uint8_t rtcFailure=0;
+RTC_DATA_ATTR static uint32_t rtcFailureHeap=0,rtcFailureLargest=0;
+static bool bootExclusive=false;
+static void clearRtcHandoff() {
+  rtcHandoff.magic=0;rtcHandoff.inverse=0;
+}
 // Retain the latest failed start in RAM so op21 can diagnose an AP which
 // never broadcast. These counters do not touch or remount the SD card.
 static std::atomic<uint8_t> lastStartFailure{0};
@@ -5062,6 +5079,9 @@ static void noteStartFailure(uint8_t stage) {
   const uint32_t freeHeap=ESP.getFreeHeap();
   const uint32_t largest=heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   failedHeap=freeHeap;failedLargestBlock=largest;lastStartFailure=stage;
+  if(bootExclusive) {
+    rtcFailure=stage;rtcFailureHeap=freeHeap;rtcFailureLargest=largest;
+  }
   Serial.printf("[C3-AP] startup failure stage=%u freeHeap=%lu largest=%lu BLE=%u SD=%u OTA=%u\n",
     unsigned(stage),static_cast<unsigned long>(freeHeap),
     static_cast<unsigned long>(largest),unsigned(deviceConnected.load()),
@@ -5290,6 +5310,8 @@ static void file() {
 }
 // A planned Wi-Fi handoff releases radio time and avoids accepting a new
 // BLE central while the C3's single radio is serving SoftAP traffic.
+// This historical same-boot BLE/Wi-Fi handoff remains available only for
+// inspection; no production AP start calls it after the exclusive-mode fix.
 static bool pauseBleForWifi() {
   if (!bleServer) return false;
 #if defined(CONFIG_NIMBLE_ENABLED)
@@ -5336,7 +5358,7 @@ static void shutDown() {
   apServing=false;
   apActive=false;
   stopRequested=false;
-  resumeBleAfterWifi();
+  if(!bootExclusive) resumeBleAfterWifi();
 }
 static void serveSession() {
   // One SD mutex lease across a session: no concurrent FAT operations,
@@ -5363,7 +5385,10 @@ static bool activateAp() {
     noteStartFailure(2);return false;
   }
   const Info next=snapshot();
-  if (!pauseBleForWifi()) {noteStartFailure(3);return false;}
+  if (!bootExclusive) {noteStartFailure(3);return false;}
+  Serial.printf("[C3-AP] exclusive Wi-Fi boot: no BLE allocated; heap=%lu largest=%lu\n",
+    static_cast<unsigned long>(ESP.getFreeHeap()),
+    static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
   WiFi.persistent(false);
   if(!WiFi.mode(WIFI_AP)) {noteStartFailure(4);return false;}
   // The core's SoftAP default is already 192.168.4.1/24. Avoid the extra
@@ -5400,13 +5425,85 @@ static bool activateAp() {
   return true;
 }
 static void apTask(void*) {
-  // Credentials are staged in the op20 GATT response; provide a bounded
-  // delivery window before deliberately handing the shared radio to Wi-Fi.
+  // BLE op20 has returned credentials. Four seconds later, safely quiesce
+  // the SD controller and reboot into Wi-Fi mode with no BLE stack or
+  // audio/control worker tasks consuming the ESP32-C3's small heap.
   vTaskDelay(pdMS_TO_TICKS(4000));
-  if(!stopRequested.load() && activateAp()) serveSession();
-  else Serial.println("[C3-AP] startup cancelled/failed; no SD changes");
+  if(stopRequested.load() || !odysseySdReady() ||
+     odysseyRecording.load() || streamingEnabled.load() || otaBusy() ||
+     sleepPending || batteryCritical()) {
+    noteStartFailure(2);
+  } else if(!odysseyPrepareSdForPowerTransition(1500u)) {
+    noteStartFailure(8);
+  } else {
+    const Info requested=snapshot();
+    memcpy(rtcHandoff.ssid,requested.ssid,sizeof(requested.ssid));
+    memcpy(rtcHandoff.password,requested.password,sizeof(requested.password));
+    memcpy(rtcHandoff.key,requested.key,sizeof(requested.key));
+    rtcHandoff.inverse=~AP_REBOOT_MAGIC;
+    rtcHandoff.magic=AP_REBOOT_MAGIC; // Commit after credentials are copied.
+    Serial.printf("[C3-AP] Wi-Fi-only reboot staged; freeHeap=%lu\n",
+      static_cast<unsigned long>(ESP.getFreeHeap()));
+    Serial.flush();
+    vTaskDelay(pdMS_TO_TICKS(150));
+    ESP.restart();
+  }
+  // Fail-closed: recovery to BLE remains possible, without radio contention.
   shutDown();
   vTaskDelete(nullptr);
+}
+// Must be called once during C3 boot, before initializeBLE() or any audio
+// queues/tasks are allocated. It only consumes RTC memory, never NVS/SD.
+bool resumeAtBoot() {
+  const bool valid=bootResetReason==ESP_RST_SW &&
+    rtcHandoff.magic==AP_REBOOT_MAGIC &&
+    rtcHandoff.inverse==~AP_REBOOT_MAGIC &&
+    strncmp(rtcHandoff.ssid,"Synap-C3-",9)==0 &&
+    strnlen(rtcHandoff.ssid,sizeof(rtcHandoff.ssid))<sizeof(rtcHandoff.ssid) &&
+    strnlen(rtcHandoff.password,sizeof(rtcHandoff.password))==32u &&
+    strnlen(rtcHandoff.key,sizeof(rtcHandoff.key))==32u;
+  Info requested{};
+  if(valid){
+    requested.active=true;
+    memcpy(requested.ssid,rtcHandoff.ssid,sizeof(requested.ssid));
+    memcpy(requested.password,rtcHandoff.password,sizeof(requested.password));
+    memcpy(requested.key,rtcHandoff.key,sizeof(requested.key));
+  }
+  clearRtcHandoff(); // A panic during AP startup must boot BLE next time.
+  if(!valid) {
+    if(bootResetReason!=ESP_RST_SW) {
+      rtcFailure=0;rtcFailureHeap=0;rtcFailureLargest=0;
+    }
+    return false;
+  }
+  bootExclusive=true;
+  apActive=true;apServing=false;stopRequested=false;
+  store(requested);
+  return true;
+}
+void runBootSession() {
+  if(!bootExclusive) return;
+  Serial.printf("[C3-AP] EXCLUSIVE boot: skipping BLE initialization, heap=%lu\n",
+    static_cast<unsigned long>(ESP.getFreeHeap()));
+  // A fresh normal C3 boot mounts once; this read-only AP boot does the
+  // same, without ever formatting, deleting or recovering SD implicitly.
+  restoreOdysseySdBatteryDividerProfile();
+  const bool sdReady=odysseyInitializeSdCardBeforeBle();
+  sampleBattery(true);
+  if(!sdReady) noteStartFailure(8);
+  else if(activateAp()) serveSession();
+  else Serial.println("[C3-AP] Wi-Fi-only activation refused");
+  shutDown();
+  // All network clients are closed and the SD lease has been released.
+  // Do not restart over unfinished card transactions.
+  if(!odysseyPrepareSdForPowerTransition(1500u)) {
+    Serial.println("[C3-AP] SD not safely idle; remaining in guarded offline state");
+    for(;;) vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+  Serial.printf("[C3-AP] returning to BLE boot; lastFailure=%u\n",unsigned(rtcFailure));
+  Serial.flush();
+  vTaskDelay(pdMS_TO_TICKS(200));
+  ESP.restart();
 }
 bool begin() {
   if(apActive.load() || OdysseyWifi::busy() || !odysseySdReady() ||
@@ -5421,6 +5518,8 @@ bool begin() {
   }
   stopRequested=false;
   lastStartFailure=0;failedHeap=0;failedLargestBlock=0;
+  rtcFailure=0;rtcFailureHeap=0;rtcFailureLargest=0;
+  clearRtcHandoff();
   next.active=true;
   store(next);
   // GATT op21 sees this staged response before the SoftAP radio starts.
@@ -5448,13 +5547,15 @@ size_t encode(char* output,size_t capacity) {
       apServing.load()?"false":"true",current.ssid,current.password,current.key):
     snprintf(output,capacity,
       "{\"active\":false,\"failure\":%u,\"freeHeap\":%lu,\"largestBlock\":%lu}",
-      unsigned(lastStartFailure.load()),
-      static_cast<unsigned long>(failedHeap.load()),
-      static_cast<unsigned long>(failedLargestBlock.load()));
+      unsigned(lastStartFailure.load()?lastStartFailure.load():rtcFailure),
+      static_cast<unsigned long>(lastStartFailure.load()?failedHeap.load():rtcFailureHeap),
+      static_cast<unsigned long>(lastStartFailure.load()?failedLargestBlock.load():rtcFailureLargest));
   return n>0 && size_t(n)<capacity?size_t(n):0;
 }
 #else
 bool busy(){return false;}
+bool resumeAtBoot(){return false;}
+void runBootSession(){}
 bool begin(){return false;}
 bool stop(){return false;}
 size_t encode(char* output,size_t cap){
@@ -6347,6 +6448,9 @@ void ble(BLEService* service) {
 }
 } // namespace OdysseyTransfer
 #endif
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+namespace OdysseyWifiAp { bool resumeAtBoot(); void runBootSession(); }
+#endif
 void initializeBLE() {
   BLEDevice::init(DEVICE_NAME);
   BLEDevice::setMTU(REQUESTED_MTU);
@@ -6461,6 +6565,19 @@ void setup() {
   if (!confirmTouchWakeGesture()) return;
   disconnectedAt=millis();
   setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  // Exclusive C3 hotspot boot: consume the one-shot RTC marker BEFORE
+  // initializeBLE(), GATT services, 20-frame audio queue and microphone
+  // worker tasks consume the remaining 320 KiB SRAM. Wi-Fi-only mode can
+  // recover back to normal BLE via ESP.restart() after the session ends.
+  // An invalid marker, panic or power cycle always follows normal BLE boot.
+  if (OdysseyWifiAp::resumeAtBoot()) {
+    OdysseyWifiAp::runBootSession(); // Does not return on a healthy SD.
+    Serial.println("[C3-AP] exclusive session returned unexpectedly; rebooting");
+    Serial.flush();
+    ESP.restart();
+  }
+#endif
   // Initial C3 sample is provisional x2. On SD.begin the field C3+SD
   // profile changes to 1470/470 and resamples before any FAT write probe.
 #if !CONFIG_IDF_TARGET_ESP32C3
