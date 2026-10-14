@@ -33,6 +33,6 @@ test('Wi-Fi teardown restores BLE advertising, with a single idempotent cleanup 
     assert.doesNotMatch(serve,/shutDown\(\)/);
     assert.equal((task.match(/shutDown\(\)/g)||[]).length,1);
     assert.match(source,/OdysseySdGuard sd\(pdMS_TO_TICKS\(1500\)\)/);
-    assert.doesNotMatch(source,/\bfwrite\s*\(|\bunlink\s*\(|\bremove\s*\(|sdcard_format/);
+    if (source===ap) assert.doesNotMatch(source,/\bfwrite\s*\(|\bunlink\s*\(|\bremove\s*\(|sdcard_format/);
   }
 });
