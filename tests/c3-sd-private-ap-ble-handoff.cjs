@@ -26,8 +26,14 @@ test('C3 staged SoftAP never runs Wi-Fi.mode in BLE command and returns credenti
  assert.doesNotMatch(op20,/WiFi\.mode|delay\(/);
 });
 test('Private SoftAP remains read-only, mutex-serialized and shut down after task',()=>{
- const task=ap.split('static void apTask(void*) {')[1].split('bool begin() {')[0];
- assert(task.indexOf('activateAp()')<task.indexOf('shutDown()'));
+ const staging=ap.split('static void apTask(void*) {')[1].split('bool resumeAtBoot() {')[0];
+ const wifi=ap.split('void runBootSession() {')[1].split('bool begin() {')[0];
+ assert.match(staging,/odysseyPrepareSdForPowerTransition\(1500u\)/);
+ assert.match(staging,/rtcHandoff\.magic=AP_REBOOT_MAGIC/);
+ assert.match(staging,/ESP\.restart\(\)/);
+ assert.doesNotMatch(staging,/activateAp\(\)/);
+ assert(wifi.indexOf('activateAp()')<wifi.indexOf('shutDown()'));
+ assert.match(wifi,/odysseyPrepareSdForPowerTransition\(1500u\)/);
  assert.match(ap,/OdysseySdGuard sd\(pdMS_TO_TICKS\(1500\)\)/);
  assert.match(ap,/void shutDown/);
  assert.doesNotMatch(ap,/\bunlink\s*\(|\bremove\s*\(|\bmkdir\s*\(|\bfwrite\s*\(/);
