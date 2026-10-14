@@ -36,7 +36,7 @@ static void noteStartFailure(uint8_t stage) {
   const uint32_t freeHeap=ESP.getFreeHeap();
   const uint32_t largest=heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   failedHeap=freeHeap;failedLargestBlock=largest;lastStartFailure=stage;
-  Serial.printf("[C3-AP] startup failure stage=%u freeHeap=%lu largest=%lu BLE=%u SD=%u OTA=%u\\n",
+  Serial.printf("[C3-AP] startup failure stage=%u freeHeap=%lu largest=%lu BLE=%u SD=%u OTA=%u\n",
     unsigned(stage),static_cast<unsigned long>(freeHeap),
     static_cast<unsigned long>(largest),unsigned(deviceConnected.load()),
     unsigned(odysseySdReady()),unsigned(otaBusy()));
@@ -347,6 +347,11 @@ static bool activateAp() {
     noteStartFailure(5);return false;
   }
   const IPAddress expected(192,168,4,1);
+  // esp-netif comes up asynchronously on some Arduino-ESP32 revisions.
+  // Wait briefly for the default gateway rather than treating the first
+  // 0.0.0.0 read as permanent AP failure.
+  for(uint8_t attempt=0;attempt<10u && WiFi.softAPIP()!=expected;++attempt)
+    vTaskDelay(pdMS_TO_TICKS(50));
   if(WiFi.softAPIP()!=expected) {
     noteStartFailure(6);return false;
   }
