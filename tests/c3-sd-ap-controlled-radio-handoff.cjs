@@ -34,7 +34,12 @@ test('Wi-Fi-only boot consumes RTC marker and never initializes BLE before AP',(
     assert.match(run,/serveSession\(\)/);
     assert.match(run,/odysseyPrepareSdForPowerTransition\(1500u\)/);
     assert.match(run,/ESP\.restart\(\)/);
-    assert.match(source,/RTC_DATA_ATTR static RtcHandoff rtcHandoff/);
+    assert.match(source,/RTC_NOINIT_ATTR static RtcHandoff rtcHandoff/);
+    assert.match(source,/RTC_NOINIT_ATTR static uint8_t rtcFailure;/);
+    assert.match(source,/RTC_NOINIT_ATTR static uint32_t rtcFailureHeap,rtcFailureLargest;/);
+    assert.doesNotMatch(source,/RTC_DATA_ATTR static RtcHandoff rtcHandoff/);
+    assert.match(resume,/markerArmed/);
+    assert.match(resume,/clearRtcHandoff\(\)/);
     assert.doesNotMatch(source,/struct RtcHandoff\s*\{[^}]*=/);
     assert.match(source,/OdysseySdGuard sd\(pdMS_TO_TICKS\(1500\)\)/);
   }

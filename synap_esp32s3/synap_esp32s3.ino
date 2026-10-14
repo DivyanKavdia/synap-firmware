@@ -5054,19 +5054,20 @@ static portMUX_TYPE apMux=portMUX_INITIALIZER_UNLOCKED;
 static std::atomic<bool> apActive{false}, stopRequested{false}, apServing{false};
 static WebServer* apServer=nullptr;
 static uint32_t startedAt=0,lastActivityAt=0;
-// Warm ESP.restart preserves RTC_DATA_ATTR but not ordinary heap. Consume
-// this one-shot handoff only on ESP_RST_SW; a panic, brownout or power cycle
-// returns to the normal BLE/OTA boot, never traps the pendant in an AP loop.
+// ESP.restart() needs the .rtc_noinit linker section. RTC_DATA_ATTR is
+// initialized on ordinary software boot and can silently erase this handoff.
+// The one-shot marker is accepted ONLY on ESP_RST_SW, then immediately cleared;
+// a panic, brownout or power cycle returns to normal BLE/OTA operation.
 static constexpr uint32_t AP_REBOOT_MAGIC=0x534E4150u;
 struct RtcHandoff {
-  // No constructors, in-class initializers or STL objects: RTC_DATA_ATTR
-  // must not be zeroed again by C++ global initialization after esp_restart.
+  // Plain POD, no constructors or default member initializers. RTC_NOINIT_ATTR
+  // retains it across software restart without replaying .rtc.data startup.
   uint32_t magic,inverse;
   char ssid[24],password[33],key[33];
 };
-RTC_DATA_ATTR static RtcHandoff rtcHandoff;
-RTC_DATA_ATTR static uint8_t rtcFailure=0;
-RTC_DATA_ATTR static uint32_t rtcFailureHeap=0,rtcFailureLargest=0;
+RTC_NOINIT_ATTR static RtcHandoff rtcHandoff;
+RTC_NOINIT_ATTR static uint8_t rtcFailure;
+RTC_NOINIT_ATTR static uint32_t rtcFailureHeap,rtcFailureLargest;
 static bool bootExclusive=false;
 static void clearRtcHandoff() {
   rtcHandoff.magic=0;rtcHandoff.inverse=0;
@@ -5455,6 +5456,8 @@ static void apTask(void*) {
 // Must be called once during C3 boot, before initializeBLE() or any audio
 // queues/tasks are allocated. It only consumes RTC memory, never NVS/SD.
 bool resumeAtBoot() {
+  const bool markerArmed=rtcHandoff.magic==AP_REBOOT_MAGIC &&
+    rtcHandoff.inverse==~AP_REBOOT_MAGIC;
   const bool valid=bootResetReason==ESP_RST_SW &&
     rtcHandoff.magic==AP_REBOOT_MAGIC &&
     rtcHandoff.inverse==~AP_REBOOT_MAGIC &&
@@ -5470,6 +5473,9 @@ bool resumeAtBoot() {
     memcpy(requested.key,rtcHandoff.key,sizeof(requested.key));
   }
   clearRtcHandoff(); // A panic during AP startup must boot BLE next time.
+  Serial.printf("[C3-AP] boot marker=%u valid=%u reset=%u heap=%lu\n",
+    unsigned(markerArmed),unsigned(valid),unsigned(bootResetReason),
+    static_cast<unsigned long>(ESP.getFreeHeap()));
   if(!valid) {
     if(bootResetReason!=ESP_RST_SW) {
       rtcFailure=0;rtcFailureHeap=0;rtcFailureLargest=0;
