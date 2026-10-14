@@ -33,8 +33,10 @@ static uint32_t startedAt=0,lastActivityAt=0;
 // returns to the normal BLE/OTA boot, never traps the pendant in an AP loop.
 static constexpr uint32_t AP_REBOOT_MAGIC=0x534E4150u;
 struct RtcHandoff {
-  uint32_t magic=0, inverse=0;
-  Info credentials{};
+  // No constructors, in-class initializers or STL objects: RTC_DATA_ATTR
+  // must not be zeroed again by C++ global initialization after esp_restart.
+  uint32_t magic,inverse;
+  char ssid[24],password[33],key[33];
 };
 RTC_DATA_ATTR static RtcHandoff rtcHandoff;
 RTC_DATA_ATTR static uint8_t rtcFailure=0;
@@ -409,7 +411,9 @@ static void apTask(void*) {
     noteStartFailure(8);
   } else {
     const Info requested=snapshot();
-    rtcHandoff.credentials=requested;
+    memcpy(rtcHandoff.ssid,requested.ssid,sizeof(requested.ssid));
+    memcpy(rtcHandoff.password,requested.password,sizeof(requested.password));
+    memcpy(rtcHandoff.key,requested.key,sizeof(requested.key));
     rtcHandoff.inverse=~AP_REBOOT_MAGIC;
     rtcHandoff.magic=AP_REBOOT_MAGIC; // Commit after credentials are copied.
     Serial.printf("[C3-AP] Wi-Fi-only reboot staged; freeHeap=%lu\n",
@@ -428,11 +432,17 @@ bool resumeAtBoot() {
   const bool valid=bootResetReason==ESP_RST_SW &&
     rtcHandoff.magic==AP_REBOOT_MAGIC &&
     rtcHandoff.inverse==~AP_REBOOT_MAGIC &&
-    rtcHandoff.credentials.active &&
-    strncmp(rtcHandoff.credentials.ssid,"Synap-C3-",9)==0 &&
-    strlen(rtcHandoff.credentials.password)==32u &&
-    strlen(rtcHandoff.credentials.key)==32u;
-  const Info requested=valid?rtcHandoff.credentials:Info{};
+    strncmp(rtcHandoff.ssid,"Synap-C3-",9)==0 &&
+    strnlen(rtcHandoff.ssid,sizeof(rtcHandoff.ssid))<sizeof(rtcHandoff.ssid) &&
+    strnlen(rtcHandoff.password,sizeof(rtcHandoff.password))==32u &&
+    strnlen(rtcHandoff.key,sizeof(rtcHandoff.key))==32u;
+  Info requested{};
+  if(valid){
+    requested.active=true;
+    memcpy(requested.ssid,rtcHandoff.ssid,sizeof(requested.ssid));
+    memcpy(requested.password,rtcHandoff.password,sizeof(requested.password));
+    memcpy(requested.key,rtcHandoff.key,sizeof(requested.key));
+  }
   clearRtcHandoff(); // A panic during AP startup must boot BLE next time.
   if(!valid) {
     if(bootResetReason!=ESP_RST_SW) {
