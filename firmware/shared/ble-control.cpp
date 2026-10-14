@@ -244,7 +244,13 @@ void controlTask(void* parameter) {
       }
     }
 #if defined(CONFIG_BLUEDROID_ENABLED)
-    if (restartAdvertising && !deviceConnected.load() && millis()-disconnectedAt > 250) {
+    if (restartAdvertising && !deviceConnected.load() && millis()-disconnectedAt > 250
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+        // A deliberate C3 BLE-to-Wi-Fi handoff must not be undone by the
+        // generic disconnect recovery task while SoftAP is starting/serving.
+        && !OdysseyWifi::busy()
+#endif
+    ) {
       restartAdvertising=false;
       bleServer->startAdvertising();
     }
