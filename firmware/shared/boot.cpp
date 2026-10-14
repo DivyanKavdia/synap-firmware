@@ -1,3 +1,6 @@
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+namespace OdysseyWifiAp { bool resumeAtBoot(); void runBootSession(); }
+#endif
 void initializeBLE() {
   BLEDevice::init(DEVICE_NAME);
   BLEDevice::setMTU(REQUESTED_MTU);
@@ -139,6 +142,19 @@ void setup() {
     static_cast<unsigned long>(runningOta?runningOta->address:0u),
     static_cast<unsigned long>(selectedOta?selectedOta->address:0u),
     int(otaImageState),int(imageStateResult),unsigned(bootResetReason),unsigned(SYNAP_FIRMWARE_BUILD));
+#endif
+#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
+  // Exclusive C3 hotspot boot: consume the one-shot RTC marker BEFORE
+  // initializeBLE(), GATT services, 20-frame audio queue and microphone
+  // worker tasks consume the remaining 320 KiB SRAM. Wi-Fi-only mode can
+  // recover back to normal BLE via ESP.restart() after the session ends.
+  // An invalid marker, panic or power cycle always follows normal BLE boot.
+  if (OdysseyWifiAp::resumeAtBoot()) {
+    OdysseyWifiAp::runBootSession(); // Does not return on a healthy SD.
+    Serial.println("[C3-AP] exclusive session returned unexpectedly; rebooting");
+    Serial.flush();
+    ESP.restart();
+  }
 #endif
 #if SYNAP_CHAKSHU
   ChakshuMedia::initialize();
