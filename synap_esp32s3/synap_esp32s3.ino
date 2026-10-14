@@ -5263,6 +5263,45 @@ static void file() {
   if(remaining || sent!=44)client.stop();
   free(buffer);fclose(input);lastActivityAt=millis();
 }
+// A planned Wi-Fi handoff releases radio time and avoids accepting a new
+// BLE central while the C3's single radio is serving SoftAP traffic.
+static bool pauseBleForWifi() {
+  if (!bleServer) return false;
+#if defined(CONFIG_NIMBLE_ENABLED)
+  bleServer->advertiseOnDisconnect(false);
+#endif
+  BLEDevice::stopAdvertising();
+  if (deviceConnected.load() || bleServer->getConnectedCount()) {
+    const uint16_t connId=bleServer->getConnId();
+    Serial.printf("[C3-AP] BLE handoff disconnect conn=%u heap=%lu\n",
+      unsigned(connId),static_cast<unsigned long>(ESP.getFreeHeap()));
+    bleServer->disconnect(connId);
+    const uint32_t began=millis();
+    while ((deviceConnected.load() || bleServer->getConnectedCount()) &&
+           uint32_t(millis()-began)<2000u && !stopRequested.load()) {
+      vTaskDelay(pdMS_TO_TICKS(25));
+    }
+  }
+  // Fail closed rather than contending for the single radio with a live BLE
+  // connection. The cleanup path restores ordinary BLE discoverability.
+  if (deviceConnected.load() || bleServer->getConnectedCount() ||
+      stopRequested.load()) {
+    Serial.println("[C3-AP] BLE handoff not idle; cancelling Wi-Fi startup");
+    return false;
+  }
+  return true;
+}
+static void resumeBleAfterWifi() {
+  if (!bleServer) return;
+#if defined(CONFIG_NIMBLE_ENABLED)
+  bleServer->advertiseOnDisconnect(true);
+#endif
+  if (!deviceConnected.load()) {
+    bleServer->startAdvertising();
+    Serial.printf("[C3-AP] BLE advertising restored heap=%lu\n",
+      static_cast<unsigned long>(ESP.getFreeHeap()));
+  }
+}
 static void shutDown() {
   if(apServer){apServer->stop();delete apServer;apServer=nullptr;}
   WiFi.softAPdisconnect(true);
@@ -5271,12 +5310,13 @@ static void shutDown() {
   apServing=false;
   apActive=false;
   stopRequested=false;
+  resumeBleAfterWifi();
 }
 static void serveSession() {
   // One SD mutex lease across a session: no concurrent FAT operations,
   // offline recording, remounts, OTA, deletion or formatting.
   OdysseySdGuard sd(pdMS_TO_TICKS(1500));
-  if(!sd || !odysseySdReady()){shutDown();return;}
+  if(!sd || !odysseySdReady())return;
   while(!stopRequested.load() &&
         uint32_t(millis()-startedAt)<MAX_MS &&
         uint32_t(millis()-lastActivityAt)<IDLE_MS &&
@@ -5292,6 +5332,7 @@ static bool activateAp() {
      odysseyRecording.load() || streamingEnabled.load() || otaBusy() ||
      sleepPending || batteryCritical())return false;
   const Info next=snapshot();
+  if (!pauseBleForWifi()) return false;
   WiFi.persistent(false);
   if(!WiFi.mode(WIFI_AP) ||
      !WiFi.softAPConfig(IPAddress(192,168,4,1),IPAddress(192,168,4,1),
@@ -5316,8 +5357,8 @@ static bool activateAp() {
   return true;
 }
 static void apTask(void*) {
-  // The BLE media response is read over a separate GATT characteristic;
-  // allow both startup requests to complete before enabling Wi-Fi.
+  // Credentials are staged in the op20 GATT response; provide a bounded
+  // delivery window before deliberately handing the shared radio to Wi-Fi.
   vTaskDelay(pdMS_TO_TICKS(4000));
   if(!stopRequested.load() && activateAp()) serveSession();
   else Serial.println("[C3-AP] startup cancelled/failed; no SD changes");
