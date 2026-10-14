@@ -313,7 +313,10 @@ static void serveSession() {
 // Start Wi-Fi only after the op20 ACK and op21 hotspot credentials have
 // reached Bluefy. ESP32-C3 SoftAP and BLE share radio and constrained heap.
 static bool activateAp() {
-  if(stopRequested.load() || OdysseyWifi::busy() || !odysseySdReady() ||
+  // OdysseyWifi::busy() deliberately includes THIS AP session. begin() has
+  // already acquired AP ownership; rechecking the composite flag here would
+  // reject every deferred startup before the radio is ever enabled.
+  if(stopRequested.load() || !odysseySdReady() ||
      odysseyRecording.load() || streamingEnabled.load() || otaBusy() ||
      sleepPending || batteryCritical())return false;
   const Info next=snapshot();
