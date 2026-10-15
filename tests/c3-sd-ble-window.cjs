@@ -20,9 +20,9 @@ test('C3 notifications are paced, bounded, explicit-path, and MTU safe',()=>{
   const fn=transfer.split('static void streamSdWindow(const Request& request) {')[1]
     .split('static void worker(void*) {')[0];
   assert.match(fn,/capacity<496u/);
-  assert.match(fn,/request\.path\[0\]/);
+  assert.match(fn,/windowPath\[0\]/);
   assert.match(fn,/n<credits/);
-  assert.match(fn,/readSelected\(request\.path,offset,total,chunk,length\)/);
+  assert.match(fn,/readSelected\(windowPath,offset,total,chunk,length\)/);
   assert.match(fn,/notifySdWindow\(request,1,OK,fullSize,offset,chunk,length\)/);
   assert.match(fn,/vTaskDelay\(pacing\)/);
   assert.match(fn,/fast\?15u:20u/);
@@ -51,7 +51,7 @@ test('C3 optional opcode31 tunes paced read-only windows without changing legacy
  assert.match(transfer,/adaptive\?std::max\(uint8_t\(8\),std::min\(uint8_t\(15\),request\.paceMs\)\)/);
  assert.doesNotMatch(transfer,/if \(adaptive && n\+1u==credits\) return;/);
  assert.match(transfer,/notifySdWindow\(request,2,OK,fullSize,offset\)/);
- assert.match(transfer,/const size_t pathStart=adaptive\?12u:\(fast\?11u:10u\)/);
+ assert.match(transfer,/const size_t pathStart=request\.compact\?16u:\(adaptive\?12u:\(fast\?11u:10u\)\)/);
  assert.match(transfer,/if \(adaptive\) request\.paceMs=std::max\(uint8_t\(8\),std::min\(uint8_t\(15\),p\[11\]\)\)/);
  assert.match(transfer,/if \(!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED &&/);
  assert.match(transfer,/static constexpr bool ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
@@ -59,7 +59,7 @@ test('C3 optional opcode31 tunes paced read-only windows without changing legacy
  const mode=transfer.split('static void streamSdWindow(const Request& request) {')[1]
    .split('static void worker(void*) {')[0];
  assert.doesNotMatch(mode,/unlink\(|fwrite\(|removeFile\(|odysseyRecoverSdCard\(/);
- assert.match(ino,/p\[14\]=2;/);
+ assert.match(ino,/p\[14\]=3;/);
 });
 
 test('media-v3 compact SD window requires a connection-bound selected-file token',()=>{
