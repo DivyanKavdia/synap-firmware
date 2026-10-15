@@ -5243,7 +5243,7 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* characteristic) override {
     const size_t length=characteristic->getLength();
     const uint8_t* p=characteristic->getData();
-    if (!p || length<10 || length>73 || p[0]!=0xCA) return;
+    if (!p || length<10 || length>74 || p[0]!=0xCA) return;
     Request request{};
     request.operation=p[1];
     memcpy(&request.id,p+2,4);
