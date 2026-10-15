@@ -15,6 +15,6 @@ test('BLE read-only fast op30 and legacy op12 do not modify FAT media',()=>{
  assert.match(media,/case 12:/);
  assert.match(media,/case 30:/);
  assert.match(media,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
- assert.match(media,/readSelected\(request\.path,offset,total,chunk,length\)/);
+ assert.match(media,/readSelected\(windowPath,offset,total,chunk,length\)/);
  assert.match(media,/notifySdWindow\(request,2,OK,fullSize,offset\)/);
 });

@@ -52,7 +52,7 @@ test('BLE and SD media safely resume by ID and offset; never delete on transfer'
     cap=shared('module-capabilities.cpp');
   assert.match(media,/request\.connection!=connectionGeneration\.load\(\)/);
   assert.match(media,/case 30:/);
-  assert.match(media,/readSelected\(request\.path,offset,total,chunk,length\)/);
+  assert.match(media,/readSelected\(windowPath,offset,total,chunk,length\)/);
   assert.match(media,/notifySdWindow\(request,2,OK,fullSize,offset\)/);
   assert.match(media,/case 4:\s*error=readSelected\(request\.path,request\.offset,total,bytes,size\)/);
   assert.match(media,/case 17:\s*[\s\S]*?error=removeFile\(request\.path\)/);
