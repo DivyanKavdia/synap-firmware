@@ -142,6 +142,9 @@ static uint32_t sdBleReadCacheHits=0,sdBleReadDiskFills=0;
 static uint32_t sdBleReadRequests=0,sdBleReadLastRequestedOffset=0;
 static uint32_t sdBleReadLastOkOffset=0,sdBleReadFailureOffset=0;
 static uint32_t sdBleReadWindowRequests=0,sdBleReadMtuFallbacks=0;
+// Last failed cache-fill snapshot, retained in RAM even when VFS quarantines
+// the card. Flags: bit0=ferror, bit1=feof, bit2=seek fail, bit3=close fail.
+static uint32_t sdBleFaultReadGot=0,sdBleFaultReadWant=0,sdBleFaultReadFlags=0;
 static void invalidateBleReadCache() {
   sdBleReadCache.valid=false;
   sdBleReadCache.path[0]=0;
@@ -224,10 +227,16 @@ static uint8_t readWavChunk(const char* logical,uint32_t offset,
     }
   }
   const int readErr=errno;
+  const bool streamError=ferror(file)!=0;
+  const bool streamEof=feof(file)!=0;
   errno=0;
   const int closeResult=fclose(file);
   const int closeErr=errno;
   if (!seekOk || got!=want || closeResult!=0) {
+    sdBleFaultReadGot=uint32_t(got);
+    sdBleFaultReadWant=uint32_t(want);
+    sdBleFaultReadFlags=(streamError?1u:0u) | (streamEof?2u:0u) |
+      (!seekOk?4u:0u) | (closeResult!=0?8u:0u);
     const int err=!seekOk ? (seekErr?seekErr:EIO) :
       got!=want ? (readErr?readErr:EIO) :
       (closeErr?closeErr:EIO);
@@ -639,7 +648,7 @@ static void worker(void*) {
         // previous op4/op12 requests; it must remain safe after mount loss.
         char detail[480];
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"reads\":%lu,\"cacheHits\":%lu,\"diskFills\":%lu,\"lastRequestedOffset\":%lu,\"lastOkOffset\":%lu,\"faultOffset\":%lu,\"windowRequests\":%lu,\"mtuFallbacks\":%lu,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireMs\":%lu}",
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"reads\":%lu,\"cacheHits\":%lu,\"diskFills\":%lu,\"lastRequestedOffset\":%lu,\"lastOkOffset\":%lu,\"faultOffset\":%lu,\"windowRequests\":%lu,\"mtuFallbacks\":%lu,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireMs\":%lu,\"readGot\":%lu,\"readWant\":%lu,\"readFlags\":%lu}",
           unsigned(odysseySdDetectionState()),
           unsigned(odysseySdProbeState()),
           unsigned(sdLastMediaFaultOperation.load()),
@@ -656,7 +665,10 @@ static void worker(void*) {
           static_cast<unsigned long>(odysseySdWireFaultCmd()),
           static_cast<unsigned long>(odysseySdWireFaultError()),
           static_cast<unsigned long>(odysseySdWireFaultArg()),
-          static_cast<unsigned long>(odysseySdWireFaultElapsedMs()));
+          static_cast<unsigned long>(odysseySdWireFaultElapsedMs()),
+          static_cast<unsigned long>(sdBleFaultReadGot),
+          static_cast<unsigned long>(sdBleFaultReadWant),
+          static_cast<unsigned long>(sdBleFaultReadFlags));
         if (n<0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
