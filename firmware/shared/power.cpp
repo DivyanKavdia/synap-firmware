@@ -411,7 +411,7 @@ void pollTouchControl() {
 
   if (deepSleepAfterStop && !streaming && !raw && !otaBusy()
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-      && !odysseyRecording.load() && !OdysseyWifi::busy() && !OdysseyTransfer::busy()
+      && !odysseyRecording.load() && !OdysseyTransfer::busy()
       // A hold while recording requests STOP but cannot sleep before
       // fclose, recovery and the post-write SD settle have completed.
       && (!odysseySdSleepGuardUntil.load() ||
