@@ -38,7 +38,7 @@ test('C3 transfer owns an explicit sleep veto including request gaps and user po
   assert.match(transfer,/sdBleTransferInFlight=true/);
   assert.match(transfer,/sdBleLastTransferAt=millis\(\)/);
   assert.match(transfer,/uint32_t\(millis\(\)-last\)<15000u/);
-  assert.match(transfer,/case 12:\s*streamSdWindow\(request\);[\s\S]*?sdBleTransferInFlight=false/);
+  assert.match(transfer,/case 12:\s*case 30:[\s\S]*?streamSdWindow\(request\);[\s\S]*?sdBleTransferInFlight=false/);
   assert.match(power,/if \(OdysseyTransfer::busy\(\)\)[\s\S]*?deep sleep deferred: C3 SD transfer active/);
   assert.match(power,/if \(OdysseyWifi::busy\(\) \|\| OdysseyTransfer::busy\(\)\) return/);
   assert.match(power,/deepSleepAfterStop=true;[\s\S]*?deep sleep deferred until C3 SD BLE sync completes/);
