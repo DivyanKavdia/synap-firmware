@@ -733,7 +733,7 @@ void encodeModuleCapabilities(uint8_t* p) {
     p[16]|=1;
     p[16]|=4;
     p[16]|=0x40;
-    p[14]=2; // Media-v2 opt-in: opcode 31 adaptive read-only BLE windows.
+    p[14]=3; // Media-v3: optional token-verified compact opcode31; v1/v2 retained.
     if (odysseySdDetectionState()==1) {
       ready|=SYNAP_CAP_SD;
       if (ready&SYNAP_CAP_AUDIO) ready|=SYNAP_CAP_SDAUDIO;
@@ -4466,8 +4466,9 @@ bool busy() { return false; }
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 namespace OdysseyTransfer {
 struct Request {
-  uint32_t connection=0,id=0,offset=0;
+  uint32_t connection=0,id=0,offset=0,sessionToken=0;
   uint8_t operation=0,credits=6,paceMs=15;
+  bool compact=false;
   char path[64]{};
 };
 // Shipping safety policy: physical C3+SD units have timed out on CMD24/CMD25
@@ -4498,6 +4499,9 @@ static uint8_t response[496]{};
 static size_t responseSize=16;
 static uint32_t responseConnection=0;
 static char selectedPath[64]{};
+// Only a successfully selected WAV on this connection can authorize an
+// opcode31 compact window. No filesystem handle is retained between windows.
+static uint32_t selectedSessionToken=0,selectedSessionConnection=0;
 static String catalogueBuffer;
 static int catalogueErrno=0;
 static uint8_t catalogueStep=0;
@@ -4911,10 +4915,22 @@ static void notifySdWindow(const Request& request,uint8_t kind,uint8_t error,
 
 static void streamSdWindow(const Request& request) {
   ++sdBleReadWindowRequests;
+  // A short 16-byte media-v3 request carries the selection request ID,
+  // not a path. Match it to the SAME BLE connection and original selectFile.
+  // Old explicit-path opcode30/31 callers bypass this v3-only optimization.
+  const char* windowPath=request.path;
+  if (request.compact) {
+    if (!request.sessionToken || request.sessionToken!=selectedSessionToken ||
+        request.connection!=selectedSessionConnection || !selectedPath[0]) {
+      notifySdWindow(request,2,FILE_UNAVAILABLE,0,request.offset);
+      return;
+    }
+    windowPath=selectedPath;
+  }
   // Older/small-MTU Bluefy connections fall back to op4 without overlong BLE
   // notifications. A 16-byte empty-window completion tells the PWA to fall back.
   const uint16_t capacity=attValueCapacity.load();
-  if (capacity<496u || !streamCharacteristic || !request.path[0]) {
+  if (capacity<496u || !streamCharacteristic || !windowPath[0]) {
     ++sdBleReadMtuFallbacks;
     notifySdWindow(request,2,0,0,request.offset);
     return;
@@ -4943,7 +4959,7 @@ static void streamSdWindow(const Request& request) {
         otaBusy() || sleepPending) return;
     uint32_t total=0;
     size_t length=0;
-    error=readSelected(request.path,offset,total,chunk,length);
+    error=readSelected(windowPath,offset,total,chunk,length);
     if (error!=OK || !length || length>chunkCapacity) {
       if (error==IO_ERROR) {
         sdBleReadFailureOffset=sdBleReadLastRequestedOffset;
@@ -5021,7 +5037,11 @@ static void worker(void*) {
     }
     uint8_t error=OK;uint32_t total=0;size_t size=0;
     switch (request.operation) {
-      case 3: error=selectFile(request.path,total); break;
+      case 3:
+        error=selectFile(request.path,total);
+        selectedSessionToken=error==OK?request.id:0;
+        selectedSessionConnection=request.connection;
+        break;
       case 12:
       case 30:
       case 31: // Adaptive paced BLE read; all three remain read-only.
@@ -5287,11 +5307,15 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
     const bool adaptive=request.operation==31u;
     const bool fast=request.operation==30u || adaptive;
     if (fast && length<(adaptive?13u:12u)) return;
-    const size_t pathStart=adaptive?12u:(fast?11u:10u);
+    // 16-byte compact opcode31 carries the token of the prior verified
+    // selectFile request. A 4-byte suffix cannot be a valid /synap/ WAV path.
+    request.compact=adaptive && length==16u;
+    const size_t pathStart=request.compact?16u:(adaptive?12u:(fast?11u:10u));
     const size_t pathLength=length-pathStart;
     if (pathLength>63u) return;
     if (fast) request.credits=std::max(uint8_t(6),std::min(uint8_t(12),p[10]));
     if (adaptive) request.paceMs=std::max(uint8_t(8),std::min(uint8_t(15),p[11]));
+    if (request.compact) memcpy(&request.sessionToken,p+12,4);
     if (pathLength) memcpy(request.path,p+pathStart,pathLength);
     request.path[pathLength]=0;
     if (!requests || xQueueSend(requests,&request,0)!=pdTRUE) reply(request,BUSY);
