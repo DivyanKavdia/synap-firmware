@@ -822,10 +822,16 @@ static bool odysseySdBeginLocked() {
     odysseySdTimedOutWriteQuarantined=true;
     odysseySdUnsafeToSleep=true;
   }
-  // SDIO CMD52 is used during ESP-IDF card discovery. Ordinary memory
-  // cards are allowed to time out on this OPTIONAL probe, and a successful
-  // mount must not carry it as the first recording/write failure.
-  const bool expectedIoProbe = cmd && cmd->opcode==52u &&
+  // ESP-IDF probes for optional SDIO functionality during card init:
+  // CMD52 (IO reset) and CMD5 (IO_SEND_OP_COND). An ordinary SD memory card
+  // may reject either; sdmmc_init_io() explicitly treats CMD5 rejection as
+  // "not an IO card" and proceeds with the memory-card mount. Do not let
+  // these EXPECTED probe results occupy the first real SD read/write fault.
+  // This is diagnostics-only: every original transaction and return value
+  // is left unchanged. In particular, no timeout recovery or extra CMD is
+  // introduced during an existing recording or WAV transfer.
+  const bool expectedIoProbe = cmd &&
+    (cmd->opcode==52u || cmd->opcode==5u) &&
     (error==ESP_ERR_TIMEOUT || error==ESP_ERR_NOT_SUPPORTED || error==ESP_ERR_INVALID_CRC);
   if (cmd && error!=ESP_OK && !expectedIoProbe) {
     uint32_t expected=0;

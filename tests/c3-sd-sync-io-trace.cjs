@@ -6,6 +6,11 @@ const sync=code.split('case 29: {')[1].split('case 4:')[0];
 const reader=code.split('static uint8_t readWavChunk(')[1].split('static uint8_t readSelected(')[0];
 test('C3 sync counters observe existing reads and never change FAT or SPI transaction logic',()=>{
   assert.match(reader,/\+\+sdBleReadRequests/);
+  assert.match(reader,/const bool streamError=ferror\(file\)!=0/);
+  assert.match(reader,/const bool streamEof=feof\(file\)!=0/);
+  assert.match(reader,/sdBleFaultReadGot=uint32_t\(got\)/);
+  assert.match(reader,/sdBleFaultReadWant=uint32_t\(want\)/);
+  assert.match(reader,/sdBleFaultReadFlags=/);
   assert.match(reader,/sdBleReadLastRequestedOffset=offset/);
   assert.match(reader,/sdBleReadLastOkOffset=offset\+uint32_t\(size\)/);
   assert.match(code,/sdBleReadFailureOffset=sdBleReadLastRequestedOffset/);
@@ -18,7 +23,7 @@ test('C3 sync counters observe existing reads and never change FAT or SPI transa
 test('RAM-only sync diagnostic includes current error operation and bounded offsets',()=>{
   for(const field of ['ioOp','ioStep','ioErr','reads','cacheHits','diskFills',
     'lastRequestedOffset','lastOkOffset','faultOffset','windowRequests','mtuFallbacks',
-    'wireCmd','wireErr','wireArg','wireMs'])
+    'wireCmd','wireErr','wireArg','wireMs','readGot','readWant','readFlags'])
     assert(sync.includes('\\\"'+field+'\\\"'),field);
   const fmt=sync.match(/snprintf\(detail,sizeof\(detail\),\s*("(?:\\.|[^"])*")/);
   assert(fmt,'diagnostic format present');
