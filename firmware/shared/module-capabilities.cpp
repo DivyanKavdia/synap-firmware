@@ -54,6 +54,7 @@ void encodeModuleCapabilities(uint8_t* p) {
     p[16]|=1;
     p[16]|=4;
     p[16]|=0x40;
+    p[14]=2; // Media-v2 opt-in: opcode 31 adaptive read-only BLE windows.
     if (odysseySdDetectionState()==1) {
       ready|=SYNAP_CAP_SD;
       if (ready&SYNAP_CAP_AUDIO) ready|=SYNAP_CAP_SDAUDIO;
