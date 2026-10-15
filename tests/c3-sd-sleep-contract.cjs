@@ -22,7 +22,7 @@ test('C3 cannot enter deep sleep or reboot on a non-idle SD bus',()=>{
  assert.match(detect,/odysseySdUnsafeToSleep=false;/);
  assert.doesNotMatch(prepare,/quiesced=%u[^\n]*\n\s*return true;/);
  const deep=power.split('void enterDeepSleep(const char* reason) {')[1].split('void powerTick() {')[0];
- assert.match(deep,/if \(odysseyRecording\.load\(\) \|\| OdysseyWifi::busy\(\)\) return;/);
+ assert.match(deep,/if \(odysseyRecording\.load\(\)\) return;/);
  assert.match(deep,/odysseyRecoverSdCard\("sleep"\)/);
  assert.match(deep,/lastSdSleepRecoveryAt[\s\S]*30000u/);
  assert.match(deep,/if \(!odysseyPrepareSdForPowerTransition\(1000u\)\) \{[\s\S]*?sleepPending=false;[\s\S]*?return;[\s\S]*?esp_deep_sleep_start\(\);/);
@@ -58,7 +58,7 @@ test('all automatic and touch-triggered sleep entries defer until recording fina
  const tick=power.split('void powerTick() {')[1].split('void pollTouchControl() {')[0];
  assert.match(tick,/if \(odysseyRecording\.load\(\)\) \{[\s\S]*?batteryCritical\(\) && !odysseyStopRequested\.exchange\(true\)[\s\S]*?return;/);
   assert.match(tick,/if \(odysseySdReady\(\) \|\| odysseySdFormatting\(\)\) return;/);
- assert.match(tick,/if \(OdysseyWifi::busy\(\) \|\| OdysseyTransfer::busy\(\)\) return;/);
+ assert.match(tick,/if \(OdysseyTransfer::busy\(\)\) return;/);
  assert.match(tick,/odysseySdSleepGuardUntil\.load\(\)/);
  assert.match(tick,/enterDeepSleep\("critical-battery"\)/);
  assert.match(tick,/enterDeepSleep\("disconnected-timeout"\)/);
@@ -66,7 +66,6 @@ test('all automatic and touch-triggered sleep entries defer until recording fina
  assert.match(hold,/if \(deepSleepAfterStop && !streaming && !raw && !otaBusy\(\)[\s\S]*?odysseySdSleepGuardUntil\.load\(\)[\s\S]*?lastDeferredSleepAttemptAt[\s\S]*?\) \{/);
  assert.match(hold,/lastDeferredSleepAttemptAt=now \? now : 1u;[\s\S]*?enterDeepSleep\("touch-hold-after-stop"\);/);
  assert.match(hold,/deepSleepAfterStop=false;[\s\S]*?pending C3 sleep cancelled by new touch/);
- assert.match(hold,/deep sleep deferred until C3 Wi-Fi upload completes/);
  assert.match(hold,/if \(odysseyRecording\.load\(\)\) \{\s*odysseyStopRequested=true;\s*deepSleepAfterStop=true;/);
  assert.match(hold,/enterDeepSleep\("touch-hold"\)/);
 });

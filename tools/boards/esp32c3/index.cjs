@@ -20,12 +20,7 @@ function materializeC3(source,target){
     'applyCpuPowerProfile(streamingEnabled.load() || otaNeedsActiveCpu() || odysseyRecording.load());',
     'C3 SD capture CPU profile');
 
-  // The new factory-provisioned C3+SD has larger OTA slots. Keep verified
-  // Wi-Fi/TLS out of the legacy 1.25MiB C3 image and encode the difference
-  // in the exact source artifact instead of a hidden compiler-only flag.
-  if(target.id==='esp32c3-supermini-4m-sd' || target.id==='esp32c3-supermini-4m-sd-ota')
-    out=replaceOnce(out,'#define SYNAP_C3_WIFI_UPLOAD_ENABLED 0',
-      '#define SYNAP_C3_WIFI_UPLOAD_ENABLED 1','new C3+SD Wi-Fi specialization');
+  // BLE-only firmware is used on both legacy and enhanced C3 OTA layouts.
   // Application-only OTA for already-large slots must preserve the identity
   // and product marker recognized by the installed legacy C3 updater.
   // This is intentionally NOT the independent factory C3+SD identity.

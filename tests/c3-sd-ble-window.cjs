@@ -24,7 +24,7 @@ test('C3 notifications are paced, bounded, explicit-path, and MTU safe',()=>{
   assert.match(fn,/n<6/);
   assert.match(fn,/readSelected\(request\.path,offset,total,chunk,length\)/);
   assert.match(fn,/notifySdWindow\(request,1,OK,fullSize,offset,chunk,length\)/);
-  assert.match(fn,/vTaskDelay\(pdMS_TO_TICKS\(20\)\)/);
+  assert.match(fn,/vTaskDelay\(pdMS_TO_TICKS\(12\)\)/);
   assert.match(fn,/notifySdWindow\(request,2,OK,fullSize,offset\)/);
   assert.match(fn,/odysseySdMarkVfsFailure\(\)/);
   assert.match(fn,/streamingEnabled\.load\(\) \|\| odysseyRecording\.load\(\)/);

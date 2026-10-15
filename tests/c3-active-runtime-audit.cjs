@@ -11,7 +11,7 @@ const active=require('../firmware/shared/sources.json');
 
 test('C3 contract tests track the actual assembled 1631 production runtime, not retired sources',()=>{
   const selected=['odyssey-sd-1631-detect.cpp','odyssey-sd-1631-recording.cpp',
-    'odyssey-sd-1631-transfer.cpp','odyssey-c3-wifi.cpp','ble-control.cpp',
+    'odyssey-sd-1631-transfer.cpp','ble-control.cpp',
     'audio-session.cpp','battery.cpp','power.cpp','boot.cpp'];
   for(const path of selected){
     assert(active.includes(path),'active production source list must contain '+path);
@@ -51,7 +51,7 @@ test('BLE and SD media safely resume by ID and offset; never delete on transfer'
   const media=shared('odyssey-sd-1631-transfer.cpp'),
     cap=shared('module-capabilities.cpp');
   assert.match(media,/request\.connection!=connectionGeneration\.load\(\)/);
-  assert.match(media,/request\.operation==25/);
+  assert.match(media,/request\.operation>=20 && request\.operation<=26/);
   assert.match(media,/readSelected\(request\.path,offset,total,chunk,length\)/);
   assert.match(media,/notifySdWindow\(request,2,OK,fullSize,offset\)/);
   assert.match(media,/case 4:\s*error=readSelected\(request\.path,request\.offset,total,bytes,size\)/);
@@ -60,7 +60,7 @@ test('BLE and SD media safely resume by ID and offset; never delete on transfer'
   assert.match(media,/if \(count>=100u\) \{catalogueErrno=EOVERFLOW;catalogueStep=6;break;\}/);
   assert.match(media,/uint32_t\(millis\(\)-last\)<15000u/);
   assert.match(cap,/p\[16\]\|=1/);
-  assert.match(cap,/if \(OdysseyWifi::available\(\)\) p\[16\]\|=2/);
+  assert.doesNotMatch(cap,/p\[16\]\|=2/);
 });
 
 test('C3 connected BLE uses mbuf-saving ADPCM, central-managed connection timing',()=>{
@@ -72,12 +72,11 @@ test('C3 connected BLE uses mbuf-saving ADPCM, central-managed connection timing
   assert.match(ble,/bleServer->startAdvertising\(\)/);
 });
 
-test('Wi-Fi is advertised only if enabled and the shipped C3 feature defaults off',()=>{
-  const wifi=shared('odyssey-c3-wifi.cpp'),
-    cap=shared('module-capabilities.cpp');
-  assert.match(wifi,/#define SYNAP_C3_WIFI_UPLOAD_ENABLED 0/);
-  assert.match(wifi,/#if SYNAP_C3_WIFI_UPLOAD_ENABLED/);
-  assert.match(cap,/if \(OdysseyWifi::available\(\)\) p\[16\]\|=2/);
+test('C3 BLE-only build excludes Wi-Fi transport and never reports Wi-Fi capability',()=>{
+  const cap=shared('module-capabilities.cpp');
+  assert(!active.some(name=>/wifi|c3-sd-ap/i.test(name)));
+  assert.doesNotMatch(compiled,/WiFiClientSecure|OdysseyWifiAp|namespace OdysseyWifi/);
+  assert.doesNotMatch(cap,/p\[16\]\|=2/);
 });
 
 test('SD failure vetoes unsafe sleep; firmware battery cannot claim an invalid full charge',()=>{
