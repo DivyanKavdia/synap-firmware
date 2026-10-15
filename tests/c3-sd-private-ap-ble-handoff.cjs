@@ -9,7 +9,7 @@ test('C3 BLE-only protocol removes hotspot and STA command handlers',()=>{
 test('C3 fast SD receiver grants bounded credits without changing legacy windows',()=>{
  assert.match(tx,/case 12:\s*case 30:/);
  assert.match(tx,/request\.credits/);
- assert.match(tx,/uint8_t\(20\)/);
+ assert.match(tx,/uint8_t\(12\)/);
  assert.match(tx,/vTaskDelay\(pacing\)/);
  assert.match(tx,/notifySdWindow\(request,2,OK,fullSize,offset\)/);
 });
