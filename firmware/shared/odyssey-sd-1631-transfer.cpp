@@ -447,10 +447,11 @@ static void streamSdWindow(const Request& request) {
   uint8_t chunk[480]{};
   uint32_t offset=request.offset,fullSize=0;
   uint8_t error=OK;
-  // PWA retains at most 8 chunks; 6-chunk windows leave headroom on iOS.
+  // Six 480-byte packets per window stay below iOS's eight-packet buffer.
+  // 12 ms pacing reduces idle time without an unbounded radio burst.
   for (uint8_t n=0;n<6;++n) {
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load() ||
-        streamingEnabled.load() || odysseyRecording.load() || OdysseyWifi::busy() ||
+        streamingEnabled.load() || odysseyRecording.load() ||
         otaBusy() || sleepPending) return;
     uint32_t total=0;
     size_t length=0;
@@ -477,11 +478,11 @@ static void streamSdWindow(const Request& request) {
     notifySdWindow(request,1,OK,fullSize,offset,chunk,length);
     offset+=uint32_t(length);
     if (offset>=fullSize) break;
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(12));
   }
   // End packet closes the credit window. Never delete/modify the SD source.
   if (request.connection==connectionGeneration.load() && deviceConnected.load()) {
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(12));
     notifySdWindow(request,2,OK,fullSize,offset);
   }
 }
@@ -495,7 +496,7 @@ static void worker(void*) {
       // A physical disconnected double-tap is an explicit recovery request,
       // just like PWA operation 14, and may safely run while storage is idle.
       const bool idleEnough=!odysseyRecording.load() && !streamingEnabled.load() &&
-        !OdysseyWifi::busy() && !otaBusy() && !sleepPending;
+        !otaBusy() && !sleepPending;
       if (odysseySdConsumeRecoveryRequest()) {
         if (idleEnough) {
           Serial.println("[SD] physical touch requested software recovery");
@@ -520,23 +521,14 @@ static void worker(void*) {
     sdBleLastTransferAt=millis();
     // Connected remote standby only idles the microphone/CPU; SD media must
     // remain readable for verified sync and recovery without a forced wake.
-    // Wi-Fi status must remain readable over BLE while the uploader owns SD.
-    if (request.operation==25 || request.operation==21) {
-      char detail[480];
-      const size_t n=request.operation==21
-        ?OdysseyWifiAp::encode(detail,sizeof(detail))
-        :OdysseyWifi::encode(detail,sizeof(detail));
-      reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),n);
-      sdBleLastTransferAt=millis();
-      sdBleTransferInFlight=false;
-      continue;
-    }
-    if(request.operation==22) {
-      reply(request,OdysseyWifiAp::stop()?OK:BUSY);
+    // Wi-Fi opcodes remain unsupported even for outdated PWA clients.
+    // Never touch FAT or radio for requests 20-26.
+    if (request.operation>=20 && request.operation<=26) {
+      reply(request,BAD_COMMAND);
       sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
       continue;
     }
-    if (odysseyRecording.load() || streamingEnabled.load() || OdysseyWifi::busy() ||
+    if (odysseyRecording.load() || streamingEnabled.load() ||
         otaBusy() || sleepPending) {
       reply(request,BUSY);
       sdBleLastTransferAt=millis();
@@ -552,20 +544,6 @@ static void worker(void*) {
         sdBleTransferInFlight=false;
         continue;
       case 16: error=OK; break;
-      case 20: {
-        // Return SSID, WPA password and private URL in the SAME BLE response
-        // that arms SoftAP; an extra op21 round trip may never complete once
-        // Wi-Fi starts sharing radio and C3 internal heap with Bluetooth.
-        if(!OdysseyWifiAp::begin()) {error=BUSY;break;}
-        char detail[480]{};
-        const size_t n=OdysseyWifiAp::encode(detail,sizeof(detail));
-        if(!n) {error=IO_ERROR;break;}
-        reply(request,OK,uint32_t(n),0,
-          reinterpret_cast<const uint8_t*>(detail),n);
-        sdBleLastTransferAt=millis();
-        sdBleTransferInFlight=false;
-        continue;
-      }
       case 27: {
         // Purely read-only snapshot of the LAST recorder error after a
         // reboot. It never calls SD.begin, SD.end, mkdir, fopen or recovery.
@@ -775,21 +753,6 @@ static void worker(void*) {
         }
         break;
       }
-      // C3 direct Wi-Fi sync control. Configuration is staged in <=60-byte BLE
-      // chunks so credentials and short-lived cloud tickets never need a new
-      // characteristic or protocol version.
-      case 23: {
-        const uint32_t next=OdysseyWifi::configChunk(request.offset,request.path);
-        if (next==UINT32_MAX) error=BAD_COMMAND; else total=next;
-        break;
-      }
-      case 24:
-        if (request.offset!=1u && request.offset!=2u) error=BAD_COMMAND;
-        else error=OdysseyWifi::applyConfig(request.offset)?OK:BUSY;
-        break;
-      case 26:
-        error=OdysseyWifi::forget()?OK:BUSY;
-        break;
       default:error=BAD_COMMAND;break;
     }
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {

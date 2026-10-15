@@ -182,7 +182,7 @@ bool exitRemoteStandby() {
 
 void enterRemoteStandby() {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  if (odysseyRecording.load() || OdysseyWifi::busy()) return;
+  if (odysseyRecording.load()) return;
 #endif
   if (sleepPending) return;
   if (otaBusy()) { updateStatusCharacteristic(true); return; }
@@ -204,7 +204,7 @@ void enterRemoteStandby() {
 
 void enterDeepSleep(const char* reason) {
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  if (odysseyRecording.load() || OdysseyWifi::busy()) return;
+  if (odysseyRecording.load()) return;
   if (OdysseyTransfer::busy()) {
     Serial.println("[POWER] deep sleep deferred: C3 SD transfer active");
     return;
@@ -356,7 +356,7 @@ void powerTick() {
     // fsync/fclose, even if the PWA has never connected.
     return;
   }
-  if (OdysseyWifi::busy() || OdysseyTransfer::busy()) return;
+  if (OdysseyTransfer::busy()) return;
   // Do not permanently suppress disconnected-timeout or critical-battery
   // sleep after a failed quiesce. enterDeepSleep() performs a bounded,
   // throttled recovery and still refuses sleep until SD is proven idle.
@@ -497,11 +497,6 @@ void pollTouchControl() {
       if (odysseyRecording.load()) {
         odysseyStopRequested=true;
         deepSleepAfterStop=true;
-        return;
-      }
-      if (OdysseyWifi::busy()) {
-        deepSleepAfterStop=true;
-        Serial.println("[POWER] deep sleep deferred until C3 Wi-Fi upload completes");
         return;
       }
       if (OdysseyTransfer::busy()) {

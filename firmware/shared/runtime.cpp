@@ -238,15 +238,6 @@ bool odysseySdFormatting(); // media-v1 op19 exclusively owns the SD volume
 bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs);
 bool odysseyPrepareSdForCommittedOtaRestart(uint32_t timeoutMs);
 bool odysseySdBusStuckLow(); // confirmed deselected MISO held LOW after failed mount
-namespace OdysseyWifi {
-void initialize();
-bool available();
-bool busy();
-uint32_t configChunk(uint32_t offset,const char* text);
-bool applyConfig(uint32_t mode);
-bool forget();
-size_t encode(char* output,size_t capacity);
-}
 namespace OdysseyTransfer {
 void initialize();
 void ble(BLEService* service);
