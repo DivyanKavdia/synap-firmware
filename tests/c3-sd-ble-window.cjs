@@ -49,7 +49,8 @@ test('C3 optional opcode31 tunes paced read-only windows without changing legacy
  assert.match(transfer,/case 12:\s*case 30:\s*case 31:/);
  assert.match(transfer,/request\.operation==31u/);
  assert.match(transfer,/adaptive\?std::max\(uint8_t\(8\),std::min\(uint8_t\(15\),request\.paceMs\)\)/);
- assert.match(transfer,/if \(adaptive && n\+1u==credits\) return;/);
+ assert.doesNotMatch(transfer,/if \(adaptive && n\+1u==credits\) return;/);
+ assert.match(transfer,/notifySdWindow\(request,2,OK,fullSize,offset\)/);
  assert.match(transfer,/const size_t pathStart=adaptive\?12u:\(fast\?11u:10u\)/);
  assert.match(transfer,/if \(adaptive\) request\.paceMs=std::max\(uint8_t\(8\),std::min\(uint8_t\(15\),p\[11\]\)\)/);
  assert.match(transfer,/if \(!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED &&/);

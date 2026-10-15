@@ -4965,10 +4965,9 @@ static void streamSdWindow(const Request& request) {
     // resume missing windows, and verifies the final file before import.
     notifySdWindow(request,1,OK,fullSize,offset,chunk,length);
     offset+=uint32_t(length);
-    // Opcode 31 omits the redundant trailing END after a complete credit
-    // grant. The phone checks all offsets before asking for the next grant.
-    // A partial EOF window retains the explicit END below.
-    if (adaptive && n+1u==credits) return;
+    // Keep END even for a full credit grant: the phone can finish early
+    // after contiguous delivery, but if one packet is lost the END lets it
+    // retry immediately instead of waiting for a 3-second missing-END timer.
     if (offset>=fullSize) break;
     vTaskDelay(pacing);
   }
