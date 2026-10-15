@@ -65,7 +65,7 @@ test('C3 production image uses guarded append-only multi-block offline recording
   assert.match(c3,/esp_vfs_fat_sdcard_format\(/);
 });
 
-test('1631 C3 worker exposes media-v1 plus BLE-controlled direct Wi-Fi upload',()=>{
+test('1631 C3 worker exposes BLE-only media-v1 and rejects legacy Wi-Fi commands',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/xTaskCreate\(worker,"odyssey-sd",TRANSFER_STACK_BYTES/);
   assert.match(c3,/odysseySdConsumeRecoveryRequest\(\)/);
@@ -76,11 +76,9 @@ test('1631 C3 worker exposes media-v1 plus BLE-controlled direct Wi-Fi upload',(
   assert.match(c3,/case 4:\s*error=readSelected\(request\.path,request\.offset,total,bytes,size\)/);
   assert.match(c3,/case 17:\s*[\s\S]*?error=removeFile\(request\.path\)/);
   assert.match(c3,/case 18:/);
-  assert.match(c3,/case 23:/);
-  assert.match(c3,/case 24:/);
-  assert.match(c3,/request\.operation==25/);
-  assert.match(c3,/case 26:/);
-  assert.match(c3,/p\[16\]\|=2/,'C3 must advertise direct Wi-Fi upload');
+  assert.match(c3,/request\.operation>=20 && request\.operation<=26/);
+  assert.doesNotMatch(c3,/case 23:|case 24:|case 26:/);
+  assert.doesNotMatch(c3,/p\[16\]\|=2/);
   assert.match(c3,/case 19:/,'full-card format requires explicit media-v1 operation 19');
   assert.match(c3,/patchVirtualWavHeader\(bytes,size,offset,total\)/);
   assert.match(c3,/p\[16\]\|=4/,'C3 must advertise explicit PWA-confirmed formatting');
@@ -89,7 +87,7 @@ test('1631 C3 worker exposes media-v1 plus BLE-controlled direct Wi-Fi upload',(
 test('release retains pinned core but C3 uses native SDSPI, not Arduino patch',()=>{
   const workflow=fs.readFileSync(path.join(root,'.github/workflows/firmware.yml'),'utf8');
   const compileLines=workflow.split('\n').filter(line=>line.includes('arduino-cli compile'));
-  assert.equal(compileLines.length,5,'S3, legacy C3, factory C3+SD, large-slot Wi-Fi C3+SD and Chakshu compile independently');
+  assert.equal(compileLines.length,5,'S3, legacy C3, factory C3+SD, large-slot BLE C3+SD and Chakshu compile independently');
   assert(compileLines.every(line=>line.includes('-DUSE_REAL_I2S_MIC=1')));
   assert.match(workflow,/arduino-cli core install esp32:esp32@3\.3\.5/);
   assert.doesNotMatch(workflow,/node tools\/patch-arduino-sd\.cjs/);
