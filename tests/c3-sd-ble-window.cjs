@@ -42,3 +42,22 @@ test('C3 recorder, safe sleep, transport fallback and OTA size remain unchanged'
   assert.match(ino,/p\[16\]\|=1/);
   assert.doesNotMatch(transfer,/esp_vfs_fat_sdspi_mount|format_if_empty/);
 });
+
+test('C3 optional opcode31 tunes paced read-only windows without changing legacy 12/30 or deleting SD files',()=>{
+ assert.match(caps,/p\[14\]=2; \/\/ Media-v2 opt-in/);
+ assert.match(transfer,/uint8_t operation=0,credits=6,paceMs=15;/);
+ assert.match(transfer,/case 12:\s*case 30:\s*case 31:/);
+ assert.match(transfer,/request\.operation==31u/);
+ assert.match(transfer,/adaptive\?std::max\(uint8_t\(8\),std::min\(uint8_t\(15\),request\.paceMs\)\)/);
+ assert.doesNotMatch(transfer,/if \(adaptive && n\+1u==credits\) return;/);
+ assert.match(transfer,/notifySdWindow\(request,2,OK,fullSize,offset\)/);
+ assert.match(transfer,/const size_t pathStart=adaptive\?12u:\(fast\?11u:10u\)/);
+ assert.match(transfer,/if \(adaptive\) request\.paceMs=std::max\(uint8_t\(8\),std::min\(uint8_t\(15\),p\[11\]\)\)/);
+ assert.match(transfer,/if \(!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED &&/);
+ assert.match(transfer,/static constexpr bool ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
+ assert.match(transfer,/const TickType_t pacing=pdMS_TO_TICKS\(paceMs\)/);
+ const mode=transfer.split('static void streamSdWindow(const Request& request) {')[1]
+   .split('static void worker(void*) {')[0];
+ assert.doesNotMatch(mode,/unlink\(|fwrite\(|removeFile\(|odysseyRecoverSdCard\(/);
+ assert.match(ino,/p\[14\]=2;/);
+});

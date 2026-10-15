@@ -5,7 +5,7 @@
 namespace OdysseyTransfer {
 struct Request {
   uint32_t connection=0,id=0,offset=0;
-  uint8_t operation=0,credits=6;
+  uint8_t operation=0,credits=6,paceMs=15;
   char path[64]{};
 };
 // Shipping safety policy: physical C3+SD units have timed out on CMD24/CMD25
@@ -26,6 +26,8 @@ bool busy() {
 // Legacy opcode 12 uses six paced notifications. Opcode 30 accepts receiver
 // credits, capped at 12 on C3/Bluefy to prevent NimBLE queue overrun when iOS
 // reports MTU 517 but delivers only a fraction of 20 notifications.
+// Opcode 31 is opt-in: same contiguous payload/credit contract with receiver-
+// selected 8..15 ms pacing. Legacy 12/30 keep their original timing and ABI.
 
 static BLECharacteristic* streamCharacteristic=nullptr;
 static constexpr uint32_t TRANSFER_STACK_BYTES=8192;
@@ -463,11 +465,16 @@ static void streamSdWindow(const Request& request) {
   // lossy on physical Bluefy (6/20 packets delivered) during SD recovery.
   // Prioritize contiguous verified bytes over fire-and-forget throughput.
   // Legacy op12 remains six packets at 20 ms, completely unchanged.
-  const bool fast=request.operation==30u;
+  const bool adaptive=request.operation==31u;
+  const bool fast=request.operation==30u || adaptive;
   const uint8_t credits=fast
     ?std::max(uint8_t(6),std::min(uint8_t(12),request.credits))
     :uint8_t(6);
-  const TickType_t pacing=pdMS_TO_TICKS(fast?15u:20u);
+  // The phone owns rate selection. A lossy burst must retry from the first
+  // missing offset instead of falsely treating a queued notify as delivered.
+  const uint8_t paceMs=adaptive?std::max(uint8_t(8),std::min(uint8_t(15),request.paceMs))
+    :uint8_t(fast?15u:20u);
+  const TickType_t pacing=pdMS_TO_TICKS(paceMs);
   for (uint8_t n=0;n<credits;++n) {
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load() ||
         streamingEnabled.load() || odysseyRecording.load() || OdysseyWifi::busy() ||
@@ -496,6 +503,9 @@ static void streamSdWindow(const Request& request) {
     // resume missing windows, and verifies the final file before import.
     notifySdWindow(request,1,OK,fullSize,offset,chunk,length);
     offset+=uint32_t(length);
+    // Keep END even for a full credit grant: the phone can finish early
+    // after contiguous delivery, but if one packet is lost the END lets it
+    // retry immediately instead of waiting for a 3-second missing-END timer.
     if (offset>=fullSize) break;
     vTaskDelay(pacing);
   }
@@ -551,7 +561,8 @@ static void worker(void*) {
     switch (request.operation) {
       case 3: error=selectFile(request.path,total); break;
       case 12:
-      case 30: // Credit-based fast BLE read; same read-only file/window ABI.
+      case 30:
+      case 31: // Adaptive paced BLE read; all three remain read-only.
         streamSdWindow(request);
         sdBleLastTransferAt=millis();
         sdBleTransferInFlight=false;
@@ -803,20 +814,22 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* characteristic) override {
     const size_t length=characteristic->getLength();
     const uint8_t* p=characteristic->getData();
-    if (!p || length<10 || length>74 || p[0]!=0xCA) return;
+    if (!p || length<10 || length>75 || p[0]!=0xCA) return;
     Request request{};
     request.operation=p[1];
     memcpy(&request.id,p+2,4);
     memcpy(&request.offset,p+6,4);
     request.connection=connectionGeneration.load();
-    // Fast opcode 30 extends the command by one credit byte before the
-    // logical /synap/*.wav path. Legacy op12 and all other ops are unchanged.
-    const bool fast=request.operation==30u;
-    if (fast && length<12u) return;
-    const size_t pathStart=fast?11u:10u;
+    // Op30: credit byte at 10. New op31: credit and pacing byte at 10/11.
+    // The remaining path stays explicit, and existing command ABIs are unchanged.
+    const bool adaptive=request.operation==31u;
+    const bool fast=request.operation==30u || adaptive;
+    if (fast && length<(adaptive?13u:12u)) return;
+    const size_t pathStart=adaptive?12u:(fast?11u:10u);
     const size_t pathLength=length-pathStart;
     if (pathLength>63u) return;
-    if (fast) request.credits=std::max(uint8_t(6),std::min(uint8_t(20),p[10]));
+    if (fast) request.credits=std::max(uint8_t(6),std::min(uint8_t(12),p[10]));
+    if (adaptive) request.paceMs=std::max(uint8_t(8),std::min(uint8_t(15),p[11]));
     if (pathLength) memcpy(request.path,p+pathStart,pathLength);
     request.path[pathLength]=0;
     if (!requests || xQueueSend(requests,&request,0)!=pdTRUE) reply(request,BUSY);
