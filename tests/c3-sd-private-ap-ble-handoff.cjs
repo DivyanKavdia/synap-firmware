@@ -1,40 +1,15 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs');
-const ap=fs.readFileSync('firmware/shared/odyssey-c3-sd-ap.cpp','utf8');
 const tx=fs.readFileSync('firmware/shared/odyssey-sd-1631-transfer.cpp','utf8');
-const compiled=fs.readFileSync('synap_esp32s3/synap_esp32s3.ino','utf8');
-test('C3 staged SoftAP never runs Wi-Fi.mode in BLE command and returns credentials in op20',()=>{
- for(const source of [ap]){
-  const begin=source.split('bool begin() {')[1].split('bool stop() {')[0];
-  assert(begin);
-  assert.match(begin,/next.active=true/);
-  assert.match(begin,/store\(next\)/);
-  assert.match(begin,/xTaskCreate\(apTask/);
-  assert.doesNotMatch(begin,/WiFi\.mode\(|WiFi\.softAP\(/);
-  assert.match(source,/vTaskDelay\(pdMS_TO_TICKS\(4000\)\)/);
-  assert.match(source,/static bool activateAp\(\)/);
-  assert.match(source,/\\\"starting\\\":%s/);
- }
- assert.match(compiled,/vTaskDelay\(pdMS_TO_TICKS\(4000\)\)/);
- assert.match(compiled,/static bool activateAp\(\)/);
- const op20=tx.split('case 20: {')[1].split('case 27:')[0];
- assert(op20);
- assert.match(op20,/OdysseyWifiAp::begin\(\)/);
- assert.match(op20,/OdysseyWifiAp::encode/);
- assert.match(op20,/reply\(request,OK,uint32_t\(n\),0/);
- assert.match(op20,/continue;/);
- assert.doesNotMatch(op20,/WiFi\.mode|delay\(/);
+const caps=fs.readFileSync('firmware/shared/module-capabilities.cpp','utf8');
+test('C3 BLE-only protocol removes hotspot and STA command handlers',()=>{
+ assert.doesNotMatch(tx,/case 20:|case 23:|case 24:|case 26:|OdysseyWifiAp::/);
+ assert.doesNotMatch(caps,/p\[16\]\|=2|OdysseyWifi::available\(\)/);
 });
-test('Private SoftAP remains read-only, mutex-serialized and shut down after task',()=>{
- const staging=ap.split('static void apTask(void*) {')[1].split('bool resumeAtBoot() {')[0];
- const wifi=ap.split('void runBootSession() {')[1].split('bool begin() {')[0];
- assert.match(staging,/odysseyPrepareSdForPowerTransition\(1500u\)/);
- assert.match(staging,/rtcHandoff\.magic=AP_REBOOT_MAGIC/);
- assert.match(staging,/ESP\.restart\(\)/);
- assert.doesNotMatch(staging,/activateAp\(\)/);
- assert(wifi.indexOf('activateAp()')<wifi.indexOf('shutDown()'));
- assert.match(wifi,/odysseyPrepareSdForPowerTransition\(1500u\)/);
- assert.match(ap,/OdysseySdGuard sd\(pdMS_TO_TICKS\(1500\)\)/);
- assert.match(ap,/void shutDown/);
- assert.doesNotMatch(ap,/\bunlink\s*\(|\bremove\s*\(|\bmkdir\s*\(|\bfwrite\s*\(/);
+test('C3 fast SD receiver grants bounded credits without changing legacy windows',()=>{
+ assert.match(tx,/case 12:\s*case 30:/);
+ assert.match(tx,/request\.credits/);
+ assert.match(tx,/uint8_t\(20\)/);
+ assert.match(tx,/vTaskDelay\(pacing\)/);
+ assert.match(tx,/notifySdWindow\(request,2,OK,fullSize,offset\)/);
 });

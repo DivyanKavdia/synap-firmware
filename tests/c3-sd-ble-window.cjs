@@ -11,7 +11,7 @@ test('C3 adds an optional media-v1 notification window without replacing legacy 
   assert.match(caps,/p\[16\]\|=1/);
   assert.match(transfer,/PROPERTY_NOTIFY/);
   assert.match(transfer,/4fa1235a-0000-1000-8000-00805f9b34fb/);
-  assert.match(transfer,/case 12:\s*streamSdWindow\(request\);[\s\S]*?sdBleTransferInFlight=false;[\s\S]*?continue;/);
+  assert.match(transfer,/case 12:\s*case 30:[\s\S]*?streamSdWindow\(request\);[\s\S]*?sdBleTransferInFlight=false;[\s\S]*?continue;/);
   assert.match(transfer,/case 4:\s*error=readSelected\(request.path,request.offset,total,bytes,size\)/);
   assert.match(transfer,/case 16: error=OK; break;/);
   assert.match(transfer,/OdysseySdGuard guard/);
@@ -21,10 +21,12 @@ test('C3 notifications are paced, bounded, explicit-path, and MTU safe',()=>{
     .split('static void worker(void*) {')[0];
   assert.match(fn,/capacity<496u/);
   assert.match(fn,/request\.path\[0\]/);
-  assert.match(fn,/n<6/);
+  assert.match(fn,/n<credits/);
   assert.match(fn,/readSelected\(request\.path,offset,total,chunk,length\)/);
   assert.match(fn,/notifySdWindow\(request,1,OK,fullSize,offset,chunk,length\)/);
-  assert.match(fn,/vTaskDelay\(pdMS_TO_TICKS\(20\)\)/);
+  assert.match(fn,/vTaskDelay\(pacing\)/);
+  assert.match(fn,/fast\?8u:20u/);
+  assert.match(fn,/std::min\(uint8_t\(20\),request.credits\)/);
   assert.match(fn,/notifySdWindow\(request,2,OK,fullSize,offset\)/);
   assert.match(fn,/odysseySdMarkVfsFailure\(\)/);
   assert.match(fn,/streamingEnabled\.load\(\) \|\| odysseyRecording\.load\(\)/);

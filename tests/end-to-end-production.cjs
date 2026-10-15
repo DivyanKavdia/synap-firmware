@@ -65,7 +65,7 @@ test('C3 production image uses guarded append-only multi-block offline recording
   assert.match(c3,/esp_vfs_fat_sdcard_format\(/);
 });
 
-test('1631 C3 worker exposes media-v1 plus BLE-controlled direct Wi-Fi upload',()=>{
+test('1631 C3 worker exposes legacy and accelerated BLE SD transfer without Wi-Fi',()=>{
   const c3=materialize(productionS3(),'esp32c3-supermini-4m');
   assert.match(c3,/xTaskCreate\(worker,"odyssey-sd",TRANSFER_STACK_BYTES/);
   assert.match(c3,/odysseySdConsumeRecoveryRequest\(\)/);
@@ -76,11 +76,10 @@ test('1631 C3 worker exposes media-v1 plus BLE-controlled direct Wi-Fi upload',(
   assert.match(c3,/case 4:\s*error=readSelected\(request\.path,request\.offset,total,bytes,size\)/);
   assert.match(c3,/case 17:\s*[\s\S]*?error=removeFile\(request\.path\)/);
   assert.match(c3,/case 18:/);
-  assert.match(c3,/case 23:/);
-  assert.match(c3,/case 24:/);
-  assert.match(c3,/request\.operation==25/);
-  assert.match(c3,/case 26:/);
-  assert.match(c3,/p\[16\]\|=2/,'C3 must advertise direct Wi-Fi upload');
+  assert.match(c3,/case 12:/);
+  assert.match(c3,/case 30:/);
+  assert.match(c3,/p\[16\]\|=0x40/,'C3 must advertise credit-based fast BLE');
+  assert.doesNotMatch(c3,/OdysseyWifiAp::|WiFiClientSecure|WiFi\.softAP/);
   assert.match(c3,/case 19:/,'full-card format requires explicit media-v1 operation 19');
   assert.match(c3,/patchVirtualWavHeader\(bytes,size,offset,total\)/);
   assert.match(c3,/p\[16\]\|=4/,'C3 must advertise explicit PWA-confirmed formatting');

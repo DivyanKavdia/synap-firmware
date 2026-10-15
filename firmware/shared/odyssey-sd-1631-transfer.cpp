@@ -5,7 +5,7 @@
 namespace OdysseyTransfer {
 struct Request {
   uint32_t connection=0,id=0,offset=0;
-  uint8_t operation=0;
+  uint8_t operation=0,credits=6;
   char path[64]{};
 };
 // Shipping safety policy: physical C3+SD units have timed out on CMD24/CMD25
@@ -23,7 +23,8 @@ bool busy() {
   const uint32_t last=sdBleLastTransferAt.load();
   return last && uint32_t(millis()-last)<15000u;
 }
-// Six paced notifications per request avoid thousands of GATT read round trips.
+// Legacy opcode 12 uses six paced notifications. Opcode 30 accepts a bounded
+// receiver credit and uses shorter congestion-safe pacing for large WAV sync.
 static BLECharacteristic* streamCharacteristic=nullptr;
 static constexpr uint32_t TRANSFER_STACK_BYTES=8192;
 static portMUX_TYPE responseMux=portMUX_INITIALIZER_UNLOCKED;
@@ -447,8 +448,15 @@ static void streamSdWindow(const Request& request) {
   uint8_t chunk[480]{};
   uint32_t offset=request.offset,fullSize=0;
   uint8_t error=OK;
-  // PWA retains at most 8 chunks; 6-chunk windows leave headroom on iOS.
-  for (uint8_t n=0;n<6;++n) {
+  // The PWA grants at most 20 chunks per request. A legacy op12 retains its
+  // original six notifications and 20 ms pacing without a protocol change.
+  // Fast op30 has an explicit bounded credit; no unbounded GATT floods.
+  const bool fast=request.operation==30u;
+  const uint8_t credits=fast
+    ?std::max(uint8_t(6),std::min(uint8_t(20),request.credits))
+    :uint8_t(6);
+  const TickType_t pacing=pdMS_TO_TICKS(fast?8u:20u);
+  for (uint8_t n=0;n<credits;++n) {
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load() ||
         streamingEnabled.load() || odysseyRecording.load() || OdysseyWifi::busy() ||
         otaBusy() || sleepPending) return;
@@ -477,11 +485,11 @@ static void streamSdWindow(const Request& request) {
     notifySdWindow(request,1,OK,fullSize,offset,chunk,length);
     offset+=uint32_t(length);
     if (offset>=fullSize) break;
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pacing);
   }
   // End packet closes the credit window. Never delete/modify the SD source.
   if (request.connection==connectionGeneration.load() && deviceConnected.load()) {
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pacing);
     notifySdWindow(request,2,OK,fullSize,offset);
   }
 }
@@ -520,22 +528,6 @@ static void worker(void*) {
     sdBleLastTransferAt=millis();
     // Connected remote standby only idles the microphone/CPU; SD media must
     // remain readable for verified sync and recovery without a forced wake.
-    // Wi-Fi status must remain readable over BLE while the uploader owns SD.
-    if (request.operation==25 || request.operation==21) {
-      char detail[480];
-      const size_t n=request.operation==21
-        ?OdysseyWifiAp::encode(detail,sizeof(detail))
-        :OdysseyWifi::encode(detail,sizeof(detail));
-      reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),n);
-      sdBleLastTransferAt=millis();
-      sdBleTransferInFlight=false;
-      continue;
-    }
-    if(request.operation==22) {
-      reply(request,OdysseyWifiAp::stop()?OK:BUSY);
-      sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
-      continue;
-    }
     if (odysseyRecording.load() || streamingEnabled.load() || OdysseyWifi::busy() ||
         otaBusy() || sleepPending) {
       reply(request,BUSY);
@@ -547,25 +539,12 @@ static void worker(void*) {
     switch (request.operation) {
       case 3: error=selectFile(request.path,total); break;
       case 12:
+      case 30: // Credit-based fast BLE read; same read-only file/window ABI.
         streamSdWindow(request);
         sdBleLastTransferAt=millis();
         sdBleTransferInFlight=false;
         continue;
       case 16: error=OK; break;
-      case 20: {
-        // Return SSID, WPA password and private URL in the SAME BLE response
-        // that arms SoftAP; an extra op21 round trip may never complete once
-        // Wi-Fi starts sharing radio and C3 internal heap with Bluetooth.
-        if(!OdysseyWifiAp::begin()) {error=BUSY;break;}
-        char detail[480]{};
-        const size_t n=OdysseyWifiAp::encode(detail,sizeof(detail));
-        if(!n) {error=IO_ERROR;break;}
-        reply(request,OK,uint32_t(n),0,
-          reinterpret_cast<const uint8_t*>(detail),n);
-        sdBleLastTransferAt=millis();
-        sdBleTransferInFlight=false;
-        continue;
-      }
       case 27: {
         // Purely read-only snapshot of the LAST recorder error after a
         // reboot. It never calls SD.begin, SD.end, mkdir, fopen or recovery.
@@ -775,21 +754,6 @@ static void worker(void*) {
         }
         break;
       }
-      // C3 direct Wi-Fi sync control. Configuration is staged in <=60-byte BLE
-      // chunks so credentials and short-lived cloud tickets never need a new
-      // characteristic or protocol version.
-      case 23: {
-        const uint32_t next=OdysseyWifi::configChunk(request.offset,request.path);
-        if (next==UINT32_MAX) error=BAD_COMMAND; else total=next;
-        break;
-      }
-      case 24:
-        if (request.offset!=1u && request.offset!=2u) error=BAD_COMMAND;
-        else error=OdysseyWifi::applyConfig(request.offset)?OK:BUSY;
-        break;
-      case 26:
-        error=OdysseyWifi::forget()?OK:BUSY;
-        break;
       default:error=BAD_COMMAND;break;
     }
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
@@ -824,14 +788,21 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* characteristic) override {
     const size_t length=characteristic->getLength();
     const uint8_t* p=characteristic->getData();
-    if (!p || length<10 || length>73 || p[0]!=0xCA) return;
+    if (!p || length<10 || length>74 || p[0]!=0xCA) return;
     Request request{};
     request.operation=p[1];
     memcpy(&request.id,p+2,4);
     memcpy(&request.offset,p+6,4);
     request.connection=connectionGeneration.load();
-    const size_t pathLength=length-10;
-    if (pathLength) memcpy(request.path,p+10,pathLength);
+    // Fast opcode 30 extends the command by one credit byte before the
+    // logical /synap/*.wav path. Legacy op12 and all other ops are unchanged.
+    const bool fast=request.operation==30u;
+    if (fast && length<12u) return;
+    const size_t pathStart=fast?11u:10u;
+    const size_t pathLength=length-pathStart;
+    if (pathLength>63u) return;
+    if (fast) request.credits=std::max(uint8_t(6),std::min(uint8_t(20),p[10]));
+    if (pathLength) memcpy(request.path,p+pathStart,pathLength);
     request.path[pathLength]=0;
     if (!requests || xQueueSend(requests,&request,0)!=pdTRUE) reply(request,BUSY);
   }

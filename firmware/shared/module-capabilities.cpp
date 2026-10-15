@@ -49,11 +49,11 @@ void encodeModuleCapabilities(uint8_t* p) {
 #if CONFIG_IDF_TARGET_ESP32C3
   if (OdysseyTransfer::available()) {
     p[14]=1;
-    // Media feature bits: 0=BLE window, 1=Wi-Fi upload, 2=explicit
-    // full-card FAT format (operation 19). No automatic formatting.
+    // Media feature bits: 0=legacy BLE windows, 2=existing format ABI,
+    // 6=new credit-based BLE transfer (opcode 30). Wi-Fi bit 1 is absent.
     p[16]|=1;
-    if (OdysseyWifi::available()) p[16]|=2;
     p[16]|=4;
+    p[16]|=0x40;
     if (odysseySdDetectionState()==1) {
       ready|=SYNAP_CAP_SD;
       if (ready&SYNAP_CAP_AUDIO) ready|=SYNAP_CAP_SDAUDIO;

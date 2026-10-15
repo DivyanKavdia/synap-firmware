@@ -276,12 +276,7 @@ bool odysseyPrepareSdForCommittedOtaRestart(uint32_t timeoutMs);
 bool odysseySdBusStuckLow(); // confirmed deselected MISO held LOW after failed mount
 namespace OdysseyWifi {
 void initialize();
-bool available();
-bool busy();
-uint32_t configChunk(uint32_t offset,const char* text);
-bool applyConfig(uint32_t mode);
-bool forget();
-size_t encode(char* output,size_t capacity);
+bool busy(); // Always false: C3 Wi-Fi implementations were removed.
 }
 namespace OdysseyTransfer {
 void initialize();
@@ -733,11 +728,11 @@ void encodeModuleCapabilities(uint8_t* p) {
 #if CONFIG_IDF_TARGET_ESP32C3
   if (OdysseyTransfer::available()) {
     p[14]=1;
-    // Media feature bits: 0=BLE window, 1=Wi-Fi upload, 2=explicit
-    // full-card FAT format (operation 19). No automatic formatting.
+    // Media feature bits: 0=legacy BLE windows, 2=existing format ABI,
+    // 6=new credit-based BLE transfer (opcode 30). Wi-Fi bit 1 is absent.
     p[16]|=1;
-    if (OdysseyWifi::available()) p[16]|=2;
     p[16]|=4;
+    p[16]|=0x40;
     if (odysseySdDetectionState()==1) {
       ready|=SYNAP_CAP_SD;
       if (ready&SYNAP_CAP_AUDIO) ready|=SYNAP_CAP_SDAUDIO;
@@ -4445,1133 +4440,19 @@ void odysseyToggleRecording() {
   Serial.println("[TOUCH] double tap -> SD audio START");
 }
 #endif
-// Odyssey C3 Wi-Fi SD upload.
-// Control remains on BLE. The ESP32-C3 joins a user-provisioned 2.4 GHz Wi-Fi
-// network (home Wi-Fi or phone hotspot) only for an explicit upload session,
-// then streams the append-only SD WAV directly to Synap Cloud over HTTPS.
-// The SD source is never deleted here; retention stays a separate PWA choice.
+// BLE-only Odyssey C3. The former STA/TLS uploader has been removed.
+// Keep this compatibility shim while other shared recorder/power modules
+// retain their lightweight OdysseyWifi::busy() interlock.
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-// The direct HTTPS Wi-Fi implementation currently exceeds the immutable
-// 1,310,720-byte C3 OTA slot. Keep its implementation for optimization, but
-// ship a diagnostic-safe build with the feature explicitly disabled; otherwise
-// the OTA pipeline cannot publish fixes for the existing SD recorder.
-// Never enlarge the OTA partition without a separate migration design.
-#ifndef SYNAP_C3_WIFI_UPLOAD_ENABLED
-#define SYNAP_C3_WIFI_UPLOAD_ENABLED 0
-#endif
-#if SYNAP_C3_WIFI_UPLOAD_ENABLED
-#include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <limits.h>
-#include <time.h>
-
-namespace OdysseyWifiAp { bool busy(); }
 namespace OdysseyWifi {
-
-// Google Trust Services GTS Root R1 (current digitalSignature root).
-// SHA-256: D9:47:43:2A:BD:E7:B7:FA:90:FC:2E:6B:59:10:1B:12:
-//           80:E0:E1:C7:E4:E4:0F:A3:C6:88:7F:FF:57:A7:F4:CF
-// Valid until 2036-06-22. Source: https://pki.goog/repository/
-// Arduino-ESP32 3.3.5 has setCACert(), but no useBuiltinCACertBundle().
-static const char GOOGLE_TRUST_ROOT_R1[] PROGMEM = R"PEM(
------BEGIN CERTIFICATE-----
-MIIFVzCCAz+gAwIBAgINAgPlk28xsBNJiGuiFzANBgkqhkiG9w0BAQwFADBHMQsw
-CQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEU
-MBIGA1UEAxMLR1RTIFJvb3QgUjEwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAw
-MDAwWjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZp
-Y2VzIExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjEwggIiMA0GCSqGSIb3DQEBAQUA
-A4ICDwAwggIKAoICAQC2EQKLHuOhd5s73L+UPreVp0A8of2C+X0yBoJx9vaMf/vo
-27xqLpeXo4xL+Sv2sfnOhB2x+cWX3u+58qPpvBKJXqeqUqv4IyfLpLGcY9vXmX7w
-Cl7raKb0xlpHDU0QM+NOsROjyBhsS+z8CZDfnWQpJSMHobTSPS5g4M/SCYe7zUjw
-TcLCeoiKu7rPWRnWr4+wB7CeMfGCwcDfLqZtbBkOtdh+JhpFAz2weaSUKK0Pfybl
-qAj+lug8aJRT7oM6iCsVlgmy4HqMLnXWnOunVmSPlk9orj2XwoSPwLxAwAtcvfaH
-szVsrBhQf4TgTM2S0yDpM7xSma8ytSmzJSq0SPly4cpk9+aCEI3oncKKiPo4Zor8
-Y/kB+Xj9e1x3+naH+uzfsQ55lVe0vSbv1gHR6xYKu44LtcXFilWr06zqkUspzBmk
-MiVOKvFlRNACzqrOSbTqn3yDsEB750Orp2yjj32JgfpMpf/VjsPOS+C12LOORc92
-wO1AK/1TD7Cn1TsNsYqiA94xrcx36m97PtbfkSIS5r762DL8EGMUUXLeXdYWk70p
-aDPvOmbsB4om3xPXV2V4J95eSRQAogB/mqghtqmxlbCluQ0WEdrHbEg8QOB+DVrN
-VjzRlwW5y0vtOUucxD/SVRNuJLDWcfr0wbrM7Rv1/oFB2ACYPTrIrnqYNxgFlQID
-AQABo0IwQDAOBgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4E
-FgQU5K8rJnEaK0gnhS9SZizv8IkTcT4wDQYJKoZIhvcNAQEMBQADggIBAJ+qQibb
-C5u+/x6Wki4+omVKapi6Ist9wTrYggoGxval3sBOh2Z5ofmmWJyq+bXmYOfg6LEe
-QkEzCzc9zolwFcq1JKjPa7XSQCGYzyI0zzvFIoTgxQ6KfF2I5DUkzps+GlQebtuy
-h6f88/qBVRRiClmpIgUxPoLW7ttXNLwzldMXG+gnoot7TiYaelpkttGsN/H9oPM4
-7HLwEXWdyzRSjeZ2axfG34arJ45JK3VmgRAhpuo+9K4l/3wV3s6MJT/KYnAK9y8J
-ZgfIPxz88NtFMN9iiMG1D53Dn0reWVlHxYciNuaCp+0KueIHoI17eko8cdLiA6Ef
-MgfdG+RCzgwARWGAtQsgWSl4vflVy2PFPEz0tv/bal8xa5meLMFrUKTX5hgUvYU/
-Z6tGn6D/Qqc6f1zLXbBwHSs09dR2CQzreExZBfMzQsNhFRAbd03OIozUhfJFfbdT
-6u9AWpQKXCBfTkBdYiJ23//OYb2MI3jSNwLgjt7RETeJ9r/tSQdirpLsQBqvFAnZ
-0E6yove+7u7Y/9waLd64NnHi/Hm3lCXRSHNboTXns5lndcEZOitHTtNCjv0xyBZm
-2tIMPNuzjsmhDYAPexZ3FL//2wmUspO8IFgV6dtxQ/PeEMMA3KgqlbbC1j+Qa3bb
-bP6MvPJwNQzcmRk13NfIRmPVNnGuV/u3gm3c
------END CERTIFICATE-----
-)PEM";
-
-static constexpr uint32_t WIFI_CONNECT_MS=20000u;
-static constexpr uint32_t TIME_SYNC_MS=12000u;
-static constexpr time_t TLS_MIN_UNIX_TIME=1704067200; // 2024-01-01 UTC
-static constexpr uint32_t HTTP_TIMEOUT_MS=30000u;
-static constexpr uint32_t SEGMENT_MS=120000u;
-static constexpr uint32_t PCM_BYTES_PER_MS=32u; // 16 kHz * mono * 16 bit / 1000.
-static constexpr uint32_t SEGMENT_PCM_BYTES=SEGMENT_MS*PCM_BYTES_PER_MS;
-static constexpr size_t CONFIG_CAPACITY=2304;
-static constexpr size_t WIFI_TASK_STACK=12288;
-
-enum Phase : uint8_t {
-  IDLE=0,
-  CONNECTING=1,
-  PREPARING=2,
-  UPLOADING=3,
-  FINALIZING=4,
-  COMPLETE=5,
-  FAILED=6,
-};
-
-struct Status {
-  bool active=false;
-  bool configured=false;
-  uint8_t phase=IDLE;
-  uint32_t total=0;
-  uint32_t uploaded=0;
-  int16_t http=0;
-  char ssid[33]{};
-  char message[96]{};
-};
-
-struct UploadSpec {
-  char endpoint[192]{};
-  char token[896]{};
-  char recordingId[40]{};
-  char path[64]{};
-};
-
-static portMUX_TYPE statusMux=portMUX_INITIALIZER_UNLOCKED;
-static Status statusState;
-static UploadSpec uploadSpec;
-static std::atomic<bool> uploadBusy{false};
-static char configBuffer[CONFIG_CAPACITY]{};
-static size_t configLength=0;
-
-static void setStatus(uint8_t phase,bool active,uint32_t total,uint32_t uploaded,
-                      int http,const char* message) {
-  portENTER_CRITICAL(&statusMux);
-  statusState.phase=phase;
-  statusState.active=active;
-  statusState.total=total;
-  statusState.uploaded=uploaded;
-  statusState.http=int16_t(http);
-  if (message) snprintf(statusState.message,sizeof(statusState.message),"%s",message);
-  portEXIT_CRITICAL(&statusMux);
-}
-
-static bool readCredentials(char* ssid,size_t ssidCap,char* password,size_t passwordCap) {
-  if (!ssid || ssidCap<2 || !password || passwordCap<1) return false;
-  ssid[0]=0;password[0]=0;
-  Preferences prefs;
-  if (!prefs.begin("c3-wifi",true)) return false;
-  const String storedSsid=prefs.getString("ssid","");
-  const String storedPassword=prefs.getString("pass","");
-  prefs.end();
-  if (!storedSsid.length() || storedSsid.length()>32 || storedPassword.length()>63) return false;
-  snprintf(ssid,ssidCap,"%s",storedSsid.c_str());
-  snprintf(password,passwordCap,"%s",storedPassword.c_str());
-  return true;
-}
-
-static void refreshConfigured() {
-  char ssid[33],password[64];
-  const bool ok=readCredentials(ssid,sizeof(ssid),password,sizeof(password));
-  portENTER_CRITICAL(&statusMux);
-  statusState.configured=ok;
-  snprintf(statusState.ssid,sizeof(statusState.ssid),"%s",ok?ssid:"");
-  portEXIT_CRITICAL(&statusMux);
-}
-
-bool available() { return true; }
-bool busy() { return uploadBusy.load() || OdysseyWifiAp::busy(); }
-
-static bool safeWavPath(const char* path) {
-  if (!path || strncmp(path,"/synap/",7)!=0) return false;
-  const size_t n=strlen(path);
-  if (n<12 || n>63 || (strcasecmp(path+n-4,".wav")!=0)) return false;
-  for (size_t i=7;i<n-4;++i) {
-    const char c=path[i];
-    if (!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='-'||c=='.')) return false;
-  }
-  return true;
-}
-
-static int hexNibble(char c) {
-  if (c>='0'&&c<='9') return c-'0';
-  if (c>='a'&&c<='f') return c-'a'+10;
-  if (c>='A'&&c<='F') return c-'A'+10;
-  return -1;
-}
-
-static bool decodeField(const char* key,char* output,size_t capacity) {
-  if (!key || !output || capacity<1) return false;
-  const size_t keyLength=strlen(key);
-  const char* start=configBuffer;
-  const char* limit=configBuffer+configLength;
-  while (start<limit) {
-    const char* end=static_cast<const char*>(memchr(start,'\n',size_t(limit-start)));
-    if (!end) end=limit;
-    if (size_t(end-start)>=keyLength && !memcmp(start,key,keyLength)) {
-      const char* hex=start+keyLength;
-      const size_t digits=size_t(end-hex);
-      if (digits&1u || digits/2u>=capacity) return false;
-      const size_t bytes=digits/2u;
-      for (size_t i=0;i<bytes;++i) {
-        const int hi=hexNibble(hex[i*2]),lo=hexNibble(hex[i*2+1]);
-        if (hi<0 || lo<0) return false;
-        output[i]=char((hi<<4)|lo);
-      }
-      output[bytes]=0;
-      return true;
-    }
-    start=end<limit?end+1:limit;
-  }
-  return false;
-}
-
-uint32_t configChunk(uint32_t offset,const char* text) {
-  const size_t n=text?strlen(text):0;
-  if (offset==0) { configLength=0;configBuffer[0]=0; }
-  if (offset!=configLength || !n || n>60 || configLength+n>=sizeof(configBuffer)) return UINT32_MAX;
-  memcpy(configBuffer+configLength,text,n);
-  configLength+=n;
-  configBuffer[configLength]=0;
-  return uint32_t(configLength);
-}
-
-static bool saveCredentialsFromConfig() {
-  char ssid[33]{},password[64]{};
-  if (!decodeField("S=",ssid,sizeof(ssid)) || !ssid[0]) return false;
-  // An open network is valid, so a missing P= is treated as empty only when
-  // the field itself exists in the configuration.
-  if (!decodeField("P=",password,sizeof(password))) return false;
-  Preferences prefs;
-  if (!prefs.begin("c3-wifi",false)) return false;
-  const size_t a=prefs.putString("ssid",ssid);
-  const size_t b=prefs.putString("pass",password);
-  prefs.end();
-  if (!a || (password[0] && !b)) return false;
-  // NVS acknowledgement must be verified by reading both values back; the
-  // UI intentionally clears its password field after saving for privacy.
-  char verifySsid[33]{},verifyPassword[64]{};
-  const bool verified=readCredentials(verifySsid,sizeof(verifySsid),
-    verifyPassword,sizeof(verifyPassword)) &&
-    strcmp(ssid,verifySsid)==0 && strcmp(password,verifyPassword)==0;
-  refreshConfigured();
-  return verified;
-}
-
-bool forget() {
-  if (busy()) return false;
-  Preferences prefs;
-  if (!prefs.begin("c3-wifi",false)) return false;
-  const bool ok=prefs.clear();
-  prefs.end();
-  WiFi.disconnect(true,false);
-  WiFi.mode(WIFI_OFF);
-  refreshConfigured();
-  setStatus(IDLE,false,0,0,0,ok?"Wi-Fi network removed.":"Could not remove Wi-Fi network.");
-  return ok;
-}
-
-static void wavHeader(uint8_t* h,uint32_t pcmBytes) {
-  memset(h,0,44);
-  memcpy(h,"RIFF",4);put32le(h+4,pcmBytes+36u);
-  memcpy(h+8,"WAVEfmt ",8);put32le(h+16,16u);
-  h[20]=1;h[22]=1;put32le(h+24,SAMPLE_RATE);
-  put32le(h+28,SAMPLE_RATE*2u);h[32]=2;h[34]=16;
-  memcpy(h+36,"data",4);put32le(h+40,pcmBytes);
-}
-
-static uint8_t httpBuffer[2048];
-
-static bool endpoint(char* host,size_t hostCapacity,uint16_t& port) {
-  const char* value=uploadSpec.endpoint;
-  if (!value || strncmp(value,"https://",8)!=0) return false;
-  value+=8;
-  if (!*value || strchr(value,'/')) return false;
-  const char* colon=strrchr(value,':');
-  size_t hostLength=colon?size_t(colon-value):strlen(value);
-  if (!hostLength || hostLength>=hostCapacity) return false;
-  memcpy(host,value,hostLength);host[hostLength]=0;
-  port=443;
-  if (colon) {
-    unsigned parsed=0;
-    const char* p=colon+1;
-    if (!*p) return false;
-    while (*p) {
-      if (*p<'0' || *p>'9') return false;
-      parsed=parsed*10u+unsigned(*p-'0');
-      if (parsed>65535u) return false;
-      ++p;
-    }
-    if (!parsed) return false;
-    port=uint16_t(parsed);
-  }
-  return true;
-}
-
-static bool writeAll(WiFiClientSecure& tls,const uint8_t* data,size_t size) {
-  const uint32_t started=millis();
-  size_t sent=0;
-  while (sent<size && tls.connected() && uint32_t(millis()-started)<HTTP_TIMEOUT_MS) {
-    const size_t written=tls.write(data+sent,size-sent);
-    if (written) sent+=written;
-    else delay(1);
-  }
-  return sent==size;
-}
-static bool writeAll(WiFiClientSecure& tls,const char* text) {
-  return text && writeAll(tls,reinterpret_cast<const uint8_t*>(text),strlen(text));
-}
-
-static int readHttpStatus(WiFiClientSecure& tls) {
-  char line[64]{};
-  size_t used=0;
-  const uint32_t started=millis();
-  while (uint32_t(millis()-started)<HTTP_TIMEOUT_MS && used+1<sizeof(line)) {
-    if (!tls.available()) {
-      if (!tls.connected()) break;
-      delay(1);continue;
-    }
-    const int c=tls.read();
-    if (c<0) continue;
-    if (c=='\n') break;
-    if (c!='\r') line[used++]=char(c);
-  }
-  line[used]=0;
-  if (strncmp(line,"HTTP/",5)!=0) return -1;
-  const char* space=strchr(line,' ');
-  if (!space || space[1]<'0'||space[1]>'9'||space[2]<'0'||space[2]>'9'||space[3]<'0'||space[3]>'9')
-    return -1;
-  return (space[1]-'0')*100+(space[2]-'0')*10+(space[3]-'0');
-}
-
-static bool openHttps(WiFiClientSecure& tls,char* host,size_t hostCapacity) {
-  uint16_t port=443;
-  if (!endpoint(host,hostCapacity,port)) return false;
-  tls.setCACert(GOOGLE_TRUST_ROOT_R1);
-  tls.setHandshakeTimeout(15);
-  return tls.connect(host,port,15000)==1;
-}
-
-static bool uploadSegment(FILE* file,uint32_t index,uint32_t pcmOffset,uint32_t pcmBytes,int& httpCode) {
-  if (!file || fseek(file,long(44u+pcmOffset),SEEK_SET)!=0) { httpCode=-1;return false; }
-  char host[128]{};
-  WiFiClientSecure tls;
-  if (!openHttps(tls,host,sizeof(host))) { httpCode=-1;return false; }
-
-  char header[1536];
-  const int headerSize=snprintf(header,sizeof(header),
-    "PUT /v1/device-uploads/%s/segments/%lu HTTP/1.1\r\n"
-    "Host: %s\r\n"
-    "Authorization: SynapDevice %s\r\n"
-    "Content-Type: audio/wav\r\n"
-    "Content-Length: %lu\r\n"
-    "x-synap-start-ms: %lu\r\n"
-    "x-synap-end-ms: %lu\r\n"
-    "Cache-Control: no-store\r\n"
-    "Connection: close\r\n\r\n",
-    uploadSpec.recordingId,static_cast<unsigned long>(index),host,uploadSpec.token,
-    static_cast<unsigned long>(pcmBytes+44u),
-    static_cast<unsigned long>(pcmOffset/PCM_BYTES_PER_MS),
-    static_cast<unsigned long>((pcmOffset+pcmBytes)/PCM_BYTES_PER_MS));
-  if (headerSize<=0 || size_t(headerSize)>=sizeof(header) || !writeAll(tls,header)) {
-    tls.stop();httpCode=-1;return false;
-  }
-
-  uint8_t wav[44];
-  wavHeader(wav,pcmBytes);
-  if (!writeAll(tls,wav,sizeof(wav))) { tls.stop();httpCode=-1;return false; }
-
-  uint32_t remaining=pcmBytes;
-  while (remaining) {
-    const size_t wanted=remaining<sizeof(httpBuffer)?size_t(remaining):sizeof(httpBuffer);
-    const size_t got=fread(httpBuffer,1,wanted,file);
-    if (got!=wanted || !writeAll(tls,httpBuffer,got)) {
-      tls.stop();httpCode=-1;return false;
-    }
-    remaining-=uint32_t(got);
-  }
-
-  httpCode=readHttpStatus(tls);
-  tls.stop();
-  return httpCode==200 || httpCode==202;
-}
-
-static bool finalizeUpload(uint32_t durationMs,uint32_t segmentCount,int& httpCode) {
-  char host[128]{};
-  WiFiClientSecure tls;
-  if (!openHttps(tls,host,sizeof(host))) { httpCode=-1;return false; }
-
-  char body[112];
-  const int bodySize=snprintf(body,sizeof(body),
-    "{\"duration_ms\":%lu,\"segment_count\":%lu}",
-    static_cast<unsigned long>(durationMs),static_cast<unsigned long>(segmentCount));
-  if (bodySize<=0 || size_t(bodySize)>=sizeof(body)) { tls.stop();httpCode=-1;return false; }
-
-  char header[1536];
-  const int headerSize=snprintf(header,sizeof(header),
-    "POST /v1/device-uploads/%s/finalize HTTP/1.1\r\n"
-    "Host: %s\r\n"
-    "Authorization: SynapDevice %s\r\n"
-    "Content-Type: application/json\r\n"
-    "Content-Length: %u\r\n"
-    "Cache-Control: no-store\r\n"
-    "Connection: close\r\n\r\n",
-    uploadSpec.recordingId,host,uploadSpec.token,unsigned(bodySize));
-  if (headerSize<=0 || size_t(headerSize)>=sizeof(header) ||
-      !writeAll(tls,header) || !writeAll(tls,reinterpret_cast<const uint8_t*>(body),size_t(bodySize))) {
-    tls.stop();httpCode=-1;return false;
-  }
-
-  httpCode=readHttpStatus(tls);
-  tls.stop();
-  return httpCode==200 || httpCode==202;
-}
-
-static bool connectWifi() {
-  char ssid[33]{},password[64]{};
-  if (!readCredentials(ssid,sizeof(ssid),password,sizeof(password))) return false;
-  setStatus(CONNECTING,true,0,0,0,"Connecting Odyssey C3 to Wi-Fi…");
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
-  WiFi.begin(ssid,password);
-  const uint32_t started=millis();
-  while (WiFi.status()!=WL_CONNECTED && uint32_t(millis()-started)<WIFI_CONNECT_MS) {
-    if (otaBusy() || sleepPending) break;
-    delay(100);
-  }
-  if (WiFi.status()!=WL_CONNECTED) {
-    WiFi.disconnect(true,false);
-    WiFi.mode(WIFI_OFF);
-    return false;
-  }
-  return true;
-}
-
-static bool syncClock() {
-  if (time(nullptr)>=TLS_MIN_UNIX_TIME) return true;
-  setStatus(CONNECTING,true,0,0,0,"Securing Wi-Fi connection…");
-  configTime(0,0,"time.google.com","time.cloudflare.com","pool.ntp.org");
-  const uint32_t started=millis();
-  while (time(nullptr)<TLS_MIN_UNIX_TIME && uint32_t(millis()-started)<TIME_SYNC_MS) {
-    if (otaBusy() || sleepPending || batteryCritical() || WiFi.status()!=WL_CONNECTED) return false;
-    delay(100);
-  }
-  return time(nullptr)>=TLS_MIN_UNIX_TIME;
-}
-
-static void stopWifi() {
-  WiFi.disconnect(true,false);
-  WiFi.mode(WIFI_OFF);
-}
-
-static void uploadTask(void*) {
-  applyCpuPowerProfile(true);
-  bool ok=false;
-  int httpCode=0;
-  uint32_t pcmTotal=0,uploaded=0,segments=0;
-  char full[96]{};
-  FILE* file=nullptr;
-
-  setStatus(PREPARING,true,0,0,0,"Preparing SD recording for Wi-Fi sync…");
-
-  if (!connectWifi()) {
-    setStatus(FAILED,false,0,0,0,"Could not join the saved Wi-Fi/hotspot.");
-    uploadBusy=false;
-    applyCpuPowerProfile(false);
-    vTaskDelete(nullptr);
-    return;
-  }
-  if (!syncClock()) {
-    stopWifi();
-    setStatus(FAILED,false,0,0,0,"Wi-Fi connected, but secure time sync failed.");
-    uploadBusy=false;
-    applyCpuPowerProfile(false);
-    vTaskDelete(nullptr);
-    return;
-  }
-
-  {
-    // Keep storage mounted and the file stable for the complete cloud upload.
-    OdysseySdGuard storage(pdMS_TO_TICKS(5000));
-    if (storage && odysseySdReady() && safeWavPath(uploadSpec.path) &&
-        odysseySdPath(uploadSpec.path,full,sizeof(full))) {
-      struct stat st{};
-      if (stat(full,&st)==0 && S_ISREG(st.st_mode) && st.st_size>44 &&
-          uint64_t(st.st_size)<=uint64_t(LONG_MAX)) {
-        pcmTotal=uint32_t(st.st_size)-44u;
-        file=fopen(full,"rb");
-      }
-    }
-
-    if (!file || !pcmTotal) {
-      if (file) fclose(file);
-      setStatus(FAILED,false,0,0,0,"SD recording is unavailable.");
-    } else {
-      setStatus(UPLOADING,true,pcmTotal,0,0,"Uploading SD recording over Wi-Fi…");
-      const uint32_t segmentCount=(pcmTotal+SEGMENT_PCM_BYTES-1u)/SEGMENT_PCM_BYTES;
-      for (uint32_t index=0;index<segmentCount;++index) {
-        if (otaBusy() || sleepPending || batteryCritical() || WiFi.status()!=WL_CONNECTED) break;
-        const uint32_t offset=index*SEGMENT_PCM_BYTES;
-        const uint32_t remaining=pcmTotal-offset;
-        const uint32_t bytes=remaining<SEGMENT_PCM_BYTES?remaining:SEGMENT_PCM_BYTES;
-        if (!uploadSegment(file,index,offset,bytes,httpCode)) break;
-        uploaded+=bytes;
-        segments=index+1u;
-        setStatus(UPLOADING,true,pcmTotal,uploaded,httpCode,"Uploading SD recording over Wi-Fi…");
-      }
-      if (uploaded==pcmTotal && segments==segmentCount) {
-        setStatus(FINALIZING,true,pcmTotal,uploaded,httpCode,"Verifying Wi-Fi upload…");
-        const uint32_t durationMs=pcmTotal/PCM_BYTES_PER_MS;
-        ok=finalizeUpload(durationMs,segmentCount,httpCode);
-      }
-      fclose(file);file=nullptr;
-      if (ok) {
-        setStatus(COMPLETE,false,pcmTotal,uploaded,httpCode,"Wi-Fi sync complete.");
-      } else {
-        setStatus(FAILED,false,pcmTotal,uploaded,httpCode,
-          WiFi.status()==WL_CONNECTED?"Wi-Fi upload failed; SD original kept.":"Wi-Fi disconnected; SD original kept.");
-      }
-    }
-  }
-
-  stopWifi();
-  uploadBusy=false;
-  applyCpuPowerProfile(false);
-  vTaskDelete(nullptr);
-}
-
-static bool prepareUploadFromConfig() {
-  UploadSpec next{};
-  if (!decodeField("E=",next.endpoint,sizeof(next.endpoint)) ||
-      !decodeField("T=",next.token,sizeof(next.token)) ||
-      !decodeField("R=",next.recordingId,sizeof(next.recordingId)) ||
-      !decodeField("F=",next.path,sizeof(next.path))) return false;
-  if (strncmp(next.endpoint,"https://",8)!=0 || strchr(next.endpoint+8,'/') ||
-      strlen(next.token)<16 || strlen(next.recordingId)!=36 || !safeWavPath(next.path)) return false;
-  if (busy() || odysseyRecording.load() || streamingEnabled.load() || otaBusy() || sleepPending ||
-      !odysseySdReady()) return false;
-  uploadSpec=next;
-  uploadBusy=true;
-  setStatus(PREPARING,true,0,0,0,"Starting Wi-Fi sync…");
-  if (xTaskCreate(uploadTask,"c3-wifi",WIFI_TASK_STACK,nullptr,1,nullptr)!=pdPASS) {
-    uploadBusy=false;
-    setStatus(FAILED,false,0,0,0,"Wi-Fi upload task unavailable.");
-    return false;
-  }
-  return true;
-}
-
-bool applyConfig(uint32_t mode) {
-  bool ok=false;
-  if (mode==1) ok=saveCredentialsFromConfig();
-  else if (mode==2) ok=prepareUploadFromConfig();
-  configLength=0;configBuffer[0]=0;
-  if (!ok && mode==1) setStatus(FAILED,false,0,0,0,"Wi-Fi network could not be saved.");
-  return ok;
-}
-
-size_t encode(char* output,size_t capacity) {
-  if (!output || capacity<32) return 0;
-  refreshConfigured();
-  Status snapshot;
-  portENTER_CRITICAL(&statusMux);
-  snapshot=statusState;
-  portEXIT_CRITICAL(&statusMux);
-  const int n=snprintf(output,capacity,
-    "{\"configured\":%s,\"active\":%s,\"phase\":%u,\"total\":%lu,\"uploaded\":%lu,"
-    "\"http\":%d,\"message\":\"%s\"}",
-    snapshot.configured?"true":"false",snapshot.active?"true":"false",unsigned(snapshot.phase),
-    static_cast<unsigned long>(snapshot.total),static_cast<unsigned long>(snapshot.uploaded),
-    int(snapshot.http),snapshot.message);
-  if (n<0) return 0;
-  return size_t(n)<capacity?size_t(n):capacity-1;
-}
-
-void initialize() {
-  refreshConfigured();
-  // Expose the safe default after a large-slot OTA upgrade: uploads are
-  // opt-in, and firmware never deletes the audio originals from microSD.
-  setStatus(IDLE,false,0,0,0,"Wi-Fi idle; SD originals retained.");
-}
-
-} // namespace OdysseyWifi
-#else
-// No Wi-Fi upload is advertised until the C3 TLS image fits the deployed OTA
-// partition. Media-v1 BLE catalogue/read/delete and offline SD recording stay
-// available exactly as in the proven recorder baseline.
-namespace OdysseyWifi {
-bool available() { return false; }
-bool busy() { return false; }
-uint32_t configChunk(uint32_t,const char*) { return UINT32_MAX; }
-bool applyConfig(uint32_t) { return false; }
-bool forget() { return false; }
-size_t encode(char* output,size_t capacity) {
-  static constexpr char unavailable[] =
-      R"JSON({"configured":false,"active":false,"phase":0,"total":0,"uploaded":0,"http":0,"message":"Wi-Fi sync requires a size-optimized firmware update."})JSON";
-  if (!output || capacity<=sizeof(unavailable)-1u) return 0;
-  memcpy(output,unavailable,sizeof(unavailable));
-  return sizeof(unavailable)-1u;
-}
 void initialize() {}
-} // namespace OdysseyWifi
-#endif // SYNAP_C3_WIFI_UPLOAD_ENABLED
-#endif // Odyssey C3
-// Odyssey C3+SD private read-only Wi-Fi hotspot.
-// BLE operations 20/21/22 start, inspect and stop a temporary AP session.
-// This intentionally never writes, deletes, remounts, or formats the SD.
-// The separate cloud STA uploader remains available for compatibility.
-#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-#if SYNAP_C3_WIFI_UPLOAD_ENABLED
-#include <WebServer.h>
-#include <WiFi.h>
-#include <dirent.h>
-#include <sys/stat.h>
-#include <new>
-#include "esp_system.h"
-#include "esp_heap_caps.h"
-#endif
-namespace OdysseyWifiAp {
-#if SYNAP_C3_WIFI_UPLOAD_ENABLED
-
-static constexpr uint32_t IDLE_MS=180000u, MAX_MS=900000u;
-static constexpr size_t AP_STACK=4096; // Staging task only; Wi-Fi runs after reboot, without BLE
-struct Info {
-  bool active=false;
-  char ssid[24]{};
-  char password[33]{};
-  char key[33]{};
-};
-static Info apInfo;
-static portMUX_TYPE apMux=portMUX_INITIALIZER_UNLOCKED;
-static std::atomic<bool> apActive{false}, stopRequested{false}, apServing{false};
-static WebServer* apServer=nullptr;
-static uint32_t startedAt=0,lastActivityAt=0;
-// ESP.restart() needs the .rtc_noinit linker section. RTC_DATA_ATTR is
-// initialized on ordinary software boot and can silently erase this handoff.
-// The one-shot marker is accepted ONLY on ESP_RST_SW, then immediately cleared;
-// a panic, brownout or power cycle returns to normal BLE/OTA operation.
-static constexpr uint32_t AP_REBOOT_MAGIC=0x534E4150u;
-struct RtcHandoff {
-  // Plain POD, no constructors or default member initializers. RTC_NOINIT_ATTR
-  // retains it across software restart without replaying .rtc.data startup.
-  uint32_t magic,inverse;
-  char ssid[24],password[33],key[33];
-};
-RTC_NOINIT_ATTR static RtcHandoff rtcHandoff;
-RTC_NOINIT_ATTR static uint8_t rtcFailure;
-RTC_NOINIT_ATTR static uint32_t rtcFailureHeap,rtcFailureLargest;
-static bool bootExclusive=false;
-static void clearRtcHandoff() {
-  rtcHandoff.magic=0;rtcHandoff.inverse=0;
-}
-// Retain the latest failed start in RAM so op21 can diagnose an AP which
-// never broadcast. These counters do not touch or remount the SD card.
-static std::atomic<uint8_t> lastStartFailure{0};
-static std::atomic<uint32_t> failedHeap{0},failedLargestBlock{0};
-static void noteStartFailure(uint8_t stage) {
-  const uint32_t freeHeap=ESP.getFreeHeap();
-  const uint32_t largest=heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  failedHeap=freeHeap;failedLargestBlock=largest;lastStartFailure=stage;
-  if(bootExclusive) {
-    rtcFailure=stage;rtcFailureHeap=freeHeap;rtcFailureLargest=largest;
-  }
-  Serial.printf("[C3-AP] startup failure stage=%u freeHeap=%lu largest=%lu BLE=%u SD=%u OTA=%u\n",
-    unsigned(stage),static_cast<unsigned long>(freeHeap),
-    static_cast<unsigned long>(largest),unsigned(deviceConnected.load()),
-    unsigned(odysseySdReady()),unsigned(otaBusy()));
-}
-
-static Info snapshot() {
-  Info copy;
-  portENTER_CRITICAL(&apMux); copy=apInfo; portEXIT_CRITICAL(&apMux);
-  return copy;
-}
-static void store(const Info& next) {
-  portENTER_CRITICAL(&apMux); apInfo=next; portEXIT_CRITICAL(&apMux);
-}
-bool busy() { return apActive.load(); }
-static bool safeWav(const char* path) {
-  if (!path || strncmp(path,"/synap/",7)!=0) return false;
-  const size_t n=strlen(path);
-  if (n<12u || n>63u || strcasecmp(path+n-4,".wav")!=0) return false;
-  for(size_t i=7;i<n-4;++i) {
-    const char c=path[i];
-    if (!((c>='a' && c<='z')||(c>='A' && c<='Z')||
-          (c>='0' && c<='9')||c=='_'||c=='-'||c=='.')) return false;
-  }
-  return true;
-}
-static bool authorized() {
-  apServer->sendHeader("Cache-Control","no-store, no-cache, must-revalidate");
-  apServer->sendHeader("Referrer-Policy","no-referrer");
-  apServer->sendHeader("X-Content-Type-Options","nosniff");
-  apServer->sendHeader("Content-Security-Policy",
-    "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'");
-  const Info current=snapshot();
-  if (!current.active || apServer->arg("key")!=current.key) {
-    apServer->send(403,"text/plain","Use the private link displayed in Synap.");
-    return false;
-  }
-  lastActivityAt=millis();
-  return true;
-}
-static void page() {
-  if (!authorized()) return;
-  const Info current=snapshot();
-  apServer->setContentLength(CONTENT_LENGTH_UNKNOWN);
-  apServer->send(200,"text/html","");
-  apServer->sendContent("<!doctype html><html lang=en><meta charset=utf-8>"
-    "<meta name=viewport content='width=device-width,initial-scale=1'>"
-    "<title>Synap C3 SD downloads</title><style>"
-    "body{font:16px system-ui;background:#f6f8f6;color:#18352c;max-width:44rem;margin:auto;padding:22px}"
-    "h1{font-size:25px}li{padding:12px 0;border-bottom:1px solid #d5dfd9;overflow-wrap:anywhere}"
-    "a{color:#155f4a}button{font:inherit;padding:10px;border-radius:9px}"
-    "</style><h1>Synap C3 recordings</h1>"
-    "<p>Download WAV files directly to this device. No SD data is deleted."
-    " When opened from Synap, tap a recording to import it directly into Memories."
-    " If the browser bridge is unavailable, the link downloads a WAV as a fallback.</p>"
-    "<p id=bridgeStatus aria-live=polite>Waiting for the Synap import bridge; downloads remain available.</p><ul>");
-  size_t shown=0;
-  // New FAT-root 8.3 WAVs and legacy /synap WAVs share one media URL API.
-  // Both directories are observed read-only under the AP's SD mutex lease.
-  const char* const dirs[2]={odysseySdMountPoint(),ODYSSEY_SD_RECORDING_DIR};
-  for(uint8_t scan=0;scan<2 && !stopRequested.load();++scan) {
-    DIR* directory=opendir(dirs[scan]);
-    if(!directory) {
-      if(scan==0u || errno!=ENOENT)
-        apServer->sendContent("<li>One SD directory is unavailable; recordings were not changed.</li>");
-      continue;
-    }
-    struct dirent* entry=nullptr;
-    while((entry=readdir(directory))!=nullptr && shown<250 &&
-          !stopRequested.load() && uint32_t(millis()-startedAt)<MAX_MS) {
-      const char* name=entry->d_name;
-      if(!name || strlen(name)>55u)continue;
-      if(scan==0u ? !odysseySdRootWavName(name)
-                  : odysseySdRootWavName(name)) continue;
-      char logical[64]{},full[96]{};
-      snprintf(logical,sizeof(logical),"/synap/%s",name);
-      if(!safeWav(logical)||!odysseySdPath(logical,full,sizeof(full)))continue;
-      struct stat st{};
-      if(stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<44)continue;
-      char line[260];
-      const int n=snprintf(line,sizeof(line),
-        "<li><a data-path='%s' href='/file?key=%s&amp;path=%s'>%s</a> (%lu bytes)</li>",
-        logical,current.key,logical,name,static_cast<unsigned long>(st.st_size));
-      if(n>0 && size_t(n)<sizeof(line)){apServer->sendContent(String(line));++shown;}
-      vTaskDelay(1);
-    }
-    closedir(directory);
-  }
-  if(!shown)apServer->sendContent("<li>No compatible WAV files found.</li>");
-  apServer->sendContent("</ul><p>Hotspot closes after 3 minutes idle, at most 15 minutes.</p>"
-    "<form method=post action='/stop?key=");
-  apServer->sendContent(String(current.key));
-  apServer->sendContent("'><button>Finish downloads</button></form>");
-
-  apServer->sendContent(R"JS(<script>
-(function(){
-'use strict';
-const query=new URLSearchParams(location.search);
-const channel=query.get('bridge')||'';
-const target=query.get('origin')||'';
-const status=document.getElementById('bridgeStatus');
-const enabled=/^[a-f0-9]{32}$/.test(channel) &&
-  /^https:\/\/[a-z0-9.-]+(?::[0-9]{2,5})?$/.test(target) && !!window.opener;
-let ready=false,serial=0,active=false;
-const outstanding=new Map();
-function say(msg){status.textContent=msg;}
-function send(action,details={},buffer){
-  const message={type:'synap:c3-ap',version:1,channel,action,...details};
-  if(buffer)window.opener.postMessage({...message,buffer},target,[buffer]);
-  else window.opener.postMessage(message,target);
-}
-function expect(action,details={},buffer,timeoutMs=20000){
-  return new Promise((resolve,reject)=>{
-    const seq=++serial;
-    const timer=setTimeout(()=>{outstanding.delete(seq);reject(Error('Synap bridge did not acknowledge '+action));},timeoutMs);
-    outstanding.set(seq,{resolve,reject,timer});
-    try{send(action,{...details,seq},buffer);}
-    catch(e){clearTimeout(timer);outstanding.delete(seq);reject(e);}
-  });
-}
-if(enabled){
-  window.addEventListener('message',event=>{
-    const data=event.data;
-    if(event.origin!==target || event.source!==window.opener ||
-       !data || data.type!=='synap:c3-ack' || data.version!==1 || data.channel!==channel)return;
-    if(data.action==='ready'){ready=true;say('Synap connected. Tap a WAV to save and verify it directly in Synap Memories.');return;}
-    const pending=outstanding.get(data.seq);
-    if(!pending)return;
-    outstanding.delete(data.seq);clearTimeout(pending.timer);
-    data.ok?pending.resolve(data):pending.reject(Error(data.error||'Synap import failed'));
-  });
-  send('hello',{seq:0});
-  setTimeout(()=>{if(!ready)say('Direct import unavailable in this browser session. Tap WAV links to download safely instead.');},8000);
-}
-document.addEventListener('click',async event=>{
-  const link=event.target.closest('a[data-path]');
-  if(!link || !enabled || !ready)return;
-  event.preventDefault();
-  if(active){say('Finish the current recording before selecting another.');return;}
-  active=true;
-  const path=link.dataset.path;
-  try{
-    say('Reading '+path+' from pendant over Wi-Fi…');
-    const response=await fetch(link.href,{cache:'no-store'});
-    if(!response.ok || !response.body)throw Error('Local SD read failed: HTTP '+response.status);
-    const size=Number(response.headers.get('content-length'));
-    if(!Number.isSafeInteger(size) || size<44 || size>67108864)
-      throw Error('Invalid WAV length; original was not changed');
-    await expect('begin',{path,size});
-    let received=0;
-    const reader=response.body.getReader();
-    while(true){
-      const block=await reader.read();
-      if(block.done)break;
-      const bytes=block.value;
-      for(let offset=0;offset<bytes.byteLength;offset+=16384){
-        const packet=bytes.slice(offset,offset+16384);
-        const length=packet.byteLength;
-        await expect('chunk',{path,offset:received},packet.buffer);
-        received+=length;
-        say('Transferring '+path+' · '+Math.round(received/size*100)+'%');
-      }
-    }
-    if(received!==size)throw Error('Incomplete SD transfer; original retained');
-    await expect('end',{path,size},null,180000);
-    say('Verified and saved in Synap Memories. SD original retained. You can select another recording.');
-  }catch(e){
-    try{send('cancel',{seq:++serial,path});}catch(_){}
-    say('Direct import failed: '+e.message+'. The SD original is unchanged. Retry or use the WAV download link.');
-  }finally{active=false;}
-});
-})();
-</script>)JS");
-  apServer->sendContent("</html>");
-  apServer->sendContent("");
-  lastActivityAt=millis();
-}
-static void virtualHeader(uint8_t* h,uint32_t fileSize) {
-  memset(h,0,44);
-  const uint32_t pcm=fileSize-44u;
-  memcpy(h,"RIFF",4);put32le(h+4,fileSize-8u);
-  memcpy(h+8,"WAVEfmt ",8);put32le(h+16,16);
-  h[20]=1;h[22]=1;put32le(h+24,SAMPLE_RATE);
-  put32le(h+28,SAMPLE_RATE*2);h[32]=2;h[34]=16;
-  memcpy(h+36,"data",4);put32le(h+40,pcm);
-}
-static void file() {
-  if(!authorized())return;
-  const String path=apServer->arg("path");
-  char full[96]{};
-  if(!safeWav(path.c_str()) || !odysseySdPath(path.c_str(),full,sizeof(full))) {
-    apServer->send(400,"text/plain","Invalid WAV path.");return;
-  }
-  struct stat st{};
-  if(stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<44 ||
-     uint64_t(st.st_size)>UINT32_MAX) {
-    apServer->send(404,"text/plain","Recording is unavailable.");return;
-  }
-  FILE* input=fopen(full,"rb");
-  if(!input){apServer->send(503,"text/plain","SD read unavailable.");return;}
-  if(fseek(input,44,SEEK_SET)!=0) {
-    fclose(input);apServer->send(503,"text/plain","SD seek failed.");return;
-  }
-  uint8_t* buffer=static_cast<uint8_t*>(malloc(2048));
-  if(!buffer){fclose(input);apServer->send(503,"text/plain","Download buffer unavailable.");return;}
-  const uint32_t fileSize=uint32_t(st.st_size);
-  apServer->sendHeader("Content-Disposition",
-    "attachment; filename=\""+path.substring(7)+"\"");
-  apServer->setContentLength(fileSize);
-  apServer->send(200,"audio/wav","");
-  WiFiClient client=apServer->client();
-  uint8_t header[44];virtualHeader(header,fileSize);
-  size_t sent=client.write(header,sizeof(header));
-  uint32_t remaining=fileSize-44u;
-  while(sent==44 && remaining && client.connected() && !stopRequested.load() &&
-        uint32_t(millis()-startedAt)<MAX_MS) {
-    const size_t count=std::min(size_t(remaining),size_t(2048));
-    const size_t got=fread(buffer,1,count,input);
-    if(got!=count || client.write(buffer,got)!=got)break;
-    remaining-=uint32_t(got);
-    lastActivityAt=millis();
-    vTaskDelay(1);
-  }
-  if(remaining || sent!=44)client.stop();
-  free(buffer);fclose(input);lastActivityAt=millis();
-}
-// A planned Wi-Fi handoff releases radio time and avoids accepting a new
-// BLE central while the C3's single radio is serving SoftAP traffic.
-// This historical same-boot BLE/Wi-Fi handoff remains available only for
-// inspection; no production AP start calls it after the exclusive-mode fix.
-static bool pauseBleForWifi() {
-  if (!bleServer) return false;
-#if defined(CONFIG_NIMBLE_ENABLED)
-  bleServer->advertiseOnDisconnect(false);
-#endif
-  BLEDevice::stopAdvertising();
-  if (deviceConnected.load() || bleServer->getConnectedCount()) {
-    const uint16_t connId=bleServer->getConnId();
-    Serial.printf("[C3-AP] BLE handoff disconnect conn=%u heap=%lu\n",
-      unsigned(connId),static_cast<unsigned long>(ESP.getFreeHeap()));
-    bleServer->disconnect(connId);
-    const uint32_t began=millis();
-    while ((deviceConnected.load() || bleServer->getConnectedCount()) &&
-           uint32_t(millis()-began)<2000u && !stopRequested.load()) {
-      vTaskDelay(pdMS_TO_TICKS(25));
-    }
-  }
-  // Fail closed rather than contending for the single radio with a live BLE
-  // connection. The cleanup path restores ordinary BLE discoverability.
-  if (deviceConnected.load() || bleServer->getConnectedCount() ||
-      stopRequested.load()) {
-    Serial.println("[C3-AP] BLE handoff not idle; cancelling Wi-Fi startup");
-    return false;
-  }
-  return true;
-}
-static void resumeBleAfterWifi() {
-  if (!bleServer) return;
-#if defined(CONFIG_NIMBLE_ENABLED)
-  // Only the C3 AP shutdown path should reenable post-disconnect advertising.
-  if (!apActive.load()) bleServer->advertiseOnDisconnect(true);
-#endif
-  if (!deviceConnected.load()) {
-    bleServer->startAdvertising();
-    Serial.printf("[C3-AP] BLE advertising restored heap=%lu\n",
-      static_cast<unsigned long>(ESP.getFreeHeap()));
-  }
-}
-static void shutDown() {
-  if(apServer){apServer->stop();delete apServer;apServer=nullptr;}
-  WiFi.softAPdisconnect(true);
-  WiFi.mode(WIFI_OFF);
-  store(Info{});
-  apServing=false;
-  apActive=false;
-  stopRequested=false;
-  if(!bootExclusive) resumeBleAfterWifi();
-}
-static void serveSession() {
-  // One SD mutex lease across a session: no concurrent FAT operations,
-  // offline recording, remounts, OTA, deletion or formatting.
-  OdysseySdGuard sd(pdMS_TO_TICKS(1500));
-  if(!sd || !odysseySdReady()) {noteStartFailure(8);return;}
-  while(!stopRequested.load() &&
-        uint32_t(millis()-startedAt)<MAX_MS &&
-        uint32_t(millis()-lastActivityAt)<IDLE_MS &&
-        !batteryCritical()) {
-    apServer->handleClient();
-    vTaskDelay(pdMS_TO_TICKS(5));
-  }
-}
-// Start Wi-Fi only after the op20 ACK and op21 hotspot credentials have
-// reached Bluefy. ESP32-C3 SoftAP and BLE share radio and constrained heap.
-static bool activateAp() {
-  // OdysseyWifi::busy() deliberately includes THIS AP session. begin() has
-  // already acquired AP ownership; rechecking the composite flag here would
-  // reject every deferred startup before the radio is ever enabled.
-  if(stopRequested.load()) {noteStartFailure(1);return false;}
-  if(!odysseySdReady() || odysseyRecording.load() ||
-     streamingEnabled.load() || otaBusy() || sleepPending || batteryCritical()) {
-    noteStartFailure(2);return false;
-  }
-  const Info next=snapshot();
-  if (!bootExclusive) {noteStartFailure(3);return false;}
-  Serial.printf("[C3-AP] exclusive Wi-Fi boot: no BLE allocated; heap=%lu largest=%lu\n",
-    static_cast<unsigned long>(ESP.getFreeHeap()),
-    static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
-  WiFi.persistent(false);
-  if(!WiFi.mode(WIFI_AP)) {noteStartFailure(4);return false;}
-  // The core's SoftAP default is already 192.168.4.1/24. Avoid the extra
-  // softAPConfig DHCP/netif transition, which can abort an otherwise healthy
-  // AP before its SSID is ever broadcast.
-  if(!WiFi.softAP(next.ssid,next.password,1,false,1)) {
-    noteStartFailure(5);return false;
-  }
-  const IPAddress expected(192,168,4,1);
-  // esp-netif comes up asynchronously on some Arduino-ESP32 revisions.
-  // Wait briefly for the default gateway rather than treating the first
-  // 0.0.0.0 read as permanent AP failure.
-  for(uint8_t attempt=0;attempt<10u && WiFi.softAPIP()!=expected;++attempt)
-    vTaskDelay(pdMS_TO_TICKS(50));
-  if(WiFi.softAPIP()!=expected) {
-    noteStartFailure(6);return false;
-  }
-  apServer=new(std::nothrow) WebServer(80);
-  if(!apServer){noteStartFailure(7);return false;}
-  apServer->on("/",HTTP_GET,page);
-  apServer->on("/file",HTTP_GET,file);
-  apServer->on("/stop",HTTP_POST,[] {
-    if(authorized()){
-      apServer->send(200,"text/plain","Downloads finished. Return to Synap.");
-      stopRequested=true;
-    }
-  });
-  apServer->onNotFound([]{apServer->send(404,"text/plain","Open your private Synap link.");});
-  apServer->begin();
-  startedAt=lastActivityAt=millis();
-  apServing=true;
-  Serial.printf("[C3-AP] hotspot online freeHeap=%lu\n",
-    static_cast<unsigned long>(ESP.getFreeHeap()));
-  return true;
-}
-static void apTask(void*) {
-  // BLE op20 has returned credentials. Four seconds later, safely quiesce
-  // the SD controller and reboot into Wi-Fi mode with no BLE stack or
-  // audio/control worker tasks consuming the ESP32-C3's small heap.
-  vTaskDelay(pdMS_TO_TICKS(4000));
-  if(stopRequested.load() || !odysseySdReady() ||
-     odysseyRecording.load() || streamingEnabled.load() || otaBusy() ||
-     sleepPending || batteryCritical()) {
-    noteStartFailure(2);
-  } else if(!odysseyPrepareSdForPowerTransition(1500u)) {
-    noteStartFailure(8);
-  } else {
-    const Info requested=snapshot();
-    memcpy(rtcHandoff.ssid,requested.ssid,sizeof(requested.ssid));
-    memcpy(rtcHandoff.password,requested.password,sizeof(requested.password));
-    memcpy(rtcHandoff.key,requested.key,sizeof(requested.key));
-    rtcHandoff.inverse=~AP_REBOOT_MAGIC;
-    rtcHandoff.magic=AP_REBOOT_MAGIC; // Commit after credentials are copied.
-    Serial.printf("[C3-AP] Wi-Fi-only reboot staged; freeHeap=%lu\n",
-      static_cast<unsigned long>(ESP.getFreeHeap()));
-    Serial.flush();
-    vTaskDelay(pdMS_TO_TICKS(150));
-    ESP.restart();
-  }
-  // Fail-closed: recovery to BLE remains possible, without radio contention.
-  shutDown();
-  vTaskDelete(nullptr);
-}
-// Must be called once during C3 boot, before initializeBLE() or any audio
-// queues/tasks are allocated. It only consumes RTC memory, never NVS/SD.
-bool resumeAtBoot() {
-  const bool markerArmed=rtcHandoff.magic==AP_REBOOT_MAGIC &&
-    rtcHandoff.inverse==~AP_REBOOT_MAGIC;
-  const bool valid=bootResetReason==ESP_RST_SW &&
-    rtcHandoff.magic==AP_REBOOT_MAGIC &&
-    rtcHandoff.inverse==~AP_REBOOT_MAGIC &&
-    strncmp(rtcHandoff.ssid,"Synap-C3-",9)==0 &&
-    strnlen(rtcHandoff.ssid,sizeof(rtcHandoff.ssid))<sizeof(rtcHandoff.ssid) &&
-    strnlen(rtcHandoff.password,sizeof(rtcHandoff.password))==32u &&
-    strnlen(rtcHandoff.key,sizeof(rtcHandoff.key))==32u;
-  Info requested{};
-  if(valid){
-    requested.active=true;
-    memcpy(requested.ssid,rtcHandoff.ssid,sizeof(requested.ssid));
-    memcpy(requested.password,rtcHandoff.password,sizeof(requested.password));
-    memcpy(requested.key,rtcHandoff.key,sizeof(requested.key));
-  }
-  clearRtcHandoff(); // A panic during AP startup must boot BLE next time.
-  Serial.printf("[C3-AP] boot marker=%u valid=%u reset=%u heap=%lu\n",
-    unsigned(markerArmed),unsigned(valid),unsigned(bootResetReason),
-    static_cast<unsigned long>(ESP.getFreeHeap()));
-  if(!valid) {
-    if(bootResetReason!=ESP_RST_SW) {
-      rtcFailure=0;rtcFailureHeap=0;rtcFailureLargest=0;
-    }
-    return false;
-  }
-  bootExclusive=true;
-  apActive=true;apServing=false;stopRequested=false;
-  store(requested);
-  return true;
-}
-void runBootSession() {
-  if(!bootExclusive) return;
-  Serial.printf("[C3-AP] EXCLUSIVE boot: skipping BLE initialization, heap=%lu\n",
-    static_cast<unsigned long>(ESP.getFreeHeap()));
-  // A fresh normal C3 boot mounts once; this read-only AP boot does the
-  // same, without ever formatting, deleting or recovering SD implicitly.
-  restoreOdysseySdBatteryDividerProfile();
-  const bool sdReady=odysseyInitializeSdCardBeforeBle();
-  sampleBattery(true);
-  if(!sdReady) noteStartFailure(8);
-  else if(activateAp()) serveSession();
-  else Serial.println("[C3-AP] Wi-Fi-only activation refused");
-  shutDown();
-  // All network clients are closed and the SD lease has been released.
-  // Do not restart over unfinished card transactions.
-  if(!odysseyPrepareSdForPowerTransition(1500u)) {
-    Serial.println("[C3-AP] SD not safely idle; remaining in guarded offline state");
-    for(;;) vTaskDelay(pdMS_TO_TICKS(1000));
-  }
-  Serial.printf("[C3-AP] returning to BLE boot; lastFailure=%u\n",unsigned(rtcFailure));
-  Serial.flush();
-  vTaskDelay(pdMS_TO_TICKS(200));
-  ESP.restart();
-}
-bool begin() {
-  if(apActive.load() || OdysseyWifi::busy() || !odysseySdReady() ||
-     odysseyRecording.load() || streamingEnabled.load() || otaBusy() ||
-     sleepPending || batteryCritical())return false;
-  Info next{};
-  uint8_t randomBytes[32];esp_fill_random(randomBytes,sizeof(randomBytes));
-  snprintf(next.ssid,sizeof(next.ssid),"Synap-C3-%02X%02X",randomBytes[0],randomBytes[1]);
-  for(size_t i=0;i<16;++i) {
-    snprintf(next.password+i*2,3,"%02x",randomBytes[i]);
-    snprintf(next.key+i*2,3,"%02x",randomBytes[i+16]);
-  }
-  stopRequested=false;
-  lastStartFailure=0;failedHeap=0;failedLargestBlock=0;
-  rtcFailure=0;rtcFailureHeap=0;rtcFailureLargest=0;
-  clearRtcHandoff();
-  next.active=true;
-  store(next);
-  // GATT op21 sees this staged response before the SoftAP radio starts.
-  apActive=true;
-  apServing=false;
-  if(xTaskCreate(apTask,"c3-sd-ap",AP_STACK,nullptr,1,nullptr)!=pdPASS) {
-    noteStartFailure(9);
-    store(Info{});
-    apActive=false;
-    return false;
-  }
-  return true;
-}
-bool stop() {
-  if(!apActive.load()) return false;
-  stopRequested=true;return true;
-}
-size_t encode(char* output,size_t capacity) {
-  if(!output || capacity<32)return 0;
-  const Info current=snapshot();
-  const int n=current.active?
-    snprintf(output,capacity,
-      "{\"active\":true,\"starting\":%s,\"ssid\":\"%s\",\"password\":\"%s\","
-      "\"url\":\"http://192.168.4.1/?key=%s\",\"idleSeconds\":180}",
-      apServing.load()?"false":"true",current.ssid,current.password,current.key):
-    snprintf(output,capacity,
-      "{\"active\":false,\"failure\":%u,\"freeHeap\":%lu,\"largestBlock\":%lu}",
-      unsigned(lastStartFailure.load()?lastStartFailure.load():rtcFailure),
-      static_cast<unsigned long>(lastStartFailure.load()?failedHeap.load():rtcFailureHeap),
-      static_cast<unsigned long>(lastStartFailure.load()?failedLargestBlock.load():rtcFailureLargest));
-  return n>0 && size_t(n)<capacity?size_t(n):0;
-}
-#else
-bool busy(){return false;}
-bool resumeAtBoot(){return false;}
-void runBootSession(){}
-bool begin(){return false;}
-bool stop(){return false;}
-size_t encode(char* output,size_t cap){
-  if(!output || cap<17)return 0;
-  const int n=snprintf(output,cap,"{\"active\":false}");
-  return n>0 && size_t(n)<cap?size_t(n):0;
+bool busy() { return false; }
 }
 #endif
-} // namespace OdysseyWifiAp
-#endif
+// Odyssey C3 BLE-only profile. The SoftAP server, RTC handoff, Wi-Fi
+// credentials, and browser HTTP transfer have been removed entirely.
+// No code is compiled from this file; retained to document the retirement
+// of the former AP module in the source manifest.
 // Odyssey C3 SD media-v1: catalogue/read/delete for locally recorded WAV files.
 // C3 storage is mounted through the stock Arduino SD SPI path and accessed through FAT/VFS.
 // Files are deleted only after the PWA has imported and verified them.
@@ -5579,7 +4460,7 @@ size_t encode(char* output,size_t cap){
 namespace OdysseyTransfer {
 struct Request {
   uint32_t connection=0,id=0,offset=0;
-  uint8_t operation=0;
+  uint8_t operation=0,credits=6;
   char path[64]{};
 };
 // Shipping safety policy: physical C3+SD units have timed out on CMD24/CMD25
@@ -5597,7 +4478,8 @@ bool busy() {
   const uint32_t last=sdBleLastTransferAt.load();
   return last && uint32_t(millis()-last)<15000u;
 }
-// Six paced notifications per request avoid thousands of GATT read round trips.
+// Legacy opcode 12 uses six paced notifications. Opcode 30 accepts a bounded
+// receiver credit and uses shorter congestion-safe pacing for large WAV sync.
 static BLECharacteristic* streamCharacteristic=nullptr;
 static constexpr uint32_t TRANSFER_STACK_BYTES=8192;
 static portMUX_TYPE responseMux=portMUX_INITIALIZER_UNLOCKED;
@@ -6021,8 +4903,15 @@ static void streamSdWindow(const Request& request) {
   uint8_t chunk[480]{};
   uint32_t offset=request.offset,fullSize=0;
   uint8_t error=OK;
-  // PWA retains at most 8 chunks; 6-chunk windows leave headroom on iOS.
-  for (uint8_t n=0;n<6;++n) {
+  // The PWA grants at most 20 chunks per request. A legacy op12 retains its
+  // original six notifications and 20 ms pacing without a protocol change.
+  // Fast op30 has an explicit bounded credit; no unbounded GATT floods.
+  const bool fast=request.operation==30u;
+  const uint8_t credits=fast
+    ?std::max(uint8_t(6),std::min(uint8_t(20),request.credits))
+    :uint8_t(6);
+  const TickType_t pacing=pdMS_TO_TICKS(fast?8u:20u);
+  for (uint8_t n=0;n<credits;++n) {
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load() ||
         streamingEnabled.load() || odysseyRecording.load() || OdysseyWifi::busy() ||
         otaBusy() || sleepPending) return;
@@ -6051,11 +4940,11 @@ static void streamSdWindow(const Request& request) {
     notifySdWindow(request,1,OK,fullSize,offset,chunk,length);
     offset+=uint32_t(length);
     if (offset>=fullSize) break;
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pacing);
   }
   // End packet closes the credit window. Never delete/modify the SD source.
   if (request.connection==connectionGeneration.load() && deviceConnected.load()) {
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pacing);
     notifySdWindow(request,2,OK,fullSize,offset);
   }
 }
@@ -6094,22 +4983,6 @@ static void worker(void*) {
     sdBleLastTransferAt=millis();
     // Connected remote standby only idles the microphone/CPU; SD media must
     // remain readable for verified sync and recovery without a forced wake.
-    // Wi-Fi status must remain readable over BLE while the uploader owns SD.
-    if (request.operation==25 || request.operation==21) {
-      char detail[480];
-      const size_t n=request.operation==21
-        ?OdysseyWifiAp::encode(detail,sizeof(detail))
-        :OdysseyWifi::encode(detail,sizeof(detail));
-      reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),n);
-      sdBleLastTransferAt=millis();
-      sdBleTransferInFlight=false;
-      continue;
-    }
-    if(request.operation==22) {
-      reply(request,OdysseyWifiAp::stop()?OK:BUSY);
-      sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
-      continue;
-    }
     if (odysseyRecording.load() || streamingEnabled.load() || OdysseyWifi::busy() ||
         otaBusy() || sleepPending) {
       reply(request,BUSY);
@@ -6121,25 +4994,12 @@ static void worker(void*) {
     switch (request.operation) {
       case 3: error=selectFile(request.path,total); break;
       case 12:
+      case 30: // Credit-based fast BLE read; same read-only file/window ABI.
         streamSdWindow(request);
         sdBleLastTransferAt=millis();
         sdBleTransferInFlight=false;
         continue;
       case 16: error=OK; break;
-      case 20: {
-        // Return SSID, WPA password and private URL in the SAME BLE response
-        // that arms SoftAP; an extra op21 round trip may never complete once
-        // Wi-Fi starts sharing radio and C3 internal heap with Bluetooth.
-        if(!OdysseyWifiAp::begin()) {error=BUSY;break;}
-        char detail[480]{};
-        const size_t n=OdysseyWifiAp::encode(detail,sizeof(detail));
-        if(!n) {error=IO_ERROR;break;}
-        reply(request,OK,uint32_t(n),0,
-          reinterpret_cast<const uint8_t*>(detail),n);
-        sdBleLastTransferAt=millis();
-        sdBleTransferInFlight=false;
-        continue;
-      }
       case 27: {
         // Purely read-only snapshot of the LAST recorder error after a
         // reboot. It never calls SD.begin, SD.end, mkdir, fopen or recovery.
@@ -6349,21 +5209,6 @@ static void worker(void*) {
         }
         break;
       }
-      // C3 direct Wi-Fi sync control. Configuration is staged in <=60-byte BLE
-      // chunks so credentials and short-lived cloud tickets never need a new
-      // characteristic or protocol version.
-      case 23: {
-        const uint32_t next=OdysseyWifi::configChunk(request.offset,request.path);
-        if (next==UINT32_MAX) error=BAD_COMMAND; else total=next;
-        break;
-      }
-      case 24:
-        if (request.offset!=1u && request.offset!=2u) error=BAD_COMMAND;
-        else error=OdysseyWifi::applyConfig(request.offset)?OK:BUSY;
-        break;
-      case 26:
-        error=OdysseyWifi::forget()?OK:BUSY;
-        break;
       default:error=BAD_COMMAND;break;
     }
     if (request.operation==7 && (error==IO_ERROR || error==NO_SD)) {
@@ -6398,14 +5243,21 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* characteristic) override {
     const size_t length=characteristic->getLength();
     const uint8_t* p=characteristic->getData();
-    if (!p || length<10 || length>73 || p[0]!=0xCA) return;
+    if (!p || length<10 || length>74 || p[0]!=0xCA) return;
     Request request{};
     request.operation=p[1];
     memcpy(&request.id,p+2,4);
     memcpy(&request.offset,p+6,4);
     request.connection=connectionGeneration.load();
-    const size_t pathLength=length-10;
-    if (pathLength) memcpy(request.path,p+10,pathLength);
+    // Fast opcode 30 extends the command by one credit byte before the
+    // logical /synap/*.wav path. Legacy op12 and all other ops are unchanged.
+    const bool fast=request.operation==30u;
+    if (fast && length<12u) return;
+    const size_t pathStart=fast?11u:10u;
+    const size_t pathLength=length-pathStart;
+    if (pathLength>63u) return;
+    if (fast) request.credits=std::max(uint8_t(6),std::min(uint8_t(20),p[10]));
+    if (pathLength) memcpy(request.path,p+pathStart,pathLength);
     request.path[pathLength]=0;
     if (!requests || xQueueSend(requests,&request,0)!=pdTRUE) reply(request,BUSY);
   }
@@ -6453,9 +5305,6 @@ void ble(BLEService* service) {
 #endif
 }
 } // namespace OdysseyTransfer
-#endif
-#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-namespace OdysseyWifiAp { bool resumeAtBoot(); void runBootSession(); }
 #endif
 void initializeBLE() {
   BLEDevice::init(DEVICE_NAME);
@@ -6571,19 +5420,6 @@ void setup() {
   if (!confirmTouchWakeGesture()) return;
   disconnectedAt=millis();
   setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
-#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  // Exclusive C3 hotspot boot: consume the one-shot RTC marker BEFORE
-  // initializeBLE(), GATT services, 20-frame audio queue and microphone
-  // worker tasks consume the remaining 320 KiB SRAM. Wi-Fi-only mode can
-  // recover back to normal BLE via ESP.restart() after the session ends.
-  // An invalid marker, panic or power cycle always follows normal BLE boot.
-  if (OdysseyWifiAp::resumeAtBoot()) {
-    OdysseyWifiAp::runBootSession(); // Does not return on a healthy SD.
-    Serial.println("[C3-AP] exclusive session returned unexpectedly; rebooting");
-    Serial.flush();
-    ESP.restart();
-  }
-#endif
   // Initial C3 sample is provisional x2. On SD.begin the field C3+SD
   // profile changes to 1470/470 and resamples before any FAT write probe.
 #if !CONFIG_IDF_TARGET_ESP32C3
