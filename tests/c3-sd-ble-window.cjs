@@ -21,10 +21,12 @@ test('C3 notifications are paced, bounded, explicit-path, and MTU safe',()=>{
     .split('static void worker(void*) {')[0];
   assert.match(fn,/capacity<496u/);
   assert.match(fn,/request\.path\[0\]/);
-  assert.match(fn,/n<6/);
+  assert.match(fn,/n<credits/);
   assert.match(fn,/readSelected\(request\.path,offset,total,chunk,length\)/);
   assert.match(fn,/notifySdWindow\(request,1,OK,fullSize,offset,chunk,length\)/);
-  assert.match(fn,/vTaskDelay\(pdMS_TO_TICKS\(20\)\)/);
+  assert.match(fn,/vTaskDelay\(pacing\)/);
+  assert.match(fn,/fast\?8u:20u/);
+  assert.match(fn,/std::min\(uint8_t\(20\),request.credits\)/);
   assert.match(fn,/notifySdWindow\(request,2,OK,fullSize,offset\)/);
   assert.match(fn,/odysseySdMarkVfsFailure\(\)/);
   assert.match(fn,/streamingEnabled\.load\(\) \|\| odysseyRecording\.load\(\)/);
