@@ -50,12 +50,10 @@ test('BLE catalogue reads new root and legacy /synap and does not mutate either'
   assert.match(tx,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
 });
 
-test('private Wi-Fi AP handles both directories without moving or deleting SD files',()=>{
-  const list=ap.split('static void page() {')[1].split('static void virtualHeader(')[0];
-  assert.match(list,/odysseySdMountPoint\(\),ODYSSEY_SD_RECORDING_DIR/);
-  assert.match(list,/odysseySdRootWavName\(name\)/);
-  assert.match(list,/scan==0u/);
-  assert.match(list,/\/synap\/%s/);
-  assert.match(list,/odysseySdPath\(logical,full,sizeof\(full\)\)/);
-  assert.doesNotMatch(list,/\bmkdir\s*\(|\bunlink\s*\(|\bremove\s*\(|odysseyRecoverSdCard\(/);
+test('C3 BLE-only build retains root and /synap catalogue with no Wi-Fi server',()=>{
+  assert.match(tx,/odysseySdMountPoint\(\),ODYSSEY_SD_RECORDING_DIR/);
+  assert.match(tx,/odysseySdRootWavName\(name\)/);
+  assert.doesNotMatch(ap,/#include <WiFi|WiFi\.softAP|WebServer\(/);
+  assert.doesNotMatch(ino,/WiFi\.softAP|WiFiClientSecure/);
+  assert.match(tx,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
 });
