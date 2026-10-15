@@ -11,6 +11,9 @@ test('C3 trace calls unmodified SDSPI transaction once, without additional comma
  assert.equal((trace.match(/sdspi_host_do_transaction\(/g)||[]).length,1);
  assert.doesNotMatch(trace,/vTaskDelay|spi_device_transmit|sdmmc_send_cmd\(|odysseySdBitBang|odysseyRecoverSdCard/);
  assert.match(sd,/host\.do_transaction=\[\]\(int slot,sdmmc_command_t\* cmd\)->esp_err_t/);
+ assert.match(sd,/cmd->opcode==52u \|\| cmd->opcode==5u/);
+ assert.match(sd,/error==ESP_ERR_NOT_SUPPORTED/);
+ assert.match(sd,/if \(cmd && error!=ESP_OK && !expectedIoProbe\)/);
  assert.match(sd,/mount\.format_if_mount_failed=false/);
  assert.match(sd,/mount\.disk_status_check_enable=false/);
 });
