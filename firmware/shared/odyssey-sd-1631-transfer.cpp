@@ -23,8 +23,10 @@ bool busy() {
   const uint32_t last=sdBleLastTransferAt.load();
   return last && uint32_t(millis()-last)<15000u;
 }
-// Legacy opcode 12 uses six paced notifications. Opcode 30 accepts a bounded
-// receiver credit and uses shorter congestion-safe pacing for large WAV sync.
+// Legacy opcode 12 uses six paced notifications. Opcode 30 accepts receiver
+// credits, capped at 12 on C3/Bluefy to prevent NimBLE queue overrun when iOS
+// reports MTU 517 but delivers only a fraction of 20 notifications.
+
 static BLECharacteristic* streamCharacteristic=nullptr;
 static constexpr uint32_t TRANSFER_STACK_BYTES=8192;
 static portMUX_TYPE responseMux=portMUX_INITIALIZER_UNLOCKED;
@@ -448,14 +450,15 @@ static void streamSdWindow(const Request& request) {
   uint8_t chunk[480]{};
   uint32_t offset=request.offset,fullSize=0;
   uint8_t error=OK;
-  // The PWA grants at most 20 chunks per request. A legacy op12 retains its
-  // original six notifications and 20 ms pacing without a protocol change.
-  // Fast op30 has an explicit bounded credit; no unbounded GATT floods.
+  // Fast op30 uses only a bounded BLE window. 20 x 480-byte at 8 ms proved
+  // lossy on physical Bluefy (6/20 packets delivered) during SD recovery.
+  // Prioritize contiguous verified bytes over fire-and-forget throughput.
+  // Legacy op12 remains six packets at 20 ms, completely unchanged.
   const bool fast=request.operation==30u;
   const uint8_t credits=fast
-    ?std::max(uint8_t(6),std::min(uint8_t(20),request.credits))
+    ?std::max(uint8_t(6),std::min(uint8_t(12),request.credits))
     :uint8_t(6);
-  const TickType_t pacing=pdMS_TO_TICKS(fast?8u:20u);
+  const TickType_t pacing=pdMS_TO_TICKS(fast?15u:20u);
   for (uint8_t n=0;n<credits;++n) {
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load() ||
         streamingEnabled.load() || odysseyRecording.load() || OdysseyWifi::busy() ||
