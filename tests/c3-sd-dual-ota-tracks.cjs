@@ -26,9 +26,8 @@ test('C3+SD materialization targets unique firmware marker and leaves Chakshu/S3
   assert.doesNotMatch(c3,/SYNAP-ESP32C3-OTA-ID-V3/);
   assert.doesNotMatch(old,/SYNAP-ESP32C3-SD-OTA-ID-V1/);
   assert.match(c3,/#define SYNAP_CHAKSHU 0/);
-  assert.match(c3,/#define SYNAP_C3_WIFI_UPLOAD_ENABLED 1/);
-  assert.match(old,/#define SYNAP_C3_WIFI_UPLOAD_ENABLED 0/);
-  assert(c3.includes('WiFiClientSecure'), 'new source retains verified HTTPS uploader');
+  assert.doesNotMatch(c3,/WiFiClientSecure|OdysseyWifiAp|namespace OdysseyWifi/);
+  assert.doesNotMatch(old,/WiFiClientSecure|OdysseyWifiAp|namespace OdysseyWifi/);
 });
 test('new C3+SD factory table has two large OTA slots without flash overlap',()=>{
   const csv=fs.readFileSync('partitions/c3-sd-dual-ota.csv','utf8');
@@ -60,12 +59,12 @@ test('large-slot OTA specialization is same target as already-installed 2119 C3'
   assert.notEqual(upgrade.manifestPath,next.manifestPath);
   const sketch=materialize(assemble(),upgrade.id);
   assert.match(sketch,/SYNAP-ESP32C3-OTA-ID-V3/);
-  assert.match(sketch,/#define SYNAP_C3_WIFI_UPLOAD_ENABLED 1/);
+  assert.doesNotMatch(sketch,/WiFiClientSecure|OdysseyWifiAp|namespace OdysseyWifi/);
   assert.match(sketch,/SYNAP-FW:esp32c3-supermini-4m:/);
   assert.doesNotMatch(sketch,/SYNAP-FW:esp32c3-supermini-4m-sd-ota:/);
   assert.doesNotMatch(sketch,/SYNAP-ESP32C3-SD-OTA-ID-V1/);
 });
-test('only 1.875MiB OTA slots can receive large-slot Wi-Fi binary',()=>{
+test('only 1.875MiB OTA slots can receive large-slot BLE firmware image',()=>{
   const {createManifest,validate}=require('../tools/release.cjs');
   const upgrade=TARGETS['esp32c3-supermini-4m-sd-ota'];
   const build=2123;

@@ -1,0 +1,20 @@
+'use strict';
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs');
+const read=p=>fs.readFileSync(p,'utf8');
+test('Odyssey C3 has no Wi-Fi radio source and keeps BLE OTA, catalogue and notification transfer',()=>{
+ const sources=JSON.parse(read('firmware/shared/sources.json'));
+ assert(!sources.some(name=>/wifi|c3-sd-ap/i.test(name)));
+ const firmware=read('synap_esp32s3/synap_esp32s3.ino');
+ assert.doesNotMatch(firmware,/WiFiClientSecure|WiFi\.mode|OdysseyWifiAp|namespace OdysseyWifi/);
+ const transfer=read('firmware/shared/odyssey-sd-1631-transfer.cpp');
+ assert.match(transfer,/request\.operation>=20 && request\.operation<=26/);
+ assert.match(transfer,/reply\(request,BAD_COMMAND\)/);
+ assert.match(transfer,/case 12:\s*streamSdWindow\(request\)/);
+ assert.match(transfer,/case 4:\s*error=readSelected\(/);
+ assert.match(transfer,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
+ assert.match(transfer,/n<6/);
+ assert.match(transfer,/vTaskDelay\(pdMS_TO_TICKS\(12\)\)/);
+ assert.match(read('firmware/shared/boot.cpp'),/initializeBLE\(\)/);
+ assert.match(read('firmware/shared/boot.cpp'),/OdysseyTransfer::initialize\(\)/);
+ assert.doesNotMatch(read('firmware/shared/module-capabilities.cpp'),/p\[16\]\|=2/);
+});

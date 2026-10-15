@@ -3,7 +3,6 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 const detect=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8');
 const capture=fs.readFileSync('firmware/shared/odyssey-sd-1631-recording.cpp','utf8');
 const tx=fs.readFileSync('firmware/shared/odyssey-sd-1631-transfer.cpp','utf8');
-const ap=fs.readFileSync('firmware/shared/odyssey-c3-sd-ap.cpp','utf8');
 const ino=fs.readFileSync('synap_esp32s3/synap_esp32s3.ino','utf8');
 
 test('empty FAT cards create recording directly in root 8.3 entry with no mkdir',()=>{
@@ -50,12 +49,3 @@ test('BLE catalogue reads new root and legacy /synap and does not mutate either'
   assert.match(tx,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
 });
 
-test('private Wi-Fi AP handles both directories without moving or deleting SD files',()=>{
-  const list=ap.split('static void page() {')[1].split('static void virtualHeader(')[0];
-  assert.match(list,/odysseySdMountPoint\(\),ODYSSEY_SD_RECORDING_DIR/);
-  assert.match(list,/odysseySdRootWavName\(name\)/);
-  assert.match(list,/scan==0u/);
-  assert.match(list,/\/synap\/%s/);
-  assert.match(list,/odysseySdPath\(logical,full,sizeof\(full\)\)/);
-  assert.doesNotMatch(list,/\bmkdir\s*\(|\bunlink\s*\(|\bremove\s*\(|odysseyRecoverSdCard\(/);
-});

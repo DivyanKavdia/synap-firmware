@@ -302,7 +302,7 @@ void otaTick() {
     otaSession.packet(message.data,message.length,millis(),generation,
       streamingEnabled.load() || batteryCritical()
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-      || odysseyRecording.load() || OdysseyWifi::busy() || odysseySdFormatting()
+      || odysseyRecording.load() || odysseySdFormatting()
 #endif
 #if SYNAP_CHAKSHU
       || mediaBusy()

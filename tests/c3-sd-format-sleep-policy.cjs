@@ -34,7 +34,7 @@ test('offline C3+SD is awake for touch gestures, but SD-less C3 and manual sleep
   assert.match(power,/enterDeepSleep\("touch-hold"\)/);
   assert.match(sd,/power transition deferred: local recording or format active/);
   assert.match(runtime,/bool odysseySdFormatting\(\);/);
-  assert.match(ota,/odysseyRecording\.load\(\) \|\| OdysseyWifi::busy\(\) \|\| odysseySdFormatting\(\)/);
+  assert.match(ota,/odysseyRecording\.load\(\) \|\| odysseySdFormatting\(\)/);
   assert.match(rec,/odysseySdFormatting\(\) \|\| otaBusy\(\)/);
 });
 

@@ -184,16 +184,6 @@ void processCommand(uint8_t command, uint8_t version) {
       break;
   }
 }
-// Keep the C3 Wi-Fi guard outside Bluedroid's conditional code. Chakshu's
-// NimBLE source adapter strips the Bluedroid block during materialization and
-// cannot safely rewrite nested preprocessor branches inside that block.
-static bool bleAutoAdvertiseAllowed() {
-#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  return !OdysseyWifi::busy();
-#else
-  return true;
-#endif
-}
 void reconcileConnection() {
   // Link transitions cannot be lost when the command queue is full. A newer
   // transition during this work leaves the flag set for the next control tick.
@@ -255,7 +245,7 @@ void controlTask(void* parameter) {
     }
 #if defined(CONFIG_BLUEDROID_ENABLED)
     if (restartAdvertising && !deviceConnected.load() &&
-        millis()-disconnectedAt > 250 && bleAutoAdvertiseAllowed()) {
+        millis()-disconnectedAt > 250) {
       restartAdvertising=false;
       bleServer->startAdvertising();
     }

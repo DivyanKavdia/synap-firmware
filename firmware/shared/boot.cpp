@@ -1,5 +1,4 @@
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-namespace OdysseyWifiAp { bool resumeAtBoot(); void runBootSession(); }
 #endif
 void initializeBLE() {
   BLEDevice::init(DEVICE_NAME);
@@ -115,19 +114,6 @@ void setup() {
   if (!confirmTouchWakeGesture()) return;
   disconnectedAt=millis();
   setDeviceState(DeviceState::DISCONNECTED, ErrorCode::NONE);
-#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
-  // Exclusive C3 hotspot boot: consume the one-shot RTC marker BEFORE
-  // initializeBLE(), GATT services, 20-frame audio queue and microphone
-  // worker tasks consume the remaining 320 KiB SRAM. Wi-Fi-only mode can
-  // recover back to normal BLE via ESP.restart() after the session ends.
-  // An invalid marker, panic or power cycle always follows normal BLE boot.
-  if (OdysseyWifiAp::resumeAtBoot()) {
-    OdysseyWifiAp::runBootSession(); // Does not return on a healthy SD.
-    Serial.println("[C3-AP] exclusive session returned unexpectedly; rebooting");
-    Serial.flush();
-    ESP.restart();
-  }
-#endif
   // Initial C3 sample is provisional x2. On SD.begin the field C3+SD
   // profile changes to 1470/470 and resamples before any FAT write probe.
 #if !CONFIG_IDF_TARGET_ESP32C3
@@ -163,7 +149,6 @@ void setup() {
   // Reproduce the last independently observed healthy lifecycle (build 1445 /
   // 1481): create the transfer worker first, then perform one mount before BLE.
   // The worker cannot touch storage until BLE submits a request.
-  OdysseyWifi::initialize();
   OdysseyTransfer::initialize();
   // Restore the once-confirmed C3+SD divider before ANY battery reading.
   // Card mount/write failures must not switch a fitted 1M/470k board to x2
