@@ -3334,9 +3334,12 @@ static bool odysseySdBeginLocked() {
     odysseySdUnsafeToSleep=true;
   }
   // Field build 2206: BLE sync lost CMD17 after 3072/4096 read bytes.
-  // Only quarantine a read in a previously verified mounted session;
-  // SD card discovery's optional probes must never create this latch.
-  if (cmd && error==ESP_ERR_TIMEOUT && odysseySdBootState.load()==1 &&
+  // A read during FAT VFS validation can time out before bootState becomes
+  // 1. A non-null native card here proves the mount helper finished. Do not
+  // quarantine optional card initialization probes when the mount has not
+  // returned a card yet.
+  if (cmd && error==ESP_ERR_TIMEOUT &&
+      (odysseySdBootState.load()==1 || odysseySdNativeCard!=nullptr) &&
       (cmd->opcode==17u || cmd->opcode==18u)) {
     odysseySdTimedOutReadQuarantined=true;
     odysseySdUnsafeToSleep=true;
@@ -3517,6 +3520,16 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   }
 
   if (!odysseySdValidateVfsLocked(reason,attempt)) {
+    // A timed-out VFS root/directory read is *not* permission to unmount,
+    // trigger a new CMD12/CMD0, or reinitialize the same powered SD card.
+    // Preserve the mounted driver for a real rail power cycle.
+    if (odysseySdTimedOutReadQuarantined.load() ||
+        odysseySdTimedOutWriteQuarantined.load()) {
+      odysseySdUnsafeToSleep=true;
+      Serial.printf("[SD] VFS validation failed after native timeout step=%u errno=%ld; no SPI teardown or retry\n",
+        unsigned(odysseySdVfsStep.load()),static_cast<long>(odysseySdVfsErrno.load()));
+      return false;
+    }
     odysseySdReleaseLocked();
     return false;
   }
@@ -3550,6 +3563,11 @@ static bool odysseySdMountLocked(const char* reason,uint8_t attempts) {
   }
   for (uint8_t attempt=1;attempt<=attempts;++attempt) {
     if (odysseySdMountOnceLocked(reason,attempt)) return true;
+    if (odysseySdTimedOutReadQuarantined.load() ||
+        odysseySdTimedOutWriteQuarantined.load()) {
+      Serial.println("[SD] stop mount attempts: timed-out SD read/write requires rail power cycle");
+      break;
+    }
     // Do not hammer a deselected busy-low SD on a sealed C3.
     // A controller-only restart cannot physically power-cycle that card.
     if (reason && !strcmp(reason,"boot") &&
