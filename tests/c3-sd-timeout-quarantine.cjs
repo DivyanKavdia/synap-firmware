@@ -10,12 +10,12 @@ test('C3 quarantines a physical CMD24/25 program timeout without reset or remoun
     assert.match(source,/odysseySdTimedOutWriteQuarantined=true/);
     assert.match(source,/cmd->opcode==24u \|\| cmd->opcode==25u/);
     assert.match(source,/cmd->opcode==13u && \(prior==24u \|\| prior==25u\)/);
-    assert.match(source,/if \(odysseySdWriteTimeoutQuarantined\(\)\) \{/);
-    assert.match(source,/recovery refused after CMD24\/CMD25 timeout/);
+    assert.match(source,/if \(odysseySdWriteTimeoutQuarantined\(\) \|\|\s*odysseySdReadTimeoutQuarantined\(\)\) \{/);
+    assert.match(source,/recovery refused after timed-out CMD17\/18 or CMD24\/25/);
     assert.match(source,/odysseySdTimedOutWriteQuarantined=false/);
   }
   const recovery=detector.split('bool odysseyRecoverSdCard(const char* reason) {')[1].split('esp_err_t odysseyFormatSdCard()')[0];
-  assert(recovery.indexOf('if (odysseySdWriteTimeoutQuarantined())')<
+  assert(recovery.indexOf('if (odysseySdWriteTimeoutQuarantined() ||')<
     recovery.indexOf('odysseySdReleaseLocked()'),'blocked BEFORE teardown or new CMD0');
 });
 test('first SD write-timeout abort never fclose nor attempt a second write on stuck card',()=>{
