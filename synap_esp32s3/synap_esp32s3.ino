@@ -5170,7 +5170,7 @@ static void worker(void*) {
         // previous op4/op12 requests; it must remain safe after mount loss.
         char detail[480];
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"reads\":%lu,\"cacheHits\":%lu,\"diskFills\":%lu,\"lastRequestedOffset\":%lu,\"lastOkOffset\":%lu,\"faultOffset\":%lu,\"windowRequests\":%lu,\"mtuFallbacks\":%lu,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireMs\":%lu,\"readGot\":%lu,\"readWant\":%lu,\"readFlags\":%lu,\"readQuarantine\":%u,\"writeQuarantine\":%u}",
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"reads\":%lu,\"cacheHits\":%lu,\"diskFills\":%lu,\"lastRequestedOffset\":%lu,\"lastOkOffset\":%lu,\"faultOffset\":%lu,\"windowRequests\":%lu,\"mtuFallbacks\":%lu,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireMs\":%lu,\"readGot\":%lu,\"readWant\":%lu,\"readFlags\":%lu,\"readQ\":%u,\"writeQ\":%u}",
           unsigned(odysseySdDetectionState()),
           unsigned(odysseySdProbeState()),
           unsigned(sdLastMediaFaultOperation.load()),
