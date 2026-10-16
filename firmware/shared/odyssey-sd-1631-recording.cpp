@@ -535,6 +535,10 @@ static void odysseyRecordTake() {
   // completed, so they cannot change the write timing being measured.
   if (failed || bytes==0) {
     const uint8_t persistedStage=failureStage?failureStage:40;
+    // Revoke a previous healthy-cold-mount witness before recording any new
+    // SD storage failure. Never clear the underlying failure diagnostics.
+    if (persistedStage!=43u && persistedStage!=48u)
+      odysseySdInvalidateHistoricalFaultResolution();
     odysseyPersistRecordFailure(persistedStage,bytes);
     // Mic failure (43) and an empty, user-stopped take (48) do not establish
     // that the SD card failed. Keep a still-mounted FAT volume accessible so

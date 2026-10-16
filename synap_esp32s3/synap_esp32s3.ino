@@ -2519,6 +2519,7 @@ void transmitterTask(void* parameter) {
 #include "driver/sdspi_host.h"
 #include "sdmmc_cmd.h"
 uint8_t odysseyLastRecordFailureStage();
+uint32_t odysseyLastRecordFailureBytes();
 #else
 #include <SPI.h>
 #include <SD.h>
@@ -3587,6 +3588,41 @@ void odysseyDetectSdCard() {
   if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return; }
   odysseySdMountLocked("probe",1);
 }
+// A cold power-on followed by a verified FAT mount establishes that a
+// RETAINED diagnostic describes a past failure, not today's SD health.
+// Keep the original first-fault journal intact for field diagnostics.
+// New recording faults revoke this separate recovery witness BEFORE journaling.
+static constexpr uint32_t ODYSSEY_SD_RECOVERY_WITNESS=0x53445231u;
+bool odysseySdHistoricalFaultResolved() {
+  const uint8_t stage=odysseyLastRecordFailureStage();
+  if (stage<44u || stage==48u) return false;
+  Preferences prefs;
+  if (!prefs.begin("sd-recstate",true)) return false;
+  uint32_t witness[3]{};
+  const bool read=prefs.getBytesLength("resolved")==sizeof(witness) &&
+    prefs.getBytes("resolved",witness,sizeof(witness))==sizeof(witness);
+  prefs.end();
+  return read && witness[0]==ODYSSEY_SD_RECOVERY_WITNESS &&
+    witness[1]==uint32_t(stage) && witness[2]==odysseyLastRecordFailureBytes();
+}
+static void odysseySdMarkHistoricalFaultResolved() {
+  const uint8_t stage=odysseyLastRecordFailureStage();
+  if (stage<44u || stage==48u) return;
+  const uint32_t witness[3]={ODYSSEY_SD_RECOVERY_WITNESS,
+    uint32_t(stage),odysseyLastRecordFailureBytes()};
+  Preferences prefs;
+  if (!prefs.begin("sd-recstate",false)) return;
+  (void)prefs.putBytes("resolved",witness,sizeof(witness));
+  prefs.end();
+}
+void odysseySdInvalidateHistoricalFaultResolution() {
+  const uint32_t witness[3]={0u,0u,0u};
+  Preferences prefs;
+  if (!prefs.begin("sd-recstate",false)) return;
+  (void)prefs.putBytes("resolved",witness,sizeof(witness));
+  prefs.end();
+}
+
 bool odysseyInitializeSdCardBeforeBle() {
   OdysseySdGuard guard;
   if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return false; }
@@ -3597,7 +3633,8 @@ bool odysseyInitializeSdCardBeforeBle() {
   // still be programming. A true cold power-on may try one normal mount,
   // followed only by guarded/passive recovery. User op14 remains explicit.
   const uint8_t previousRecordStage=odysseyLastRecordFailureStage();
-  const bool previousStorageFault=previousRecordStage>=44u && previousRecordStage!=48u;
+  const bool previousStorageFault=previousRecordStage>=44u && previousRecordStage!=48u &&
+    !odysseySdHistoricalFaultResolved();
   if (previousStorageFault) {
     odysseySdUnsafeToSleep=true;
     if (bootResetReason!=ESP_RST_POWERON) {
@@ -3612,6 +3649,10 @@ bool odysseyInitializeSdCardBeforeBle() {
   }
 
   const bool ready=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
+  // Only an actual cold card power-on + successful VFS validation can clear
+  // this historical boot veto. Software/OTA reset alone is insufficient.
+  if (ready && bootResetReason==ESP_RST_POWERON)
+    odysseySdMarkHistoricalFaultResolved();
   Serial.printf("[SD] boot initialization complete state=%u stage=%u before BLE\n",
     unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()));
   return ready;
@@ -4313,6 +4354,10 @@ static void odysseyRecordTake() {
   // completed, so they cannot change the write timing being measured.
   if (failed || bytes==0) {
     const uint8_t persistedStage=failureStage?failureStage:40;
+    // Revoke a previous healthy-cold-mount witness before recording any new
+    // SD storage failure. Never clear the underlying failure diagnostics.
+    if (persistedStage!=43u && persistedStage!=48u)
+      odysseySdInvalidateHistoricalFaultResolution();
     odysseyPersistRecordFailure(persistedStage,bytes);
     // Mic failure (43) and an empty, user-stopped take (48) do not establish
     // that the SD card failed. Keep a still-mounted FAT volume accessible so
