@@ -148,8 +148,8 @@ test('retained FAT EIO defers SD commands on warm boot; cold boot attempts one m
 });
 
 test('verified cold FAT mount resolves historical failure boot veto without deleting fault journal',()=>{
- const detect=read('firmware/shared/odyssey-sd-1631-detect.cpp');
- const recording=read('firmware/shared/odyssey-sd-1631-recording.cpp');
+ const detect=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8');
+ const recording=fs.readFileSync('firmware/shared/odyssey-sd-1631-recording.cpp','utf8');
  const boot=detect.split('bool odysseyInitializeSdCardBeforeBle() {')[1].split('bool odysseyRecoverSdCard(')[0];
  assert.match(detect,/odysseySdHistoricalFaultResolved\(\)/);
  assert.match(detect,/witness\[1\]==uint32_t\(stage\)/);
