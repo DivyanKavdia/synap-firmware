@@ -44,3 +44,16 @@ test('reduce forced FAT metadata updates, tolerate brief I2S starvation, never e
   assert.match(worker,/request.operation==17u \|\| request.operation==18u \|\| request.operation==19u/);
   assert.match(worker,/reply\(request,BAD_COMMAND\)/);
 });
+
+test('CMD24 invalid-response 264 quarantines an uncertain FAT write without a subsequent fclose',()=>{
+ for(const source of [detector,ino]){
+  assert.match(source,/error==ESP_ERR_TIMEOUT \|\| error==ESP_ERR_INVALID_RESPONSE/);
+  assert.match(source,/odysseySdTimedOutWriteQuarantined=true/);
+ }
+ for(const source of [recording,ino]){
+  assert.match(source,/odysseyLastWireError\(\)==uint32_t\(ESP_ERR_INVALID_RESPONSE\)/);
+  const take=source.split('static void odysseyRecordTake() {')[1].split('static void odysseyRecordTask(void*) {')[0];
+  const beforeClose=take.indexOf('if (odysseySdWriteTimeoutQuarantined()) {',take.indexOf('if (!failed && batchUsed) {'));
+  assert(beforeClose>=0 && beforeClose<take.indexOf('if (fclose(file)!=0)'));
+ }
+});

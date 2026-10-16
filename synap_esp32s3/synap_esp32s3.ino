@@ -2598,7 +2598,7 @@ static std::atomic<uint32_t> odysseyWirePriorCmd{UINT32_MAX};
 static std::atomic<uint32_t> odysseyWirePriorSuccessCmd{UINT32_MAX};
 static std::atomic<uint32_t> odysseyWireGoodWrites{0};
 static std::atomic<uint32_t> odysseyWireWritesAtFailure{0};
-// A timed-out CMD24/CMD25 (or its immediately following CMD13) can leave the
+// A timed-out or invalid-response CMD24/CMD25 (or following CMD13) can leave the
 // always-powered SD controller busy/programming. No further filesystem I/O,
 // unmount or same-rail recovery is permitted before a real power cycle.
 static std::atomic<bool> odysseySdTimedOutWriteQuarantined{false};
@@ -3328,7 +3328,7 @@ static bool odysseySdBeginLocked() {
   if (cmd && cmd->opcode==13u) odysseyWireLastCmd13=cmd->response[0];
   const esp_err_t error=result!=ESP_OK?result:(cmd?cmd->error:ESP_FAIL);
   const uint32_t prior=odysseyWirePriorCmd.load();
-  if (cmd && error==ESP_ERR_TIMEOUT &&
+  if (cmd && (error==ESP_ERR_TIMEOUT || error==ESP_ERR_INVALID_RESPONSE) &&
       (cmd->opcode==24u || cmd->opcode==25u ||
        (cmd->opcode==13u && (prior==24u || prior==25u)))) {
     odysseySdTimedOutWriteQuarantined=true;
@@ -4385,7 +4385,8 @@ static void odysseyRecordTask(void*) {
   // left storage unavailable, recover it here after leaving the touch/control
   // task rather than forcing the user to perform a separate recovery gesture.
   const bool previousProgramTimeout =
-    odysseyLastWireError()==uint32_t(ESP_ERR_TIMEOUT) &&
+    (odysseyLastWireError()==uint32_t(ESP_ERR_TIMEOUT) ||
+     odysseyLastWireError()==uint32_t(ESP_ERR_INVALID_RESPONSE)) &&
     (odysseyLastWireCommand()==24u || odysseyLastWireCommand()==25u ||
       (odysseyLastWireCommand()==13u &&
         (odysseyLastWirePrev()==24u || odysseyLastWirePrev()==25u)));
@@ -4402,7 +4403,7 @@ static void odysseyRecordTask(void*) {
     odysseyStopRequested=false;
     applyCpuPowerProfile(false);
     updateStatusLed(true);
-    Serial.println("[SD] offline start refused: prior timed-out CMD24/CMD25; power-cycle SD, never automatic remount");
+    Serial.println("[SD] offline start refused: prior unsafe CMD24/CMD25 response; power-cycle SD, never automatic remount");
     vTaskDelete(nullptr);
     return;
   }

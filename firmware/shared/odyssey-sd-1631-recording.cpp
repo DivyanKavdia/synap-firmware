@@ -566,7 +566,8 @@ static void odysseyRecordTask(void*) {
   // left storage unavailable, recover it here after leaving the touch/control
   // task rather than forcing the user to perform a separate recovery gesture.
   const bool previousProgramTimeout =
-    odysseyLastWireError()==uint32_t(ESP_ERR_TIMEOUT) &&
+    (odysseyLastWireError()==uint32_t(ESP_ERR_TIMEOUT) ||
+     odysseyLastWireError()==uint32_t(ESP_ERR_INVALID_RESPONSE)) &&
     (odysseyLastWireCommand()==24u || odysseyLastWireCommand()==25u ||
       (odysseyLastWireCommand()==13u &&
         (odysseyLastWirePrev()==24u || odysseyLastWirePrev()==25u)));
@@ -583,7 +584,7 @@ static void odysseyRecordTask(void*) {
     odysseyStopRequested=false;
     applyCpuPowerProfile(false);
     updateStatusLed(true);
-    Serial.println("[SD] offline start refused: prior timed-out CMD24/CMD25; power-cycle SD, never automatic remount");
+    Serial.println("[SD] offline start refused: prior unsafe CMD24/CMD25 response; power-cycle SD, never automatic remount");
     vTaskDelete(nullptr);
     return;
   }
