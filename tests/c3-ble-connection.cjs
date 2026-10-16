@@ -20,5 +20,19 @@ test('C3 relies on central BLE connection timing without a GAP renegotiation dur
  assert.match(boot,/bleServer->advertiseOnDisconnect\(true\)/);
  assert.match(ble,/reconcileConnection\(\)/);
  assert.match(ble,/restartAdvertising=true;/);
- assert.match(ble,/if \(deviceConnected\.load\(\) && streamingEnabled\.load\(\)/);
+ assert.match(ble,/if \(deviceConnected\.load\(\) &&\s*\(!streamingEnabled\.load\(\) \|\| !recoveryWaiting\.load\(\)\)/);
+});
+
+test('SD-only C3 BLE sync observes negotiated MTU without starting live audio',()=>{
+ const loop=ble.split('void controlTask(void* parameter) {')[1]
+   .split('#if defined(CONFIG_BLUEDROID_ENABLED)')[0];
+ // The idle link needs ATT payload >=496 to use media-v3 windows.
+ // Audio safety and recovery handling must remain unchanged.
+ assert.match(loop,/if \(deviceConnected\.load\(\) &&/);
+ assert.match(loop,/!streamingEnabled\.load\(\)/);
+ assert.match(loop,/bleServer->getPeerMTU\(bleServer->getConnId\(\)\)/);
+ assert.match(loop,/peerMtu=liveMtu;attValueCapacity=liveCapacity;/);
+ assert.match(loop,/if \(streamingEnabled\.load\(\) &&\s*liveCapacity </);
+ assert.match(loop,/!recoveryWaiting\.load\(\)/);
+ assert.doesNotMatch(loop,/if \(deviceConnected\.load\(\) && streamingEnabled\.load\(\)/);
 });
