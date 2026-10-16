@@ -16,6 +16,7 @@
 #include "sdmmc_cmd.h"
 uint8_t odysseyLastRecordFailureStage();
 uint32_t odysseyLastRecordFailureBytes();
+void odysseySdInvalidateHistoricalFaultResolution();
 #else
 #include <SPI.h>
 #include <SD.h>
@@ -231,6 +232,10 @@ int16_t odysseySdBitBangCmd8Response() { return odysseySdBitBangCmd8.load(); }
 uint32_t odysseySdBitBangR7Response() { return odysseySdBitBangR7.load(); }
 void odysseySdUseProbingClock() {}
 void odysseySdMarkVfsFailure() {
+  // Read-side EIO revokes any prior cold-mount witness. On a subsequent
+  // software/OTA reset, this newer unresolved SD failure must stay protected.
+  // This touches ESP internal NVS only; no additional SD command is issued.
+  odysseySdInvalidateHistoricalFaultResolution();
   // Observation only. Catalogue/read errors must never schedule a destructive
   // remount behind the user's back. Explicit recovery still refuses any
   // timed-out CMD17/CMD18 until the SD card receives a genuine power cycle.

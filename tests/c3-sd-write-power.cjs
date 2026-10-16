@@ -160,3 +160,11 @@ test('verified cold FAT mount resolves historical failure boot veto without dele
  assert.match(recording,/odysseySdInvalidateHistoricalFaultResolution\(\);[\s\S]*?odysseyPersistRecordFailure\(persistedStage,bytes\)/);
  assert.match(recording,/prefs.putBytes\("last",record,sizeof\(record\)\)/);
 });
+
+test('a new SD read failure revokes old cold-mount recovery witness before OTA reboot',()=>{
+ const detect=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8');
+ const mark=detect.split('void odysseySdMarkVfsFailure() {')[1].split('static void odysseySdEnsureMutex()')[0];
+ assert.match(mark,/odysseySdInvalidateHistoricalFaultResolution\(\)/);
+ assert.match(mark,/odysseySdBootState=2/);
+ assert.match(detect,/void odysseySdInvalidateHistoricalFaultResolution\(\) \{/);
+});
