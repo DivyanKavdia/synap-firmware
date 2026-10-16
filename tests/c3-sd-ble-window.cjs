@@ -104,10 +104,9 @@ test('C3 quarantine blocks remount and explicit recovery after live CMD17/CMD18 
 
 test('SD read-timeout telemetry remains RAM-only, compact and preserves legacy fields',()=>{
  assert.match(transfer,/case 29: \{/);
- assert.match(transfer,/odysseySdReadTimeoutQuarantined\(\)\?1u:0u/);
- assert.match(transfer,/odysseySdWriteTimeoutQuarantined\(\)\?1u:0u/);
- assert.match(transfer,/readQ/);
- assert.match(transfer,/writeQ/);
+ assert.match(transfer,/odysseySdReadTimeoutQuarantined\(\)\?16u:0u/);
+ assert.match(transfer,/odysseySdWriteTimeoutQuarantined\(\)\?32u:0u/);
+ assert.match(transfer,/readFlags/);
  const section=transfer.split('case 29: {')[1].split('case 4:')[0];
  assert.doesNotMatch(section,/fopen\(|fread\(|unlink\(|fwrite\(|odysseyRecoverSdCard\(/);
  assert.match(ino,/odysseySdReadTimeoutQuarantined\(\)/);
