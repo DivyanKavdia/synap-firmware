@@ -4549,6 +4549,10 @@ static char selectedPath[64]{};
 // Only a successfully selected WAV on this connection can authorize an
 // opcode31 compact window. No filesystem handle is retained between windows.
 static uint32_t selectedSessionToken=0,selectedSessionConnection=0;
+// A successful op3 stat locks the read-only file size to this selection and
+// connection. Reuse it across 4 KiB cache fills rather than stat() the same
+// FAT entry hundreds of times. No file handles survive BLE waits.
+static uint32_t selectedFileSize=0;
 static String catalogueBuffer;
 static int catalogueErrno=0;
 static uint8_t catalogueStep=0;
@@ -4623,6 +4627,7 @@ static void reply(const Request& request,uint8_t error,uint32_t total=0,uint32_t
 
 static uint8_t selectFile(const char* path,uint32_t& total) {
   selectedPath[0]=0;
+  selectedFileSize=0;
   if (!safeWavPath(path)) return BAD_COMMAND;
   OdysseySdGuard guard;
   if (!guard || !storageReady()) return NO_SD;
@@ -4632,6 +4637,7 @@ static uint8_t selectFile(const char* path,uint32_t& total) {
   if (stat(full,&st)!=0 || !S_ISREG(st.st_mode) || st.st_size<=0) return FILE_UNAVAILABLE;
   if (uint64_t(st.st_size)>UINT32_MAX) return FILE_UNAVAILABLE;
   total=uint32_t(st.st_size);
+  selectedFileSize=total;
   snprintf(selectedPath,sizeof(selectedPath),"%s",path);
   return OK;
 }
@@ -4693,21 +4699,32 @@ static uint8_t readWavChunk(const char* logical,uint32_t offset,
     return OK;
   }
   invalidateBleReadCache();
-  struct stat st{};
-  errno=0;
-  if (stat(full,&st)!=0) {
-    const int err=errno;
-    if (err==EIO || err==ENODEV || err==ETIMEDOUT) {
-      sdBleReadFailureStep=1;
-      sdBleReadFailureErrno=err;
-      errno=err;
-      return IO_ERROR;
+  // Op3 already verified the file is regular and its length on this very
+  // connection. No SD mutations are allowed over BLE on deployed C3+SD.
+  // The streaming/recording gate prevents simultaneous writers. If the
+  // selection changes, use the original stat() path without shortcuts.
+  const bool selectedMetadataValid=selectedSessionToken!=0 &&
+    selectedSessionConnection==generation && selectedFileSize>0 &&
+    selectedPath[0] && strcmp(logical,selectedPath)==0;
+  if (selectedMetadataValid) {
+    total=selectedFileSize;
+  } else {
+    struct stat st{};
+    errno=0;
+    if (stat(full,&st)!=0) {
+      const int err=errno;
+      if (err==EIO || err==ENODEV || err==ETIMEDOUT) {
+        sdBleReadFailureStep=1;
+        sdBleReadFailureErrno=err;
+        errno=err;
+        return IO_ERROR;
+      }
+      return FILE_UNAVAILABLE;
     }
-    return FILE_UNAVAILABLE;
+    if (!S_ISREG(st.st_mode) || st.st_size<=0 ||
+        uint64_t(st.st_size)>UINT32_MAX) return FILE_UNAVAILABLE;
+    total=uint32_t(st.st_size);
   }
-  if (!S_ISREG(st.st_mode) || st.st_size<=0 ||
-      uint64_t(st.st_size)>UINT32_MAX) return FILE_UNAVAILABLE;
-  total=uint32_t(st.st_size);
   if (offset>=total) return FILE_UNAVAILABLE;
   const uint32_t base=(offset/ODYSSEY_SD_BLE_READ_CACHE_BYTES)*
     ODYSSEY_SD_BLE_READ_CACHE_BYTES;
