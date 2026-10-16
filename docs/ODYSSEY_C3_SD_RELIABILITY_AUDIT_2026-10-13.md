@@ -60,3 +60,27 @@ After the *final padded 4096-byte* `fwrite`, the previous code unconditionally i
 8. Do not enable field SD deletion, formatting, file repair or automatic remount without successful physical qualification.
 
 **References:** Espressif ESP-IDF SDSPI host, SD pull-up requirements, and FATFS mount documentation. Hardware references: `hardware/odyssey-c3/pcb/final/BOM.csv` and `ASSEMBLED_C3_SD_FIELD_VARIANT.md`.
+
+## 2026-10-16 field update: build 2206 SD read failure (CMD17)
+
+**Hardware:** Synap Odyssey C3 / ESP32-C3 SuperMini 4 MiB, SPI2 SDSPI CS=GPIO0, SCK=GPIO10, MOSI=GPIO21, MISO=GPIO20, SD powered at 3.3 V. The **assembled** battery divider is 1 MΩ / 470 kΩ (the archived fabrication BOM's values are historical).
+
+**Evidence:** mounted and catalogued, media-v3 BLE (MTU 517/ATT 514, op31), then `Rxxxxxxx.WAV` download failed after 69,632 of 3,084,288 bytes. A 4,096-byte cache fill read only 3,072 bytes; **CMD17 timed out (ESP_ERR_TIMEOUT=263) after 1,000 ms**. An earlier offline take had already reported **CMD25 timeout after 5,045 ms** at byte 368,640. These are *different native SD read and write failures*. Missing BLE notifications (6/12 etc.) were observed too, but the fatal failure is native SD I/O. No proof of FAT corruption is provided by these readings.
+
+### Shipped software guard (post-2206)
+
+- Intercept timeout results from **CMD17/CMD18 only after a previously verified mount**, with no extra SD command. Latch a volatile **read-timeout quarantine**, alongside existing write-timeout quarantine.
+- Refuse **same-powered-card remount/recovery**, including explicit BLE op14 and touch recovery, after a timed-out read. Preserve all existing audio, do **not** automatically format, clear, delete, reset the SD host, or attempt CMD0/CMD12. Keep deep-sleep veto. The firmware cannot electrically reset the card because its 3.3 V rail is not software-switchable.
+- Expose **`readQ` / `writeQ`** in existing op29 RAM-only transfer diagnostics without touching storage or changing the BLE ABI. Historical op27 recorder faults remain distinct from live read errors.
+- Do not change recorder buffering, 60-second sync interval, native 800-kHz SD clock, FAT layout, partitions, or the read cache in response to one failed sector: none would be a demonstrated fix for an electrical/data-response timeout.
+
+### Physical ECO / acceptance, not a firmware change
+
+1. **Preserve data first.** Before opening the enclosure or removing the card, completely power off, disconnect USB, and confirm the SD rail has discharged. Do not hot-remove the mounted card. Back up readable WAV files via a trusted external reader; avoid reformatting the original.
+2. **Measure SD VCC at the microSD module, not at the battery ADC.** Scope VCC-to-SD-GND at boot/mount, first FAT metadata write, sustained PCM recording, and live BLE SD sync. Record both DC voltage and short transient minimum/ground bounce. The ESP32-C3's cell reading near 3.9 V proves nothing about the SD's local 3.3 V rail.
+3. **Check fitted BOM first.** Verify C2 (10 µF local SD bulk) and the appropriate 100 nF ceramic decoupler are present and truly connected to SD VCC/GND. On a prototype, an additional **47–100 µF low-ESR bulk capacitor** and **100 nF ceramic** placed very close to the SD socket can be evaluated for transient droop. Observe polarity on polarized capacitors, minimum 6.3-V rating (10-V preferred for margin), regulator stability, startup inrush and connector clearance. Extra capacitance does not fix a weak 3.3 V regulator, an unreliable socket, or a defective card.
+4. **Inspect SPI electrical path.** Check short wires/traces, solder joints, shared ground and the actual module's CS/CMD/DAT pull-ups (typically ~10 kΩ where required by SD SPI design). The C3 internal MISO pull-up alone is not an adequate substitute for verifying the module. Measure CS, CLK, MOSI, MISO and SD rail together if possible. Do not use S3 pins for this C3 board.
+5. **Cross-test** using a genuine known-good SD card (FAT32, compatible capacity) after securing the original data. On separate disposable media, run one-minute and ten-minute recording, full readback/verified BLE sync, then an immediate second recording **without an MCU reset**. Repeat at different LiPo state of charge and under USB vs battery power. Never use production recordings for destructive testing.
+6. **Future PCB revision:** add a properly sized, switchable SD 3.3 V rail/load switch and a defined off/discharge interval. Ensure firmware stops FatFs/SPI operations, unmounts cleanly and closes files before switching power; never cut power during a write or after an unresolved program-timeout just to force a retry. Add SD VCC/GND test points and measured local decoupling. A hardware rail redesign is not achievable via OTA.
+
+**Acceptance gate:** 30-minute offline recording, verified BLE import, another recording with no restart, multiple stop/start cycles, and no native CMD17/CMD24/CMD25 timeout on at least two known-good cards. Firmware safety quarantine is not a remedy for faulty media or supply power.
