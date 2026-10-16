@@ -146,3 +146,25 @@ test('retained FAT EIO defers SD commands on warm boot; cold boot attempts one m
  assert.match(sd,/if \(!mounted\) \{[\s\S]*?odysseySdBitBangRecoverLocked\(reason\)/);
  assert.doesNotMatch(bootFn,/SD\.format\(|formatIfMountFailed/);
 });
+
+test('verified cold FAT mount resolves historical failure boot veto without deleting fault journal',()=>{
+ const detect=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8');
+ const recording=fs.readFileSync('firmware/shared/odyssey-sd-1631-recording.cpp','utf8');
+ const boot=detect.split('bool odysseyInitializeSdCardBeforeBle() {')[1].split('bool odysseyRecoverSdCard(')[0];
+ assert.match(detect,/odysseySdHistoricalFaultResolved\(\)/);
+ assert.match(detect,/witness\[1\]==uint32_t\(stage\)/);
+ assert.match(detect,/witness\[2\]==odysseyLastRecordFailureBytes\(\)/);
+ assert.match(boot,/!odysseySdHistoricalFaultResolved\(\)/);
+ assert.match(boot,/if \(ready && bootResetReason==ESP_RST_POWERON\)/);
+ assert.match(boot,/odysseySdMarkHistoricalFaultResolved\(\)/);
+ assert.match(recording,/odysseySdInvalidateHistoricalFaultResolution\(\);[\s\S]*?odysseyPersistRecordFailure\(persistedStage,bytes\)/);
+ assert.match(recording,/prefs.putBytes\("last",record,sizeof\(record\)\)/);
+});
+
+test('a new SD read failure revokes old cold-mount recovery witness before OTA reboot',()=>{
+ const detect=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8');
+ const mark=detect.split('void odysseySdMarkVfsFailure() {')[1].split('static void odysseySdEnsureMutex()')[0];
+ assert.match(mark,/odysseySdInvalidateHistoricalFaultResolution\(\)/);
+ assert.match(mark,/odysseySdBootState=2/);
+ assert.match(detect,/void odysseySdInvalidateHistoricalFaultResolution\(\) \{/);
+});

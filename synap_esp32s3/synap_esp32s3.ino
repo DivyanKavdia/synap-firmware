@@ -2519,6 +2519,8 @@ void transmitterTask(void* parameter) {
 #include "driver/sdspi_host.h"
 #include "sdmmc_cmd.h"
 uint8_t odysseyLastRecordFailureStage();
+uint32_t odysseyLastRecordFailureBytes();
+void odysseySdInvalidateHistoricalFaultResolution();
 #else
 #include <SPI.h>
 #include <SD.h>
@@ -2597,7 +2599,7 @@ static std::atomic<uint32_t> odysseyWirePriorCmd{UINT32_MAX};
 static std::atomic<uint32_t> odysseyWirePriorSuccessCmd{UINT32_MAX};
 static std::atomic<uint32_t> odysseyWireGoodWrites{0};
 static std::atomic<uint32_t> odysseyWireWritesAtFailure{0};
-// A timed-out CMD24/CMD25 (or its immediately following CMD13) can leave the
+// A timed-out or invalid-response CMD24/CMD25 (or following CMD13) can leave the
 // always-powered SD controller busy/programming. No further filesystem I/O,
 // unmount or same-rail recovery is permitted before a real power cycle.
 static std::atomic<bool> odysseySdTimedOutWriteQuarantined{false};
@@ -2734,6 +2736,10 @@ int16_t odysseySdBitBangCmd8Response() { return odysseySdBitBangCmd8.load(); }
 uint32_t odysseySdBitBangR7Response() { return odysseySdBitBangR7.load(); }
 void odysseySdUseProbingClock() {}
 void odysseySdMarkVfsFailure() {
+  // Read-side EIO revokes any prior cold-mount witness. On a subsequent
+  // software/OTA reset, this newer unresolved SD failure must stay protected.
+  // This touches ESP internal NVS only; no additional SD command is issued.
+  odysseySdInvalidateHistoricalFaultResolution();
   // Observation only. Catalogue/read errors must never schedule a destructive
   // remount behind the user's back. Explicit recovery still refuses any
   // timed-out CMD17/CMD18 until the SD card receives a genuine power cycle.
@@ -3327,7 +3333,7 @@ static bool odysseySdBeginLocked() {
   if (cmd && cmd->opcode==13u) odysseyWireLastCmd13=cmd->response[0];
   const esp_err_t error=result!=ESP_OK?result:(cmd?cmd->error:ESP_FAIL);
   const uint32_t prior=odysseyWirePriorCmd.load();
-  if (cmd && error==ESP_ERR_TIMEOUT &&
+  if (cmd && (error==ESP_ERR_TIMEOUT || error==ESP_ERR_INVALID_RESPONSE) &&
       (cmd->opcode==24u || cmd->opcode==25u ||
        (cmd->opcode==13u && (prior==24u || prior==25u)))) {
     odysseySdTimedOutWriteQuarantined=true;
@@ -3587,6 +3593,41 @@ void odysseyDetectSdCard() {
   if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return; }
   odysseySdMountLocked("probe",1);
 }
+// A cold power-on followed by a verified FAT mount establishes that a
+// RETAINED diagnostic describes a past failure, not today's SD health.
+// Keep the original first-fault journal intact for field diagnostics.
+// New recording faults revoke this separate recovery witness BEFORE journaling.
+static constexpr uint32_t ODYSSEY_SD_RECOVERY_WITNESS=0x53445231u;
+bool odysseySdHistoricalFaultResolved() {
+  const uint8_t stage=odysseyLastRecordFailureStage();
+  if (stage<44u || stage==48u) return false;
+  Preferences prefs;
+  if (!prefs.begin("sd-recstate",true)) return false;
+  uint32_t witness[3]{};
+  const bool read=prefs.getBytesLength("resolved")==sizeof(witness) &&
+    prefs.getBytes("resolved",witness,sizeof(witness))==sizeof(witness);
+  prefs.end();
+  return read && witness[0]==ODYSSEY_SD_RECOVERY_WITNESS &&
+    witness[1]==uint32_t(stage) && witness[2]==odysseyLastRecordFailureBytes();
+}
+static void odysseySdMarkHistoricalFaultResolved() {
+  const uint8_t stage=odysseyLastRecordFailureStage();
+  if (stage<44u || stage==48u) return;
+  const uint32_t witness[3]={ODYSSEY_SD_RECOVERY_WITNESS,
+    uint32_t(stage),odysseyLastRecordFailureBytes()};
+  Preferences prefs;
+  if (!prefs.begin("sd-recstate",false)) return;
+  (void)prefs.putBytes("resolved",witness,sizeof(witness));
+  prefs.end();
+}
+void odysseySdInvalidateHistoricalFaultResolution() {
+  const uint32_t witness[3]={0u,0u,0u};
+  Preferences prefs;
+  if (!prefs.begin("sd-recstate",false)) return;
+  (void)prefs.putBytes("resolved",witness,sizeof(witness));
+  prefs.end();
+}
+
 bool odysseyInitializeSdCardBeforeBle() {
   OdysseySdGuard guard;
   if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return false; }
@@ -3597,7 +3638,8 @@ bool odysseyInitializeSdCardBeforeBle() {
   // still be programming. A true cold power-on may try one normal mount,
   // followed only by guarded/passive recovery. User op14 remains explicit.
   const uint8_t previousRecordStage=odysseyLastRecordFailureStage();
-  const bool previousStorageFault=previousRecordStage>=44u && previousRecordStage!=48u;
+  const bool previousStorageFault=previousRecordStage>=44u && previousRecordStage!=48u &&
+    !odysseySdHistoricalFaultResolved();
   if (previousStorageFault) {
     odysseySdUnsafeToSleep=true;
     if (bootResetReason!=ESP_RST_POWERON) {
@@ -3612,6 +3654,10 @@ bool odysseyInitializeSdCardBeforeBle() {
   }
 
   const bool ready=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
+  // Only an actual cold card power-on + successful VFS validation can clear
+  // this historical boot veto. Software/OTA reset alone is insufficient.
+  if (ready && bootResetReason==ESP_RST_POWERON)
+    odysseySdMarkHistoricalFaultResolved();
   Serial.printf("[SD] boot initialization complete state=%u stage=%u before BLE\n",
     unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()));
   return ready;
@@ -4313,6 +4359,10 @@ static void odysseyRecordTake() {
   // completed, so they cannot change the write timing being measured.
   if (failed || bytes==0) {
     const uint8_t persistedStage=failureStage?failureStage:40;
+    // Revoke a previous healthy-cold-mount witness before recording any new
+    // SD storage failure. Never clear the underlying failure diagnostics.
+    if (persistedStage!=43u && persistedStage!=48u)
+      odysseySdInvalidateHistoricalFaultResolution();
     odysseyPersistRecordFailure(persistedStage,bytes);
     // Mic failure (43) and an empty, user-stopped take (48) do not establish
     // that the SD card failed. Keep a still-mounted FAT volume accessible so
@@ -4340,7 +4390,8 @@ static void odysseyRecordTask(void*) {
   // left storage unavailable, recover it here after leaving the touch/control
   // task rather than forcing the user to perform a separate recovery gesture.
   const bool previousProgramTimeout =
-    odysseyLastWireError()==uint32_t(ESP_ERR_TIMEOUT) &&
+    (odysseyLastWireError()==uint32_t(ESP_ERR_TIMEOUT) ||
+     odysseyLastWireError()==uint32_t(ESP_ERR_INVALID_RESPONSE)) &&
     (odysseyLastWireCommand()==24u || odysseyLastWireCommand()==25u ||
       (odysseyLastWireCommand()==13u &&
         (odysseyLastWirePrev()==24u || odysseyLastWirePrev()==25u)));
@@ -4357,7 +4408,7 @@ static void odysseyRecordTask(void*) {
     odysseyStopRequested=false;
     applyCpuPowerProfile(false);
     updateStatusLed(true);
-    Serial.println("[SD] offline start refused: prior timed-out CMD24/CMD25; power-cycle SD, never automatic remount");
+    Serial.println("[SD] offline start refused: prior unsafe CMD24/CMD25 response; power-cycle SD, never automatic remount");
     vTaskDelete(nullptr);
     return;
   }

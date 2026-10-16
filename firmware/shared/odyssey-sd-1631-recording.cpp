@@ -535,6 +535,10 @@ static void odysseyRecordTake() {
   // completed, so they cannot change the write timing being measured.
   if (failed || bytes==0) {
     const uint8_t persistedStage=failureStage?failureStage:40;
+    // Revoke a previous healthy-cold-mount witness before recording any new
+    // SD storage failure. Never clear the underlying failure diagnostics.
+    if (persistedStage!=43u && persistedStage!=48u)
+      odysseySdInvalidateHistoricalFaultResolution();
     odysseyPersistRecordFailure(persistedStage,bytes);
     // Mic failure (43) and an empty, user-stopped take (48) do not establish
     // that the SD card failed. Keep a still-mounted FAT volume accessible so
@@ -562,7 +566,8 @@ static void odysseyRecordTask(void*) {
   // left storage unavailable, recover it here after leaving the touch/control
   // task rather than forcing the user to perform a separate recovery gesture.
   const bool previousProgramTimeout =
-    odysseyLastWireError()==uint32_t(ESP_ERR_TIMEOUT) &&
+    (odysseyLastWireError()==uint32_t(ESP_ERR_TIMEOUT) ||
+     odysseyLastWireError()==uint32_t(ESP_ERR_INVALID_RESPONSE)) &&
     (odysseyLastWireCommand()==24u || odysseyLastWireCommand()==25u ||
       (odysseyLastWireCommand()==13u &&
         (odysseyLastWirePrev()==24u || odysseyLastWirePrev()==25u)));
@@ -579,7 +584,7 @@ static void odysseyRecordTask(void*) {
     odysseyStopRequested=false;
     applyCpuPowerProfile(false);
     updateStatusLed(true);
-    Serial.println("[SD] offline start refused: prior timed-out CMD24/CMD25; power-cycle SD, never automatic remount");
+    Serial.println("[SD] offline start refused: prior unsafe CMD24/CMD25 response; power-cycle SD, never automatic remount");
     vTaskDelete(nullptr);
     return;
   }
