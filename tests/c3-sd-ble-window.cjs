@@ -119,3 +119,22 @@ test('SD read-timeout telemetry remains RAM-only, compact and preserves legacy f
  assert.doesNotMatch(section,/fopen\(|fread\(|unlink\(|fwrite\(|odysseyRecoverSdCard\(/);
  assert.match(ino,/odysseySdReadTimeoutQuarantined\(\)/);
 });
+
+
+test('C3 selected WAV metadata avoids repeated FAT stats without weakening read checks',()=>{
+ const transfer=load('firmware/shared/odyssey-sd-1631-transfer.cpp');
+ assert.match(transfer,/static uint32_t selectedFileSize=0;/);
+ assert.match(transfer,/selectedFileSize=0;/);
+ assert.match(transfer,/selectedFileSize=total;/);
+ const read=transfer.split('static uint8_t readWavChunk(')[1].split('static uint8_t readSelected(')[0];
+ assert.match(read,/const bool selectedMetadataValid=selectedSessionToken!=0/);
+ assert.match(read,/selectedSessionConnection==generation/);
+ assert.match(read,/strcmp\(logical,selectedPath\)==0/);
+ assert.match(read,/if \(selectedMetadataValid\) \{\s*total=selectedFileSize;/);
+ assert.match(read,/if \(stat\(full,&st\)!=0\)/);
+ assert.match(read,/const size_t step=std::min\(size_t\(512\),want-got\)/);
+ assert.match(read,/const int closeResult=fclose\(file\)/);
+ assert.match(read,/if \(!seekOk \|\| got!=want \|\| closeResult!=0\)/);
+ assert.match(transfer,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
+ assert(ino.includes(transfer),'release sketch must exactly include the source with selected metadata guard');
+});
