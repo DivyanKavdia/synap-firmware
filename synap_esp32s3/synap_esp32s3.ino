@@ -5170,7 +5170,7 @@ static void worker(void*) {
         // previous op4/op12 requests; it must remain safe after mount loss.
         char detail[480];
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"reads\":%lu,\"cacheHits\":%lu,\"diskFills\":%lu,\"lastRequestedOffset\":%lu,\"lastOkOffset\":%lu,\"faultOffset\":%lu,\"windowRequests\":%lu,\"mtuFallbacks\":%lu,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireMs\":%lu,\"readGot\":%lu,\"readWant\":%lu,\"readFlags\":%lu,\"readQ\":%u,\"writeQ\":%u}",
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"reads\":%lu,\"cacheHits\":%lu,\"diskFills\":%lu,\"lastRequestedOffset\":%lu,\"lastOkOffset\":%lu,\"faultOffset\":%lu,\"windowRequests\":%lu,\"mtuFallbacks\":%lu,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireMs\":%lu,\"readGot\":%lu,\"readWant\":%lu,\"readFlags\":%lu}",
           unsigned(odysseySdDetectionState()),
           unsigned(odysseySdProbeState()),
           unsigned(sdLastMediaFaultOperation.load()),
@@ -5190,9 +5190,12 @@ static void worker(void*) {
           static_cast<unsigned long>(odysseySdWireFaultElapsedMs()),
           static_cast<unsigned long>(sdBleFaultReadGot),
           static_cast<unsigned long>(sdBleFaultReadWant),
-          static_cast<unsigned long>(sdBleFaultReadFlags),
-          unsigned(odysseySdReadTimeoutQuarantined()?1u:0u),
-          unsigned(odysseySdWriteTimeoutQuarantined()?1u:0u));
+          // Bits 0..3 retain their original read-failure semantics.
+          // Bit4=timed-out CMD17/18 read, bit5=timed-out CMD24/25 write.
+          // No additional JSON keys: op29 must fit its 480-byte BLE reply.
+          static_cast<unsigned long>(sdBleFaultReadFlags |
+            (odysseySdReadTimeoutQuarantined()?16u:0u) |
+            (odysseySdWriteTimeoutQuarantined()?32u:0u)));
         if (n<0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
