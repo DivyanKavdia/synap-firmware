@@ -71,7 +71,7 @@ After the *final padded 4096-byte* `fwrite`, the previous code unconditionally i
 
 - Intercept timeout results from **CMD17/CMD18 only after a previously verified mount**, with no extra SD command. Latch a volatile **read-timeout quarantine**, alongside existing write-timeout quarantine.
 - Refuse **same-powered-card remount/recovery**, including explicit BLE op14 and touch recovery, after a timed-out read. Preserve all existing audio, do **not** automatically format, clear, delete, reset the SD host, or attempt CMD0/CMD12. Keep deep-sleep veto. The firmware cannot electrically reset the card because its 3.3 V rail is not software-switchable.
-- Expose **`readQ` / `writeQ`** in existing op29 RAM-only transfer diagnostics without touching storage or changing the BLE ABI. Historical op27 recorder faults remain distinct from live read errors.
+- Expose timeout quarantine in the existing op29 RAM-only **`readFlags`** bitmask (bit 4 = read CMD17/18 timeout, bit 5 = write CMD24/25 timeout); bits 0–3 retain their original failure meanings. No new keys, SD access, or BLE ABI change. Historical op27 recorder faults remain distinct from live read errors.
 - Do not change recorder buffering, 60-second sync interval, native 800-kHz SD clock, FAT layout, partitions, or the read cache in response to one failed sector: none would be a demonstrated fix for an electrical/data-response timeout.
 
 ### Physical ECO / acceptance, not a firmware change
