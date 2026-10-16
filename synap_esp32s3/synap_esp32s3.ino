@@ -2601,8 +2601,15 @@ static std::atomic<uint32_t> odysseyWireWritesAtFailure{0};
 // always-powered SD controller busy/programming. No further filesystem I/O,
 // unmount or same-rail recovery is permitted before a real power cycle.
 static std::atomic<bool> odysseySdTimedOutWriteQuarantined{false};
+// A CMD17/CMD18 timeout during an already-mounted session may leave the
+// continuously-powered SDSPI controller in an unknown data-transfer state.
+// Do not treat a returned POSIX errno as evidence of card-side idle.
+static std::atomic<bool> odysseySdTimedOutReadQuarantined{false};
 bool odysseySdWriteTimeoutQuarantined() {
   return odysseySdTimedOutWriteQuarantined.load();
+}
+bool odysseySdReadTimeoutQuarantined() {
+  return odysseySdTimedOutReadQuarantined.load();
 }
 void odysseySdClearWireFault() {
   odysseyWireCmdPlusOne=0;
@@ -2728,8 +2735,8 @@ uint32_t odysseySdBitBangR7Response() { return odysseySdBitBangR7.load(); }
 void odysseySdUseProbingClock() {}
 void odysseySdMarkVfsFailure() {
   // Observation only. Catalogue/read errors must never schedule a destructive
-  // remount behind the user's back. Explicit PWA Check SD (op14) or a physical
-  // disconnected double-tap may request recovery.
+  // remount behind the user's back. Explicit recovery still refuses any
+  // timed-out CMD17/CMD18 until the SD card receives a genuine power cycle.
   odysseySdVfsStep=11;odysseySdVfsErrno=errno?errno:EIO;
   odysseySdBootState=2;odysseySdProbeStage=4;
   odysseySdLastMountError=ESP_FAIL;
@@ -3326,6 +3333,14 @@ static bool odysseySdBeginLocked() {
     odysseySdTimedOutWriteQuarantined=true;
     odysseySdUnsafeToSleep=true;
   }
+  // Field build 2206: BLE sync lost CMD17 after 3072/4096 read bytes.
+  // Only quarantine a read in a previously verified mounted session;
+  // SD card discovery's optional probes must never create this latch.
+  if (cmd && error==ESP_ERR_TIMEOUT && odysseySdBootState.load()==1 &&
+      (cmd->opcode==17u || cmd->opcode==18u)) {
+    odysseySdTimedOutReadQuarantined=true;
+    odysseySdUnsafeToSleep=true;
+  }
   // ESP-IDF probes for optional SDIO functionality during card init:
   // CMD52 (IO reset) and CMD5 (IO_SEND_OP_COND). An ordinary SD memory card
   // may reject either; sdmmc_init_io() explicitly treats CMD5 rejection as
@@ -3516,6 +3531,7 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
   // that makes a previously failed sleep quiesce safe to attempt again.
   odysseySdUnsafeToSleep=false;
   odysseySdTimedOutWriteQuarantined=false; // only a verified fresh mount clears quarantine
+  odysseySdTimedOutReadQuarantined=false;  // never cleared by an ordinary BLE read
   const uint64_t bytes=uint64_t(odysseySdNativeCard->csd.capacity)*
     uint64_t(odysseySdNativeCard->csd.sector_size);
   Serial.printf("[SD] native SDSPI FAT ready capacity=%llu MiB clock=%lu Hz\\n",
@@ -3526,6 +3542,12 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
 
 static bool odysseySdMountLocked(const char* reason,uint8_t attempts) {
   if (odysseySdReady()) return true;
+  if (odysseySdTimedOutReadQuarantined.load() ||
+      odysseySdTimedOutWriteQuarantined.load()) {
+    odysseySdUnsafeToSleep=true;
+    Serial.println("[SD] same-rail remount refused after SD transfer timeout; cycle SD power");
+    return false;
+  }
   for (uint8_t attempt=1;attempt<=attempts;++attempt) {
     if (odysseySdMountOnceLocked(reason,attempt)) return true;
     // Do not hammer a deselected busy-low SD on a sealed C3.
@@ -3577,12 +3599,13 @@ bool odysseyInitializeSdCardBeforeBle() {
   return ready;
 }
 bool odysseyRecoverSdCard(const char* reason) {
-  // A failed program/write timeout is not a permission to reset SPI or issue
-  // CMD0/CMD12 to a card still programming NAND. A true rail power cycle
-  // (cold boot, card removal) is required; preserve its existing FAT data.
-  if (odysseySdWriteTimeoutQuarantined()) {
+  // A timed-out read or write is not proof that the card returned to SPI
+  // idle. Never attempt CMD0/CMD12, remount or FAT access on that same rail;
+  // require actual card power cycling, retaining all original recordings.
+  if (odysseySdWriteTimeoutQuarantined() ||
+      odysseySdReadTimeoutQuarantined()) {
     odysseySdUnsafeToSleep=true;
-    Serial.println("[SD] recovery refused after CMD24/CMD25 timeout: SD power-cycle required; recordings retained");
+    Serial.println("[SD] recovery refused after timed-out CMD17/18 or CMD24/25: SD rail power-cycle required; recordings retained");
     return false;
   }
   OdysseySdGuard guard(pdMS_TO_TICKS(5000));
@@ -5147,7 +5170,7 @@ static void worker(void*) {
         // previous op4/op12 requests; it must remain safe after mount loss.
         char detail[480];
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"reads\":%lu,\"cacheHits\":%lu,\"diskFills\":%lu,\"lastRequestedOffset\":%lu,\"lastOkOffset\":%lu,\"faultOffset\":%lu,\"windowRequests\":%lu,\"mtuFallbacks\":%lu,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireMs\":%lu,\"readGot\":%lu,\"readWant\":%lu,\"readFlags\":%lu}",
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"reads\":%lu,\"cacheHits\":%lu,\"diskFills\":%lu,\"lastRequestedOffset\":%lu,\"lastOkOffset\":%lu,\"faultOffset\":%lu,\"windowRequests\":%lu,\"mtuFallbacks\":%lu,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireMs\":%lu,\"readGot\":%lu,\"readWant\":%lu,\"readFlags\":%lu,\"readQuarantine\":%u,\"writeQuarantine\":%u}",
           unsigned(odysseySdDetectionState()),
           unsigned(odysseySdProbeState()),
           unsigned(sdLastMediaFaultOperation.load()),
@@ -5167,7 +5190,9 @@ static void worker(void*) {
           static_cast<unsigned long>(odysseySdWireFaultElapsedMs()),
           static_cast<unsigned long>(sdBleFaultReadGot),
           static_cast<unsigned long>(sdBleFaultReadWant),
-          static_cast<unsigned long>(sdBleFaultReadFlags));
+          static_cast<unsigned long>(sdBleFaultReadFlags),
+          unsigned(odysseySdReadTimeoutQuarantined()?1u:0u),
+          unsigned(odysseySdWriteTimeoutQuarantined()?1u:0u));
         if (n<0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
