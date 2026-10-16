@@ -85,9 +85,17 @@ test('C3 quarantine blocks remount and explicit recovery after live CMD17/CMD18 
  const sd=load('firmware/shared/odyssey-sd-1631-detect.cpp');
  // The logged CMD17 timeout happened during an already mounted 4 KiB read.
  assert.match(sd,/static std::atomic<bool> odysseySdTimedOutReadQuarantined\{false\}/);
- assert.match(sd,/error==ESP_ERR_TIMEOUT && odysseySdBootState\.load\(\)==1/);
+ assert.match(sd,/error==ESP_ERR_TIMEOUT &&\s*\(odysseySdBootState\.load\(\)==1 \|\| odysseySdNativeCard!=nullptr\)/);
  assert.match(sd,/cmd->opcode==17u \|\| cmd->opcode==18u/);
  assert.match(sd,/odysseySdTimedOutReadQuarantined=true;/);
+ // Validation can time out *after* native mount but before bootState=ready.
+ const validateFailure=sd.split('if (!odysseySdValidateVfsLocked(reason,attempt)) {')[1]
+   .split('// Persist the field C3+SD divider')[0];
+ assert.match(validateFailure,/odysseySdTimedOutReadQuarantined\.load\(\)/);
+ assert.match(validateFailure,/no SPI teardown or retry/);
+ assert(validateFailure.indexOf('odysseySdTimedOutReadQuarantined.load()')<
+   validateFailure.indexOf('odysseySdReleaseLocked()'),'validation timeout quarantine before unmount');
+ assert.match(sd,/stop mount attempts: timed-out SD read\/write requires rail power cycle/);
  assert.match(sd,/odysseySdUnsafeToSleep=true;/);
  const mounted=sd.split('static bool odysseySdMountLocked(const char* reason,uint8_t attempts) {')[1]
    .split('void odysseyDetectSdCard()')[0];
