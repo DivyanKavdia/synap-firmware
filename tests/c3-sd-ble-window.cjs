@@ -79,3 +79,43 @@ test('media-v3 compact SD window requires a connection-bound selected-file token
  assert.doesNotMatch(transfer.split('static void streamSdWindow(const Request& request) {')[1].split('static void worker(void*) {')[0],/unlink\(|fwrite\(|removeFile\(|format_if_empty/);
  assert.match(ino,/p\[14\]=3;/);
 });
+
+
+test('C3 quarantine blocks remount and explicit recovery after live CMD17/CMD18 timeout',()=>{
+ const sd=load('firmware/shared/odyssey-sd-1631-detect.cpp');
+ // The logged CMD17 timeout happened during an already mounted 4 KiB read.
+ assert.match(sd,/static std::atomic<bool> odysseySdTimedOutReadQuarantined\{false\}/);
+ assert.match(sd,/error==ESP_ERR_TIMEOUT &&\s*\(odysseySdBootState\.load\(\)==1 \|\| odysseySdNativeCard!=nullptr\)/);
+ assert.match(sd,/cmd->opcode==17u \|\| cmd->opcode==18u/);
+ assert.match(sd,/odysseySdTimedOutReadQuarantined=true;/);
+ // Validation can time out *after* native mount but before bootState=ready.
+ const validateFailure=sd.split('if (!odysseySdValidateVfsLocked(reason,attempt)) {')[1]
+   .split('// Persist the field C3+SD divider')[0];
+ assert.match(validateFailure,/odysseySdTimedOutReadQuarantined\.load\(\)/);
+ assert.match(validateFailure,/no SPI teardown or retry/);
+ assert(validateFailure.indexOf('odysseySdTimedOutReadQuarantined.load()')<
+   validateFailure.indexOf('odysseySdReleaseLocked()'),'validation timeout quarantine before unmount');
+ assert.match(sd,/stop mount attempts: timed-out SD read\/write requires rail power cycle/);
+ assert.match(sd,/odysseySdUnsafeToSleep=true;/);
+ const mounted=sd.split('static bool odysseySdMountLocked(const char* reason,uint8_t attempts) {')[1]
+   .split('void odysseyDetectSdCard()')[0];
+ assert.match(mounted,/odysseySdTimedOutReadQuarantined\.load\(\)/);
+ assert.match(mounted,/return false;/);
+ const recovery=sd.split('bool odysseyRecoverSdCard(const char* reason) {')[1]
+   .split('// Explicit media-v1 operation 19')[0];
+ assert.match(recovery,/odysseySdReadTimeoutQuarantined\(\)/);
+ assert.match(recovery,/SD rail power-cycle required; recordings retained/);
+ assert.match(sd,/odysseySdTimedOutReadQuarantined=false;  \/\/ never cleared by an ordinary BLE read/);
+ assert.match(sd,/mount\.format_if_mount_failed=false/);
+ assert.match(ino,/odysseySdTimedOutReadQuarantined=true;/);
+});
+
+test('SD read-timeout telemetry remains RAM-only, compact and preserves legacy fields',()=>{
+ assert.match(transfer,/case 29: \{/);
+ assert.match(transfer,/odysseySdReadTimeoutQuarantined\(\)\?16u:0u/);
+ assert.match(transfer,/odysseySdWriteTimeoutQuarantined\(\)\?32u:0u/);
+ assert.match(transfer,/readFlags/);
+ const section=transfer.split('case 29: {')[1].split('case 4:')[0];
+ assert.doesNotMatch(section,/fopen\(|fread\(|unlink\(|fwrite\(|odysseyRecoverSdCard\(/);
+ assert.match(ino,/odysseySdReadTimeoutQuarantined\(\)/);
+});

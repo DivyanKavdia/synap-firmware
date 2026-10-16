@@ -699,7 +699,12 @@ static void worker(void*) {
           static_cast<unsigned long>(odysseySdWireFaultElapsedMs()),
           static_cast<unsigned long>(sdBleFaultReadGot),
           static_cast<unsigned long>(sdBleFaultReadWant),
-          static_cast<unsigned long>(sdBleFaultReadFlags));
+          // Bits 0..3 retain their original read-failure semantics.
+          // Bit4=timed-out CMD17/18 read, bit5=timed-out CMD24/25 write.
+          // No additional JSON keys: op29 must fit its 480-byte BLE reply.
+          static_cast<unsigned long>(sdBleFaultReadFlags |
+            (odysseySdReadTimeoutQuarantined()?16u:0u) |
+            (odysseySdWriteTimeoutQuarantined()?32u:0u)));
         if (n<0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
