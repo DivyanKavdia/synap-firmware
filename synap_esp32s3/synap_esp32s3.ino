@@ -2201,12 +2201,18 @@ void controlTask(void* parameter) {
     // A restored link cannot transmit until RESUME binds it to the app journal.
     if(recoveryFinishing.load() && deviceConnected.load() && !recoveryWaiting.load() && (!recoveryCanSend() && !transmitterActive.load() && uint32_t(millis()-recoveryFinishAt)>150u))stopStreaming();
     if(recoveryFinishing.load() && uint32_t(millis()-recoveryFinishAt)>35000u)stopStreaming(ErrorCode::TRANSPORT_CHANGED);
-    if (deviceConnected.load() && streamingEnabled.load() && !recoveryWaiting.load()) {
+    // Offline C3 SD sync is BLE-connected but does not stream microphone audio.
+    // Poll the negotiated MTU while idle too, otherwise attValueCapacity stays
+    // at 20 and every large media-v3 notification silently falls back to op4.
+    // Preserve the existing recovery pause and active-audio MTU shrink guard.
+    if (deviceConnected.load() &&
+        (!streamingEnabled.load() || !recoveryWaiting.load())) {
       uint16_t liveMtu=bleServer->getPeerMTU(bleServer->getConnId());
       if (liveMtu<23) liveMtu=23;
       if (liveMtu!=peerMtu) {
         const uint16_t liveCapacity=liveMtu-3;
-        if (liveCapacity < uint16_t(AUDIO_HEADER_BYTES+audioPayloadBytes.load())) {
+        if (streamingEnabled.load() &&
+            liveCapacity < uint16_t(AUDIO_HEADER_BYTES+audioPayloadBytes.load())) {
           stopStreaming(ErrorCode::TRANSPORT_CHANGED);
         } else {
           peerMtu=liveMtu;attValueCapacity=liveCapacity;
