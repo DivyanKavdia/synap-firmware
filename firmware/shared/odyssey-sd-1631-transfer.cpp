@@ -679,7 +679,7 @@ static void worker(void*) {
         // previous op4/op12 requests; it must remain safe after mount loss.
         char detail[480];
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"reads\":%lu,\"cacheHits\":%lu,\"diskFills\":%lu,\"lastRequestedOffset\":%lu,\"lastOkOffset\":%lu,\"faultOffset\":%lu,\"windowRequests\":%lu,\"mtuFallbacks\":%lu,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireMs\":%lu,\"readGot\":%lu,\"readWant\":%lu,\"readFlags\":%lu}",
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"ioOp\":%u,\"ioStep\":%u,\"ioErr\":%ld,\"reads\":%lu,\"cacheHits\":%lu,\"diskFills\":%lu,\"lastRequestedOffset\":%lu,\"lastOkOffset\":%lu,\"faultOffset\":%lu,\"windowRequests\":%lu,\"mtuFallbacks\":%lu,\"wireCmd\":%lu,\"wireErr\":%lu,\"wireArg\":%lu,\"wireMs\":%lu,\"readGot\":%lu,\"readWant\":%lu,\"readFlags\":%lu,\"readQuarantine\":%u,\"writeQuarantine\":%u}",
           unsigned(odysseySdDetectionState()),
           unsigned(odysseySdProbeState()),
           unsigned(sdLastMediaFaultOperation.load()),
@@ -699,7 +699,9 @@ static void worker(void*) {
           static_cast<unsigned long>(odysseySdWireFaultElapsedMs()),
           static_cast<unsigned long>(sdBleFaultReadGot),
           static_cast<unsigned long>(sdBleFaultReadWant),
-          static_cast<unsigned long>(sdBleFaultReadFlags));
+          static_cast<unsigned long>(sdBleFaultReadFlags),
+          unsigned(odysseySdReadTimeoutQuarantined()?1u:0u),
+          unsigned(odysseySdWriteTimeoutQuarantined()?1u:0u));
         if (n<0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
