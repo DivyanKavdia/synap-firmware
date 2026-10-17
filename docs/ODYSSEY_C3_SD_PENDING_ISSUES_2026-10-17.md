@@ -56,7 +56,7 @@
 - BLE-only firmware path, no SD Wi-Fi AP.
 - Serialised storage mutex between offline recording and BLE operations.
 - New 8.3 `Rxxxxxxx.WAV` files in FAT root; no `mkdir /synap` for new takes; legacy `/synap` indexed read-only.
-- 4 KiB direct append writes on native ESP-IDF SDSPI + FatFs; SD SPI 800 kHz.
+- Build 2248 candidate uses **2 KiB** four-sector CMD25 append writes on native ESP-IDF SDSPI + FatFs; SD SPI remains 800 kHz. Earlier Build 2240 used 4 KiB eight-sector CMD25 writes.
 - Native first-fault transaction ancestry preserved across post-write CMD13 checks.
 - Any uncertain write quarantines the same-powered SD controller; no follow-on `fclose` or automatic format/retry.
 - BLE transfer does not delete SD originals; recorder health op34 reads RAM without further SD traffic.
@@ -65,3 +65,15 @@
 ## Release/rollout note
 
 The associated early-checkpoint PR is a **controlled experiment**. Production publishing must pass GitHub Actions and the C3+SD target check, and the candidate must not be represented as a proven reliability fix before physical acceptance. Firmware OTA updates the **application** only; it does not repartition the existing enhanced C3+SD OTA table or deploy itself to an offline pendant. Archive diagnostic logs and card images before destructive testing.
+
+## Build 2248 follow-up — 2026-10-17
+
+Production OTA **`synap-os1-build2248`** published for `esp32c3-supermini-4m-sd-ota` from commit `b89f83d62c47742b336b1a7d5ca264cd6b4f9783`. Regression tests, target compilation, release binary provenance, CORS and manifest verification passed. This publishes an **application-only OTA** and does not physically update the pendant until a PWA firmware update completes.
+
+**Change:** C3 offline recorder uses **2048 bytes per sequential `fwrite`**, yielding four contiguous SD sectors per native CMD25 operation instead of eight sectors (4096 bytes). This is a controlled SD-card compatibility attempt to bound a single programming transaction; SPI remains 800 kHz. Existing early 256 KiB / 60-second FatFs sync, WAV integrity check after clean STOP, BLE-only operation, no auto-format/delete, quarantine after uncertain writes, and no same-rail recovery remain unchanged. Tail zero-padding to sector-multiple is now at most 64 ms.
+
+**Historical versus current telemetry:** latest field diagnostics on installed Build 2240 showed **retained** stage 66 / CMD25 / `ESP_ERR_TIMEOUT=263` at 12288-byte offset, and a later **live** mount state 1, probe 6, readQuarantine 0, writeQuarantine 0, faultLed 0, no native failure in that boot. Retained NVS fault details can persist across successful cold mounts and firmware updates, so repeat op27 is not new failure evidence. A **fresh** op34 diagnostic taken immediately after red pulses is the needed discriminator.
+
+**Unknown:** Whether four-sector CMD25 transactions actually eliminate or reduce failures on the user's microSD card has not been tested remotely and **cannot be declared resolved**. Shorter writes increase number of transactions and may exacerbate marginal hardware. A second genuine FAT32 card, verified SD pull-ups and oscilloscope capture remain next steps if fresh CMD25 timeout persists.
+
+**Acceptance test:** Before treating offline recording as dependable, first test a 30-second offline WAV, clean STOP, BLE sync and playback; immediately follow with a 10-minute recording and another take without power cycling, then long-duration/back-to-back acceptance as above. Log `faultLed,readQuarantine,writeQuarantine,recording,stage,bytes` from RAM op34 and `wireCmd,wireErr,wireLen,wireMs,recordBytes,failureOffset` from op27. The *new* wire length is expected to be **2048** for recorder PCM CMD25 failures, while existing historical errors may remain **4096**.
