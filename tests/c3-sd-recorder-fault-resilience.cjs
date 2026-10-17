@@ -4,6 +4,22 @@ const rec=fs.readFileSync('firmware/shared/odyssey-sd-1631-recording.cpp','utf8'
 const detect=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8');
 const tx=fs.readFileSync('firmware/shared/odyssey-sd-1631-transfer.cpp','utf8');
 const ino=fs.readFileSync('synap_esp32s3/synap_esp32s3.ino','utf8');
+test('zero PCM cannot reach the saved message as a successful take',()=>{
+ const {nativeTest}=require('./support/native.cjs');
+ const guard=rec.slice(rec.indexOf('  if (!failed && bytes==0)'),rec.indexOf('  // A successful fwrite/fclose'));
+ nativeTest(`#include <cassert>
+ int main(){
+   bool failed=false; unsigned bytes=0,failureStage=0;
+   ${guard}
+   assert(failed && failureStage==48);
+   failed=true; failureStage=70;
+   ${guard}
+   assert(failed && failureStage==70);
+   failed=false; failureStage=0; bytes=4096;
+   ${guard}
+   assert(!failed && failureStage==0);
+ }`);
+});
 test('any uncertain PCM/checkpoint write quarantines before close or remount',()=>{
  assert.match(rec,/bool uncertainSdWrite=false/);
  assert.match(rec,/writeError!=ENOSPC\) uncertainSdWrite=true/);

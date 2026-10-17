@@ -6,6 +6,46 @@
 
 ## Evidence and root-cause boundaries
 
+### Follow-up implementation status
+
+The 256 KiB checkpoint is already present on firmware main at `2241dc2`.
+The follow-up correction makes a zero-PCM take a failure before the saved/failed
+log is emitted. No write retry, timeout extension, unsafe close, automatic
+deletion, Wi-Fi, pin change or partition change is introduced.
+
+Companion PWA follow-up: shell227 reads op34 before explicit recovery, refuses
+op14 when either quarantine bit is set or offline finalization is active, and
+scopes cached health to the exact BLE connection. Invalid/unavailable health
+cannot authorize a C3 remount. Discovery also reads health without recovering.
+Settings disable recovery/capacity/raw probes/format when quarantine is known;
+RAM diagnostics remain available. Library deletion and post-import deletion
+offers are disabled for C3. A zero-length entry is described as lacking a
+committed audio length, not proof that no PCM sectors were written.
+
+| Issue | Closure status |
+| --- | --- |
+| CMD25 timeout | OPEN: no demonstrated root-cause fix; card/board measurements required |
+| Power-cycle versus deletion | OPEN: controlled test below required |
+| Metadata durability | IMPLEMENTED EXPERIMENT: early checkpoint already on main; interrupted-card validation outstanding |
+| Finalization | Software fail-closed safeguards retained; empty-take success log corrected. Unsynced-tail recovery remains unproven |
+| PWA maintenance UX | Follow-up implementation and regression tests prepared; real-phone validation outstanding |
+| Endurance/back-to-back | OPEN: no physical results obtained in this software session |
+| Bluefy background/throughput | OPEN: OS suspension cannot be prevented by a web app; existing bounded transfer and integrity protections retained |
+| Power/mechanical | OPEN: SD-pad scope traces, contact/pull-up/module checks required |
+
+For each field run retain: exact firmware build, PWA shell, card make/model and
+capacity, power source, start/stop times, LED count, op34 before/after, complete
+op27 first-fault report, imported byte count and integrity result, and whether
+the next recording worked without reset. Use one variable change per trial.
+Never label a test passed solely because a mount or BLE import succeeded.
+
+For the 0 B discriminator, first export diagnostics; then use a disposable card
+and leave the file intact. Disconnect both USB and battery and verify SD VCC
+has fallen to 0 V before reconnecting. Compare recording after that cold start
+with the prior failure; do not delete/format as part of this trial. A successful
+cold restart supports a controller-state explanation but does not prove the
+card or board can sustain the endurance workload.
+
 | Observation | Evidence | Interpretation | Confidence |
 | --- | --- | --- | --- |
 | Recorder stops during purple LED cycle, then multiple red pulses | Field reports on 2026-10-17. Current LED code maps 2 red pulses to SD/write; 3 to mic; 4 to controller unsafe/start refused. | Record task is failing; LED count and fresh recorder diagnostic are still needed to classify the *latest* event. | High for failure, unconfirmed exact stage |
