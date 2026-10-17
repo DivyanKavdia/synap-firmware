@@ -2603,6 +2603,12 @@ static std::atomic<uint32_t> odysseyWirePriorCmd{UINT32_MAX};
 static std::atomic<uint32_t> odysseyWirePriorSuccessCmd{UINT32_MAX};
 static std::atomic<uint32_t> odysseyWireGoodWrites{0};
 static std::atomic<uint32_t> odysseyWireWritesAtFailure{0};
+// In ESP-IDF 5.5 SDSPI, a successful sector write can be followed by two
+// CMD13 status checks. Last-successful-opcode alone becomes 13 after the
+// first status and loses provenance when the second status fails.
+// Preserve the parent data-program command across at most two status checks.
+static std::atomic<uint8_t> odysseyPostWriteStatusSlots{0};
+static std::atomic<uint32_t> odysseyPostWriteParent{UINT32_MAX};
 // A timed-out or invalid-response CMD24/CMD25 (or following CMD13) can leave the
 // always-powered SD controller busy/programming. No further filesystem I/O,
 // unmount or same-rail recovery is permitted before a real power cycle.
@@ -2638,6 +2644,8 @@ void odysseySdClearWireFault() {
   odysseyWirePriorSuccessCmd=UINT32_MAX;
   odysseyWireGoodWrites=0;
   odysseyWireWritesAtFailure=0;
+  odysseyPostWriteStatusSlots=0;
+  odysseyPostWriteParent=UINT32_MAX;
 }
 uint32_t odysseySdWireFaultCmd() {
   const uint32_t code=odysseyWireCmdPlusOne.load();
@@ -3355,15 +3363,32 @@ static bool odysseySdBeginLocked(bool explicitlyProvisionFat=false) {
   // Stopwatch surrounds the EXACT original native transaction. Duration
   // near cmd->timeout_ms suggests write-program busy; a short failure may be
   // command/data-response related. No extra SD command or delay is added.
+  const uint32_t opcode=cmd?cmd->opcode:UINT32_MAX;
+  // Track exactly the write's native post-program status commands. This is
+  // observational only: no extra command, retry, or timeout adjustment.
+  if (opcode==24u || opcode==25u) {
+    odysseyPostWriteParent=opcode;
+    odysseyPostWriteStatusSlots=2;
+  } else if (opcode!=13u) {
+    odysseyPostWriteParent=UINT32_MAX;
+    odysseyPostWriteStatusSlots=0;
+  }
+  const uint32_t writeParent=(opcode==13u && odysseyPostWriteStatusSlots.load())
+    ?odysseyPostWriteParent.load():UINT32_MAX;
   const uint32_t startedAt=millis();
   const esp_err_t result=sdspi_host_do_transaction(slot,cmd);
+  if (writeParent!=UINT32_MAX) {
+    const uint8_t slots=odysseyPostWriteStatusSlots.load();
+    odysseyPostWriteStatusSlots=slots?uint8_t(slots-1u):0u;
+  }
   const uint32_t elapsed=uint32_t(millis()-startedAt);
   if (cmd && cmd->opcode==13u) odysseyWireLastCmd13=cmd->response[0];
   const esp_err_t error=result!=ESP_OK?result:(cmd?cmd->error:ESP_FAIL);
   const uint32_t prior=odysseyWirePriorCmd.load();
   if (cmd && (error==ESP_ERR_TIMEOUT || error==ESP_ERR_INVALID_RESPONSE) &&
       (cmd->opcode==24u || cmd->opcode==25u ||
-       (cmd->opcode==13u && (prior==24u || prior==25u)))) {
+       (cmd->opcode==13u && (prior==24u || prior==25u ||
+         writeParent==24u || writeParent==25u)))) {
     odysseySdTimedOutWriteQuarantined=true;
     odysseySdUnsafeToSleep=true;
   }
@@ -3398,7 +3423,11 @@ static bool odysseySdBeginLocked(bool explicitlyProvisionFat=false) {
       odysseyWireElapsedMs=elapsed;
       odysseyWireBudgetMs=cmd->timeout_ms;
       odysseyWireDataLength=cmd->datalen;
-      odysseyWirePriorSuccessCmd=odysseyWirePriorCmd.load();
+      // wirePrev is the write command for either post-write CMD13.
+      // This survives NVS reboot and closes a previous false-safe warm
+      // remount path when the immediate prior successful opcode was CMD13.
+      odysseyWirePriorSuccessCmd=writeParent!=UINT32_MAX
+        ?writeParent:odysseyWirePriorCmd.load();
       odysseyWireWritesAtFailure=odysseyWireGoodWrites.load();
     }
   } else if (cmd && error==ESP_OK && !odysseyWireCmdPlusOne.load()) {

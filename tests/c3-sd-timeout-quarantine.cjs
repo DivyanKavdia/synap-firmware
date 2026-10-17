@@ -57,3 +57,19 @@ test('CMD24 invalid-response 264 quarantines an uncertain FAT write without a su
   assert(beforeClose>=0 && beforeClose<take.indexOf('if (fclose(file)!=0)'));
  }
 });
+
+test('second post-write CMD13 retains CMD25 ancestry and quarantines immediately',()=>{
+ for(const source of [detector,ino]){
+  assert.match(source,/odysseyPostWriteStatusSlots=2/);
+  assert.match(source,/const uint32_t writeParent=\(opcode==13u && odysseyPostWriteStatusSlots\.load\(\)\)/);
+  assert.match(source,/writeParent==24u \|\| writeParent==25u/);
+  assert.match(source,/odysseyWirePriorSuccessCmd=writeParent!=UINT32_MAX/);
+  assert.match(source,/odysseyPostWriteStatusSlots=0/);
+  assert.match(source,/odysseyPostWriteParent=UINT32_MAX/);
+  assert.doesNotMatch(source,/cmd->timeout_ms\s*=\s*5000/);
+ }
+ const take=recording.split('static void odysseyRecordTake() {')[1]
+   .split('static void odysseyRecordTask(void*) {')[0];
+ assert.match(take,/odysseySdQuarantineUncertainWrite\(\)/);
+ assert.match(take,/if \(file && \(odysseySdWriteTimeoutQuarantined\(\) \|\| uncertainSdWrite\)\)/);
+});
