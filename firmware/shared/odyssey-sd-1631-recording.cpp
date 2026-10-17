@@ -249,6 +249,7 @@ static void odysseyCaptureCreateFault(int err,const char* operation,uint8_t stag
 
 static void odysseyRecordTake() {
   odysseySdClearWireFault();  // first ACTUAL CMD fault of this take
+  odysseyMicRecoveryAttempts=0;
   synapSdClearWriteFaultCode();
   odysseyPersistedDriverFault=0;
   odysseyPersistedWriteErrno=0;
@@ -256,6 +257,7 @@ static void odysseyRecordTake() {
   odysseyPersistedWriteExpected=0;
   odysseyPersistedWriteFerror=0;
   bool failed=false;
+  bool uncertainSdWrite=false; // No FAT close/metadata writes after unknown write EIO
   uint8_t failureStage=0;
   uint32_t bytes=0;
   uint32_t lastCheckpointAt=millis();
@@ -336,6 +338,16 @@ static void odysseyRecordTake() {
           // starve I2S; three zero reads (often <250 ms) were treated as a
           // fatal microphone error. Allow one second before abandoning a take.
           if (uint32_t(millis()-noAudioSince)>=1000u) {
+            // Recover one intermittent microphone DMA stall, but never
+            // repeat indefinitely or mistake an SD timeout for an I2S fault.
+            if (!odysseyMicRecoveryAttempts.load() && !odysseyStopRequested.load()) {
+              odysseyMicRecoveryAttempts=1;
+              Serial.println("[MIC] local I2S stalled; controlled one-time restart");
+              stopMicrophone();
+              if (startMicrophone()) {
+                received=0;noAudioSince=millis();continue;
+              }
+            }
             failed=true;failureStage=43;break;
           }
           vTaskDelay(1);
@@ -368,6 +380,7 @@ static void odysseyRecordTake() {
             odysseyPersistedWriteFerror=ferror(file)?1u:0u;
             synapSdNoteNativeWriteError(odysseyBatchWriteFailureStage(writeError),writeError);
             odysseyPersistedDriverFault=synapSdWriteFaultCode();
+            if (writeError!=ENOSPC) uncertainSdWrite=true;
             failed=true;failureStage=odysseyBatchWriteFailureStage(writeError);
             Serial.printf("[SD] PCM batch write failed errno=%d stage=%u wrote=%u pcm=%lu\n",
               writeError,unsigned(failureStage),unsigned(written),
@@ -393,6 +406,7 @@ static void odysseyRecordTake() {
               odysseyPersistedWriteFerror=ferror(file)?1u:0u;
               synapSdNoteNativeWriteError(checkpointStage,checkpointErrno);
             odysseyPersistedDriverFault=synapSdWriteFaultCode();
+              uncertainSdWrite=true;
               failed=true;
               failureStage=checkpointStage;
               Serial.printf("[SD] WAV checkpoint failed stage=%u errno=%d pcm=%lu lastSynced=%lu\n",
@@ -418,7 +432,7 @@ static void odysseyRecordTake() {
   failed=true;failureStage=43;
 #endif
 
-  if (file && odysseySdWriteTimeoutQuarantined()) {
+  if (file && (odysseySdWriteTimeoutQuarantined() || uncertainSdWrite)) {
     // NEVER fclose/f_sync after a timed-out CMD24/CMD25. FatFs fclose can
     // itself write directory/FAT sectors, injecting new commands into a card
     // still asserting BUSY and turning one write failure into permanent loss
@@ -431,7 +445,7 @@ static void odysseyRecordTake() {
     odysseySdProbeStage=failureStage;
     odysseySdUnsafeToSleep=true;
     file=nullptr;
-    Serial.println("[SD] CMD24/CMD25 timeout: skip unsafe fclose, quarantine card until SD power-cycle; retain WAV prefix");
+    Serial.println("[SD] uncertain SD write: skip unsafe fclose/FAT updates; preserve WAV prefix for cold recovery");
   }
   if (file) {
     if (!failed && batchUsed) {
@@ -449,6 +463,7 @@ static void odysseyRecordTake() {
         odysseyPersistedWriteFerror=ferror(file)?1u:0u;
             synapSdNoteNativeWriteError(odysseyBatchWriteFailureStage(writeError),writeError);
             odysseyPersistedDriverFault=synapSdWriteFaultCode();
+        if (writeError!=ENOSPC) uncertainSdWrite=true;
         failed=true;failureStage=odysseyBatchWriteFailureStage(writeError);
         Serial.printf("[SD] final PCM batch failed errno=%d stage=%u wrote=%u expected=%u\n",
           writeError,unsigned(failureStage),unsigned(written),unsigned(sizeof(batch)));
@@ -469,7 +484,7 @@ static void odysseyRecordTake() {
     // with fclose(), which may issue another FatFs directory/CMD24 write to
     // a controller that is still busy programming. Keep the VFS descriptor
     // stranded until the genuine SD power cycle; no further SD I/O is safe.
-    if (odysseySdWriteTimeoutQuarantined()) {
+    if (odysseySdWriteTimeoutQuarantined() || uncertainSdWrite) {
       failed=true;
       if (!failureStage) failureStage=79;
       if (!odysseyPersistedWriteErrno.load()) odysseyPersistedWriteErrno=EIO;
@@ -544,7 +559,10 @@ static void odysseyRecordTake() {
     // that the SD card failed. Keep a still-mounted FAT volume accessible so
     // the user can delete incomplete WAVs. Only storage/verify faults revoke
     // SD readiness. Never remove or format a failed recording automatically.
-    const bool storageFailure=persistedStage!=43u && persistedStage!=48u;
+    const bool storageFailure=persistedStage!=43u && persistedStage!=48u &&
+      persistedStage!=52u && persistedStage!=68u; // ENOSPC is not a bus fault
+    odysseyRecorderFaultLedCode=persistedStage==43u?3u:
+      (odysseySdWriteTimeoutQuarantined()?4u:2u);
     if (storageFailure) {
       odysseySdBootState=2;
       odysseySdProbeStage=persistedStage;
@@ -553,6 +571,7 @@ static void odysseyRecordTake() {
     odysseyRecordFaultAt=millis();
   } else {
     odysseyPersistRecordFailure(0,0);
+    odysseyRecorderFaultLedCode=0;
     odysseySdBootState=1;
     odysseySdProbeStage=6;
   }
@@ -578,6 +597,7 @@ static void odysseyRecordTask(void*) {
     // after a recorded NAND program timeout; it risks compounding failure.
     const uint32_t finalizedAt=millis();
     odysseyRecordFaultAt=finalizedAt;
+    odysseyRecorderFaultLedCode=4;
     odysseySdSleepGuardUntil=finalizedAt+5000u;
     disconnectedAt=finalizedAt;
     odysseyRecording=false;
@@ -594,6 +614,7 @@ static void odysseyRecordTask(void*) {
     // Do not let one double-tap restart an already-known stuck-low card.
     const uint32_t finalizedAt=millis();
     odysseyRecordFaultAt=finalizedAt;
+    odysseyRecorderFaultLedCode=4;
     odysseySdSleepGuardUntil=finalizedAt+5000u;
     disconnectedAt=finalizedAt;
     odysseyRecording=false;
@@ -611,6 +632,7 @@ static void odysseyRecordTask(void*) {
     // hammer the continuously-powered SD with CMD0/CMD12.
     const uint32_t finalizedAt=millis();
     odysseyRecordFaultAt=finalizedAt;
+    odysseyRecorderFaultLedCode=4;
     odysseySdSleepGuardUntil=finalizedAt+5000u;
     disconnectedAt=finalizedAt;
     odysseyRecording=false;
@@ -625,6 +647,7 @@ static void odysseyRecordTask(void*) {
     Serial.println("[SD] one-gesture offline start: recovering storage before capture");
     if (!odysseyRecoverSdCard("touch")) {
       odysseyRecordFaultAt=millis();
+      odysseyRecorderFaultLedCode=4;
       // Keep the C3 awake through recovery teardown and a short SD settle.
       // The record-active flag is the sleep veto until cleanup has finished.
       const uint32_t finalizedAt=millis();
@@ -706,6 +729,7 @@ void odysseyToggleRecording() {
   odysseyStopRequested=false;
   odysseyRecordingStartedAt=millis();
   odysseyRecordFaultAt=0;
+  odysseyRecorderFaultLedCode=0;
   odysseyRecording=true;
   applyCpuPowerProfile(true);
   updateStatusLed(true);
@@ -713,6 +737,7 @@ void odysseyToggleRecording() {
     odysseyRecording=false;
     odysseyStopRequested=false;
     odysseyRecordFaultAt=millis();
+    odysseyRecorderFaultLedCode=4;
     applyCpuPowerProfile(false);
     updateStatusLed(true);
     Serial.println("[SD] local audio task allocation failed");
