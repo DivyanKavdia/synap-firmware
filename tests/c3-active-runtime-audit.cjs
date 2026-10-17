@@ -40,7 +40,7 @@ test('C3 SD 1 MHz guarded boot follows BLE advertising; no silent auto-format',(
 test('offline double tap owns SD WAV and BLE START waits for recorder finalize',()=>{
   const take=shared('odyssey-sd-1631-recording.cpp'),control=shared('ble-control.cpp'),
     session=shared('audio-session.cpp'),power=shared('power.cpp');
-  assert.match(take,/alignas\(4\) static uint8_t batch\[4096\]/);
+  assert.match(take,/alignas\(4\) static uint8_t batch\[ODYSSEY_SD_RECORD_BATCH_BYTES\]/);
   assert.match(take,/OdysseySdGuard storage;/);
   assert.match(take,/odysseyWavHeader\(header,0\)/);
   assert.match(take,/fclose\(file\)/);
