@@ -6,7 +6,7 @@ const ino=fs.readFileSync('synap_esp32s3/synap_esp32s3.ino','utf8');
 test('shipping C3 BLE SD maintenance is fail-closed BEFORE any FAT operation',()=>{
   assert.match(tx,/static constexpr bool ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
   const worker=tx.split('static void worker(void*) {')[1].split('class CommandCallbacks :')[0];
-  const guard=worker.indexOf('if (!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED &&');
+  const guard=worker.indexOf('if ((!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED &&');
   const mutation=worker.indexOf('case 17:');
   assert(guard>=0 && mutation>guard,'reject destructive commands before worker enters switch');
   for(const op of [17,18])

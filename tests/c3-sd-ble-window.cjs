@@ -53,7 +53,7 @@ test('C3 optional opcode31 tunes paced read-only windows without changing legacy
  assert.match(transfer,/notifySdWindow\(request,2,OK,fullSize,offset\)/);
  assert.match(transfer,/const size_t pathStart=request\.compact\?16u:\(adaptive\?12u:\(fast\?11u:10u\)\)/);
  assert.match(transfer,/if \(adaptive\) request\.paceMs=std::max\(uint8_t\(8\),std::min\(uint8_t\(15\),p\[11\]\)\)/);
- assert.match(transfer,/if \(!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED &&/);
+ assert.match(transfer,/if \(\(!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED &&/);
  assert.match(transfer,/static constexpr bool ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
  assert.match(transfer,/const TickType_t pacing=pdMS_TO_TICKS\(paceMs\)/);
  const mode=transfer.split('static void streamSdWindow(const Request& request) {')[1]

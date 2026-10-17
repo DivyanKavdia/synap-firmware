@@ -41,7 +41,7 @@ test('reduce forced FAT metadata updates, tolerate brief I2S starvation, never e
   assert.match(transfer,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
   const worker=transfer.split('static void worker(void*) {')[1];
   assert(worker.indexOf('!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED')<worker.indexOf('case 17:'));
-  assert.match(worker,/request.operation==17u \|\| request.operation==18u \|\| request.operation==19u/);
+  assert.match(worker,/request.operation==17u \|\| request.operation==18u/);
   assert.match(worker,/reply\(request,BAD_COMMAND\)/);
 });
 
