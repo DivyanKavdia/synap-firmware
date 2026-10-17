@@ -71,8 +71,8 @@ test('single 256 KiB early checkpoint and 60-second periodic FatFs checkpoints f
  assert(batch.indexOf('bytes+=batchPcmBytes')<batch.indexOf('odysseyCheckpointWav(file,checkpointErrno)'));
  assert.match(batch,/firstCheckpointDue=checkpointedPcmBytes==0u/);
  assert.match(batch,/bytes>=ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES/);
- assert.match(batch,/periodicCheckpointDue=[\\s\\S]*?ODYSSEY_SD_CHECKPOINT_INTERVAL_MS/);
- assert.match(batch,/if \\(firstCheckpointDue \\|\\| periodicCheckpointDue\\)/);
+ assert.match(batch,/periodicCheckpointDue=[\s\S]*?ODYSSEY_SD_CHECKPOINT_INTERVAL_MS/);
+ assert.match(batch,/if \(firstCheckpointDue \|\| periodicCheckpointDue\)/);
  assert.match(batch,/if \(checkpointStage\) \{[\s\S]*?failed=true;[\s\S]*?failureStage=checkpointStage;[\s\S]*?break;/);
  assert.match(batch,/odysseyPersistedWriteErrno=uint32_t\(checkpointErrno\)/);
  assert.match(batch,/checkpointedPcmBytes=bytes;/);
