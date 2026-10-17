@@ -3681,7 +3681,9 @@ bool odysseyInitializeSdCardBeforeBle() {
   // still be programming. A true cold power-on may try one normal mount,
   // followed only by guarded/passive recovery. User op14 remains explicit.
   const uint8_t previousRecordStage=odysseyLastRecordFailureStage();
-  const bool previousStorageFault=previousRecordStage>=44u && previousRecordStage!=48u &&
+  const bool previousStorageFault=previousRecordStage>=44u &&
+    previousRecordStage!=48u && previousRecordStage!=52u &&
+    previousRecordStage!=68u &&
     !odysseySdHistoricalFaultResolved();
   if (previousStorageFault) {
     odysseySdUnsafeToSleep=true;
@@ -5523,7 +5525,8 @@ static void worker(void*) {
         // Historical or current write faults require non-destructive recovery,
         // not a FAT rebuild that could erase still-recoverable recordings.
         const uint8_t recordedFault=odysseyLastRecordFailureStage();
-        if ((recordedFault>=40u && recordedFault!=48u) ||
+        if ((recordedFault>=40u && recordedFault!=43u && recordedFault!=48u &&
+             recordedFault!=52u && recordedFault!=68u) ||
             odysseySdReadTimeoutQuarantined() ||
             odysseySdWriteTimeoutQuarantined()) { error=BUSY;break; }
         // The C3+SD divider can report untrusted readings. As with manual

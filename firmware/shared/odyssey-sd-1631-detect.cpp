@@ -1173,7 +1173,9 @@ bool odysseyInitializeSdCardBeforeBle() {
   // still be programming. A true cold power-on may try one normal mount,
   // followed only by guarded/passive recovery. User op14 remains explicit.
   const uint8_t previousRecordStage=odysseyLastRecordFailureStage();
-  const bool previousStorageFault=previousRecordStage>=44u && previousRecordStage!=48u &&
+  const bool previousStorageFault=previousRecordStage>=44u &&
+    previousRecordStage!=48u && previousRecordStage!=52u &&
+    previousRecordStage!=68u &&
     !odysseySdHistoricalFaultResolved();
   if (previousStorageFault) {
     odysseySdUnsafeToSleep=true;

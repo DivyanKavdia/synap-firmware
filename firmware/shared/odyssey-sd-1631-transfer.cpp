@@ -834,7 +834,8 @@ static void worker(void*) {
         // Historical or current write faults require non-destructive recovery,
         // not a FAT rebuild that could erase still-recoverable recordings.
         const uint8_t recordedFault=odysseyLastRecordFailureStage();
-        if ((recordedFault>=40u && recordedFault!=48u) ||
+        if ((recordedFault>=40u && recordedFault!=43u && recordedFault!=48u &&
+             recordedFault!=52u && recordedFault!=68u) ||
             odysseySdReadTimeoutQuarantined() ||
             odysseySdWriteTimeoutQuarantined()) { error=BUSY;break; }
         // The C3+SD divider can report untrusted readings. As with manual
