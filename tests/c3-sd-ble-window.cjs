@@ -35,7 +35,7 @@ test('C3 notifications are paced, bounded, explicit-path, and MTU safe',()=>{
   assert.match(transfer,/request\.connection==connectionGeneration\.load\(\)/);
 });
 test('C3 recorder, safe sleep, transport fallback and OTA size remain unchanged',()=>{
-  assert.match(ino,/alignas\(4\) static uint8_t batch\[4096\]/);
+  assert.match(ino,/alignas\(4\) static uint8_t batch\[ODYSSEY_SD_RECORD_BATCH_BYTES\]/);
   assert.match(ino,/ODYSSEY_SD_DATA_FREQ_HZ=800000u/);
   assert.match(ino,/bool odysseyPrepareSdForPowerTransition\(uint32_t timeoutMs\)/);
   assert.match(ino,/streamSdWindow\(request\)/);
