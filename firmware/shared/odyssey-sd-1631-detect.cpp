@@ -809,7 +809,7 @@ static uint8_t odysseySdQuiesceLocked(uint32_t budgetMs) {
   return 1;
 }
 
-static bool odysseySdBeginLocked() {
+static bool odysseySdBeginLocked(bool explicitlyProvisionFat=false) {
   // ESP-IDF SDSPI host, not Arduino SD.begin(). The card is never formatted
   // or repartitioned, including after failed mount or watchdog reset.
   ++odysseySdBeginAttempts;
@@ -897,7 +897,8 @@ static bool odysseySdBeginLocked() {
   device.host_id=ODYSSEY_SD_HOST;
   device.gpio_cs=static_cast<gpio_num_t>(ODYSSEY_SD_CS);
   esp_vfs_fat_sdmmc_mount_config_t mount{};
-  mount.format_if_mount_failed=false;
+  mount.format_if_mount_failed=false; // Normal boot/recovery remains read-only
+  if (explicitlyProvisionFat) mount.format_if_mount_failed=true; // operator-only emergency FAT rescue
   mount.max_files=ODYSSEY_SD_MAX_OPEN_FILES;
   mount.allocation_unit_size=4096; // ignored for an existing FAT filesystem
   // FatFs disk_status_check_enable issues a *separate* CMD13 before ordinary
@@ -1007,6 +1008,13 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
 
   bool mounted=odysseySdBeginLocked();
   if (!mounted) {
+    // A responding SD card with an unmountable FAT filesystem is NOT the
+    // same as failed SD SPI initialization. Never hammer CMD0 to repair FAT.
+    if (odysseySdLastMountError.load()==ESP_FAIL) {
+      odysseySdBootState=2;odysseySdProbeStage=3;
+      Serial.println("[SD] card initialized, FAT mount failed; preserving files");
+      return false;
+    }
     const uint8_t bitBangCmd0=odysseySdBitBangRecoverLocked(reason);
     // If direct GPIO recovery returns the card to SPI idle, retry the exact
     // stock Arduino path once. No formatting or media mutation is performed.
@@ -1081,6 +1089,7 @@ static bool odysseySdMountLocked(const char* reason,uint8_t attempts) {
   }
   for (uint8_t attempt=1;attempt<=attempts;++attempt) {
     if (odysseySdMountOnceLocked(reason,attempt)) return true;
+    if (odysseySdProbeStage.load()==3) break; // Do not repeatedly probe an unmountable FAT
     if (odysseySdTimedOutReadQuarantined.load() ||
         odysseySdTimedOutWriteQuarantined.load()) {
       Serial.println("[SD] stop mount attempts: timed-out SD read/write requires rail power cycle");
@@ -1205,6 +1214,50 @@ bool odysseyRecoverSdCard(const char* reason) {
       !odysseySdReadTimeoutQuarantined())
     odysseySdMarkHistoricalFaultResolved();
   return recovered;
+}
+
+// An explicit emergency FAT rescue may provision a NEW filesystem only when
+// a physically cold-booted card completed SD SPI initialization but FAT failed.
+// This can erase ALL original recordings and is NEVER used during normal boot.
+// An MCU software reset does not power-cycle an always-powered SD controller.
+static std::atomic<bool> odysseySdEmergencyProvisionAttempted{false};
+esp_err_t odysseySdEmergencyProvisionFat() {
+  OdysseySdGuard guard(pdMS_TO_TICKS(5000));
+  if (!guard || odysseySdEmergencyProvisionAttempted.load() ||
+      esp_reset_reason()!=ESP_RST_POWERON ||
+      odysseySdReady() || odysseySdProbeStage.load()!=3 ||
+      odysseySdLastMountError.load()!=ESP_FAIL ||
+      odysseySdNativeCard || odysseySdNativeBusInitialized ||
+      odysseySdTimedOutReadQuarantined.load() ||
+      odysseySdTimedOutWriteQuarantined.load() ||
+      odysseySdControllerBusyLow() ||
+      odysseyRecording.load() || streamingEnabled.load() ||
+      otaBusy() || sleepPending || odysseySdFormatting())
+    return ESP_ERR_INVALID_STATE;
+
+  // One attempt per physical boot: never loop a potentially partial format.
+  odysseySdEmergencyProvisionAttempted=true;
+  odysseySdFormatInProgress=true;
+  odysseySdBootState=0;odysseySdProbeStage=0;
+  Serial.println("[SD] EXPLICIT emergency FAT rescue may erase ALL recordings");
+  const bool initialized=odysseySdBeginLocked(true);
+  const bool verified=initialized &&
+    odysseySdValidateVfsLocked("emergency-format",1);
+  if (!verified) {
+    odysseySdBootState=2;odysseySdProbeStage=3;
+    odysseySdUnsafeToSleep=true;
+    odysseySdFormatInProgress=false;
+    Serial.println("[SD] emergency FAT rescue FAILED; do not repeat this boot");
+    return ESP_FAIL;
+  }
+  odysseySdBootState=1;odysseySdProbeStage=6;
+  odysseySdLastMountError=ESP_OK;
+  odysseySdUnsafeToSleep=false;
+  odysseySdSleepGuardUntil=millis()+5000u;
+  odysseySdMarkHistoricalFaultResolved(); // retain first-fault journal
+  odysseySdFormatInProgress=false;
+  Serial.println("[SD] emergency FAT rescue verified; inspect before recording");
+  return ESP_OK;
 }
 
 // Explicit media-v1 operation 19 only. The SD must ALREADY be FAT-mounted;
