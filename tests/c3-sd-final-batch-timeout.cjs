@@ -12,7 +12,7 @@ test('C3 final padded write does not fclose a card quarantined by CMD25 timeout'
       .split('static void odysseyRecordTask(void*) {')[0];
     assert(take,'missing active C3 offline recorder');
     const tail=take.indexOf('if (!failed && batchUsed) {');
-    const check=take.indexOf('if (odysseySdWriteTimeoutQuarantined()) {',tail);
+    const check=take.indexOf('if (odysseySdWriteTimeoutQuarantined() || uncertainSdWrite) {',tail);
     const close=take.indexOf('if (fclose(file)!=0)',tail);
     assert(tail>=0 && check>tail && close>check,
       'recheck write timeout after final padded 4 KiB fwrite, BEFORE fclose');
@@ -21,7 +21,7 @@ test('C3 final padded write does not fclose a card quarantined by CMD25 timeout'
     assert.match(gate,/odysseySdUnsafeToSleep=true/);
     assert.match(gate,/file=nullptr/);
     assert.match(gate,/else \{\s*errno=0/);
-    assert.match(take,/if \(file && odysseySdWriteTimeoutQuarantined\(\)\)/,
+    assert.match(take,/if \(file && \(odysseySdWriteTimeoutQuarantined\(\) \|\| uncertainSdWrite\)\)/,
       'initial fast-fail after a mid-take write/checkpoint timeout stays intact');
     assert.match(take,/memset\(batch\+batchUsed,0,sizeof\(batch\)-batchUsed\)/,
       'preserve append-only final multi-sector batch');

@@ -22,9 +22,9 @@ test('first SD write-timeout abort never fclose nor attempt a second write on st
   for(const source of [recording,ino]){
     const take=source.split('static void odysseyRecordTake() {')[1].split('static void odysseyRecordTask(void*) {')[0];
     assert(take);
-    assert.match(take,/if \(file && odysseySdWriteTimeoutQuarantined\(\)\) \{/);
+    assert.match(take,/if \(file && \(odysseySdWriteTimeoutQuarantined\(\) \|\| uncertainSdWrite\)\) \{/);
     assert.match(take,/file=nullptr/);
-    const quarantine=take.indexOf('if (file && odysseySdWriteTimeoutQuarantined())');
+    const quarantine=take.indexOf('if (file && (odysseySdWriteTimeoutQuarantined() || uncertainSdWrite))');
     const close=take.indexOf('if (fclose(file)!=0)');
     assert(quarantine>=0 && quarantine<close,'quarantine before potentially blocking fclose');
     assert.match(take,/odysseySdUnsafeToSleep=true/);
@@ -53,7 +53,7 @@ test('CMD24 invalid-response 264 quarantines an uncertain FAT write without a su
  for(const source of [recording,ino]){
   assert.match(source,/odysseyLastWireError\(\)==uint32_t\(ESP_ERR_INVALID_RESPONSE\)/);
   const take=source.split('static void odysseyRecordTake() {')[1].split('static void odysseyRecordTask(void*) {')[0];
-  const beforeClose=take.indexOf('if (odysseySdWriteTimeoutQuarantined()) {',take.indexOf('if (!failed && batchUsed) {'));
+  const beforeClose=take.indexOf('if (odysseySdWriteTimeoutQuarantined() || uncertainSdWrite) {',take.indexOf('if (!failed && batchUsed) {'));
   assert(beforeClose>=0 && beforeClose<take.indexOf('if (fclose(file)!=0)'));
  }
 });

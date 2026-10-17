@@ -21,7 +21,7 @@ test('shipping C3 BLE SD maintenance is fail-closed BEFORE any FAT operation',()
   assert.match(tx,/case 32:/,'read-only SD FAT capacity remains');
   assert.match(tx,/ODYSSEY_C3_SD_EXPLICIT_FORMAT_ENABLED=true/);
   assert.match(tx,/request.offset!=ODYSSEY_C3_SD_FORMAT_TOKEN/);
-  assert.match(tx,/recordedFault>=40u && recordedFault!=48u/);
+  assert.match(tx,/recordedFault>=40u && recordedFault!=43u && recordedFault!=48u/ );
   assert.match(ino,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
 });
 
