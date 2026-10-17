@@ -12,7 +12,8 @@ test('first native C3 timeout captures transaction timing without mutating SD pr
   assert.match(cb,/odysseyWireElapsedMs=elapsed;/);
   assert.match(cb,/odysseyWireBudgetMs=cmd->timeout_ms;/);
   assert.match(cb,/odysseyWireDataLength=cmd->datalen;/);
-  assert.match(cb,/odysseyWirePriorSuccessCmd=odysseyWirePriorCmd.load\(\);/);
+  assert.match(cb,/odysseyWirePriorSuccessCmd=writeParent!=UINT32_MAX/);
+  assert.match(cb,/\?writeParent:odysseyWirePriorCmd\.load\(\)/);
   assert.match(cb,/odysseyWireWritesAtFailure=odysseyWireGoodWrites.load\(\);/);
   assert.match(cb,/odysseyWireCmdPlusOne.compare_exchange_strong\(expected,cmd->opcode\+1u\)/);
   assert.doesNotMatch(cb,/vTaskDelay|delay\(|fwrite|fopen|sdmmc_send_cmd\(|spi_device_transmit|odysseyRecoverSdCard/);

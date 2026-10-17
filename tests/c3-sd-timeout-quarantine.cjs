@@ -9,7 +9,7 @@ test('C3 quarantines a physical CMD24/25 program timeout without reset or remoun
   for(const source of [detector,ino]) {
     assert.match(source,/odysseySdTimedOutWriteQuarantined=true/);
     assert.match(source,/cmd->opcode==24u \|\| cmd->opcode==25u/);
-    assert.match(source,/cmd->opcode==13u && \(prior==24u \|\| prior==25u\)/);
+    assert.match(source,/cmd->opcode==13u && \(prior==24u \|\| prior==25u \|\|[\s\S]*?writeParent==24u \|\| writeParent==25u\)\)\)/);
     assert.match(source,/if \(odysseySdWriteTimeoutQuarantined\(\) \|\|\s*odysseySdReadTimeoutQuarantined\(\)\) \{/);
     assert.match(source,/recovery refused after timed-out CMD17\/18 or CMD24\/25/);
     assert.match(source,/odysseySdTimedOutWriteQuarantined=false/);
