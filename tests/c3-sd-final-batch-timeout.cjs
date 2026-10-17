@@ -15,7 +15,7 @@ test('C3 final padded write does not fclose a card quarantined by CMD25 timeout'
     const check=take.indexOf('if (odysseySdWriteTimeoutQuarantined() || uncertainSdWrite) {',tail);
     const close=take.indexOf('if (fclose(file)!=0)',tail);
     assert(tail>=0 && check>tail && close>check,
-      'recheck write timeout after final padded 4 KiB fwrite, BEFORE fclose');
+      'recheck write timeout after final padded 2 KiB fwrite, BEFORE fclose');
     const gate=take.slice(check,close);
     assert.match(gate,/odysseySdBootState=2/);
     assert.match(gate,/odysseySdUnsafeToSleep=true/);
