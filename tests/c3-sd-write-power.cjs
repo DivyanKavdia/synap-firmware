@@ -168,3 +168,14 @@ test('a new SD read failure revokes old cold-mount recovery witness before OTA r
  assert.match(mark,/odysseySdBootState=2/);
  assert.match(detect,/void odysseySdInvalidateHistoricalFaultResolution\(\) \{/);
 });
+
+test('manual verified Retry SD resolves reboot veto but preserves the recorder journal',()=>{
+ const detect=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8');
+ const recovery=detect.split('bool odysseyRecoverSdCard(')[1].split('esp_err_t odysseyFormatSdCard()')[0];
+ assert.match(recovery,/if \(odysseySdWriteTimeoutQuarantined\(\) \|\|/);
+ assert.match(recovery,/if \(odysseySdControllerBusyLow\(\)\)/);
+ assert.match(recovery,/if \(odysseySdReady\(\)\)/);
+ assert.match(recovery,/const bool recovered=odysseySdMountLocked/);
+ assert.match(recovery,/odysseySdMarkHistoricalFaultResolved\(\)/);
+ assert.doesNotMatch(recovery,/odysseyPersistRecordFailure\(0,0\)/);
+});

@@ -9,7 +9,7 @@ test('shipping C3 BLE SD maintenance is fail-closed BEFORE any FAT operation',()
   const guard=worker.indexOf('if (!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED &&');
   const mutation=worker.indexOf('case 17:');
   assert(guard>=0 && mutation>guard,'reject destructive commands before worker enters switch');
-  for(const op of [17,18,19])
+  for(const op of [17,18])
     assert(worker.slice(guard,mutation).includes('request.operation=='+op+'u'),'block media operation '+op);
   const refusal=worker.slice(guard,worker.indexOf('sdBleTransferInFlight=true;',guard));
   assert.match(refusal,/reply\(request,BAD_COMMAND\)/);
@@ -18,6 +18,10 @@ test('shipping C3 BLE SD maintenance is fail-closed BEFORE any FAT operation',()
     'fail closed without reaching FAT mutations or recovery');
   assert.match(tx,/case 4:/,'read-only SD sync remains');
   assert.match(tx,/case 7:/,'read-only SD catalogue remains');
+  assert.match(tx,/case 32:/,'read-only SD FAT capacity remains');
+  assert.match(tx,/ODYSSEY_C3_SD_EXPLICIT_FORMAT_ENABLED=true/);
+  assert.match(tx,/request.offset!=ODYSSEY_C3_SD_FORMAT_TOKEN/);
+  assert.match(tx,/recordedFault>=40u && recordedFault!=48u/);
   assert.match(ino,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
 });
 
@@ -36,4 +40,13 @@ test('live op29 remains RAM-only and reports the first physical SDSPI command fa
     'windowRequests','mtuFallbacks','wireCmd','wireErr','wireArg','wireMs'];
   const max=Object.fromEntries(keys.map(k=>[k,k==='version'?1:k==='ioErr'?-2147483648:4294967295]));
   assert(Buffer.byteLength(JSON.stringify(max))<480,'media payload must fit 480 bytes plus 16-byte header');
+});
+
+test('C3 capacity is guarded, observational, and excludes unmounted FAT reads',()=>{
+ const detect=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8');
+ const capacity=detect.split('esp_err_t odysseySdGetCapacity(')[1].split('// Operator-initiated, once-per-boot')[0];
+ assert.match(capacity,/OdysseySdGuard guard/);
+ assert.match(capacity,/!odysseySdReady\(\)/);
+ assert.match(capacity,/esp_vfs_fat_info\(ODYSSEY_SD_MOUNT_POINT/);
+ assert.doesNotMatch(capacity,/format\(|fopen\(|fwrite\(|unlink\(|odysseySdMountLocked\(/);
 });

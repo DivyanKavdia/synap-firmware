@@ -268,6 +268,22 @@ public:
 bool odysseySdReady() {
   return odysseySdBootState.load()==1 && odysseySdProbeStage.load()==6;
 }
+// Explicit read-only FAT capacity query: no writes, remounts or recovery.
+esp_err_t odysseySdGetCapacity(uint64_t& totalBytes,uint64_t& freeBytes,uint64_t& physicalBytes) {
+  totalBytes=0;freeBytes=0;physicalBytes=0;
+  OdysseySdGuard guard(pdMS_TO_TICKS(1000));
+  if (!guard || !odysseySdReady() || !odysseySdNativeCard ||
+      odysseySdTimedOutReadQuarantined.load() ||
+      odysseySdTimedOutWriteQuarantined.load() ||
+      odysseyRecording.load() || streamingEnabled.load() || otaBusy() || sleepPending)
+    return ESP_ERR_INVALID_STATE;
+  physicalBytes=uint64_t(odysseySdNativeCard->csd.capacity)*
+    uint64_t(odysseySdNativeCard->csd.sector_size);
+  const esp_err_t result=esp_vfs_fat_info(ODYSSEY_SD_MOUNT_POINT,&totalBytes,&freeBytes);
+  if (result!=ESP_OK || !totalBytes || freeBytes>totalBytes)
+    return result==ESP_OK?ESP_FAIL:result;
+  return ESP_OK;
+}
 // Operator-initiated, once-per-boot raw sector classification for SD that
 // will not mount after a genuine power cycle. NO FAT calls or card writes.
 // This is not a repair, filesystem scan, or backup of the original card.
@@ -1175,9 +1191,20 @@ bool odysseyRecoverSdCard(const char* reason) {
     Serial.println("[SD] recovery refused: selected SD still drives sustained busy-low, cycle SD power");
     return false;
   }
+  // A healthy card needs no unmount/reinit on an explicit Retry SD.
+  if (odysseySdReady()) {
+    odysseySdMarkHistoricalFaultResolved();
+    return true;
+  }
   odysseySdBootState=0;odysseySdProbeStage=0;
-  odysseySdReleaseLocked();
-  return odysseySdMountLocked(reason?reason:"op14",ODYSSEY_SD_RECOVERY_ATTEMPTS);
+  if (!odysseySdReleaseLocked()) return false;
+  const bool recovered=odysseySdMountLocked(reason?reason:"op14",ODYSSEY_SD_RECOVERY_ATTEMPTS);
+  // The operator explicitly validated a fresh FAT mount. Resolve only the
+  // boot veto, retaining the original CMD24/CMD25 journal for diagnostics.
+  if (recovered && !odysseySdWriteTimeoutQuarantined() &&
+      !odysseySdReadTimeoutQuarantined())
+    odysseySdMarkHistoricalFaultResolved();
+  return recovered;
 }
 
 // Explicit media-v1 operation 19 only. The SD must ALREADY be FAT-mounted;

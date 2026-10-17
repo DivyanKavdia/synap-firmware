@@ -15,6 +15,9 @@ struct Request {
 // mutators, including commands issued by cached/older PWA clients.
 // Does not gate disconnected recording, catalogue or verified SD reads.
 static constexpr bool ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false;
+// Delete and Clear remain disabled. Format has its own explicit request token.
+static constexpr bool ODYSSEY_C3_SD_EXPLICIT_FORMAT_ENABLED=true;
+static constexpr uint32_t ODYSSEY_C3_SD_FORMAT_TOKEN=0x5344464Du; // "SDFM"
 static QueueHandle_t requests=nullptr;
 // Keep SD reads protected while BLE is transferring and briefly afterward.
 static std::atomic<bool> sdBleTransferInFlight{false};
@@ -572,8 +575,12 @@ static void worker(void*) {
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load()) continue;
     // Gate before touching FAT, the read cache, catalogue, or any remount.
     // BAD_COMMAND is the existing media-v1 'unsupported' error: no new ABI.
-    if (!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED &&
-        (request.operation==17u || request.operation==18u || request.operation==19u)) {
+    if ((!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED &&
+         (request.operation==17u || request.operation==18u)) ||
+        (request.operation==19u &&
+         (!ODYSSEY_C3_SD_EXPLICIT_FORMAT_ENABLED ||
+          request.offset!=ODYSSEY_C3_SD_FORMAT_TOKEN ||
+          request.path[0]))) {
       Serial.printf("[SD] BLE maintenance write refused op=%u; originals preserved\\n",
         unsigned(request.operation));
       reply(request,BAD_COMMAND);
@@ -801,6 +808,12 @@ static void worker(void*) {
         // separate destructive confirmation; never retry automatically.
         selectedPath[0]=0;catalogueBuffer="";
         if (!storageReady()) { error=NO_SD;break; }
+        // Historical or current write faults require non-destructive recovery,
+        // not a FAT rebuild that could erase still-recoverable recordings.
+        const uint8_t recordedFault=odysseyLastRecordFailureStage();
+        if ((recordedFault>=40u && recordedFault!=48u) ||
+            odysseySdReadTimeoutQuarantined() ||
+            odysseySdWriteTimeoutQuarantined()) { error=BUSY;break; }
         // The C3+SD divider can report untrusted readings. As with manual
         // unlink, reject an actually TRUSTED low reading; do not fabricate one.
         if (batteryAvailable.load() &&
@@ -820,6 +833,28 @@ static void worker(void*) {
           sdLastMediaFaultStep=0;
           sdLastMediaFaultErrno=0;
         }
+        break;
+      }
+      case 32: {
+        // Operator-requested read-only FAT capacity and free space.
+        uint64_t totalBytes=0,freeBytes=0,physicalBytes=0;
+        const esp_err_t result=odysseySdGetCapacity(totalBytes,freeBytes,physicalBytes);
+        if (result!=ESP_OK) {
+          error=result==ESP_ERR_INVALID_STATE?NO_SD:IO_ERROR;
+          if (error==IO_ERROR) {
+            noteSdMediaFault(32,1,int(result));
+            errno=EIO;
+            odysseySdMarkVfsFailure();
+          }
+          break;
+        }
+        const int n=snprintf(reinterpret_cast<char*>(bytes),sizeof(bytes),
+          "{\"version\":1,\"totalBytes\":%llu,\"freeBytes\":%llu,\"physicalBytes\":%llu}",
+          static_cast<unsigned long long>(totalBytes),
+          static_cast<unsigned long long>(freeBytes),
+          static_cast<unsigned long long>(physicalBytes));
+        if (n<0 || size_t(n)>=sizeof(bytes)) error=IO_ERROR;
+        else size=size_t(n);
         break;
       }
       default:error=BAD_COMMAND;break;
