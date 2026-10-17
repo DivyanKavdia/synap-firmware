@@ -63,13 +63,16 @@ int main() {
 `);
  assert.match(output,/PASS power-loss checkpoint helper/);
 });
-test('periodic 10-second native FatFs checkpoints after completed PCM batches',()=>{
+test('single 256 KiB early checkpoint and 60-second periodic FatFs checkpoints follow complete PCM batches',()=>{
  const capture=recorder.split('static void odysseyRecordTake() {')[1].split('static void odysseyRecordTask(void*) {')[0];
  assert.match(capture,/OdysseySdGuard storage;/);
  const batch=capture.split('if (batchUsed==sizeof(batch)) {')[1].split('// Capture performs only sequential')[0];
  assert(batch.indexOf('const size_t written=fwrite(batch')<batch.indexOf('bytes+=batchPcmBytes'));
  assert(batch.indexOf('bytes+=batchPcmBytes')<batch.indexOf('odysseyCheckpointWav(file,checkpointErrno)'));
-  assert.match(batch,/if \(uint32_t\(millis\(\)-lastCheckpointAt\)>=ODYSSEY_SD_CHECKPOINT_INTERVAL_MS\)/);
+ assert.match(batch,/firstCheckpointDue=checkpointedPcmBytes==0u/);
+ assert.match(batch,/bytes>=ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES/);
+ assert.match(batch,/periodicCheckpointDue=[\s\S]*?ODYSSEY_SD_CHECKPOINT_INTERVAL_MS/);
+ assert.match(batch,/if \(firstCheckpointDue \|\| periodicCheckpointDue\)/);
  assert.match(batch,/if \(checkpointStage\) \{[\s\S]*?failed=true;[\s\S]*?failureStage=checkpointStage;[\s\S]*?break;/);
  assert.match(batch,/odysseyPersistedWriteErrno=uint32_t\(checkpointErrno\)/);
  assert.match(batch,/checkpointedPcmBytes=bytes;/);

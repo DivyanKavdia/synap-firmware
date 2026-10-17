@@ -206,6 +206,13 @@ static uint8_t odysseyBatchWriteFailureStage(int error) {
 // Ten-second f_sync was a regular single-sector write stressor on the
 // affected C3+SD carrier. This trades a longer unsynced tail (up to ~60 s)
 // for substantially fewer controller program-busy transitions.
+// An interrupted 20-second take previously looked like 0 B because the
+// first metadata sync was deferred until 60 seconds. One early f_sync after
+// 256 KiB of successfully appended PCM (~8.2 s at 16 kHz mono PCM16)
+// bounds this exposure without reinstating the old every-10-second sync.
+// This cannot fix a CMD25 busy timeout and adds one metadata CMD24; trial
+// on a disposable card before releasing on the sealed production carrier.
+static constexpr uint32_t ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES=262144u;
 static constexpr uint32_t ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=60000u;
 static uint8_t odysseyCheckpointWav(FILE* file,int& savedErrno) {
   savedErrno=0;
@@ -396,7 +403,11 @@ static void odysseyRecordTake() {
           // power cut loses at most the unsynced tail in the normal case;
           // FAT sectors in flight can still tear on a sudden rail collapse.
           // The native SDSPI host owns write completion and timeout checks.
-          if (uint32_t(millis()-lastCheckpointAt)>=ODYSSEY_SD_CHECKPOINT_INTERVAL_MS) {
+          const bool firstCheckpointDue=checkpointedPcmBytes==0u &&
+            bytes>=ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES;
+          const bool periodicCheckpointDue=
+            uint32_t(millis()-lastCheckpointAt)>=ODYSSEY_SD_CHECKPOINT_INTERVAL_MS;
+          if (firstCheckpointDue || periodicCheckpointDue) {
             int checkpointErrno=0;
             const uint8_t checkpointStage=odysseyCheckpointWav(file,checkpointErrno);
             if (checkpointStage) {
@@ -417,6 +428,9 @@ static void odysseyRecordTake() {
             }
             checkpointedPcmBytes=bytes;
             lastCheckpointAt=millis();
+            if (firstCheckpointDue) Serial.printf(
+              "[SD] first WAV metadata checkpoint synced pcm=%lu (not proof of card-level persistence)\n",
+              static_cast<unsigned long>(bytes));
           }
         }
       }
