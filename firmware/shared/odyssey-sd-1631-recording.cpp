@@ -399,8 +399,8 @@ static void odysseyRecordTake() {
           batchPcmBytes=0;
           // This is an explicit SD write test: trust the actual complete
           // 4KiB batch result, not uncalibrated battery ADC readings.
-          // Every 10 seconds sync FAT/file-length metadata. An unexpected
-          // power cut loses at most the unsynced tail in the normal case;
+          // Sync once after 256 KiB, then at 60-second intervals. An unexpected
+          // power cut can lose the unsynced tail in the normal case;
           // FAT sectors in flight can still tear on a sudden rail collapse.
           // The native SDSPI host owns write completion and timeout checks.
           const bool firstCheckpointDue=checkpointedPcmBytes==0u &&
@@ -489,9 +489,9 @@ static void odysseyRecordTake() {
       }
     }
 
-    // STOP is append-only. One early f_sync, then fclose() on STOP minimizes
-    // metadata programming during active capture. After power loss only the
-    // early checkpointed prefix is guaranteed to be discoverable.
+    // STOP is append-only. An early and periodic f_sync reduce the unsynced
+    // tail. Even a checkpoint cannot guarantee recoverability after power
+    // loss while the card is programming FAT metadata.
     // The on-card header stays provisional; transfer synthesizes the true WAV
     // header from file size after a clean stop OR interrupted power cycle.
     // The LAST padded 4 KiB write occurs after the earlier timeout gate.
@@ -522,7 +522,7 @@ static void odysseyRecordTake() {
     }
   }
 
-  if (!failed && bytes==0) failureStage=48;
+  if (!failed && bytes==0) { failed=true;failureStage=48; }
   // A successful fwrite/fclose is not proof of persisted FAT data. Re-open
   // the closed WAV and read the physical on-card RIFF header. The PWA will
   // synthesize logical RIFF/data lengths from st_size during BLE sync.
