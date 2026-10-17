@@ -17,7 +17,7 @@ test('only explicitly confirmed operation 19 formats the already mounted FAT car
   assert.match(tx,/case 19:\s*\{/);
   assert.match(tx,/odysseyFormatSdCard\(\)/);
   assert.match(sd,/esp_err_t odysseyFormatSdCard\(\)/);
-  assert.equal((sd.match(/esp_vfs_fat_sdcard_format\s*\(/g)||[]).length,1);
+  assert.equal((sd.match(/esp_vfs_fat_sdcard_format\s*\(/g)||[]).length,2);
   assert.match(sd,/if \(!guard \|\| !odysseySdReady\(\) \|\| !odysseySdNativeCard/);
   assert.match(sd,/odysseySdFormatInProgress\.exchange\(true\)/);
   assert.match(sd,/odysseySdValidateVfsLocked\("format",1\)/);
