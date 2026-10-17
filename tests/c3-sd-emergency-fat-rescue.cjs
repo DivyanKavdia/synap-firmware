@@ -22,3 +22,10 @@ test('emergency media op33 requires token, leaves 17/18 blocked and runs once',(
  assert.match(operation,/odysseySdEmergencyProvisionFat\(\)/);
  assert.doesNotMatch(operation,/odysseyRecoverSdCard\(|odysseyFormatSdCard\(/);
 });
+
+test('an SD card transport error during mount must block emergency FAT formatting',()=>{
+ const handler=sd.split('esp_err_t odysseySdEmergencyProvisionFat() {')[1]
+   .split('// Explicit media-v1 operation 19 only')[0];
+ assert.match(handler,/odysseyWireError\.load\(\)!=0/);
+ assert.match(sd,/odysseySdProbeStage=odysseyWireError\.load\(\)\?4:3/);
+});

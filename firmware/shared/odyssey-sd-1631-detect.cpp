@@ -1011,8 +1011,14 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
     // A responding SD card with an unmountable FAT filesystem is NOT the
     // same as failed SD SPI initialization. Never hammer CMD0 to repair FAT.
     if (odysseySdLastMountError.load()==ESP_FAIL) {
-      odysseySdBootState=2;odysseySdProbeStage=3;
-      Serial.println("[SD] card initialized, FAT mount failed; preserving files");
+      // A physical CMD17/CMD18/CMD13 fault is NOT proof of a damaged FAT.
+      // Do not permit a reformat after an SD transport error in this boot.
+      odysseySdBootState=2;
+      odysseySdProbeStage=odysseyWireError.load()?4:3;
+      if (odysseyWireError.load()) odysseySdUnsafeToSleep=true;
+      Serial.println(odysseyWireError.load()
+        ? "[SD] FAT mount failed after physical SD command error; power cycle required"
+        : "[SD] SD initialized, FAT mount failed; originals preserved");
       return false;
     }
     const uint8_t bitBangCmd0=odysseySdBitBangRecoverLocked(reason);
@@ -1231,6 +1237,7 @@ esp_err_t odysseySdEmergencyProvisionFat() {
       odysseySdTimedOutReadQuarantined.load() ||
       odysseySdTimedOutWriteQuarantined.load() ||
       odysseySdControllerBusyLow() ||
+      odysseyWireError.load()!=0 || // never format after a physical SPI failure
       odysseyRecording.load() || streamingEnabled.load() ||
       otaBusy() || sleepPending || odysseySdFormatting())
     return ESP_ERR_INVALID_STATE;
