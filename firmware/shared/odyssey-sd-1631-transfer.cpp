@@ -701,6 +701,26 @@ static void worker(void*) {
         sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
         continue;
       }
+      case 34: {
+        // SD-independent recorder status, safe even after native CMD25/EIO.
+        // Zero reads, zero FAT writes and no mount/recovery side effects.
+        char detail[220];
+        const uint8_t stage=odysseyLastRecordFailureStage();
+        const int n=snprintf(detail,sizeof(detail),
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"stage\":%u,\"bytes\":%lu,\"faultLed\":%u,\"micRestarts\":%u,\"recording\":%u,\"stopPending\":%u,\"readQuarantine\":%u,\"writeQuarantine\":%u}",
+          unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
+          unsigned(stage),static_cast<unsigned long>(odysseyLastRecordFailureBytes()),
+          unsigned(odysseyRecorderFaultLedCode.load()),
+          unsigned(odysseyMicRecoveryAttempts.load()),
+          unsigned(odysseyRecording.load()?1u:0u),
+          unsigned(odysseyStopRequested.load()?1u:0u),
+          unsigned(odysseySdReadTimeoutQuarantined()?1u:0u),
+          unsigned(odysseySdWriteTimeoutQuarantined()?1u:0u));
+        if (n<=0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
+        reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
+        sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
+        continue;
+      }
       case 29: {
         // SD-independent sync trace. This reads only RAM counters from
         // previous op4/op12 requests; it must remain safe after mount loss.

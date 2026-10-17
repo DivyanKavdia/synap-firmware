@@ -103,6 +103,14 @@ static std::atomic<bool> odysseySdTimedOutWriteQuarantined{false};
 // continuously-powered SDSPI controller in an unknown data-transfer state.
 // Do not treat a returned POSIX errno as evidence of card-side idle.
 static std::atomic<bool> odysseySdTimedOutReadQuarantined{false};
+void odysseySdQuarantineUncertainWrite() {
+  // A short/EIO write can leave native SDSPI and a FILE* in an unknown state
+  // even without a decoded CMD24/25 timeout. The recorder must not fclose
+  // or permit a same-powered-rail unmount/remount of that stranded handle.
+  odysseySdTimedOutWriteQuarantined=true;
+  odysseySdUnsafeToSleep=true;
+  Serial.println("[SD] uncertain write quarantined: real SD power-cycle required");
+}
 bool odysseySdWriteTimeoutQuarantined() {
   return odysseySdTimedOutWriteQuarantined.load();
 }

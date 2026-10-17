@@ -2611,6 +2611,14 @@ static std::atomic<bool> odysseySdTimedOutWriteQuarantined{false};
 // continuously-powered SDSPI controller in an unknown data-transfer state.
 // Do not treat a returned POSIX errno as evidence of card-side idle.
 static std::atomic<bool> odysseySdTimedOutReadQuarantined{false};
+void odysseySdQuarantineUncertainWrite() {
+  // A short/EIO write can leave native SDSPI and a FILE* in an unknown state
+  // even without a decoded CMD24/25 timeout. The recorder must not fclose
+  // or permit a same-powered-rail unmount/remount of that stranded handle.
+  odysseySdTimedOutWriteQuarantined=true;
+  odysseySdUnsafeToSleep=true;
+  Serial.println("[SD] uncertain write quarantined: real SD power-cycle required");
+}
 bool odysseySdWriteTimeoutQuarantined() {
   return odysseySdTimedOutWriteQuarantined.load();
 }
@@ -4351,6 +4359,7 @@ static void odysseyRecordTake() {
 #endif
 
   if (file && (odysseySdWriteTimeoutQuarantined() || uncertainSdWrite)) {
+    if (uncertainSdWrite) odysseySdQuarantineUncertainWrite();
     // NEVER fclose/f_sync after a timed-out CMD24/CMD25. FatFs fclose can
     // itself write directory/FAT sectors, injecting new commands into a card
     // still asserting BUSY and turning one write failure into permanent loss
@@ -4403,6 +4412,7 @@ static void odysseyRecordTake() {
     // a controller that is still busy programming. Keep the VFS descriptor
     // stranded until the genuine SD power cycle; no further SD I/O is safe.
     if (odysseySdWriteTimeoutQuarantined() || uncertainSdWrite) {
+      if (uncertainSdWrite) odysseySdQuarantineUncertainWrite();
       failed=true;
       if (!failureStage) failureStage=79;
       if (!odysseyPersistedWriteErrno.load()) odysseyPersistedWriteErrno=EIO;
@@ -5375,6 +5385,26 @@ static void worker(void*) {
           unsigned(raw.bpbBytesPerSector),unsigned(raw.bpbSectorsPerCluster),
           static_cast<unsigned long>(raw.bpbTotalSectors),
           static_cast<long>(odysseySdFirstMountFailureError()));
+        if (n<=0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
+        reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
+        sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
+        continue;
+      }
+      case 34: {
+        // SD-independent recorder status, safe even after native CMD25/EIO.
+        // Zero reads, zero FAT writes and no mount/recovery side effects.
+        char detail[220];
+        const uint8_t stage=odysseyLastRecordFailureStage();
+        const int n=snprintf(detail,sizeof(detail),
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"stage\":%u,\"bytes\":%lu,\"faultLed\":%u,\"micRestarts\":%u,\"recording\":%u,\"stopPending\":%u,\"readQuarantine\":%u,\"writeQuarantine\":%u}",
+          unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
+          unsigned(stage),static_cast<unsigned long>(odysseyLastRecordFailureBytes()),
+          unsigned(odysseyRecorderFaultLedCode.load()),
+          unsigned(odysseyMicRecoveryAttempts.load()),
+          unsigned(odysseyRecording.load()?1u:0u),
+          unsigned(odysseyStopRequested.load()?1u:0u),
+          unsigned(odysseySdReadTimeoutQuarantined()?1u:0u),
+          unsigned(odysseySdWriteTimeoutQuarantined()?1u:0u));
         if (n<=0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();sdBleTransferInFlight=false;

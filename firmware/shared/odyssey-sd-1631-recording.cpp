@@ -433,6 +433,7 @@ static void odysseyRecordTake() {
 #endif
 
   if (file && (odysseySdWriteTimeoutQuarantined() || uncertainSdWrite)) {
+    if (uncertainSdWrite) odysseySdQuarantineUncertainWrite();
     // NEVER fclose/f_sync after a timed-out CMD24/CMD25. FatFs fclose can
     // itself write directory/FAT sectors, injecting new commands into a card
     // still asserting BUSY and turning one write failure into permanent loss
@@ -485,6 +486,7 @@ static void odysseyRecordTake() {
     // a controller that is still busy programming. Keep the VFS descriptor
     // stranded until the genuine SD power cycle; no further SD I/O is safe.
     if (odysseySdWriteTimeoutQuarantined() || uncertainSdWrite) {
+      if (uncertainSdWrite) odysseySdQuarantineUncertainWrite();
       failed=true;
       if (!failureStage) failureStage=79;
       if (!odysseyPersistedWriteErrno.load()) odysseyPersistedWriteErrno=EIO;
