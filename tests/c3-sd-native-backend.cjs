@@ -26,7 +26,7 @@ test('Odyssey C3 uses independent ESP-IDF SPI2 SDSPI FatFs, S3 keeps original SD
 test('C3 boots without ADC gate, read-only FAT check and never formats automatically',()=>{
   assert.match(detect,/mount\.format_if_mount_failed=false/);
   assert.match(detect,/mount.format_if_mount_failed=false/);
-  assert.equal((detect.match(/esp_vfs_fat_sdcard_format\(/g)||[]).length,2);
+  assert.equal((detect.match(/esp_vfs_fat_sdcard_format\(/g)||[]).length,1);
   const validation=detect.split('static bool odysseySdValidateVfsLocked(')[1]
     .split('static uint8_t odysseySdMountReasonCode')[0];
   assert.doesNotMatch(validation,/fopen\(|fwrite\(|unlink\(|mkdir\(|fflush\(|remove\(/);
