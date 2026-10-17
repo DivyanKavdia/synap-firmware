@@ -218,6 +218,8 @@ std::atomic<bool> batteryAvailable{false};
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
 std::atomic<bool> odysseyRecording{false}, odysseyStopRequested{false};
 std::atomic<uint32_t> odysseyRecordingStartedAt{0}, odysseyRecordFaultAt{0};
+std::atomic<uint8_t> odysseyRecorderFaultLedCode{0}; // 2 SD, 3 microphone, 4 unsafe card
+std::atomic<uint8_t> odysseyMicRecoveryAttempts{0};
 std::atomic<uint32_t> odysseySdSleepGuardUntil{0};
 // Latches a failed SD idle/quiesce or unresolved write fault. Never permit a
 // later deep-sleep retry to mistake the now-unmounted card for an absent card.

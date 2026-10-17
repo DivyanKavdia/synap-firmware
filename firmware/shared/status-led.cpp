@@ -16,10 +16,12 @@ void updateStatusLed(bool force) {
     if (phase<(finalizing?80u:260u)) { r=LED_DIM+4; b=LED_DIM+6; }
   } else if (odysseyRecordFaultAt.load() &&
              uint32_t(now-odysseyRecordFaultAt.load())<6000u) {
-    // Two red pulses distinguish missing SD / failed capture from active
-    // purple recording. Resume normal LED state after six seconds.
-    const uint32_t phase=uint32_t(now-odysseyRecordFaultAt.load())%900u;
-    if (phase<140u || (phase>=260u && phase<400u)) r=LED_DIM+3;
+    // Red pulses identify the cause even without BLE:
+    // 2=SD file/write fault, 3=microphone, 4=unsafe controller/refused start.
+    const uint8_t count=odysseyRecorderFaultLedCode.load()==3u?3u:
+      odysseyRecorderFaultLedCode.load()==4u?4u:2u;
+    const uint32_t phase=uint32_t(now-odysseyRecordFaultAt.load())%1450u;
+    if (phase/250u<count && phase%250u<115u) r=LED_DIM+3;
 #endif
   } else if (remoteStandby) {
     // Standby stays dark; battery telemetry remains available over BLE.
