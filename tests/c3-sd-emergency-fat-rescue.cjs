@@ -29,3 +29,13 @@ test('an SD card transport error during mount must block emergency FAT formattin
  assert.match(handler,/odysseyWireError\.load\(\)!=0/);
  assert.match(sd,/odysseySdProbeStage=odysseyWireError\.load\(\)\?4:3/);
 });
+
+test('emergency FAT rescue may rebuild corrupted VFS only after explicit authorization',()=>{
+ const rescue=sd.split('esp_err_t odysseySdEmergencyProvisionFat() {')[1]
+   .split('// Explicit media-v1 operation 19 only')[0];
+ assert.match(rescue,/odysseySdProbeStage\.load\(\)!=3 && odysseySdProbeStage\.load\(\)!=4/);
+ assert.match(rescue,/initialized && !verified && odysseySdNativeCard/);
+ assert.match(rescue,/odysseyWireError\.load\(\)==0/);
+ assert.match(rescue,/esp_vfs_fat_sdcard_format\(/);
+ assert.match(rescue,/odysseySdValidateVfsLocked\("emergency-format",1\)/);
+});

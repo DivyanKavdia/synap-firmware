@@ -3735,7 +3735,8 @@ esp_err_t odysseySdEmergencyProvisionFat() {
   OdysseySdGuard guard(pdMS_TO_TICKS(5000));
   if (!guard || odysseySdEmergencyProvisionAttempted.load() ||
       esp_reset_reason()!=ESP_RST_POWERON ||
-      odysseySdReady() || odysseySdProbeStage.load()!=3 ||
+      odysseySdReady() ||
+      (odysseySdProbeStage.load()!=3 && odysseySdProbeStage.load()!=4) ||
       odysseySdLastMountError.load()!=ESP_FAIL ||
       odysseySdNativeCard || odysseySdNativeBusInitialized ||
       odysseySdTimedOutReadQuarantined.load() ||
@@ -3752,8 +3753,24 @@ esp_err_t odysseySdEmergencyProvisionFat() {
   odysseySdBootState=0;odysseySdProbeStage=0;
   Serial.println("[SD] EXPLICIT emergency FAT rescue may erase ALL recordings");
   const bool initialized=odysseySdBeginLocked(true);
-  const bool verified=initialized &&
+  bool verified=initialized &&
     odysseySdValidateVfsLocked("emergency-format",1);
+  // A FAT volume may mount while its /synap directory is corrupt. The
+  // mount-time format flag does NOT help in that case. Only this separately
+  // confirmed rescue can rebuild that mounted volume; never on physical
+  // CMD17/18/24/25 transport errors or on a warm reset.
+  if (initialized && !verified && odysseySdNativeCard &&
+      odysseyWireError.load()==0 &&
+      !odysseySdTimedOutReadQuarantined.load() &&
+      !odysseySdTimedOutWriteQuarantined.load()) {
+    Serial.println("[SD] FAT mounted but VFS invalid: operator-authorized rebuild");
+    const esp_err_t rebuilt=esp_vfs_fat_sdcard_format(
+      ODYSSEY_SD_MOUNT_POINT,odysseySdNativeCard);
+    if (rebuilt==ESP_OK)
+      verified=odysseySdValidateVfsLocked("emergency-format",1);
+    else
+      odysseySdLastMountError=rebuilt;
+  }
   if (!verified) {
     odysseySdBootState=2;odysseySdProbeStage=3;
     odysseySdUnsafeToSleep=true;
