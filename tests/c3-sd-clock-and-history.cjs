@@ -51,8 +51,8 @@ test('C3 SD still uses short CMD25 batches and quarantines unknown writes',()=>{
   assert.match(code,/ODYSSEY_SD_RECORD_BATCH_BYTES=2048u/);
   assert.match(code,/if \(file && \(odysseySdWriteTimeoutQuarantined\(\) \|\| uncertainSdWrite\)\)/);
   assert.match(code,/odysseySdQuarantineUncertainWrite\(\)/);
-  assert.match(code,/ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES=262144u/);
-  assert.match(code,/ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=60000u/);
+  assert.doesNotMatch(code,/ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES|ODYSSEY_SD_CHECKPOINT_INTERVAL_MS|odysseyCheckpointWav/);
+  assert.match(code,/fclose\(file\)/);
  }
  assert.match(detect,/odysseySdMarkHistoricalFaultResolved\(\)/);
  assert.match(detect,/odysseySdTimedOutWriteQuarantined=false; \/\/ only a verified fresh mount clears quarantine/);
