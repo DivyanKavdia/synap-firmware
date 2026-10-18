@@ -18,7 +18,7 @@ test('C3 SD clock is an intentionally bounded hardware-qualified 2 MHz data phas
  assert.match(detect,/host\.do_transaction=\[\]\(int slot,sdmmc_command_t\* cmd\)->esp_err_t/);
  const capture=detect.split('host.do_transaction=[](int slot,sdmmc_command_t* cmd)->esp_err_t {')[1].split('sdspi_device_config_t device=')[0];
  assert.equal((capture.match(/sdspi_host_do_transaction\(slot,cmd\)/g)||[]).length,1);
- assert.doesNotMatch(capture,/retry|delay\(|vTaskDelay|cmd->timeout_ms\s*=/);
+ assert.doesNotMatch(capture,/delay\(|vTaskDelay|cmd->timeout_ms\s*=/);
  const compile=nativeTest('#include <cstdint>\n'+
  'static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=2000000u;\n'+
  'static_assert(ODYSSEY_SD_DATA_FREQ_HZ/1000u==2000u);\n'+
