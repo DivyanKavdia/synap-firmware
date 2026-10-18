@@ -64,11 +64,14 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 #if CONFIG_IDF_TARGET_ESP32C3
 static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
-// SDSPI keeps its standard 400 kHz card initialization clock. Cap data
-// transfers at 800 kHz rather than 1 MHz on the sealed C3+SD carrier:
-// reduced signal-edge stress with enough theoretical bandwidth for 16 kHz
-// mono PCM (32 kB/s) and metadata writes. Never change the FAT format.
-static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=800000u;
+// Keep the SD protocol's standard 400 kHz initialisation phase. The fitted
+// C3+SD carrier now has external SPI pull-ups and local SD decoupling;
+// trial a conservative 2 MHz data clock (well below SDSPI's 20 MHz ceiling).
+// This reduces the on-wire portion of each 2 KiB CMD25 burst, giving the
+// card more between-write idle time at 16 kHz mono PCM (32 kB/s).
+// A 5-second card-program busy timeout is NOT fixed by clock speed alone.
+// Never change FAT format, CMD25 timeout, or write-quarantine safeguards.
+static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=2000000u;
 static constexpr spi_host_device_t ODYSSEY_SD_HOST=SPI2_HOST;
 static sdmmc_card_t* odysseySdNativeCard=nullptr;
 static bool odysseySdNativeBusInitialized=false;
