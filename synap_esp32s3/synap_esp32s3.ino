@@ -3769,7 +3769,7 @@ bool odysseyRecoverSdCard(const char* reason) {
   // though volatile timeout-quarantine flags have returned to zero.
   // If the one allowed cold mount failed, don't turn touch or op14 into a
   // same-rail retry loop. A verified mount lifts this veto via the witness.
-  if (odysseySdUnresolvedHistoricalStorageFault() &&
+  if (!odysseySdReady() && odysseySdUnresolvedHistoricalStorageFault() &&
       (bootResetReason!=ESP_RST_POWERON ||
        odysseySdColdRecoveryState.load()==2u)) {
     odysseySdUnsafeToSleep=true;
