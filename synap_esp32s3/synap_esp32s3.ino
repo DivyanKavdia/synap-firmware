@@ -3913,16 +3913,28 @@ static bool odysseySdColdCleanupLocked() {
     }
     if (closedir(dir)!=0) scanFailed=true;
   }
-  if (scanFailed) {
-    if (odysseySdBootCleanupState.load()!=3u) odysseySdBootCleanupState=2;
-    // A read failure is not permission to reinitialize or mutate FAT.
+  if (scanFailed && odysseySdBootCleanupState.load()==3u) {
+    // A large backlog of orphan candidates is not a damaged SD card.
+    // Leave every file intact; permit normal recording and user-led cleanup.
+    Serial.println("[SD] cold orphan cleanup deferred: >16 candidates; storage remains ready");
+    return true;
+  }
+  if (scanFailed || odysseySdTimedOutReadQuarantined.load() ||
+      odysseySdTimedOutWriteQuarantined.load()) {
+    odysseySdBootCleanupState=2;
+    // Read or directory failure is not permission to reinitialize FAT.
     odysseySdBootState=2;odysseySdProbeStage=4;
     odysseySdUnsafeToSleep=true;
     return false;
   }
   for (size_t i=0;i<found;++i) {
     if (odysseySdTimedOutWriteQuarantined.load() ||
-        odysseySdTimedOutReadQuarantined.load()) break;
+        odysseySdTimedOutReadQuarantined.load()) {
+      odysseySdBootCleanupState=2;
+      odysseySdBootState=2;odysseySdProbeStage=4;
+      odysseySdUnsafeToSleep=true;
+      return false;
+    }
     errno=0;
     if (unlink(candidates[i])!=0 ||
         odysseySdTimedOutWriteQuarantined.load() ||
