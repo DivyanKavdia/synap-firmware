@@ -35,6 +35,7 @@ for (const [name,body] of [['shared',source],['assembled',assembled]]) {
   });
   test(name+': persistent same-rail warm boot veto is cleared only on successful cold boot',()=>{
     assert.match(body,/prefs\.getUChar\("railBad",0\)/);
+    assert.match(body,/if \(!prefs\.begin\("sd-recstate",true\)\) return false; \/\/ absent namespace on new units/);
     assert.match(body,/prefs\.putUChar\("railBad",unsafe\?1u:0u\)/);
     assert.match(body,/odysseySdCleanupUnsafePersisted\(\) \|\| odysseySdRailUnsafePersisted\(\)/);
     const boot=body.split('bool odysseyInitializeSdCardBeforeBle() {')[1]
