@@ -91,7 +91,7 @@ test('offline gesture reaches real C3 SD writes and verifies WAV after fclose',(
  assert.doesNotMatch(take,/odysseySdPowerSafe\(/);
  assert.match(take,/file=fopen\(fullPath,"wb"\)/);
  assert.match(take,/fwrite\(batch,1,sizeof\(batch\),file\)/);
- assert.match(take,/odysseyCheckpointWav\(file,checkpointErrno\)/);
+ assert.doesNotMatch(take,/odysseyCheckpointWav|lastCheckpointAt|ODYSSEY_SD_CHECKPOINT_INTERVAL_MS/);
  assert.match(take,/fclose\(file\)/);
  assert.match(take,/stat\(fullPath,&persisted\)/);
  assert.match(take,/fopen\(fullPath,"rb"\)/);
