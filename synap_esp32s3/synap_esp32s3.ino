@@ -3718,10 +3718,27 @@ static void odysseySdMarkHistoricalFaultResolved() {
   prefs.end();
 }
 
+// Independent NVS latch: cold-cleanup metadata writes can time out even
+// without an earlier offline recorder error. A software/OTA reset must not
+// interpret volatile flags resetting to zero as a genuine SD power cycle.
+static bool odysseySdCleanupUnsafePersisted() {
+  Preferences prefs;
+  if (!prefs.begin("sd-recstate",true)) return false;
+  const bool unsafe=prefs.getUChar("cleanupBad",0)!=0;
+  prefs.end();
+  return unsafe;
+}
+static void odysseySdRememberCleanupUnsafe(bool unsafe) {
+  Preferences prefs;
+  if (!prefs.begin("sd-recstate",false)) return;
+  (void)prefs.putUChar("cleanupBad",unsafe?1u:0u);
+  prefs.end();
+}
 static bool odysseySdUnresolvedHistoricalStorageFault() {
   const uint8_t stage=odysseyLastRecordFailureStage();
-  return stage>=44u && stage!=48u && stage!=52u && stage!=68u &&
-    !odysseySdHistoricalFaultResolved();
+  return odysseySdCleanupUnsafePersisted() ||
+    (stage>=44u && stage!=48u && stage!=52u && stage!=68u &&
+     !odysseySdHistoricalFaultResolved());
 }
 void odysseySdInvalidateHistoricalFaultResolution() {
   const uint32_t witness[3]={0u,0u,0u};
@@ -3786,8 +3803,8 @@ static bool odysseySdColdCleanupLocked() {
   char candidates[MAX_CANDIDATES][96]{};
   size_t found=0;
   const char* dirs[2]={ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_RECORDING_DIR};
-  bool scanFailed=false;
-  for (uint8_t index=0;index<2 && !scanFailed;++index) {
+  bool scanFailed=false,more=false;
+  for (uint8_t index=0;index<2 && !scanFailed && !more;++index) {
     errno=0;
     DIR* dir=opendir(dirs[index]);
     if (!dir) {
@@ -3812,33 +3829,26 @@ static bool odysseySdColdCleanupLocked() {
       // Only header-only/empty WAVs or strictly named .PART artifacts.
       if (!part && (st.st_size<0 || st.st_size>44)) continue;
       if (found==MAX_CANDIDATES) {
-        odysseySdBootCleanupState=3;
-        scanFailed=true;break;
+        more=true;break; // bounded work; remaining artifacts next cold boot
       }
       memcpy(candidates[found++],path,size_t(n)+1u);
     }
     if (closedir(dir)!=0) scanFailed=true;
   }
-  if (scanFailed && odysseySdBootCleanupState.load()==3u) {
-    // A large backlog of orphan candidates is not a damaged SD card.
-    // Leave every file intact; permit normal recording and user-led cleanup.
-    Serial.println("[SD] cold orphan cleanup deferred: >16 candidates; storage remains ready");
-    return true;
-  }
   if (scanFailed || odysseySdTimedOutReadQuarantined.load() ||
       odysseySdTimedOutWriteQuarantined.load()) {
     odysseySdBootCleanupState=2;
-    // Read or directory failure is not permission to reinitialize FAT.
-    odysseySdBootState=2;odysseySdProbeStage=4;
-    odysseySdUnsafeToSleep=true;
+    odysseySdRememberCleanupUnsafe(true);
+    // Read failure is not permission to reinitialize or mutate FAT.
+    odysseySdMarkVfsFailure(); // SD-independent diagnostic/NVS only
     return false;
   }
   for (size_t i=0;i<found;++i) {
     if (odysseySdTimedOutWriteQuarantined.load() ||
         odysseySdTimedOutReadQuarantined.load()) {
       odysseySdBootCleanupState=2;
-      odysseySdBootState=2;odysseySdProbeStage=4;
-      odysseySdUnsafeToSleep=true;
+      odysseySdRememberCleanupUnsafe(true);
+      odysseySdMarkVfsFailure(); // no additional SD card command
       return false;
     }
     errno=0;
@@ -3850,13 +3860,16 @@ static bool odysseySdColdCleanupLocked() {
       odysseySdQuarantineUncertainWrite();
       odysseySdBootState=2;odysseySdProbeStage=82;
       odysseySdBootCleanupState=2;
+      odysseySdRememberCleanupUnsafe(true);
+      odysseySdInvalidateHistoricalFaultResolution();
       return false;
     }
     odysseySdBootCleanupRemoved=uint16_t(i+1u);
   }
-  odysseySdBootCleanupState=1;
-  Serial.printf("[SD] slider cold cleanup: removed=%u empty/header-only WAV or PART entries\\n",
-    unsigned(odysseySdBootCleanupRemoved.load()));
+  odysseySdBootCleanupState=more?3u:1u;
+  if (found) vTaskDelay(pdMS_TO_TICKS(250)); // settle after last FAT mutation
+  Serial.printf("[SD] slider cold cleanup: removed=%u remaining=%u WAV/PART debris\\n",
+    unsigned(odysseySdBootCleanupRemoved.load()),unsigned(more));
   return true;
 }
 
@@ -3870,10 +3883,7 @@ bool odysseyInitializeSdCardBeforeBle() {
   // still be programming. A true cold power-on may try one normal mount,
   // followed only by guarded/passive recovery. User op14 remains explicit.
   const uint8_t previousRecordStage=odysseyLastRecordFailureStage();
-  const bool previousStorageFault=previousRecordStage>=44u &&
-    previousRecordStage!=48u && previousRecordStage!=52u &&
-    previousRecordStage!=68u &&
-    !odysseySdHistoricalFaultResolved();
+  const bool previousStorageFault=odysseySdUnresolvedHistoricalStorageFault();
   odysseySdColdRecoveryState=0;
   if (previousStorageFault) {
     odysseySdUnsafeToSleep=true;
@@ -3897,15 +3907,14 @@ bool odysseyInitializeSdCardBeforeBle() {
   // Only an actual cold card power-on + successful VFS validation can clear
   // this historical boot veto. Software/OTA reset alone is insufficient.
   if (ready && bootResetReason==ESP_RST_POWERON) {
-    // Hardware slider disconnects both MCU and SD power (unplug USB).
-    // On the fresh, read-verified card only: remove known zero-audio/part
-    // debris. Failure quarantines the rail and NEVER marks history resolved.
-    if (odysseySdColdPruneEmptyRecordingsLocked()) {
-      odysseySdMarkHistoricalFaultResolved();
-      if (previousStorageFault) odysseySdColdRecoveryState=1;
-    } else {
-      odysseySdColdRecoveryState=2;
-    }
+    // Both SD and MCU were physically switched off (USB must be unplugged).
+    // Successful cold cleanup restores readiness but never clears old PCM
+    // error diagnostics. Clear only the independent cleanup-safety latch.
+    odysseySdRememberCleanupUnsafe(false);
+    odysseySdMarkHistoricalFaultResolved();
+    if (previousStorageFault) odysseySdColdRecoveryState=1;
+  } else if (mounted && !ready) {
+    odysseySdColdRecoveryState=2;
   }
   Serial.printf("[SD] boot initialization complete state=%u stage=%u before BLE\n",
     unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()));
