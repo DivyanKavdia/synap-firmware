@@ -394,16 +394,10 @@ static uint8_t removeFailureStep=0;
 static uint8_t removeFile(const char* path) {
   removeFailureStep=0;
   if (!safeWavPath(path)) return BAD_COMMAND;
-  // Manual, single-file deletion must not be blocked by the C3+SD's
-  // independently reported untrusted battery ADC (batteryAvailable=false).
-  // Still reject a *trusted* low-voltage measurement. Never attempt FAT
-  // changes when the card is not mounted/ready or an SD take owns the lock.
-  // A single explicit unlink is one bounded FAT metadata mutation, not a
-  // long recording or full-card format. Reuse the established 3.8 V
-  // CONTINUE floor; the 3.9 V START floor remains for bulk/format actions.
-  // Rev K battery supply uses a diode into SuperMini VIN: never bypass the
-  // trusted low-voltage guard or claim the unmeasured SD 3.3 V rail is stable.
-  if (batteryAvailable.load() && batteryMillivolts<ODYSSEY_SD_WRITE_CONTINUE_MIN_MV) return BUSY;
+  // User controls the hardware power switch; battery ADC is telemetry only.
+  // No arbitrary 3.8V/3.9V admission rule for selected-file SD deletion.
+  // Active recording, timeout quarantine, verified FAT mount and storage
+  // mutex still enforce safe ordering. Physical brownout remains possible.
   OdysseySdGuard guard(pdMS_TO_TICKS(1000));
   if (!guard || !storageReady() ||
       odysseySdWriteTimeoutQuarantined() ||
@@ -434,7 +428,7 @@ static uint8_t removeFile(const char* path) {
 }
 
 static uint16_t clearRecordings() {
-  if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) return 0;
+  // Do not gate explicit SD operations on estimated battery voltage.
   OdysseySdGuard guard;
   if (!guard || !storageReady()) return 0;
   char directoryPath[96];
@@ -832,7 +826,6 @@ static void worker(void*) {
         invalidateBleReadCache();
         selectedPath[0]=0;catalogueBuffer="";
         if(!storageReady())error=NO_SD;
-        else if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) error=BUSY;
         else total=clearRecordings();
         break;
       case 19: {
@@ -848,12 +841,8 @@ static void worker(void*) {
              recordedFault!=52u && recordedFault!=68u) ||
             odysseySdReadTimeoutQuarantined() ||
             odysseySdWriteTimeoutQuarantined()) { error=BUSY;break; }
-        // The C3+SD divider can report untrusted readings. As with manual
-        // unlink, reject an actually TRUSTED low reading; do not fabricate one.
-        if (batteryAvailable.load() &&
-            batteryMillivolts<ODYSSEY_SD_WRITE_START_MIN_MV) {
-          error=BUSY;break;
-        }
+        // No battery threshold is used as an SD mutation admission gate.
+        // Format still requires explicit user token and healthy FAT state.
         const esp_err_t result=odysseyFormatSdCard();
         if (result!=ESP_OK) {
           error=IO_ERROR;
