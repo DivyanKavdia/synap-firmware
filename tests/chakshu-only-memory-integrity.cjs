@@ -18,7 +18,8 @@ test('Chakshu op35 SD diagnostics are RAM-only and do not call FAT or touch the 
  const body=source.split('case 35: {')[1].split('case 14:')[0];
  assert(body);
  assert.match(body,/ChakshuStorage::diagnostics\(bytes,sizeof\(bytes\)\)/);
- assert.doesNotMatch(body,/SD\.|recoverIO|remount|begin\(|unlink|format\(/);
+ const executed=body.split('\n').filter(line=>!line.trim().startsWith('//')).join('\n');
+ assert.doesNotMatch(executed,/SD\.|recoverIO|remount|begin\(|unlink|format\(/);
  assert.match(source,/case 17:/); // legacy Chakshu delete remains available (unlike C3).
 });
 test('Chakshu-only publication never changes other target manifests or the global target index',()=>{
