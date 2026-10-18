@@ -4,6 +4,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const source=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8');
 const assembled=fs.readFileSync('synap_esp32s3/synap_esp32s3.ino','utf8');
+const transfer=fs.readFileSync('firmware/shared/odyssey-sd-1631-transfer.cpp','utf8');
 for (const [name,body] of [['shared',source],['assembled',assembled]]) {
   test(name+': native read timeout during FAT mount quarantines before card pointer is returned',()=>{
     const tx=body.split('host.do_transaction=[]')[1].split('sdspi_device_config_t device')[0];
@@ -40,5 +41,15 @@ for (const [name,body] of [['shared',source],['assembled',assembled]]) {
       .split('bool odysseyRecoverSdCard(')[0];
     assert.match(boot,/if \(ready && bootResetReason==ESP_RST_POWERON\)/);
     assert.match(boot,/odysseySdRememberRailUnsafe\(false\)/);
+  });
+}
+
+for (const [name,body] of [['shared',transfer],['assembled',assembled]]) {
+  test(name+': BLE read timeout strands descriptor instead of calling fclose',()=>{
+    const read=body.split('static uint8_t readWavChunk(')[1]
+      .split('static uint8_t readSelected(')[0];
+    assert.match(read,/const bool nativeReadTimeout=odysseySdReadTimeoutQuarantined\(\)/);
+    assert.match(read,/nativeReadTimeout\?-1:fclose\(file\)/);
+    assert.match(read,/if \(!seekOk \|\| got!=want \|\| closeResult!=0 \|\| nativeReadTimeout\)/);
   });
 }
