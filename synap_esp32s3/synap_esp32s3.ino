@@ -1326,13 +1326,11 @@ void enterDeepSleep(const char* reason) {
     if (odysseySdBusStuckLow()) return;
     // Never hammer an unmounted, continuously powered card every 30 s.
     // The first background sleep recovery is bounded to ONE attempt per boot.
-    // Untrusted battery readings must not trigger any unattended SD activity.
-    // Explicit user-initiated SD recovery/sync remains separately available.
+    // SD recovery is controller-state gated, not ADC-voltage gated.
     static uint32_t lastSdSleepRecoveryAt=0;
     static uint8_t automaticSleepSdRecoveryAttempts=0;
     const uint32_t now=millis();
-    if (automaticSleepSdRecoveryAttempts>=1u ||
-        !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) return;
+    if (automaticSleepSdRecoveryAttempts>=1u) return;
     if (lastSdSleepRecoveryAt && uint32_t(now-lastSdSleepRecoveryAt)<30000u) return;
     lastSdSleepRecoveryAt=now ? now : 1u;
     ++automaticSleepSdRecoveryAttempts;
@@ -1440,8 +1438,7 @@ void powerTick() {
   sampleBattery(false);
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   if (odysseyRecording.load()) {
-    if (batteryCritical() && !odysseyStopRequested.exchange(true))
-      Serial.println("[POWER] trusted critical battery requested offline SD STOP");
+    // No ADC-driven STOP for offline SD capture; hardware brownout can still truncate audio.
     // No disconnected-idle or critical-battery deep sleep before recorder
     // fsync/fclose, even if the PWA has never connected.
     return;
@@ -5420,16 +5417,7 @@ static uint8_t removeFailureStep=0;
 static uint8_t removeFile(const char* path) {
   removeFailureStep=0;
   if (!safeWavPath(path)) return BAD_COMMAND;
-  // Manual, single-file deletion must not be blocked by the C3+SD's
-  // independently reported untrusted battery ADC (batteryAvailable=false).
-  // Still reject a *trusted* low-voltage measurement. Never attempt FAT
-  // changes when the card is not mounted/ready or an SD take owns the lock.
-  // A single explicit unlink is one bounded FAT metadata mutation, not a
-  // long recording or full-card format. Reuse the established 3.8 V
-  // CONTINUE floor; the 3.9 V START floor remains for bulk/format actions.
-  // Rev K battery supply uses a diode into SuperMini VIN: never bypass the
-  // trusted low-voltage guard or claim the unmeasured SD 3.3 V rail is stable.
-  if (batteryAvailable.load() && batteryMillivolts<ODYSSEY_SD_WRITE_CONTINUE_MIN_MV) return BUSY;
+  // Battery ADC is telemetry, never a gate for user-selected SD deletion.
   OdysseySdGuard guard(pdMS_TO_TICKS(1000));
   if (!guard || !storageReady() ||
       odysseySdWriteTimeoutQuarantined() ||
@@ -5460,7 +5448,6 @@ static uint8_t removeFile(const char* path) {
 }
 
 static uint16_t clearRecordings() {
-  if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) return 0;
   OdysseySdGuard guard;
   if (!guard || !storageReady()) return 0;
   char directoryPath[96];
@@ -5858,7 +5845,6 @@ static void worker(void*) {
         invalidateBleReadCache();
         selectedPath[0]=0;catalogueBuffer="";
         if(!storageReady())error=NO_SD;
-        else if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) error=BUSY;
         else total=clearRecordings();
         break;
       case 19: {
@@ -5874,12 +5860,7 @@ static void worker(void*) {
              recordedFault!=52u && recordedFault!=68u) ||
             odysseySdReadTimeoutQuarantined() ||
             odysseySdWriteTimeoutQuarantined()) { error=BUSY;break; }
-        // The C3+SD divider can report untrusted readings. As with manual
-        // unlink, reject an actually TRUSTED low reading; do not fabricate one.
-        if (batteryAvailable.load() &&
-            batteryMillivolts<ODYSSEY_SD_WRITE_START_MIN_MV) {
-          error=BUSY;break;
-        }
+        // No battery ADC restriction; healthy FAT and explicit confirmation required.
         const esp_err_t result=odysseyFormatSdCard();
         if (result!=ESP_OK) {
           error=IO_ERROR;
