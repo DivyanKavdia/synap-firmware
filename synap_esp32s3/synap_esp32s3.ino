@@ -5271,10 +5271,15 @@ static uint8_t readWavChunk(const char* logical,uint32_t offset,
   const int readErr=errno;
   const bool streamError=ferror(file)!=0;
   const bool streamEof=feof(file)!=0;
+  // A native CMD17/18 timeout may strand the SD controller in a read
+  // transaction. Do not enter FatFs again via fclose() on that same rail.
+  // This read-only descriptor is intentionally stranded until real power-off;
+  // the timeout quarantine prohibits any more SD filesystem operations.
+  const bool nativeReadTimeout=odysseySdReadTimeoutQuarantined();
   errno=0;
-  const int closeResult=fclose(file);
-  const int closeErr=errno;
-  if (!seekOk || got!=want || closeResult!=0) {
+  const int closeResult=nativeReadTimeout?-1:fclose(file);
+  const int closeErr=nativeReadTimeout?EIO:errno;
+  if (!seekOk || got!=want || closeResult!=0 || nativeReadTimeout) {
     sdBleFaultReadGot=uint32_t(got);
     sdBleFaultReadWant=uint32_t(want);
     sdBleFaultReadFlags=(streamError?1u:0u) | (streamEof?2u:0u) |
