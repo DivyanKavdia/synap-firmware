@@ -1326,7 +1326,7 @@ void enterDeepSleep(const char* reason) {
     if (odysseySdBusStuckLow()) return;
     // Never hammer an unmounted, continuously powered card every 30 s.
     // The first background sleep recovery is bounded to ONE attempt per boot.
-    // SD recovery is controller-state gated, not ADC-voltage gated.
+    // SD recovery is gated by controller/recording state, not battery ADC.
     static uint32_t lastSdSleepRecoveryAt=0;
     static uint8_t automaticSleepSdRecoveryAttempts=0;
     const uint32_t now=millis();
@@ -1438,7 +1438,9 @@ void powerTick() {
   sampleBattery(false);
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   if (odysseyRecording.load()) {
-    // No ADC-driven STOP for offline SD capture; hardware brownout can still truncate audio.
+    // User requested no battery threshold for SD recording operations.
+    // The card still cannot survive a real hardware brownout, and sudden
+    // power loss can truncate an in-progress WAV.
     // No disconnected-idle or critical-battery deep sleep before recorder
     // fsync/fclose, even if the PWA has never connected.
     return;
@@ -5355,7 +5357,10 @@ static uint8_t removeFailureStep=0;
 static uint8_t removeFile(const char* path) {
   removeFailureStep=0;
   if (!safeWavPath(path)) return BAD_COMMAND;
-  // Battery ADC is telemetry, never a gate for user-selected SD deletion.
+  // User controls the hardware power switch; battery ADC is telemetry only.
+  // No arbitrary 3.8V/3.9V admission rule for selected-file SD deletion.
+  // Active recording, timeout quarantine, verified FAT mount and storage
+  // mutex still enforce safe ordering. Physical brownout remains possible.
   OdysseySdGuard guard(pdMS_TO_TICKS(1000));
   if (!guard || !storageReady() ||
       odysseySdWriteTimeoutQuarantined() ||
@@ -5386,6 +5391,7 @@ static uint8_t removeFile(const char* path) {
 }
 
 static uint16_t clearRecordings() {
+  // Do not gate explicit SD operations on estimated battery voltage.
   OdysseySdGuard guard;
   if (!guard || !storageReady()) return 0;
   char directoryPath[96];
@@ -5666,7 +5672,7 @@ static void worker(void*) {
         char detail[280];
         const uint8_t stage=odysseyLastRecordFailureStage();
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"stage\":%u,\"bytes\":%lu,\"faultLed\":%u,\"micRestarts\":%u,\"recording\":%u,\"stopPending\":%u,\"readQuarantine\":%u,\"writeQuarantine\":%u,\"coldRecovery\":%u,\"resetReason\":%u}",
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"stage\":%u,\"bytes\":%lu,\"faultLed\":%u,\"micRestarts\":%u,\"recording\":%u,\"stopPending\":%u,\"readQuarantine\":%u,\"writeQuarantine\":%u,\"coldRecovery\":%u,\"resetReason\":%u,\"cleanupRemoved\":%u,\"cleanupStatus\":%u}",
           unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
           unsigned(stage),static_cast<unsigned long>(odysseyLastRecordFailureBytes()),
           unsigned(odysseyRecorderFaultLedCode.load()),
@@ -5676,7 +5682,9 @@ static void worker(void*) {
           unsigned(odysseySdReadTimeoutQuarantined()?1u:0u),
           unsigned(odysseySdWriteTimeoutQuarantined()?1u:0u),
           unsigned(odysseySdColdRecoveryStatus()),
-          unsigned(bootResetReason));
+          unsigned(bootResetReason),
+          unsigned(odysseySdColdCleanupRemoved()),
+          unsigned(odysseySdColdCleanupStatus()));
         if (n<=0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
@@ -5798,7 +5806,8 @@ static void worker(void*) {
              recordedFault!=52u && recordedFault!=68u) ||
             odysseySdReadTimeoutQuarantined() ||
             odysseySdWriteTimeoutQuarantined()) { error=BUSY;break; }
-        // No battery ADC restriction; healthy FAT and explicit confirmation required.
+        // No battery threshold is used as an SD mutation admission gate.
+        // Format still requires explicit user token and healthy FAT state.
         const esp_err_t result=odysseyFormatSdCard();
         if (result!=ESP_OK) {
           error=IO_ERROR;
