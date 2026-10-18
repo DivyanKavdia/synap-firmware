@@ -17,7 +17,7 @@ constexpr int OUTPUT=1,HIGH=1;
 using sdcard_type_t=int;
 bool spiHealthy=true,mountHealthy=true,rootHealthy=true,rootDirectory=true,spaceHealthy=true,rootExists=true,mkdirHealthy=true,cardPresent=true;
 bool busStarted=false,fsMounted=false;unsigned resets=0,handles=0;uint32_t lastHz=0,limitHz=4000000;
-bool probeCardVisible=false,probeRawHealthy=false,probeFsHealthy=false;
+bool probeCardVisible=false,probeCardUnknown=false,probeRawHealthy=false,probeFsHealthy=false;
 std::vector<uint32_t> clocks;
 void pinMode(int pin,int mode){assert(pin==21&&mode==OUTPUT);}
 void digitalWrite(int pin,int level){assert(pin==21&&level==HIGH);}
@@ -62,7 +62,7 @@ bool sdcard_mount(uint8_t,const char* path,uint8_t files,bool format){
  return probeFsHealthy;
 }
 uint8_t sdcard_unmount(uint8_t){return 0;}
-sdcard_type_t sdcard_type(uint8_t){return probeCardVisible?CARD_SDHC:CARD_NONE;}
+sdcard_type_t sdcard_type(uint8_t){return probeCardUnknown?CARD_UNKNOWN:(probeCardVisible?CARD_SDHC:CARD_NONE);}
 uint32_t sdcard_num_sectors(uint8_t){return probeFsHealthy?16000u:0u;}
 uint32_t sdcard_sector_size(uint8_t){return 512u;}
 bool sd_read_raw(uint8_t,uint8_t* bytes,uint32_t sector){
@@ -103,6 +103,12 @@ int main(){
  assert(clockHz==400000u);
  assert(std::string(mountStage)=="card");
  assert(probeCardType==CARD_NONE&&!probeSector0&&!probeFilesystem);
+ // CARD_UNKNOWN must never claim that sector zero actually failed: no raw
+ // sector request was issued. The old 'card-read' label was misleading.
+ sdQuarantined=false;probeCardUnknown=true;clocks.clear();
+ assert(!begin(true)&&sdQuarantined.load());
+ assert(std::string(mountStage)=="card-unknown"&&!probeSectorAttempted&&!probeSector0);
+ sdQuarantined=false;probeCardUnknown=false;
 
  // If the card initializes and raw sector zero is readable but FAT mounting
  // still fails, the fault is the filesystem, not SPI wiring. The probe never
