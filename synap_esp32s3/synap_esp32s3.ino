@@ -4166,7 +4166,10 @@ bool odysseyPrepareSdForCommittedOtaRestart(uint32_t timeoutMs) {
         odysseySdWriteTimeoutQuarantined()) {
       // Warm reboot is allowed without any SPI access. The railBad latch
       // prevents a false fresh mount while the SD rail remains powered.
-      (void)odysseySdRememberRailUnsafe(true);
+      if (!odysseySdRememberRailUnsafe(true)) {
+        Serial.println("[OTA] restart refused: cannot persist SD rail quarantine");
+        return false;
+      }
       Serial.println("[OTA] restart permitted without touching quarantined SPI2");
       return true;
     }
