@@ -2525,6 +2525,8 @@ void transmitterTask(void* parameter) {
 uint8_t odysseyLastRecordFailureStage();
 uint32_t odysseyLastRecordFailureBytes();
 void odysseySdInvalidateHistoricalFaultResolution();
+static bool odysseySdUnresolvedHistoricalStorageFault();
+uint8_t odysseySdColdRecoveryStatus();
 #else
 #include <SPI.h>
 #include <SD.h>
@@ -2842,9 +2844,15 @@ static OdysseySdRawProbeResult odysseySdRawProbeCached{};
 void odysseySdRawProbeOnce() {
   OdysseySdGuard guard(pdMS_TO_TICKS(1000));
   OdysseySdRawProbeResult result{};
+  // Raw-sector diagnostics are observational but still issue physical CMDs.
+  // Never use them to bypass the retained write-fault cold-reset gate or a
+  // native timeout quarantine on a card whose power rail stayed active.
   if (!guard || odysseySdReady() || odysseySdNativeCard ||
       odysseySdNativeBusInitialized || odysseyRecording.load() ||
-      streamingEnabled.load() || otaBusy() || sleepPending || odysseySdFormatting()) {
+      streamingEnabled.load() || otaBusy() || sleepPending || odysseySdFormatting() ||
+      odysseySdWriteTimeoutQuarantined() || odysseySdReadTimeoutQuarantined() ||
+      (odysseySdUnresolvedHistoricalStorageFault() &&
+       (bootResetReason!=ESP_RST_POWERON || odysseySdColdRecoveryStatus()==2u))) {
     result.status=2;result.error=ESP_ERR_INVALID_STATE;odysseySdRawProbeCached=result;return;
   }
   if (odysseySdControllerBusyLow() || odysseySdBusStuckLow()) {
