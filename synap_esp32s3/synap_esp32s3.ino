@@ -3796,135 +3796,12 @@ static std::atomic<uint8_t> odysseySdBootCleanupState{0};
 uint16_t odysseySdColdCleanupRemoved() { return odysseySdBootCleanupRemoved.load(); }
 uint8_t odysseySdColdCleanupStatus() { return odysseySdBootCleanupState.load(); }
 
-// Accept ONLY our 8.3 names: R + 7 hex digits + .WAV or .PART.
-// PART belongs to legacy interrupted recorder artefacts. Every non-empty WAV
-// remains untouched, even if its RIFF header is still provisional.
-static bool odysseySdCleanupName(const char* name,bool& part) {
-  if (!name || strlen(name)!=12u) return false;
-  if (name[0]!='R' && name[0]!='r') return false;
-  for (size_t i=1;i<8;i++) {
-    const char c=name[i];
-    if (!((c>='0' && c<='9') || (c>='A' && c<='F') ||
-          (c>='a' && c<='f'))) return false;
-  }
-  if (name[8]!='.') return false;
-  const char* ext=name+9;
-  const bool wav=(ext[0]=='W'||ext[0]=='w') &&
-    (ext[1]=='A'||ext[1]=='a') && (ext[2]=='V'||ext[2]=='v');
-  // A 3-character .PAR entry is not a .PART file; require the full suffix.
-  part=false;
-  return wav;
-}
-static bool odysseySdColdCleanupPartName(const char* name) {
-  if (!name || strlen(name)!=13u || (name[0]!='R'&&name[0]!='r') ||
-      name[8]!='.') return false;
-  for (size_t i=1;i<8;i++) {
-    const char c=name[i];
-    if (!((c>='0'&&c<='9')||(c>='A'&&c<='F')||
-          (c>='a'&&c<='f'))) return false;
-  }
-  const char* ext=name+9;
-  return (ext[0]=='P'||ext[0]=='p')&&(ext[1]=='A'||ext[1]=='a')&&
-    (ext[2]=='R'||ext[2]=='r')&&(ext[3]=='T'||ext[3]=='t');
-}
-
-// Run inside the existing SD mutex, once per genuine slider power-on, only
-// AFTER a successful read-only FAT validation. Never auto-clean on warm/OTA
-// boot, on a timed-out rail or during a recording. Collect/close all directory
-// reads first so unlink is not interleaved with an open FAT DIR handle.
-static bool odysseySdColdCleanupLocked() {
-  odysseySdBootCleanupRemoved=0;
-  odysseySdBootCleanupState=0;
-  if (bootResetReason!=ESP_RST_POWERON || !odysseySdReady() ||
-      odysseySdTimedOutWriteQuarantined.load() ||
-      odysseySdTimedOutReadQuarantined.load() ||
-      odysseyRecording.load() || otaBusy() || streamingEnabled.load()) return true;
-  constexpr size_t MAX_CANDIDATES=16;
-  char candidates[MAX_CANDIDATES][96]{};
-  size_t found=0;
-  const char* dirs[2]={ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_RECORDING_DIR};
-  bool scanFailed=false,more=false;
-  for (uint8_t index=0;index<2 && !scanFailed && !more;++index) {
-    errno=0;
-    DIR* dir=opendir(dirs[index]);
-    if (!dir) {
-      if (index==1u && errno==ENOENT) continue;
-      scanFailed=true;break;
-    }
-    while (true) {
-      errno=0;
-      dirent* e=readdir(dir);
-      if (!e) { if (errno) scanFailed=true;break; }
-      bool part=false;
-      const bool wav=odysseySdCleanupName(e->d_name,part);
-      part=odysseySdColdCleanupPartName(e->d_name);
-      if (!wav && !part) continue;
-      char path[96]{};
-      const int n=snprintf(path,sizeof(path),"%s/%s",dirs[index],e->d_name);
-      if (n<=0 || size_t(n)>=sizeof(path)) { scanFailed=true;break; }
-      struct stat st{};
-      errno=0;
-      if (stat(path,&st)!=0) {scanFailed=true;break;}
-      if (!S_ISREG(st.st_mode)) continue;
-      // Never erase a .PART with any possible audio; even a crashed
-      // temporary file above 44 bytes can contain recoverable PCM.
-      // Only 0..44 bytes of recognized Synap artifacts are eligible.
-      if (st.st_size<0 || st.st_size>44) continue;
-      if (found==MAX_CANDIDATES) {
-        more=true;break; // bounded work; remaining artifacts next cold boot
-      }
-      memcpy(candidates[found++],path,size_t(n)+1u);
-    }
-    if (closedir(dir)!=0) scanFailed=true;
-  }
-  if (scanFailed || odysseySdTimedOutReadQuarantined.load() ||
-      odysseySdTimedOutWriteQuarantined.load()) {
-    odysseySdBootCleanupState=2;
-    odysseySdRememberCleanupUnsafe(true);
-    // Read failure is not permission to reinitialize or mutate FAT.
-    odysseySdMarkVfsFailure(); // SD-independent diagnostic/NVS only
-    return false;
-  }
-  // Set a durable NVS guard before the first FAT mutation, not only
-  // after a reported error. Abrupt battery loss mid-unlink leaves the
-  // following warm MCU reset protected; the cold verified boot clears it.
-  if (found && !odysseySdRememberCleanupUnsafe(true)) {
-    odysseySdBootCleanupState=2;
-    Serial.println("[SD] empty-artifact cleanup skipped: could not persist safety guard");
-    return true; // card remains read-verified and usable; no FAT was changed
-  }
-  for (size_t i=0;i<found;++i) {
-    if (odysseySdTimedOutWriteQuarantined.load() ||
-        odysseySdTimedOutReadQuarantined.load()) {
-      odysseySdBootCleanupState=2;
-      odysseySdRememberCleanupUnsafe(true);
-      odysseySdMarkVfsFailure(); // no additional SD card command
-      return false;
-    }
-    errno=0;
-    if (unlink(candidates[i])!=0 ||
-        odysseySdTimedOutWriteQuarantined.load() ||
-        odysseySdTimedOutReadQuarantined.load()) {
-      // Uncertain metadata write: do NOT issue a stat, retry unlink, mount or
-      // any further physical command. Leave all other WAVs intact.
-      odysseySdQuarantineUncertainWrite();
-      odysseySdBootState=2;odysseySdProbeStage=82;
-      odysseySdBootCleanupState=2;
-      odysseySdRememberCleanupUnsafe(true);
-      odysseySdInvalidateHistoricalFaultResolution();
-      return false;
-    }
-    odysseySdBootCleanupRemoved=uint16_t(i+1u);
-    // Defer the next independent FAT metadata mutation so cleanup does not
-    // burst back-to-back card program operations on the sealed C3 module.
-    if (i+1u<found) vTaskDelay(pdMS_TO_TICKS(250u));
-  }
-  odysseySdBootCleanupState=more?3u:1u;
-  if (found) vTaskDelay(pdMS_TO_TICKS(250)); // settle after last FAT mutation
-  Serial.printf("[SD] slider cold cleanup: removed=%u remaining=%u WAV/PART debris\\n",
-    unsigned(odysseySdBootCleanupRemoved.load()),unsigned(more));
-  return true;
-}
+// No automatic directory scanning/unlink on cold boot. A real FAT mount can
+// be read-validated while SD controller writes remain unreliable; even a
+// zero-byte orphan removal triggers CMD24 metadata programming, which failed
+// at stage 82 in the 2026-10-18 field test. Explicit user deletion still
+// remains available through the media worker after a healthy mount.
+// Telemetry status 4 means intentionally disabled; removed always stays zero.
 
 bool odysseyInitializeSdCardBeforeBle() {
   OdysseySdGuard guard;
@@ -3953,23 +3830,26 @@ bool odysseyInitializeSdCardBeforeBle() {
       unsigned(previousRecordStage));
   }
 
-  const bool mounted=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
-  // Only cold, fully validated mounts are eligible for bounded orphan cleanup.
-  // On a metadata failure leave storage unavailable; no automatic retry.
-  const bool ready=mounted && odysseySdColdCleanupLocked();
+  // Boot is strictly read-only: never unlink an orphan, fsync, create a
+  // directory, format or otherwise cause a FAT metadata write just to mount.
+  // A successful mount is immediately available for the BLE catalogue and
+  // an explicit offline recording. Prior cleanupBad is cleared only below
+  // on a verified cold mount, not on warm/OTA software reset.
+  odysseySdBootCleanupRemoved=0;
+  odysseySdBootCleanupState=4;
+  const bool ready=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
   // Only an actual cold card power-on + successful VFS validation can clear
   // this historical boot veto. Software/OTA reset alone is insufficient.
   if (ready && bootResetReason==ESP_RST_POWERON) {
     // Both SD and MCU were physically switched off (USB must be unplugged).
-    // Successful cold cleanup restores readiness but never clears old PCM
-    // error diagnostics. Clear only the independent cleanup-safety latch.
+    // A verified cold FAT mount restores readiness, without changing the
+    // filesystem. Clear the independent legacy cleanup-safety latch only
+    // after the cold validation succeeded; retain historical PCM diagnostics.
     odysseySdRememberCleanupUnsafe(false);
     (void)odysseySdRememberRailUnsafe(false);
     odysseySdMarkHistoricalFaultResolved();
     if (previousStorageFault) odysseySdColdRecoveryState=1;
-  } else if (mounted && !ready) {
-    odysseySdColdRecoveryState=2;
-  }
+
   Serial.printf("[SD] boot initialization complete state=%u stage=%u before BLE\n",
     unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()));
   return ready;
@@ -4429,50 +4309,18 @@ static uint8_t odysseyBatchWriteFailureStage(int error) {
     default: return 70;
   }
 }
-// A POSIX fsync on the pinned ESP-IDF FatFs VFS maps to f_sync(), which
-// commits file size, allocation and directory metadata while keeping this
-// sequential append-only WAV open. The transfer path synthesizes its WAV
-// header from the resulting file length after an interrupted power cycle.
-// Only invoke after a successful, complete aligned PCM batch under OdysseySdGuard.
-// Fewer FAT directory/FSInfo CMD24 metadata writes while audio is active.
-// Ten-second f_sync was a regular single-sector write stressor on the
-// affected C3+SD carrier. This trades a longer unsynced tail (up to ~60 s)
-// for substantially fewer controller program-busy transitions.
-// An interrupted 20-second take previously looked like 0 B because the
-// first metadata sync was deferred until 60 seconds. One early f_sync after
-// 256 KiB of successfully appended PCM (~8.2 s at 16 kHz mono PCM16)
-// bounds this exposure without reinstating the old every-10-second sync.
-// This cannot fix a CMD25 busy timeout and adds one metadata CMD24; trial
-// on a disposable card before releasing on the sealed production carrier.
+// No fsync/fflush checkpoint while recording. The early 256 KiB metadata
+// checkpoint failed with native CMD24 ESP_ERR_TIMEOUT=263 on field build
+// 2310; periodic checkpoints create the same avoidable single-sector write.
+// Only a clean STOP/fclose commits the file length. Unexpected power loss
+// may therefore leave an empty or truncated WAV despite physically written
+// PCM clusters. This does NOT fix a card that times out on CMD25 or STOP.
 // Experimental C3 compatibility profile: 4 contiguous sectors per CMD25 instead
 // of 8. Never fall back to CMD24 or retry an uncertain write.
 static constexpr size_t ODYSSEY_SD_RECORD_BATCH_BYTES=2048u;
 static_assert(ODYSSEY_SD_RECORD_BATCH_BYTES>=1024u &&
   ODYSSEY_SD_RECORD_BATCH_BYTES%512u==0u,
   "C3 SD recording must use aligned multi-sector CMD25 writes");
-static constexpr uint32_t ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES=262144u;
-static constexpr uint32_t ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=60000u;
-static uint8_t odysseyCheckpointWav(FILE* file,int& savedErrno) {
-  savedErrno=0;
-  errno=0;
-  if (fflush(file)!=0) {
-    savedErrno=errno?errno:EIO;
-    return 71;  // C stdio flush failed
-  }
-  errno=0;
-  const int fd=fileno(file);
-  if (fd<0) {
-    savedErrno=errno?errno:EBADF;
-    return 73;  // no valid VFS descriptor; do not fsync arbitrary fd
-  }
-  errno=0;
-  if (fsync(fd)!=0) {
-    savedErrno=errno?errno:EIO;
-    return 72;  // FatFs f_sync failed: directory/size durability unknown
-  }
-  return 0;
-}
-
 // Explicit disconnected double-tap is the sole entry to this recorder.
 // The mounted FAT root, the storage mutex and each actual write determine
 // success. Do not block an actual SD I/O test on unrelated ADC telemetry.
@@ -4505,8 +4353,6 @@ static void odysseyRecordTake() {
   bool uncertainSdWrite=false; // No FAT close/metadata writes after unknown write EIO
   uint8_t failureStage=0;
   uint32_t bytes=0;
-  uint32_t lastCheckpointAt=millis();
-  uint32_t checkpointedPcmBytes=0;
   // Recorder progress is determined by SD write results, not ADC telemetry.
   char logicalPath[64]{};
   char fullPath[96]{};
@@ -4638,39 +4484,8 @@ static void odysseyRecordTake() {
           batchPcmBytes=0;
           // This is an explicit SD write test: trust the actual complete
           // aligned multi-sector batch result, not uncalibrated battery ADC readings.
-          // The first 256 KiB and subsequent 60-second checkpoints sync FAT
-          // file-length metadata. An unexpected power cut can lose the unsynced tail;
-          // FAT sectors in flight can still tear on a sudden rail collapse.
-          // The native SDSPI host owns write completion and timeout checks.
-          const bool firstCheckpointDue=checkpointedPcmBytes==0u &&
-            bytes>=ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES;
-          const bool periodicCheckpointDue=
-            uint32_t(millis()-lastCheckpointAt)>=ODYSSEY_SD_CHECKPOINT_INTERVAL_MS;
-          if (firstCheckpointDue || periodicCheckpointDue) {
-            int checkpointErrno=0;
-            const uint8_t checkpointStage=odysseyCheckpointWav(file,checkpointErrno);
-            if (checkpointStage) {
-              odysseyPersistedWriteErrno=uint32_t(checkpointErrno);
-              odysseyPersistedWriteReturned=0;
-              odysseyPersistedWriteExpected=0;
-              odysseyPersistedWriteFerror=ferror(file)?1u:0u;
-              synapSdNoteNativeWriteError(checkpointStage,checkpointErrno);
-            odysseyPersistedDriverFault=synapSdWriteFaultCode();
-              uncertainSdWrite=true;
-              failed=true;
-              failureStage=checkpointStage;
-              Serial.printf("[SD] WAV checkpoint failed stage=%u errno=%d pcm=%lu lastSynced=%lu\n",
-                unsigned(checkpointStage),checkpointErrno,
-                static_cast<unsigned long>(bytes),
-                static_cast<unsigned long>(checkpointedPcmBytes));
-              break;
-            }
-            checkpointedPcmBytes=bytes;
-            lastCheckpointAt=millis();
-            if (firstCheckpointDue) Serial.printf(
-              "[SD] first WAV metadata checkpoint synced pcm=%lu (not proof of card-level persistence)\n",
-              static_cast<unsigned long>(bytes));
-          }
+          // Do not interrupt active PCM append with FAT metadata fsync.
+          // Only clean STOP/fclose finalizes directory size and allocation.
         }
       }
 
@@ -4728,9 +4543,10 @@ static void odysseyRecordTake() {
       }
     }
 
-    // STOP is append-only. One early f_sync, then fclose() on STOP minimizes
-    // metadata programming during active capture. After power loss only the
-    // early checkpointed prefix is guaranteed to be discoverable.
+    // STOP is append-only. fclose() finalizes FAT metadata exactly once.
+    // Without active checkpoints, unexpected power loss can lose directory
+    // length even if sector writes returned success. Do not claim a power-loss
+    // recoverable audio prefix unless a fully finalized file is verified.
     // The on-card header stays provisional; transfer synthesizes the true WAV
     // header from file size after a clean stop OR interrupted power cycle.
     // The LAST padded 2 KiB write occurs after the earlier timeout gate.
