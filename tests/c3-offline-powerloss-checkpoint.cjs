@@ -10,14 +10,14 @@ test('C3 does not issue mid-record FAT metadata checkpoints after observed CMD24
  const capture=recorder.split('static void odysseyRecordTake() {')[1]
    .split('static void odysseyRecordTask(void*) {')[0];
  assert.match(capture,/ODYSSEY_SD_RECORD_BATCH_BYTES/);
- assert.match(capture,/fwrite\\(batch,1,sizeof\\(batch\\),file\\)/);
- assert.match(capture,/fclose\\(file\\)!=0/);
- assert.match(capture,/odysseySdWriteTimeoutQuarantined\\(\\)/);
- assert.match(capture,/odysseySdQuarantineUncertainWrite\\(\\)/);
- assert.doesNotMatch(recorder,/ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES|ODYSSEY_SD_CHECKPOINT_INTERVAL_MS|odysseyCheckpointWav|\\bfsync\\(/);
+ assert.match(capture,/fwrite\(batch,1,sizeof\(batch\),file\)/);
+ assert.match(capture,/fclose\(file\)!=0/);
+ assert.match(capture,/odysseySdWriteTimeoutQuarantined\(\)/);
+ assert.match(capture,/odysseySdQuarantineUncertainWrite\(\)/);
+ assert.doesNotMatch(recorder,/ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES|ODYSSEY_SD_CHECKPOINT_INTERVAL_MS|odysseyCheckpointWav|\bfsync\(/);
  const active=capture.split('while (!failed && !odysseyStopRequested.load()) {')[1]
    .split('stopMicrophone();')[0];
- assert.doesNotMatch(active,/fflush\\(|fclose\\(|fsync\\(|fseek\\(|unlink\\(/);
+ assert.doesNotMatch(active,/fflush\(|fclose\(|fsync\(|fseek\(|unlink\(/);
 });
 test('power-interrupted WAV remains discoverable; download restores virtual RIFF header in RAM',()=>{
  const read=transfer.split('static uint8_t readWavChunk(')[1].split('static uint8_t readSelected(')[0];
