@@ -74,7 +74,7 @@ if(production){
       fs.copyFileSync(path.join(dir,config.sourceName),sourceOut);fs.copyFileSync(path.join(dir,'source.sha256'),hashOut);
       assets.push(binaryOut,manifestOut,sourceOut,hashOut);
     }
-    execFileSync('gh',['release','create',tag,...assets,'--repo',repo,'--target',commit,'--latest',
+    execFileSync('gh',['release','create',tag,...assets,'--repo',repo,'--target',commit,...(onlyTarget?[]:['--latest']),
       '--title',version,
       '--notes',onlyTarget
         ? 'Chakshu XIAO ESP32-S3 Sense only. Existing Odyssey S3, C3 and C3+SD release manifests/binaries are unchanged.'
