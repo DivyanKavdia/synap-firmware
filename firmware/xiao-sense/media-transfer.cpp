@@ -398,7 +398,7 @@ void worker(void*) {
     if(error)size=0;
     if(error==ChakshuMedia::IO_ERROR||error==ChakshuMedia::NO_SD) {
       // Unlike older Chakshu releases, never start another same-powered-rail
-      // SD.begin()/SD.end() cycle after a failed media operation. Keep the
+      // SD driver reinitialisation after a failed media operation. Keep the
       // first fault visible through RAM-only op35.
       ChakshuStorage::quarantine("media-io");
       size=ChakshuStorage::diagnostics(bytes,sizeof(bytes));
