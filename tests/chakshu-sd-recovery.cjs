@@ -13,13 +13,13 @@ test('Chakshu cold-mount diagnostics quarantine controller faults until next boo
 #include <vector>
 #include <string>
 constexpr int CARD_NONE=0,CARD_MMC=1,CARD_SD=2,CARD_SDHC=3,CARD_UNKNOWN=4;
-constexpr int OUTPUT=1,HIGH=1;
+constexpr int OUTPUT=1,HIGH=1,INPUT_PULLUP=2;
 using sdcard_type_t=int;
 bool spiHealthy=true,mountHealthy=true,rootHealthy=true,rootDirectory=true,spaceHealthy=true,rootExists=true,mkdirHealthy=true,cardPresent=true;
 bool busStarted=false,fsMounted=false;unsigned resets=0,handles=0;uint32_t lastHz=0,limitHz=1000000;
 bool probeCardVisible=false,probeCardUnknown=false,probeRawHealthy=false,probeFsHealthy=false;
 std::vector<uint32_t> clocks;
-void pinMode(int pin,int mode){assert(pin==21&&mode==OUTPUT);}
+void pinMode(int pin,int mode){assert((pin==21&&mode==OUTPUT)||(pin==8&&mode==INPUT_PULLUP));}
 void digitalWrite(int pin,int level){assert(pin==21&&level==HIGH);}
 void delay(unsigned){}
 unsigned millis(){return 777;}
@@ -41,9 +41,16 @@ struct Spi {
  }
 } SPI;
 struct Card {
- void end(){assert(handles==0);fsMounted=false;}
+ void end(){assert(handles==0);fsMounted=false;busStarted=false;++resets;}
+ bool mountUncertain(){return false;}
+ void probeReadOnly(uint8_t& type,bool& attempted,bool& sectorOk,bool& signature,bool& filesystem){
+   type=probeCardUnknown?CARD_UNKNOWN:(probeCardVisible?CARD_SDHC:CARD_NONE);
+   attempted=probeCardVisible;sectorOk=probeCardVisible&&probeRawHealthy;
+   signature=sectorOk;filesystem=probeFsHealthy;
+   busStarted=false;
+ }
  bool begin(int cs,Spi&,uint32_t hz,const char*,int files,bool format){
-  assert(busStarted&&cs==21&&files==5&&!format);clocks.push_back(hz);lastHz=hz;
+  assert(cs==21&&files==5&&!format);busStarted=true;clocks.push_back(hz);lastHz=hz;
   fsMounted=mountHealthy&&hz<=limitHz;return fsMounted;
  }
  int cardType(){return fsMounted&&cardPresent?1:CARD_NONE;}
@@ -88,7 +95,7 @@ int main(){
  assert(!recoverIO()&&sdQuarantined.load()&&recoveryClockLocked&&!ready);
  assert(resets==before&&busStarted&&fsMounted);
  clocks.clear();assert(!begin(false)&&!begin(true)&&clocks.empty());
- // This native mock now simulates a physical MCU reboot.
+ // This mock simulates a physical SD-rail power cycle.
  sdQuarantined=false;sdQuarantineReason="none";recoveryClockLocked=false;ready=false;
 
  // A card that never mounted is not falsely treated as a recovered card.
@@ -123,8 +130,7 @@ int main(){
  sdQuarantined=false;probeRawHealthy=false;clocks.clear();
  assert(!begin(true)&&std::string(mountStage)=="card-read");
 
- // A filesystem which mounts in the direct diagnostic path is explicitly
- // reported as such; it is still left unmounted for the normal owner to retry.
+ // Diagnostic mock may report readable filesystem without normal owner remount.
  sdQuarantined=false;probeRawHealthy=true;probeFsHealthy=true;clocks.clear();
  assert(!begin(true)&&std::string(mountStage)=="probe-mounted"&&probeFilesystem);
 
