@@ -4,12 +4,15 @@ const sd=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8');
 const rec=fs.readFileSync('firmware/shared/odyssey-sd-1631-recording.cpp','utf8');
 const tx=fs.readFileSync('firmware/shared/odyssey-sd-1631-transfer.cpp','utf8');
 const ino=fs.readFileSync('synap_esp32s3/synap_esp32s3.ino','utf8');
-test('C3 trace calls unmodified SDSPI transaction once, without additional commands or retries',()=>{
+test('C3 retries only CRC enable CMD59 once after an illegal command',()=>{
  const trace=sd.split('host.do_transaction=[](int slot,sdmmc_command_t* cmd)->esp_err_t {')[1]
    .split('sdspi_device_config_t device=')[0];
  assert.match(trace,/sdspi_host_do_transaction\(slot,cmd\)/);
- assert.equal((trace.match(/sdspi_host_do_transaction\(/g)||[]).length,1);
- assert.doesNotMatch(trace,/vTaskDelay|spi_device_transmit|sdmmc_send_cmd\(|odysseySdBitBang|odysseyRecoverSdCard/);
+ assert.equal((trace.match(/sdspi_host_do_transaction\(/g)||[]).length,2);
+ assert.match(trace,/cmd->opcode==59u && cmd->arg==1u &&\s*result==ESP_ERR_NOT_SUPPORTED/);
+ assert.match(trace,/vTaskDelay\(pdMS_TO_TICKS\(10u\) \? pdMS_TO_TICKS\(10u\) : 1u\)/);
+ assert.equal((trace.match(/vTaskDelay\(/g)||[]).length,1);
+ assert.doesNotMatch(trace,/spi_device_transmit|sdmmc_send_cmd\(|odysseySdBitBang|odysseyRecoverSdCard/);
  assert.match(sd,/host\.do_transaction=\[\]\(int slot,sdmmc_command_t\* cmd\)->esp_err_t/);
  assert.match(sd,/cmd->opcode==52u \|\| cmd->opcode==5u/);
  assert.match(sd,/error==ESP_ERR_NOT_SUPPORTED/);

@@ -4,9 +4,11 @@ const sd=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8');
 const rec=fs.readFileSync('firmware/shared/odyssey-sd-1631-recording.cpp','utf8');
 const tx=fs.readFileSync('firmware/shared/odyssey-sd-1631-transfer.cpp','utf8');
 const ino=fs.readFileSync('synap_esp32s3/synap_esp32s3.ino','utf8');
-test('first native C3 timeout captures transaction timing without mutating SD protocol',()=>{
+test('first native C3 timeout is observed without retrying data commands',()=>{
   const cb=sd.split('host.do_transaction=[](int slot,sdmmc_command_t* cmd)->esp_err_t {')[1].split('sdspi_device_config_t device=')[0];
-  assert.equal((cb.match(/sdspi_host_do_transaction\(slot,cmd\)/g)||[]).length,1);
+  assert.equal((cb.match(/sdspi_host_do_transaction\(slot,cmd\)/g)||[]).length,2);
+  assert.match(cb,/cmd->opcode==59u && cmd->arg==1u &&\s*result==ESP_ERR_NOT_SUPPORTED/);
+  assert.equal((cb.match(/vTaskDelay\(/g)||[]).length,1);
   assert.match(cb,/const uint32_t startedAt=millis\(\);/);
   assert.match(cb,/uint32_t\(millis\(\)-startedAt\)/);
   assert.match(cb,/odysseyWireElapsedMs=elapsed;/);
@@ -16,7 +18,7 @@ test('first native C3 timeout captures transaction timing without mutating SD pr
   assert.match(cb,/\?writeParent:odysseyWirePriorCmd\.load\(\)/);
   assert.match(cb,/odysseyWireWritesAtFailure=odysseyWireGoodWrites.load\(\);/);
   assert.match(cb,/odysseyWireCmdPlusOne.compare_exchange_strong\(expected,cmd->opcode\+1u\)/);
-  assert.doesNotMatch(cb,/vTaskDelay|delay\(|fwrite|fopen|sdmmc_send_cmd\(|spi_device_transmit|odysseyRecoverSdCard/);
+  assert.doesNotMatch(cb,/delay\(|fwrite|fopen|sdmmc_send_cmd\(|spi_device_transmit|odysseyRecoverSdCard/);
   assert.match(sd,/odysseySdClearWireFault\(\)/);
 });
 test('timing survives reboot in a separate stage/byte-paired NVS journal without changing backward ABI',()=>{

@@ -3401,7 +3401,20 @@ static bool odysseySdBeginLocked(bool explicitlyProvisionFat=false) {
   const uint32_t writeParent=(opcode==13u && odysseyPostWriteStatusSlots.load())
     ?odysseyPostWriteParent.load():UINT32_MAX;
   const uint32_t startedAt=millis();
-  const esp_err_t result=sdspi_host_do_transaction(slot,cmd);
+  esp_err_t result=sdspi_host_do_transaction(slot,cmd);
+  // ESP-IDF 5.5.1 does not retry an early CMD59 illegal-command response.
+  // Newer Espressif code retries CRC enable once after 10 ms. Keep CRC
+  // mandatory, preserve the card's final response, and never retry reads,
+  // writes or any other command (their completion may be uncertain).
+  if (cmd && cmd->opcode==59u && cmd->arg==1u &&
+      result==ESP_ERR_NOT_SUPPORTED) {
+    const uint32_t firstR1=cmd->response[0];
+    vTaskDelay(pdMS_TO_TICKS(10u) ? pdMS_TO_TICKS(10u) : 1u);
+    result=sdspi_host_do_transaction(slot,cmd);
+    Serial.printf("[SD] CMD59 CRC enable retry: firstR1=0x%02lx finalR1=0x%02lx result=%s\n",
+      static_cast<unsigned long>(firstR1),
+      static_cast<unsigned long>(cmd->response[0]),esp_err_to_name(result));
+  }
   if (writeParent!=UINT32_MAX) {
     const uint8_t slots=odysseyPostWriteStatusSlots.load();
     odysseyPostWriteStatusSlots=slots?uint8_t(slots-1u):0u;
