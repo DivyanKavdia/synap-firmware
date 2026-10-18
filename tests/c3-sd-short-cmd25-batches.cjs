@@ -15,15 +15,14 @@ test('C3 CMD25 compatibility trial writes four contiguous sectors, never CMD24',
   assert.match(s,/memset\(batch\+batchUsed,0,sizeof\(batch\)-batchUsed\)/);
   assert.doesNotMatch(s.split('static void odysseyRecordTake() {')[1].split('static void odysseyRecordTask(void*)')[0], /sdmmc_write_sectors|sdspi_host_do_transaction|fwrite\(batch,1,512|SD\.format\(/);
  }
- const helper=src.split('// Experimental C3 compatibility profile:')[1].split('static constexpr uint32_t ODYSSEY_SD_FIRST_CHECKPOINT')[0];
+ const helper=src.split('// Experimental C3 compatibility profile:')[1].split('// Explicit disconnected double-tap')[0];
  const compile=nativeTest('#include <cstdint>\n#include <cstddef>\n#include <iostream>\n'+
  ' // Experimental C3 compatibility profile:'+helper+
  '\nint main(){ static_assert(ODYSSEY_SD_RECORD_BATCH_BYTES==4*512u); std::cout << "PASS C3 four-sector batches"; }');
  assert.match(compile,/PASS C3 four-sector batches/);
 });
-test('C3 first metadata checkpoint and quarantine remain independent of batch size',()=>{
- assert.match(src,/ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES=262144u/);
- assert.match(src,/ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=60000u/);
+test('C3 safe shutdown and timeout quarantine remain independent of batch size',()=>{
+ assert.doesNotMatch(src,/ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES|ODYSSEY_SD_CHECKPOINT_INTERVAL_MS|odysseyCheckpointWav/);
  assert.match(src,/if \(file && \(odysseySdWriteTimeoutQuarantined\(\) \|\| uncertainSdWrite\)\)/);
  assert.match(src,/if \(odysseySdWriteTimeoutQuarantined\(\) \|\| uncertainSdWrite\) \{/);
  assert.match(src,/odysseySdQuarantineUncertainWrite\(\)/);

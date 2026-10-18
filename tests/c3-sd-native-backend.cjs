@@ -36,10 +36,8 @@ test('C3 boots without ADC gate, read-only FAT check and never formats automatic
   assert.doesNotMatch(detect,/odysseySdPowerSafe\(/);
 });
 
-test('Native C3 preserves append-only WAV, durable checkpoints, safe STOP and read protocol',()=>{
-  assert.match(rec,/ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=60000u/);
-  assert.match(rec,/fsync\(fd\)/);
-  assert.match(rec,/fflush\(file\)/);
+test('Native C3 preserves append-only WAV, STOP-only metadata commit and read protocol',()=>{
+  assert.doesNotMatch(rec,/ODYSSEY_SD_CHECKPOINT_INTERVAL_MS|odysseyCheckpointWav|fsync\(fd\)|fflush\(file\)/);
   assert.match(rec,/odysseyStopRequested\.load\(\)/);
   assert.match(rec,/fwrite\(/);
   assert.match(rec,/fclose\(file\)/);

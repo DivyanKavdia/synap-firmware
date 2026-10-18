@@ -44,7 +44,7 @@ test('purple remains visible until WAV finalization completes; verified recorder
   assert.doesNotMatch(led,/!odysseyStopRequested\.load\(\) && phase<260u/);
   assert.match(power,/User requested no battery threshold for SD recording operations/);
   assert.match(rec,/alignas\(4\) static uint8_t batch\[ODYSSEY_SD_RECORD_BATCH_BYTES\]/);
-  assert.match(rec,/odysseyCheckpointWav\(file,checkpointErrno\)/);
+  assert.doesNotMatch(rec,/odysseyCheckpointWav|ODYSSEY_SD_CHECKPOINT_INTERVAL_MS/);
   assert.match(rec,/fwrite\(batch,1,sizeof\(batch\),file\)/);
   for(const part of [sd,tx,rec,cap,power,led]) assert.ok(ino.includes(part),'generated sketch must include changed shared module');
   assert.match(ino,/bool odysseySdFormatting\(\); \/\/ media-v1 op19/);
