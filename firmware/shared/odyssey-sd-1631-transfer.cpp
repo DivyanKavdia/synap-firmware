@@ -707,10 +707,10 @@ static void worker(void*) {
       case 34: {
         // SD-independent recorder status, safe even after native CMD25/EIO.
         // Zero reads, zero FAT writes and no mount/recovery side effects.
-        char detail[220];
+        char detail[280];
         const uint8_t stage=odysseyLastRecordFailureStage();
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"stage\":%u,\"bytes\":%lu,\"faultLed\":%u,\"micRestarts\":%u,\"recording\":%u,\"stopPending\":%u,\"readQuarantine\":%u,\"writeQuarantine\":%u}",
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"stage\":%u,\"bytes\":%lu,\"faultLed\":%u,\"micRestarts\":%u,\"recording\":%u,\"stopPending\":%u,\"readQuarantine\":%u,\"writeQuarantine\":%u,\"coldRecovery\":%u,\"resetReason\":%u}",
           unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
           unsigned(stage),static_cast<unsigned long>(odysseyLastRecordFailureBytes()),
           unsigned(odysseyRecorderFaultLedCode.load()),
@@ -718,7 +718,9 @@ static void worker(void*) {
           unsigned(odysseyRecording.load()?1u:0u),
           unsigned(odysseyStopRequested.load()?1u:0u),
           unsigned(odysseySdReadTimeoutQuarantined()?1u:0u),
-          unsigned(odysseySdWriteTimeoutQuarantined()?1u:0u));
+          unsigned(odysseySdWriteTimeoutQuarantined()?1u:0u),
+          unsigned(odysseySdColdRecoveryStatus()),
+          unsigned(bootResetReason));
         if (n<=0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
