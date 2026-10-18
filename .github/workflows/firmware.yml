@@ -123,6 +123,9 @@ jobs:
     environment: production
     env:
       SYNAP_RELEASE_BRANCH: ota-releases
+      # Only the explicitly tagged Chakshu merge may publish a single target;
+      # every ordinary production build retains the existing five-target flow.
+      SYNAP_PUBLISH_TARGETS: ${{ contains(github.event.head_commit.message, '[chakshu-only]') && 'xiao-esp32s3-sense-8m' || '' }}
     permissions:
       contents: write
       id-token: write
@@ -154,22 +157,22 @@ jobs:
             fi
           fi
       - name: Attest ESP32-S3 production firmware with GitHub OIDC
-        if: steps.current.outputs.release == 'true'
+        if: steps.current.outputs.release == 'true' && env.SYNAP_PUBLISH_TARGETS == ''
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: bundle/esp32s3-fh4r2-qspi-4m/firmware.bin
       - name: Attest ESP32-C3 production firmware with GitHub OIDC
-        if: steps.current.outputs.release == 'true'
+        if: steps.current.outputs.release == 'true' && env.SYNAP_PUBLISH_TARGETS == ''
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: bundle/esp32c3-supermini-4m/firmware.bin
       - name: Attest factory-only C3+SD Wi-Fi firmware with GitHub OIDC
-        if: steps.current.outputs.release == 'true'
+        if: steps.current.outputs.release == 'true' && env.SYNAP_PUBLISH_TARGETS == ''
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: bundle/esp32c3-supermini-4m-sd/firmware.bin
       - name: Attest opt-in existing large-slot C3+SD Wi-Fi firmware with GitHub OIDC
-        if: steps.current.outputs.release == 'true'
+        if: steps.current.outputs.release == 'true' && env.SYNAP_PUBLISH_TARGETS == ''
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: bundle/esp32c3-supermini-4m-sd-ota/firmware.bin

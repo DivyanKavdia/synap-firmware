@@ -1,6 +1,14 @@
 // Audio acquisition never waits for the camera or filesystem. The writer owns
 // every SD handle; camera congestion drops visual frames with real timestamps.
 namespace ChakshuRecorder {
+// Incremental CRC of the stored MJPEG stream; receiver checks before import.
+uint32_t updateVisualCrc(uint32_t crc,const uint8_t* bytes,size_t length){
+  for(size_t i=0;i<length;++i){
+    crc^=bytes[i];
+    for(unsigned bit=0;bit<8;++bit)crc=(crc>>1)^((crc&1u)?0xEDB88320u:0u);
+  }
+  return crc;
+}
 constexpr uint32_t AUDIO_LIMIT=1920000, VIDEO_LIMIT=32u*1024u*1024u, JPEG_LIMIT=768u*1024u;
 struct Pcm { size_t size;uint8_t bytes[1600]; };
 struct Jpeg { size_t size;uint32_t atMs;uint8_t bytes[JPEG_LIMIT]; };
@@ -67,7 +75,7 @@ void record(ChakshuMedia::Snapshot& status,bool withVideo,std::atomic<bool>& sto
   File audio,video,index;
   uint8_t header[44],error=0;
   bool audioCreated=false,cameraChanged=false,protectedCapture=false;
-  uint32_t audioBytes=0,videoBytes=0,frames=0,nextProgress=0;
+  uint32_t audioBytes=0,videoBytes=0,frames=0,nextProgress=0,visualCrc=0xFFFFFFFFu;
   char audioPath[64]{},indexPath[64]{};
   if(!ChakshuStorage::ready)error=NO_SD;
   else if(withVideo && !ChakshuCamera::ready)error=NO_CAMERA;
@@ -142,6 +150,7 @@ void record(ChakshuMedia::Snapshot& status,bool withVideo,std::atomic<bool>& sto
       const size_t n=video.write(slot->bytes,slot->size);
       if(n!=slot->size){error=IO_ERROR;break;}
       videoBytes+=n;remaining-=n;
+      visualCrc=updateVisualCrc(visualCrc,slot->bytes,n);
       const uint32_t at=std::min(slot->atMs,audioBytes/32u);
       if((frames && index.print(',')!=1) || !index.print(at)){error=IO_ERROR;break;}
       ++frames;s.video.release();wrote=true;
@@ -162,15 +171,17 @@ void record(ChakshuMedia::Snapshot& status,bool withVideo,std::atomic<bool>& sto
   if(audio) {
     ChakshuStorage::wavHeader(header,audioBytes);
     if(!audio.seek(0)||audio.write(header,44)!=44)error=IO_ERROR;
-    audio.flush();audio.close();
+    audio.flush();
+    if(audio.size()!=uint64_t(audioBytes)+44u)error=IO_ERROR;
+    audio.close();
   }
   if(index) {
-    if(!index.printf("],\"durationMs\":%lu,\"audio\":\"%s\",\"droppedFrames\":%lu,\"width\":%u,\"height\":%u,\"targetFps\":%u,\"frames\":%lu,\"videoProfile\":%u}",
+    if(!index.printf("],\"durationMs\":%lu,\"audio\":\"%s\",\"droppedFrames\":%lu,\"width\":%u,\"height\":%u,\"targetFps\":%u,\"frames\":%lu,\"videoProfile\":%u,\"visualCrc32\":%lu}",
        (unsigned long)(audioBytes/32u),audioPath,(unsigned long)s.droppedFrames.load(),
-       status.width,status.height,status.targetFps,(unsigned long)frames,status.videoProfile))error=IO_ERROR;
+       status.width,status.height,status.targetFps,(unsigned long)frames,status.videoProfile,(unsigned long)(~visualCrc)))error=IO_ERROR;
     index.flush();index.close();
   }
-  if(video){video.flush();video.close();}
+  if(video){video.flush();if(video.size()!=videoBytes)error=IO_ERROR;video.close();}
   if(protectedCapture)ChakshuStorage::clearProtection();
   stopMicrophone();free(s.audio.slots);free(s.video.slots);
   if(cameraChanged)ChakshuCamera::endVideo();

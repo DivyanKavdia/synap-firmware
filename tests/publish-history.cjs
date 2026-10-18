@@ -25,6 +25,9 @@ function publish({existing=false,lookupError=false}={}) {
       if(Buffer.byteLength(output)>(options.maxBuffer||1024*1024))throw Error('spawnSync gh ENOBUFS');
       return output;
     }};
+  // The isolated Chakshu selector defaults to publishing the full artifact set.
+  context.selected=context.artifacts;
+  context.onlyTarget='';
   vm.runInNewContext(api+release,context);
   return calls;
 }

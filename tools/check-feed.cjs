@@ -5,8 +5,12 @@ const {repository,workflow,PRIMARY_TARGET,TARGETS}=require('./release.cjs');
 const branch=process.env.SYNAP_RELEASE_BRANCH||'ota-test',origin='https://divyankavdia.github.io';
 const githubToken=process.env.GH_TOKEN||process.env.GITHUB_TOKEN||'';
 if(!['ota-test','ota-releases'].includes(branch))throw Error('Invalid release branch');
+const onlyTarget=process.env.SYNAP_PUBLISH_TARGETS||'';
+if(onlyTarget && onlyTarget!=='xiao-esp32s3-sense-8m')throw Error('Invalid isolated feed check');
 
 const local=Object.values(TARGETS).map(config=>({config,manifest:JSON.parse(fs.readFileSync(path.join('bundle',config.id,'latest.json'),'utf8'))}));
+const checked=onlyTarget?local.filter(x=>x.config.id===onlyTarget):local;
+if(checked.length!==(onlyTarget?1:local.length))throw Error('Missing selected feed');
 const primary=local.find(x=>x.config.id===PRIMARY_TARGET);
 if(!primary)throw Error('Primary target bundle missing');
 
@@ -57,11 +61,11 @@ async function verifyGitHubProvenance(feed,tip){
 (async()=>{
   const index=await authoritativeJson('targets.json');
   const expectedTargets=Object.keys(TARGETS).sort();
-  if(index.schema!==1||index.version!==primary.manifest.version||index.build!==primary.manifest.build||index.channel!==primary.manifest.channel||index.primary!==PRIMARY_TARGET||
+  if(index.schema!==1||(!onlyTarget&&(index.version!==primary.manifest.version||index.build!==primary.manifest.build))||index.channel!==primary.manifest.channel||index.primary!==PRIMARY_TARGET||
       JSON.stringify(Object.keys(index.targets||{}).sort())!==JSON.stringify(expectedTargets))throw Error('Authoritative target index is invalid');
   const tip=branch==='ota-releases'?await releaseTip():null;
 
-  for(const {config,manifest} of local){
+  for(const {config,manifest} of checked){
     const feed=await authoritativeJson(config.manifestPath);
     if(feed.version!==manifest.version||feed.identity!==manifest.identity||feed.build!==manifest.build||feed.sha256!==manifest.sha256||feed.commit!==manifest.commit||feed.target!==config.id)
       throw Error(`Authoritative feed differs from compiled artifact for ${config.id}`);
@@ -76,8 +80,8 @@ async function verifyGitHubProvenance(feed,tip){
   // Validate CORS/parseability without marking a verified release failed for CDN lag.
   try{
     const cdn=await (await get(`https://raw.githubusercontent.com/${repository}/${branch}/targets.json?t=${Date.now()}`)).json();
-    if(cdn.build<primary.manifest.build)console.log(`NOTE: raw CDN target index is still on build ${cdn.build}; authoritative feed is ${primary.manifest.build}.`);
+    if(!onlyTarget && cdn.build<primary.manifest.build)console.log(`NOTE: raw CDN target index is still on build ${cdn.build}; authoritative feed is ${primary.manifest.build}.`);
     else if(cdn.channel!==primary.manifest.channel)throw Error('Raw CDN target index channel mismatch');
   }catch(error){console.log('NOTE: raw CDN target-index propagation check is non-blocking:',error.message);}
-  console.log(`PASS: ${primary.manifest.channel} build ${primary.manifest.build}, ${local.length} hardware targets, authoritative feeds, digests, provenance and browser CORS`);
+  console.log(`PASS: ${primary.manifest.channel} build ${primary.manifest.build}, ${checked.length} selected hardware targets, authoritative feeds, digests, provenance and browser CORS`);
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -66,6 +66,7 @@ uint32_t stopAt=64000;
 struct File {
   std::shared_ptr<Contents> content;size_t position=0;std::string path;
   explicit operator bool()const{return bool(content);}
+  size_t size()const{return content?content->bytes.size():0;}
   size_t write(const uint8_t* bytes,size_t n){
     if(cardFailed)return 0;
     const bool pcm=path.find(".wav")!=std::string::npos && n>44;
