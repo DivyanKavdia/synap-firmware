@@ -35,7 +35,7 @@ test('first SD write-timeout abort never fclose nor attempt a second write on st
 });
 test('reduce forced FAT metadata updates, tolerate brief I2S starvation, never erase SD files',()=>{
   for(const source of [recording,ino]){
-    assert.match(source,/ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=60000u/);
+    assert.doesNotMatch(source,/ODYSSEY_SD_CHECKPOINT_INTERVAL_MS|odysseyCheckpointWav/);
     assert.match(source,/uint32_t\(millis\(\)-noAudioSince\)>=1000u/);
   }
   assert.match(transfer,/ODYSSEY_C3_SD_BLE_BULK_CLEAR_ENABLED=false/);
