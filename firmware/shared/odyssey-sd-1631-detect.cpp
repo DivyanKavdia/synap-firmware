@@ -1223,11 +1223,12 @@ static bool odysseySdCleanupUnsafePersisted() {
   prefs.end();
   return unsafe;
 }
-static void odysseySdRememberCleanupUnsafe(bool unsafe) {
+static bool odysseySdRememberCleanupUnsafe(bool unsafe) {
   Preferences prefs;
-  if (!prefs.begin("sd-recstate",false)) return;
-  (void)prefs.putUChar("cleanupBad",unsafe?1u:0u);
+  if (!prefs.begin("sd-recstate",false)) return false;
+  const size_t written=prefs.putUChar("cleanupBad",unsafe?1u:0u);
   prefs.end();
+  return written==sizeof(uint8_t);
 }
 static bool odysseySdUnresolvedHistoricalStorageFault() {
   const uint8_t stage=odysseyLastRecordFailureStage();
@@ -1321,8 +1322,10 @@ static bool odysseySdColdCleanupLocked() {
       errno=0;
       if (stat(path,&st)!=0) {scanFailed=true;break;}
       if (!S_ISREG(st.st_mode)) continue;
-      // Only header-only/empty WAVs or strictly named .PART artifacts.
-      if (!part && (st.st_size<0 || st.st_size>44)) continue;
+      // Never erase a .PART with any possible audio; even a crashed
+      // temporary file above 44 bytes can contain recoverable PCM.
+      // Only 0..44 bytes of recognized Synap artifacts are eligible.
+      if (st.st_size<0 || st.st_size>44) continue;
       if (found==MAX_CANDIDATES) {
         more=true;break; // bounded work; remaining artifacts next cold boot
       }
@@ -1337,6 +1340,14 @@ static bool odysseySdColdCleanupLocked() {
     // Read failure is not permission to reinitialize or mutate FAT.
     odysseySdMarkVfsFailure(); // SD-independent diagnostic/NVS only
     return false;
+  }
+  // Set a durable NVS guard before the first FAT mutation, not only
+  // after a reported error. Abrupt battery loss mid-unlink leaves the
+  // following warm MCU reset protected; the cold verified boot clears it.
+  if (found && !odysseySdRememberCleanupUnsafe(true)) {
+    odysseySdBootCleanupState=2;
+    Serial.println("[SD] empty-artifact cleanup skipped: could not persist safety guard");
+    return true; // card remains read-verified and usable; no FAT was changed
   }
   for (size_t i=0;i<found;++i) {
     if (odysseySdTimedOutWriteQuarantined.load() ||
