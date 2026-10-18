@@ -17,7 +17,7 @@ test('C3 cannot enter deep sleep or reboot on a non-idle SD bus',()=>{
  assert.match(prepare,/if \(!guard\) \{[\s\S]*?return false;/);
  assert.match(prepare,/if \(odysseyRecording\.load\(\) \|\| odysseySdFormatting\(\)\) \{[\s\S]*?return false;/);
  assert.match(prepare,/odysseySdQuiesceLocked\(ODYSSEY_SD_QUIESCE_BUDGET_MS\)/);
- assert.match(prepare,/if \(odysseySdUnsafeToSleep\.load\(\)\)/);
+ assert.match(prepare,/if \(odysseySdUnsafeToSleep\.load\(\) \|\|[\s\S]*?odysseySdWriteTimeoutQuarantined\(\)\) \{/);
  assert.match(prepare,/if \(idle!=1\) \{[\s\S]*?odysseySdUnsafeToSleep=true;[\s\S]*?return false;\s*\}/);
  assert.match(detect,/odysseySdUnsafeToSleep=false;/);
  assert.doesNotMatch(prepare,/quiesced=%u[^\n]*\n\s*return true;/);
@@ -107,7 +107,7 @@ test('C3 driven-low SD bus cannot sleep as if the card were absent',()=>{
  assert.match(block,/odysseySdBitBangCsHigh\.load\(\)==0 && odysseySdRawZero\.load\(\)>=900u/);
  assert.match(block,/odysseySdUnsafeToSleep=true;/);
  const prepare=detect.split('bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {')[1];
- assert(prepare.indexOf('if (odysseySdUnsafeToSleep.load())')<
+ assert(prepare.indexOf('if (odysseySdUnsafeToSleep.load() ||')<
         prepare.indexOf('if (!wasReady)'));
 });
 

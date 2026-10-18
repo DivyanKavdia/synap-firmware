@@ -85,7 +85,10 @@ test('C3 quarantine blocks remount and explicit recovery after live CMD17/CMD18 
  const sd=load('firmware/shared/odyssey-sd-1631-detect.cpp');
  // The logged CMD17 timeout happened during an already mounted 4 KiB read.
  assert.match(sd,/static std::atomic<bool> odysseySdTimedOutReadQuarantined\{false\}/);
- assert.match(sd,/error==ESP_ERR_TIMEOUT &&\s*\(odysseySdBootState\.load\(\)==1 \|\| odysseySdNativeCard!=nullptr\)/);
+ assert.match(sd,/error==ESP_ERR_TIMEOUT &&\s*\(cmd->opcode==17u \|\| cmd->opcode==18u\)/);
+ // Mount-time FAT reads precede card pointer assignment; quarantine still applies.
+ const intercept=sd.split('host.do_transaction=[]')[1].split('sdspi_device_config_t device')[0];
+ assert.doesNotMatch(intercept,/odysseySdBootState\.load\(\)==1 \|\| odysseySdNativeCard!=nullptr/);
  assert.match(sd,/cmd->opcode==17u \|\| cmd->opcode==18u/);
  assert.match(sd,/odysseySdTimedOutReadQuarantined=true;/);
  // Validation can time out *after* native mount but before bootState=ready.
@@ -133,8 +136,9 @@ test('C3 selected WAV metadata avoids repeated FAT stats without weakening read 
  assert.match(read,/if \(selectedMetadataValid\) \{\s*total=selectedFileSize;/);
  assert.match(read,/if \(stat\(full,&st\)!=0\)/);
  assert.match(read,/const size_t step=std::min\(size_t\(512\),want-got\)/);
- assert.match(read,/const int closeResult=fclose\(file\)/);
- assert.match(read,/if \(!seekOk \|\| got!=want \|\| closeResult!=0\)/);
+ assert.match(read,/const bool nativeReadTimeout=odysseySdReadTimeoutQuarantined\(\)/);
+ assert.match(read,/const int closeResult=nativeReadTimeout\?-1:fclose\(file\)/);
+ assert.match(read,/if \(!seekOk \|\| got!=want \|\| closeResult!=0 \|\| nativeReadTimeout\)/);
  assert.match(transfer,/ODYSSEY_C3_SD_BLE_BULK_CLEAR_ENABLED=false/);
  assert(ino.includes(transfer),'release sketch must exactly include the source with selected metadata guard');
 });

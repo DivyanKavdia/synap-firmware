@@ -2526,6 +2526,7 @@ uint32_t odysseyLastRecordFailureBytes();
 void odysseySdInvalidateHistoricalFaultResolution();
 static bool odysseySdUnresolvedHistoricalStorageFault();
 uint8_t odysseySdColdRecoveryStatus();
+static bool odysseySdRememberRailUnsafe(bool unsafe);
 #else
 #include <SPI.h>
 #include <SD.h>
@@ -2764,6 +2765,11 @@ void odysseySdMarkVfsFailure() {
   // software/OTA reset, this newer unresolved SD failure must stay protected.
   // This touches ESP internal NVS only; no additional SD command is issued.
   odysseySdInvalidateHistoricalFaultResolution();
+  // Unlike a recorder failure, a BLE read timeout has no retained NVS stage.
+  // Persist the same-rail warm-boot veto in internal flash, never on the SD.
+  if (odysseySdTimedOutReadQuarantined.load() ||
+      odysseySdTimedOutWriteQuarantined.load())
+    (void)odysseySdRememberRailUnsafe(true);
   // Observation only. Catalogue/read errors must never schedule a destructive
   // remount behind the user's back. Explicit recovery still refuses any
   // timed-out CMD17/CMD18 until the SD card receives a genuine power cycle.
@@ -3046,6 +3052,15 @@ bool odysseySdPath(const char* logical,char* full,size_t capacity) {
   return n>0 && size_t(n)<capacity;
 }
 static bool odysseySdReleaseLocked() {
+  // Native transfer timeout: do not release the bus or unmount the FatFs
+  // device while card program/read completion is uncertain on this rail.
+  if ((odysseySdTimedOutWriteQuarantined.load() ||
+       odysseySdTimedOutReadQuarantined.load()) &&
+      (odysseySdNativeCard || odysseySdNativeBusInitialized)) {
+    odysseySdUnsafeToSleep=true;
+    Serial.println("[SD] SPI2 release refused: native timeout quarantine");
+    return false;
+  }
   // Only called while holding OdysseySdGuard. Never unmount while the
   // microphone recorder or an SD media transfer owns an open FILE*.
   if (odysseySdNativeCard) {
@@ -3407,8 +3422,9 @@ static bool odysseySdBeginLocked(bool explicitlyProvisionFat=false) {
   // 1. A non-null native card here proves the mount helper finished. Do not
   // quarantine optional card initialization probes when the mount has not
   // returned a card yet.
+  // Card pointer is NULL while FAT mount reads the first sectors. Those
+  // are real memory reads, unlike optional CMD5/CMD52 init probes.
   if (cmd && error==ESP_ERR_TIMEOUT &&
-      (odysseySdBootState.load()==1 || odysseySdNativeCard!=nullptr) &&
       (cmd->opcode==17u || cmd->opcode==18u)) {
     odysseySdTimedOutReadQuarantined=true;
     odysseySdUnsafeToSleep=true;
@@ -3472,7 +3488,14 @@ static bool odysseySdBeginLocked(bool explicitlyProvisionFat=false) {
     odysseySdNativeCard=nullptr; // mount helper releases its own card/device
     Serial.printf("[SD] native SDSPI mount failed err=%s, no format\\n",
       esp_err_to_name(result));
-    (void)odysseySdReleaseLocked(); // free bus after mount's cleanup
+    if (odysseySdTimedOutReadQuarantined.load() ||
+        odysseySdTimedOutWriteQuarantined.load()) {
+      odysseySdUnsafeToSleep=true;
+      (void)odysseySdRememberRailUnsafe(true);
+      // Do not free/reinitialize SPI2 after a mount-time native timeout.
+      return false;
+    }
+    (void)odysseySdReleaseLocked(); // only after a known-safe mount failure
     return false;
   }
   markOdysseySdBatteryDividerPresent();
@@ -3723,6 +3746,20 @@ static void odysseySdMarkHistoricalFaultResolved() {
 // Independent NVS latch: cold-cleanup metadata writes can time out even
 // without an earlier offline recorder error. A software/OTA reset must not
 // interpret volatile flags resetting to zero as a genuine SD power cycle.
+static bool odysseySdRailUnsafePersisted() {
+  Preferences prefs;
+  if (!prefs.begin("sd-recstate",true)) return false; // absent namespace on new units
+  const bool unsafe=prefs.getUChar("railBad",0)!=0;
+  prefs.end();
+  return unsafe;
+}
+static bool odysseySdRememberRailUnsafe(bool unsafe) {
+  Preferences prefs;
+  if (!prefs.begin("sd-recstate",false)) return false;
+  const size_t written=prefs.putUChar("railBad",unsafe?1u:0u);
+  prefs.end();
+  return written==sizeof(uint8_t);
+}
 static bool odysseySdCleanupUnsafePersisted() {
   Preferences prefs;
   if (!prefs.begin("sd-recstate",true)) return false;
@@ -3739,7 +3776,7 @@ static bool odysseySdRememberCleanupUnsafe(bool unsafe) {
 }
 static bool odysseySdUnresolvedHistoricalStorageFault() {
   const uint8_t stage=odysseyLastRecordFailureStage();
-  return odysseySdCleanupUnsafePersisted() ||
+  return odysseySdCleanupUnsafePersisted() || odysseySdRailUnsafePersisted() ||
     (stage>=44u && stage!=48u && stage!=52u && stage!=68u &&
      !odysseySdHistoricalFaultResolved());
 }
@@ -3927,6 +3964,7 @@ bool odysseyInitializeSdCardBeforeBle() {
     // Successful cold cleanup restores readiness but never clears old PCM
     // error diagnostics. Clear only the independent cleanup-safety latch.
     odysseySdRememberCleanupUnsafe(false);
+    (void)odysseySdRememberRailUnsafe(false);
     odysseySdMarkHistoricalFaultResolved();
     if (previousStorageFault) odysseySdColdRecoveryState=1;
   } else if (mounted && !ready) {
@@ -4083,35 +4121,32 @@ bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {
     Serial.println("[SD] power transition deferred: local recording or format active");
     return false;
   }
-  if (odysseySdUnsafeToSleep.load()) {
-    Serial.println("[SD] power transition deferred: SD idle/write failure requires recovery");
+  if (odysseySdUnsafeToSleep.load() ||
+      odysseySdReadTimeoutQuarantined() ||
+      odysseySdWriteTimeoutQuarantined()) {
+    Serial.println("[SD] power transition deferred: SD controller untrusted");
     return false;
   }
   const bool wasReady=odysseySdReady();
   const uint8_t state=odysseySdBootState.load();
-  odysseySdBootState=0;odysseySdProbeStage=0;
-
-  // Only a successfully mounted session can have an application-owned CMD18
-  // or CMD25 transfer to close. If initialization already failed, do not inject
-  // another raw recovery sequence on every reset/deep-sleep transition.
   if (!wasReady) {
-    odysseySdReleaseLocked();
+    if (!odysseySdReleaseLocked()) return false;
+    odysseySdBootState=0;odysseySdProbeStage=0;
     Serial.printf("[SD] power transition prepared without quiesce state=%u\n",unsigned(state));
     return true;
   }
-
   const uint8_t idle=odysseySdQuiesceLocked(ODYSSEY_SD_QUIESCE_BUDGET_MS);
-  odysseySdReleaseLocked();
-  Serial.printf("[SD] power transition prepared ready=1 quiesced=%u\n",idle==1?1u:0u);
-  // The card may remain powered when the C3 sleeps or resets. If it did not
-  // reach the SPI idle window, never cut the host out from under a possible
-  // unfinished CMD18/CMD25 transaction. Caller must cancel the transition.
-  // Latch the failure so the next auto-sleep retry cannot bypass quiescence
-  // merely because this attempt reset odysseySdBootState to "not checked".
   if (idle!=1) {
+    // Never unmount a still-busy card after a failed native CMD13.
     odysseySdUnsafeToSleep=true;
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    (void)odysseySdRememberRailUnsafe(true);
+    Serial.println("[SD] power transition refused: CMD13 not idle, SPI2 kept owned");
     return false;
   }
+  if (!odysseySdReleaseLocked()) return false;
+  odysseySdBootState=0;odysseySdProbeStage=0;
+  Serial.println("[SD] power transition prepared: CMD13 idle and SPI2 released");
   return true;
 }
 // A committed OTA has already selected its validated boot partition.
@@ -4127,21 +4162,36 @@ bool odysseyPrepareSdForCommittedOtaRestart(uint32_t timeoutMs) {
   const bool ready=odysseySdReady();
   const uint8_t previous=odysseySdBootState.load();
   if (!ready) {
-    // Boot/media probe already declared VFS/SD unavailable, so there is no
-    // application-owned open file. Ignore the persisted sleep veto ONLY here.
-    odysseySdReleaseLocked();
+    if (odysseySdReadTimeoutQuarantined() ||
+        odysseySdWriteTimeoutQuarantined()) {
+      // Warm reboot is allowed without any SPI access. The railBad latch
+      // prevents a false fresh mount while the SD rail remains powered.
+      if (!odysseySdRememberRailUnsafe(true)) {
+        Serial.println("[OTA] restart refused: cannot persist SD rail quarantine");
+        return false;
+      }
+      Serial.println("[OTA] restart permitted without touching quarantined SPI2");
+      return true;
+    }
+    if (!odysseySdReleaseLocked()) return false;
     Serial.printf("[OTA] restart permitted with unmounted SD previousState=%u unsafe=%u\n",
       unsigned(previous),odysseySdUnsafeToSleep.load()?1u:0u);
     return true;
   }
   const uint8_t idle=odysseySdQuiesceLocked(ODYSSEY_SD_QUIESCE_BUDGET_MS);
-  odysseySdReleaseLocked();
   if (idle!=1) {
     odysseySdUnsafeToSleep=true;
-    Serial.println("[OTA] restart deferred: mounted SD failed quiesce");
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    (void)odysseySdRememberRailUnsafe(true);
+    Serial.println("[OTA] restart deferred: CMD13 not idle; SPI2 kept owned");
     return false;
   }
-  Serial.println("[OTA] restart permitted: mounted SD quiesced");
+  if (!odysseySdReleaseLocked()) {
+    Serial.println("[OTA] restart deferred: SPI2 release failed");
+    return false;
+  }
+  odysseySdBootState=0;odysseySdProbeStage=0;
+  Serial.println("[OTA] restart permitted: mounted SD quiesced and released");
   return true;
 }
 #else
@@ -5224,10 +5274,15 @@ static uint8_t readWavChunk(const char* logical,uint32_t offset,
   const int readErr=errno;
   const bool streamError=ferror(file)!=0;
   const bool streamEof=feof(file)!=0;
+  // A native CMD17/18 timeout may strand the SD controller in a read
+  // transaction. Do not enter FatFs again via fclose() on that same rail.
+  // This read-only descriptor is intentionally stranded until real power-off;
+  // the timeout quarantine prohibits any more SD filesystem operations.
+  const bool nativeReadTimeout=odysseySdReadTimeoutQuarantined();
   errno=0;
-  const int closeResult=fclose(file);
-  const int closeErr=errno;
-  if (!seekOk || got!=want || closeResult!=0) {
+  const int closeResult=nativeReadTimeout?-1:fclose(file);
+  const int closeErr=nativeReadTimeout?EIO:errno;
+  if (!seekOk || got!=want || closeResult!=0 || nativeReadTimeout) {
     sdBleFaultReadGot=uint32_t(got);
     sdBleFaultReadWant=uint32_t(want);
     sdBleFaultReadFlags=(streamError?1u:0u) | (streamEof?2u:0u) |
