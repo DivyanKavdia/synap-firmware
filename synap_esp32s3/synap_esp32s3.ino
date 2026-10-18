@@ -2572,11 +2572,14 @@ uint8_t odysseySdProbeState() { return odysseySdProbeStage.load(); }
 #if CONFIG_IDF_TARGET_ESP32C3
 static constexpr const char* ODYSSEY_SD_MOUNT_POINT="/odyssey-sd";
 static constexpr const char* ODYSSEY_SD_RECORDING_DIR="/odyssey-sd/synap";
-// SDSPI keeps its standard 400 kHz card initialization clock. Cap data
-// transfers at 800 kHz rather than 1 MHz on the sealed C3+SD carrier:
-// reduced signal-edge stress with enough theoretical bandwidth for 16 kHz
-// mono PCM (32 kB/s) and metadata writes. Never change the FAT format.
-static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=800000u;
+// Keep the SD protocol's standard 400 kHz initialisation phase. The fitted
+// C3+SD carrier now has external SPI pull-ups and local SD decoupling;
+// trial a conservative 2 MHz data clock (well below SDSPI's 20 MHz ceiling).
+// This reduces the on-wire portion of each 2 KiB CMD25 burst, giving the
+// card more between-write idle time at 16 kHz mono PCM (32 kB/s).
+// A 5-second card-program busy timeout is NOT fixed by clock speed alone.
+// Never change FAT format, CMD25 timeout, or write-quarantine safeguards.
+static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=2000000u;
 static constexpr spi_host_device_t ODYSSEY_SD_HOST=SPI2_HOST;
 static sdmmc_card_t* odysseySdNativeCard=nullptr;
 static bool odysseySdNativeBusInitialized=false;
@@ -3979,6 +3982,9 @@ static std::atomic<uint32_t> odysseyPersistedWireBudget{0};
 static std::atomic<uint32_t> odysseyPersistedWireLen{0};
 static std::atomic<uint32_t> odysseyPersistedWirePrev{UINT32_MAX};
 static std::atomic<uint32_t> odysseyPersistedWireGoodWrites{0};
+// Failure-time clock is stage/byte-paired in optional NVS. A later firmware
+// update must not relabel historical 800 kHz CMD25 faults as 2 MHz faults.
+static std::atomic<uint32_t> odysseyPersistedWireClockKhz{0};
 void odysseySdClearWireFault();
 uint32_t odysseySdWireFaultCmd();
 uint32_t odysseySdWireFaultError();
@@ -4051,6 +4057,12 @@ static void odysseyLoadPersistedRecordFailure() {
       odysseyPersistedWirePrev=timing[5];
       odysseyPersistedWireGoodWrites=timing[6];
     }
+    uint32_t clock[3]{};
+    if (prefs.getBytesLength("wclk")==sizeof(clock) &&
+        prefs.getBytes("wclk",clock,sizeof(clock))==sizeof(clock) &&
+        clock[0]==record[1] && clock[1]==record[2]) {
+      odysseyPersistedWireClockKhz=clock[2];
+    }
   }
   prefs.end();
 }
@@ -4077,6 +4089,7 @@ uint32_t odysseyLastWireBudget() { odysseyLoadPersistedRecordFailure(); return o
 uint32_t odysseyLastWireLen() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireLen.load(); }
 uint32_t odysseyLastWirePrev() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWirePrev.load(); }
 uint32_t odysseyLastWireGoodWrites() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireGoodWrites.load(); }
+uint32_t odysseyLastWireClockKhz() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireClockKhz.load(); }
 static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   odysseyPersistedRecordLoaded=true;
   odysseyPersistedRecordStage=stage;
@@ -4091,6 +4104,7 @@ static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   odysseyPersistedWireLen=stage?odysseySdWireFaultLength():0u;
   odysseyPersistedWirePrev=stage?odysseySdWireFaultPreviousCmd():UINT32_MAX;
   odysseyPersistedWireGoodWrites=stage?odysseySdWireFaultGoodWrites():0u;
+  odysseyPersistedWireClockKhz=stage?ODYSSEY_SD_DATA_FREQ_HZ/1000u:0u;
   if (!stage) {
     odysseyPersistedWriteErrno=0;
     odysseyPersistedWriteReturned=0;
@@ -4118,6 +4132,8 @@ static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
       odysseyPersistedWireLen.load(),odysseyPersistedWirePrev.load(),
       odysseyPersistedWireGoodWrites.load()};
     (void)prefs.putBytes("wtime",timing,sizeof(timing));
+    const uint32_t clock[3]={uint32_t(stage),bytes,odysseyPersistedWireClockKhz.load()};
+    (void)prefs.putBytes("wclk",clock,sizeof(clock));
   }
   const uint32_t record[3]={stage?1u:0u,uint32_t(stage),bytes};
   (void)prefs.putBytes("last",record,sizeof(record));
@@ -5381,7 +5397,7 @@ static void worker(void*) {
           unsigned(odysseySdVfsStepValue()),
           static_cast<long>(odysseySdVfsErrnoValue()),
           static_cast<unsigned long>(failureOffset),
-          static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ/1000u),
+          static_cast<unsigned long>(odysseyLastWireClockKhz()),
           unsigned(sdLastMediaFaultOperation.load()),
           unsigned(sdLastMediaFaultStep.load()),
           static_cast<long>(sdLastMediaFaultErrno.load()),
