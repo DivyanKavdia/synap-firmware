@@ -97,7 +97,9 @@ test('missing or stale SD files do not mark the entire card unavailable',()=>{
   assert.match(select,/openErr==ENOENT/);
   assert.match(select,/ChakshuStorage::noteFileSelect\(directory\?"not-file":"missing",openErr\)/);
   assert.match(select,/return ChakshuMedia::FILE_UNAVAILABLE/);
-  assert.match(read,/!SD\.exists\(selectedPath\)\)return ChakshuMedia::FILE_UNAVAILABLE/);
+  assert.match(read,/File file=SD\.open\(selectedPath,FILE_READ\)/);
+  assert.doesNotMatch(read,/SD\.exists\(selectedPath\)/,'no redundant FAT stat before BLE chunks');
+  assert.match(read,/openErr==ENOENT[\s\S]*ChakshuMedia::FILE_UNAVAILABLE/);
   assert.match(read,/offset>=total\).*FILE_UNAVAILABLE/);
   const worker=transfer.slice(transfer.indexOf('void worker(void*)'),transfer.indexOf('class CommandCallbacks'));
   const invalidation=worker.slice(worker.indexOf('if(error==ChakshuMedia::IO_ERROR'));
