@@ -210,50 +210,18 @@ static uint8_t odysseyBatchWriteFailureStage(int error) {
     default: return 70;
   }
 }
-// A POSIX fsync on the pinned ESP-IDF FatFs VFS maps to f_sync(), which
-// commits file size, allocation and directory metadata while keeping this
-// sequential append-only WAV open. The transfer path synthesizes its WAV
-// header from the resulting file length after an interrupted power cycle.
-// Only invoke after a successful, complete aligned PCM batch under OdysseySdGuard.
-// Fewer FAT directory/FSInfo CMD24 metadata writes while audio is active.
-// Ten-second f_sync was a regular single-sector write stressor on the
-// affected C3+SD carrier. This trades a longer unsynced tail (up to ~60 s)
-// for substantially fewer controller program-busy transitions.
-// An interrupted 20-second take previously looked like 0 B because the
-// first metadata sync was deferred until 60 seconds. One early f_sync after
-// 256 KiB of successfully appended PCM (~8.2 s at 16 kHz mono PCM16)
-// bounds this exposure without reinstating the old every-10-second sync.
-// This cannot fix a CMD25 busy timeout and adds one metadata CMD24; trial
-// on a disposable card before releasing on the sealed production carrier.
+// No fsync/fflush checkpoint while recording. The early 256 KiB metadata
+// checkpoint failed with native CMD24 ESP_ERR_TIMEOUT=263 on field build
+// 2310; periodic checkpoints create the same avoidable single-sector write.
+// Only a clean STOP/fclose commits the file length. Unexpected power loss
+// may therefore leave an empty or truncated WAV despite physically written
+// PCM clusters. This does NOT fix a card that times out on CMD25 or STOP.
 // Experimental C3 compatibility profile: 4 contiguous sectors per CMD25 instead
 // of 8. Never fall back to CMD24 or retry an uncertain write.
 static constexpr size_t ODYSSEY_SD_RECORD_BATCH_BYTES=2048u;
 static_assert(ODYSSEY_SD_RECORD_BATCH_BYTES>=1024u &&
   ODYSSEY_SD_RECORD_BATCH_BYTES%512u==0u,
   "C3 SD recording must use aligned multi-sector CMD25 writes");
-static constexpr uint32_t ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES=262144u;
-static constexpr uint32_t ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=60000u;
-static uint8_t odysseyCheckpointWav(FILE* file,int& savedErrno) {
-  savedErrno=0;
-  errno=0;
-  if (fflush(file)!=0) {
-    savedErrno=errno?errno:EIO;
-    return 71;  // C stdio flush failed
-  }
-  errno=0;
-  const int fd=fileno(file);
-  if (fd<0) {
-    savedErrno=errno?errno:EBADF;
-    return 73;  // no valid VFS descriptor; do not fsync arbitrary fd
-  }
-  errno=0;
-  if (fsync(fd)!=0) {
-    savedErrno=errno?errno:EIO;
-    return 72;  // FatFs f_sync failed: directory/size durability unknown
-  }
-  return 0;
-}
-
 // Explicit disconnected double-tap is the sole entry to this recorder.
 // The mounted FAT root, the storage mutex and each actual write determine
 // success. Do not block an actual SD I/O test on unrelated ADC telemetry.
@@ -286,8 +254,6 @@ static void odysseyRecordTake() {
   bool uncertainSdWrite=false; // No FAT close/metadata writes after unknown write EIO
   uint8_t failureStage=0;
   uint32_t bytes=0;
-  uint32_t lastCheckpointAt=millis();
-  uint32_t checkpointedPcmBytes=0;
   // Recorder progress is determined by SD write results, not ADC telemetry.
   char logicalPath[64]{};
   char fullPath[96]{};
@@ -419,39 +385,8 @@ static void odysseyRecordTake() {
           batchPcmBytes=0;
           // This is an explicit SD write test: trust the actual complete
           // aligned multi-sector batch result, not uncalibrated battery ADC readings.
-          // The first 256 KiB and subsequent 60-second checkpoints sync FAT
-          // file-length metadata. An unexpected power cut can lose the unsynced tail;
-          // FAT sectors in flight can still tear on a sudden rail collapse.
-          // The native SDSPI host owns write completion and timeout checks.
-          const bool firstCheckpointDue=checkpointedPcmBytes==0u &&
-            bytes>=ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES;
-          const bool periodicCheckpointDue=
-            uint32_t(millis()-lastCheckpointAt)>=ODYSSEY_SD_CHECKPOINT_INTERVAL_MS;
-          if (firstCheckpointDue || periodicCheckpointDue) {
-            int checkpointErrno=0;
-            const uint8_t checkpointStage=odysseyCheckpointWav(file,checkpointErrno);
-            if (checkpointStage) {
-              odysseyPersistedWriteErrno=uint32_t(checkpointErrno);
-              odysseyPersistedWriteReturned=0;
-              odysseyPersistedWriteExpected=0;
-              odysseyPersistedWriteFerror=ferror(file)?1u:0u;
-              synapSdNoteNativeWriteError(checkpointStage,checkpointErrno);
-            odysseyPersistedDriverFault=synapSdWriteFaultCode();
-              uncertainSdWrite=true;
-              failed=true;
-              failureStage=checkpointStage;
-              Serial.printf("[SD] WAV checkpoint failed stage=%u errno=%d pcm=%lu lastSynced=%lu\n",
-                unsigned(checkpointStage),checkpointErrno,
-                static_cast<unsigned long>(bytes),
-                static_cast<unsigned long>(checkpointedPcmBytes));
-              break;
-            }
-            checkpointedPcmBytes=bytes;
-            lastCheckpointAt=millis();
-            if (firstCheckpointDue) Serial.printf(
-              "[SD] first WAV metadata checkpoint synced pcm=%lu (not proof of card-level persistence)\n",
-              static_cast<unsigned long>(bytes));
-          }
+          // Do not interrupt active PCM append with FAT metadata fsync.
+          // Only clean STOP/fclose finalizes directory size and allocation.
         }
       }
 
@@ -509,9 +444,10 @@ static void odysseyRecordTake() {
       }
     }
 
-    // STOP is append-only. One early f_sync, then fclose() on STOP minimizes
-    // metadata programming during active capture. After power loss only the
-    // early checkpointed prefix is guaranteed to be discoverable.
+    // STOP is append-only. fclose() finalizes FAT metadata exactly once.
+    // Without active checkpoints, unexpected power loss can lose directory
+    // length even if sector writes returned success. Do not claim a power-loss
+    // recoverable audio prefix unless a fully finalized file is verified.
     // The on-card header stays provisional; transfer synthesizes the true WAV
     // header from file size after a clean stop OR interrupted power cycle.
     // The LAST padded 2 KiB write occurs after the earlier timeout gate.
