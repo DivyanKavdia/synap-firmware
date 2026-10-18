@@ -53,8 +53,8 @@ test('C3 optional opcode31 tunes paced read-only windows without changing legacy
  assert.match(transfer,/notifySdWindow\(request,2,OK,fullSize,offset\)/);
  assert.match(transfer,/const size_t pathStart=request\.compact\?16u:\(adaptive\?12u:\(fast\?11u:10u\)\)/);
  assert.match(transfer,/if \(adaptive\) request\.paceMs=std::max\(uint8_t\(8\),std::min\(uint8_t\(15\),p\[11\]\)\)/);
- assert.match(transfer,/if \(\(!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED &&/);
- assert.match(transfer,/static constexpr bool ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
+ assert.match(transfer,/if \(\(!ODYSSEY_C3_SD_BLE_SINGLE_DELETE_ENABLED &&/);
+ assert.match(transfer,/static constexpr bool ODYSSEY_C3_SD_BLE_BULK_CLEAR_ENABLED=false/);
  assert.match(transfer,/const TickType_t pacing=pdMS_TO_TICKS\(paceMs\)/);
  const mode=transfer.split('static void streamSdWindow(const Request& request) {')[1]
    .split('static void worker(void*) {')[0];
@@ -75,7 +75,7 @@ test('media-v3 compact SD window requires a connection-bound selected-file token
  assert.match(transfer,/readSelected\(windowPath,offset,total,chunk,length\)/);
  assert.match(transfer,/notifySdWindow\(request,2,FILE_UNAVAILABLE,0,request\.offset\)/);
  assert.match(transfer,/case 12:\s*case 30:\s*case 31:/);
- assert.match(transfer,/static constexpr bool ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
+ assert.match(transfer,/static constexpr bool ODYSSEY_C3_SD_BLE_BULK_CLEAR_ENABLED=false/);
  assert.doesNotMatch(transfer.split('static void streamSdWindow(const Request& request) {')[1].split('static void worker(void*) {')[0],/unlink\(|fwrite\(|removeFile\(|format_if_empty/);
  assert.match(ino,/p\[14\]=3;/);
 });
@@ -135,6 +135,6 @@ test('C3 selected WAV metadata avoids repeated FAT stats without weakening read 
  assert.match(read,/const size_t step=std::min\(size_t\(512\),want-got\)/);
  assert.match(read,/const int closeResult=fclose\(file\)/);
  assert.match(read,/if \(!seekOk \|\| got!=want \|\| closeResult!=0\)/);
- assert.match(transfer,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
+ assert.match(transfer,/ODYSSEY_C3_SD_BLE_BULK_CLEAR_ENABLED=false/);
  assert(ino.includes(transfer),'release sketch must exactly include the source with selected metadata guard');
 });
