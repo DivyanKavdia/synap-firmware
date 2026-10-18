@@ -5,6 +5,11 @@ const {isDeepStrictEqual}=require('node:util');
 const {createManifest,repository,workflow,PRIMARY_TARGET,TARGETS}=require('./release.cjs');
 const repo=repository,branch=process.env.SYNAP_RELEASE_BRANCH||'ota-test';
 if(!['ota-test','ota-releases'].includes(branch))throw Error('Invalid release branch');
+// Target-only releases never alter the Odyssey S3, C3, or C3+SD feeds.
+// An unrecognized selector must fail closed rather than fall back to all.
+const onlyTarget=process.env.SYNAP_PUBLISH_TARGETS||'';
+if(onlyTarget && onlyTarget!=='xiao-esp32s3-sense-8m')
+  throw Error('Unsupported isolated target selector');
 
 function api(endpoint,method='GET',body,query) {
   return JSON.parse(execFileSync('gh',['api',`repos/${repo}/${endpoint}`,'--method',method,...(body?['--input','-']:[]),...(query?['--jq',query]:[])],
@@ -22,6 +27,8 @@ const artifacts=Object.values(TARGETS).map(config=>{
   if(!isDeepStrictEqual(manifest,expected))throw Error(`Artifact manifest mismatch for ${config.id}`);
   return {config,dir,manifest,binary};
 });
+const selected=onlyTarget?artifacts.filter(x=>x.config.id===onlyTarget):artifacts;
+if(selected.length!==(onlyTarget?1:artifacts.length))throw Error('Missing selected release artifact');
 const primary=artifacts.find(x=>x.config.id===PRIMARY_TARGET);
 if(!primary)throw Error('Primary S3 release is missing');
 const build=primary.manifest.build,commit=primary.manifest.commit,version=primary.manifest.version;
@@ -60,7 +67,7 @@ if(production){
   if(!tags.includes(tag)){
     const assetDir=path.join('bundle','release-assets');fs.mkdirSync(assetDir,{recursive:true});
     const assets=[];
-    for(const {config,dir} of artifacts){
+    for(const {config,dir} of selected){
       const stem=config.assetStem||config.family;
       const binaryOut=path.join(assetDir,`firmware-${stem}.bin`),manifestOut=path.join(assetDir,`latest-${stem}.json`),sourceOut=path.join(assetDir,config.sourceName),hashOut=path.join(assetDir,`source-${stem}.sha256`);
       fs.copyFileSync(path.join(dir,'firmware.bin'),binaryOut);fs.copyFileSync(path.join(dir,'latest.json'),manifestOut);
@@ -69,12 +76,14 @@ if(production){
     }
     execFileSync('gh',['release','create',tag,...assets,'--repo',repo,'--target',commit,'--latest',
       '--title',version,
-      '--notes','Production-qualified multi-target pendant firmware. Includes ESP32-S3 SuperMini, ESP32-C3 SuperMini and Chakshu XIAO Sense artifacts with exact prepared source, GitHub OIDC provenance, target-bound manifests, resumable BLE OTA and default dual OTA slots.'],{stdio:'inherit'});
+      '--notes',onlyTarget
+        ? 'Chakshu XIAO ESP32-S3 Sense only. Existing Odyssey S3, C3 and C3+SD release manifests/binaries are unchanged.'
+        : 'Production-qualified multi-target pendant firmware. Includes ESP32-S3 SuperMini, ESP32-C3 SuperMini and Chakshu XIAO Sense artifacts with exact prepared source, GitHub OIDC provenance, target-bound manifests, resumable BLE OTA and default dual OTA slots.'],{stdio:'inherit'});
   }
 }
 
 const treeEntries=[];
-for(const {config,manifest,binary} of artifacts){
+for(const {config,manifest,binary} of selected){
   const blob=api('git/blobs','POST',{content:binary.toString('base64'),encoding:'base64'});
   const artifactPath=new URL(manifest.url).pathname.split(`/${branch}/`)[1];
   treeEntries.push({path:artifactPath,mode:'100644',type:'blob',sha:blob.sha});
@@ -82,10 +91,10 @@ for(const {config,manifest,binary} of artifacts){
 }
 const targetIndex={schema:1,version,build,channel:production?'production':'test',primary:PRIMARY_TARGET,
   targets:Object.fromEntries(artifacts.map(({config})=>[config.id,config.manifestPath]))};
-treeEntries.push({path:'targets.json',mode:'100644',type:'blob',content:JSON.stringify(targetIndex,null,2)+'\n'});
+if(!onlyTarget)treeEntries.push({path:'targets.json',mode:'100644',type:'blob',content:JSON.stringify(targetIndex,null,2)+'\n'});
 const tree=api('git/trees','POST',{...(base?{base_tree:base.tree.sha}:{}),tree:treeEntries});
 const commitObject=api('git/commits','POST',{message:`Publish ${production?'production':'test'} build ${build}`,tree:tree.sha,parents:existing?[existing.commit.sha]:[]});
 if(existing)api(`git/refs/heads/${branch}`,'PATCH',{sha:commitObject.sha,force:false});
 else api('git/refs','POST',{ref:`refs/heads/${branch}`,sha:commitObject.sha});
 setPublished(true);
-console.log(`Published ${production?'production':'test'} build ${build} for ${artifacts.map(x=>x.config.id).join(', ')}`);
+console.log(`Published ${production?'production':'test'} build ${build} for ${selected.map(x=>x.config.id).join(', ')}`);
