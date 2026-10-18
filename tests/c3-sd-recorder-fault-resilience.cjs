@@ -4,10 +4,11 @@ const rec=fs.readFileSync('firmware/shared/odyssey-sd-1631-recording.cpp','utf8'
 const detect=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8');
 const tx=fs.readFileSync('firmware/shared/odyssey-sd-1631-transfer.cpp','utf8');
 const ino=fs.readFileSync('synap_esp32s3/synap_esp32s3.ino','utf8');
-test('any uncertain PCM/checkpoint write quarantines before close or remount',()=>{
+test('any uncertain PCM or final-batch write quarantines before close or remount',()=>{
  assert.match(rec,/bool uncertainSdWrite=false/);
  assert.match(rec,/writeError!=ENOSPC\) uncertainSdWrite=true/);
- assert.match(rec,/uncertainSdWrite=true;[\s\S]*?failureStage=checkpointStage/);
+ assert.doesNotMatch(rec,/failureStage=checkpointStage|odysseyCheckpointWav/);
+ assert.match(rec,/final PCM batch failed/);
  const first=rec.split('if (file && (odysseySdWriteTimeoutQuarantined() || uncertainSdWrite)) {')[1].split('if (file) {')[0];
  assert.match(first,/odysseySdQuarantineUncertainWrite\(\)/);
  assert.match(first,/file=nullptr/);
