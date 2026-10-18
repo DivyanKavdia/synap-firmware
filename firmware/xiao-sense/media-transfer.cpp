@@ -2,6 +2,7 @@
 // Only this worker touches its file/frame buffers. BLE callbacks copy requests/results.
 #include <img_converters.h>
 #include <jpeg_decoder.h>
+#include <errno.h>
 namespace ChakshuTransfer {
 struct Request { uint32_t connection,id,offset;uint8_t operation;char path[64];bool local=false;uint32_t localEpoch=0,windowEpoch=0; };
 QueueHandle_t requests=nullptr;
@@ -48,19 +49,36 @@ void clearSelection() {
 // File handles never outlive a resource lease: a hardware check can remount SD
 // between BLE reads. Retain the path and reopen only while the gate is held.
 uint8_t selectFile(const char* path,uint32_t& total) {
-  if(!ChakshuStorage::ready&&!ChakshuStorage::begin(false))return ChakshuMedia::NO_SD;
+  if(!ChakshuStorage::ready&&!ChakshuStorage::begin(false)) {
+    ChakshuStorage::noteFileSelect("no-mount");return ChakshuMedia::NO_SD;
+  }
   for(uint8_t attempt=0;attempt<2;++attempt) {
-    // A stale catalogue entry or an already-moved companion is a file-level
-    // condition, not evidence that the whole card disappeared. Keep SD ready
-    // so one missing file cannot make storage vanish from the PWA.
-    if(SD.cardType()==CARD_NONE){ChakshuStorage::ready=false;return ChakshuMedia::NO_SD;}
-    if(!SD.exists(path))return ChakshuMedia::FILE_UNAVAILABLE;
-    File file=SD.open(path,FILE_READ);
-    if(file&&!file.isDirectory()) {
-      total=file.size();file.close();snprintf(selectedPath,sizeof(selectedPath),"%s",path);
-      ChakshuStorage::protect(path);return 0;
+    if(SD.cardType()==CARD_NONE) {
+      ChakshuStorage::ready=false;
+      ChakshuStorage::noteFileSelect("no-card");
+      return ChakshuMedia::NO_SD;
     }
+    // Open the catalogue-advertised path directly. The old preflight
+    // SD.exists() performed an extra FAT lookup which could fail transiently
+    // and be misreported as ENOENT even when opening the WAV would succeed.
+    errno=0;
+    File file=SD.open(path,FILE_READ);
+    const int openErr=errno;
+    if(file&&!file.isDirectory()) {
+      total=file.size();
+      file.close();
+      snprintf(selectedPath,sizeof(selectedPath),"%s",path);
+      ChakshuStorage::protect(path);
+      ChakshuStorage::noteFileSelect("open-ok");
+      return 0;
+    }
+    const bool directory=bool(file);
     file.close();
+    if(directory || openErr==ENOENT) {
+      ChakshuStorage::noteFileSelect(directory?"not-file":"missing",openErr);
+      return ChakshuMedia::FILE_UNAVAILABLE;
+    }
+    ChakshuStorage::noteFileSelect("open-io",openErr?openErr:EIO);
     if(attempt==0&&ChakshuStorage::recoverIO())continue;
     return ChakshuStorage::ready?ChakshuMedia::IO_ERROR:ChakshuMedia::NO_SD;
   }
