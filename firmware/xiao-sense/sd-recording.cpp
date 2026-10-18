@@ -186,7 +186,10 @@ void record(ChakshuMedia::Snapshot& status,bool withVideo,std::atomic<bool>& sto
   stopMicrophone();free(s.audio.slots);free(s.video.slots);
   if(cameraChanged)ChakshuCamera::endVideo();
   if(!error && (!audioBytes || (withVideo&&!frames)))error=CAPTURE_ERROR;
-  if(error==IO_ERROR || error==NO_SD)ChakshuStorage::ready=false;
+  // A short SD write or failed FAT finalization can strand the card's
+  // controller. Mirror C3's quarantine policy: do not automatically remount
+  // on the same powered rail, or erase any partial/previous recording.
+  if(error==IO_ERROR || error==NO_SD)ChakshuStorage::quarantine("recording-io");
   ChakshuStorage::refresh();
   status.bytes=withVideo?videoBytes:audioBytes;status.audioMs=audioBytes/32u;
   status.frames=frames;status.droppedFrames=s.droppedFrames;
