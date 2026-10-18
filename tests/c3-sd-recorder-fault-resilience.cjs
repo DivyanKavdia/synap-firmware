@@ -30,8 +30,8 @@ test('one-time mic restart does not retry SD transactions or classify mic as SD'
 });
 test('disk-full is distinct from card transport failure and remains cataloguable',()=>{
  assert.match(rec,/persistedStage!=52u && persistedStage!=68u/);
- assert.match(detect,/previousRecordStage!=52u &&/);
- assert.match(detect,/previousRecordStage!=68u/);
+ assert.match(detect,/stage!=52u &&/);
+ assert.match(detect,/stage!=68u/);
  assert.match(tx,/recordedFault!=52u && recordedFault!=68u/);
 });
 test('C3 LEDs distinguish microphone, SD and unsafe card; RAM health never touches FAT',()=>{

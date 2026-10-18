@@ -236,13 +236,11 @@ void enterDeepSleep(const char* reason) {
     if (odysseySdBusStuckLow()) return;
     // Never hammer an unmounted, continuously powered card every 30 s.
     // The first background sleep recovery is bounded to ONE attempt per boot.
-    // Untrusted battery readings must not trigger any unattended SD activity.
-    // Explicit user-initiated SD recovery/sync remains separately available.
+    // SD recovery is gated by controller/recording state, not battery ADC.
     static uint32_t lastSdSleepRecoveryAt=0;
     static uint8_t automaticSleepSdRecoveryAttempts=0;
     const uint32_t now=millis();
-    if (automaticSleepSdRecoveryAttempts>=1u ||
-        !odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) return;
+    if (automaticSleepSdRecoveryAttempts>=1u) return;
     if (lastSdSleepRecoveryAt && uint32_t(now-lastSdSleepRecoveryAt)<30000u) return;
     lastSdSleepRecoveryAt=now ? now : 1u;
     ++automaticSleepSdRecoveryAttempts;
@@ -350,8 +348,9 @@ void powerTick() {
   sampleBattery(false);
 #if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU
   if (odysseyRecording.load()) {
-    if (batteryCritical() && !odysseyStopRequested.exchange(true))
-      Serial.println("[POWER] trusted critical battery requested offline SD STOP");
+    // User requested no battery threshold for SD recording operations.
+    // The card still cannot survive a real hardware brownout, and sudden
+    // power loss can truncate an in-progress WAV.
     // No disconnected-idle or critical-battery deep sleep before recorder
     // fsync/fclose, even if the PWA has never connected.
     return;

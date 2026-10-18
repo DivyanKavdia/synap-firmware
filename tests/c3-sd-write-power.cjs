@@ -60,18 +60,19 @@ test('C3 SD boot mount is ADC-independent and read-only, even without /synap',()
  assert.match(transfer,/FILE\* file=fopen\(full,"rb"\)/);
 });
 
-test('single-file SD deletion tolerates untrusted ADC; bulk cleanup keeps conservative power gate',()=>{
- // A failed C3+SD ADC read cannot make a mounted card permanently undeletable.
- // Explicit single-file deletion still fails closed on a trusted low cell voltage
- // and on missing, unmounted, or inaccessible FAT, with verified unlink.
+test('C3 SD filesystem commands depend on mount and quarantine, not battery telemetry',()=>{
+ // Keep the real SD controller and FAT protections. Voltage is telemetry,
+ // never an admission gate for SD delete, bulk clear, format or recording.
  const remove=transfer.split('static uint8_t removeFile(const char* path) {')[1]
    .split('static uint16_t clearRecordings()')[0];
- assert.match(remove,/batteryAvailable\.load\(\) && batteryMillivolts<ODYSSEY_SD_WRITE_START_MIN_MV/);
+ assert.doesNotMatch(remove,/batteryAvailable|batteryMillivolts|odysseySdPowerSafe/);
  assert.match(remove,/if \(!guard \|\| !storageReady\(\) \|\|/);
  assert.match(remove,/if \(unlink\(full\)!=0\) \{[\s\S]*?removeFailureStep=2;/);
  assert.doesNotMatch(remove.split('if (unlink(full)!=0)')[1],/stat\(|odysseyRecoverSdCard/);
- assert.match(transfer,/static uint16_t clearRecordings[\s\S]*?if \(!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)\) return 0;/);
- assert.match(transfer,/case 18:[\s\S]*?if \(!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)\) error=BUSY/);
+ const clear=transfer.split('static uint16_t clearRecordings() {')[1].split('static void notifySdWindow(')[0];
+ const maintenance=transfer.split('case 18:')[1].split('case 33:')[0];
+ assert.doesNotMatch(clear,/odysseySdPowerSafe|batteryAvailable|batteryMillivolts/);
+ assert.doesNotMatch(maintenance,/odysseySdPowerSafe|batteryAvailable|batteryMillivolts/);
  assert.doesNotMatch(transfer,/SD\.format\(/);
 });
 
@@ -154,7 +155,8 @@ test('verified cold FAT mount resolves historical failure boot veto without dele
  assert.match(detect,/odysseySdHistoricalFaultResolved\(\)/);
  assert.match(detect,/witness\[1\]==uint32_t\(stage\)/);
  assert.match(detect,/witness\[2\]==odysseyLastRecordFailureBytes\(\)/);
- assert.match(boot,/!odysseySdHistoricalFaultResolved\(\)/);
+ assert.match(boot,/odysseySdUnresolvedHistoricalStorageFault\(\)/);
+ assert.match(detect,/!odysseySdHistoricalFaultResolved\(\)/);
  assert.match(boot,/if \(ready && bootResetReason==ESP_RST_POWERON\)/);
  assert.match(boot,/odysseySdMarkHistoricalFaultResolved\(\)/);
  assert.match(recording,/odysseySdInvalidateHistoricalFaultResolution\(\);[\s\S]*?odysseyPersistRecordFailure\(persistedStage,bytes\)/);

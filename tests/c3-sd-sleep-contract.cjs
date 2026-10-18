@@ -56,7 +56,8 @@ test('C3 SD recorder keeps sleep veto through final batch, fclose, persistent di
 
 test('all automatic and touch-triggered sleep entries defer until recording finalized and SD settled',()=>{
  const tick=power.split('void powerTick() {')[1].split('void pollTouchControl() {')[0];
- assert.match(tick,/if \(odysseyRecording\.load\(\)\) \{[\s\S]*?batteryCritical\(\) && !odysseyStopRequested\.exchange\(true\)[\s\S]*?return;/);
+ assert.match(tick,/if \(odysseyRecording\.load\(\)\) \{[\s\S]*?return;/);
+ assert.doesNotMatch(tick.split('if (odysseyRecording.load()) {')[1].split('return;')[0],/batteryCritical\(\)|odysseySdPowerSafe\(/);
   assert.match(tick,/if \(odysseySdReady\(\) \|\| odysseySdFormatting\(\)\) return;/);
  assert.match(tick,/if \(OdysseyWifi::busy\(\) \|\| OdysseyTransfer::busy\(\)\) return;/);
  assert.match(tick,/odysseySdSleepGuardUntil\.load\(\)/);
@@ -90,7 +91,8 @@ test('native C3 checks card status and cleanly unmounts before power transition'
 
 test('C3 restores the SD sleep veto from retained recorder write failure',()=>{
  const start=detect.split('bool odysseyInitializeSdCardBeforeBle() {')[1].split('bool odysseyRecoverSdCard(')[0];
- assert.match(start,/previousRecordStage>=44u &&[\s\S]*?previousRecordStage!=48u/);
+ assert.match(start,/odysseySdUnresolvedHistoricalStorageFault\(\)/);
+ assert.match(detect,/stage>=44u && stage!=48u/);
  const latch=start.indexOf('odysseySdUnsafeToSleep=true;');
  const recovery=start.indexOf('warm boot deferred');
  const mount=start.indexOf('odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS)');
@@ -113,7 +115,7 @@ test('SD error sleep recovery is bounded to one unprompted attempt per boot',()=
  const deep=power.split('void enterDeepSleep(const char* reason) {')[1].split('void powerTick() {')[0];
  assert.match(deep,/static uint8_t automaticSleepSdRecoveryAttempts=0;/);
  assert.match(deep,/automaticSleepSdRecoveryAttempts>=1u/);
- assert.match(deep,/!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)/);
+ assert.doesNotMatch(deep,/odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)/);
  assert(deep.indexOf('++automaticSleepSdRecoveryAttempts;')<deep.indexOf('odysseyRecoverSdCard("sleep")'));
  assert.match(deep,/if \(odysseySdBusStuckLow\(\)\) return;/);
 });

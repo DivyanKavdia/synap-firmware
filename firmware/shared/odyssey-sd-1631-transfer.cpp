@@ -394,11 +394,10 @@ static uint8_t removeFailureStep=0;
 static uint8_t removeFile(const char* path) {
   removeFailureStep=0;
   if (!safeWavPath(path)) return BAD_COMMAND;
-  // Manual, single-file deletion must not be blocked by the C3+SD's
-  // independently reported untrusted battery ADC (batteryAvailable=false).
-  // Still reject a *trusted* low-voltage measurement. Never attempt FAT
-  // changes when the card is not mounted/ready or an SD take owns the lock.
-  if (batteryAvailable.load() && batteryMillivolts<ODYSSEY_SD_WRITE_START_MIN_MV) return BUSY;
+  // User controls the hardware power switch; battery ADC is telemetry only.
+  // No arbitrary 3.8V/3.9V admission rule for selected-file SD deletion.
+  // Active recording, timeout quarantine, verified FAT mount and storage
+  // mutex still enforce safe ordering. Physical brownout remains possible.
   OdysseySdGuard guard(pdMS_TO_TICKS(1000));
   if (!guard || !storageReady() ||
       odysseySdWriteTimeoutQuarantined() ||
@@ -429,7 +428,7 @@ static uint8_t removeFile(const char* path) {
 }
 
 static uint16_t clearRecordings() {
-  if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) return 0;
+  // Do not gate explicit SD operations on estimated battery voltage.
   OdysseySdGuard guard;
   if (!guard || !storageReady()) return 0;
   char directoryPath[96];
@@ -707,10 +706,10 @@ static void worker(void*) {
       case 34: {
         // SD-independent recorder status, safe even after native CMD25/EIO.
         // Zero reads, zero FAT writes and no mount/recovery side effects.
-        char detail[220];
+        char detail[280];
         const uint8_t stage=odysseyLastRecordFailureStage();
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"stage\":%u,\"bytes\":%lu,\"faultLed\":%u,\"micRestarts\":%u,\"recording\":%u,\"stopPending\":%u,\"readQuarantine\":%u,\"writeQuarantine\":%u}",
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"stage\":%u,\"bytes\":%lu,\"faultLed\":%u,\"micRestarts\":%u,\"recording\":%u,\"stopPending\":%u,\"readQuarantine\":%u,\"writeQuarantine\":%u,\"coldRecovery\":%u,\"resetReason\":%u,\"cleanupRemoved\":%u,\"cleanupStatus\":%u}",
           unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
           unsigned(stage),static_cast<unsigned long>(odysseyLastRecordFailureBytes()),
           unsigned(odysseyRecorderFaultLedCode.load()),
@@ -718,7 +717,11 @@ static void worker(void*) {
           unsigned(odysseyRecording.load()?1u:0u),
           unsigned(odysseyStopRequested.load()?1u:0u),
           unsigned(odysseySdReadTimeoutQuarantined()?1u:0u),
-          unsigned(odysseySdWriteTimeoutQuarantined()?1u:0u));
+          unsigned(odysseySdWriteTimeoutQuarantined()?1u:0u),
+          unsigned(odysseySdColdRecoveryStatus()),
+          unsigned(bootResetReason),
+          unsigned(odysseySdColdCleanupRemoved()),
+          unsigned(odysseySdColdCleanupStatus()));
         if (n<=0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
@@ -825,7 +828,6 @@ static void worker(void*) {
         invalidateBleReadCache();
         selectedPath[0]=0;catalogueBuffer="";
         if(!storageReady())error=NO_SD;
-        else if (!odysseySdPowerSafe(ODYSSEY_SD_WRITE_START_MIN_MV)) error=BUSY;
         else total=clearRecordings();
         break;
       case 19: {
@@ -841,12 +843,8 @@ static void worker(void*) {
              recordedFault!=52u && recordedFault!=68u) ||
             odysseySdReadTimeoutQuarantined() ||
             odysseySdWriteTimeoutQuarantined()) { error=BUSY;break; }
-        // The C3+SD divider can report untrusted readings. As with manual
-        // unlink, reject an actually TRUSTED low reading; do not fabricate one.
-        if (batteryAvailable.load() &&
-            batteryMillivolts<ODYSSEY_SD_WRITE_START_MIN_MV) {
-          error=BUSY;break;
-        }
+        // No battery threshold is used as an SD mutation admission gate.
+        // Format still requires explicit user token and healthy FAT state.
         const esp_err_t result=odysseyFormatSdCard();
         if (result!=ESP_OK) {
           error=IO_ERROR;
