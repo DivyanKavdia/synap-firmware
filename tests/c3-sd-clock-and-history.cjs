@@ -37,6 +37,11 @@ test('C3 failure NVS records actual capture clock so OTA does not relabel old ti
  }
  const op=tx.split('case 27: {')[1].split('case 28:')[0];
  assert.match(op,/sdClockKhz/);
+ // Older first-fault journal records have no clock field: zero means unknown,
+ // and must not silently become the clock configured in a later OTA image.
+ assert.match(rec,/static std::atomic<uint32_t> odysseyPersistedWireClockKhz\{0\}/);
+ assert.match(rec,/if \(prefs\.getBytesLength\("wclk"\)==sizeof\(clock\)/);
+ assert.doesNotMatch(op,/static_cast<unsigned long>\(ODYSSEY_SD_DATA_FREQ_HZ\/1000u\)/);
  assert.match(op,/static_cast<unsigned long>\(odysseyLastWireClockKhz\(\)\)/);
  assert.doesNotMatch(op,/static_cast<unsigned long>\(ODYSSEY_SD_DATA_FREQ_HZ\/1000u\)/);
  assert.doesNotMatch(op,/esp_vfs_fat_sdspi_mount|odysseyRecoverSdCard\(|fwrite\(|unlink\(/);
