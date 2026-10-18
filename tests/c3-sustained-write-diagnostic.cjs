@@ -54,8 +54,8 @@ test('C3 stale write failures defer warm-boot mount and protect the next take',(
   const detect=read('firmware/shared/odyssey-sd-1631-detect.cpp');
   const recorder=read('firmware/shared/odyssey-sd-1631-recording.cpp');
   const caps=read('firmware/shared/module-capabilities.cpp');
-  assert.match(detect,/previousRecordStage>=44u/);
-  assert.match(detect,/previousRecordStage!=48u/);
+  assert.match(detect,/stage>=44u/);
+  assert.match(detect,/stage!=48u/);
   assert.match(detect,/warm boot deferred/);
   assert.match(detect,/odysseySdControllerBusyLow\(\)/);
   assert.doesNotMatch(detect.split('bool odysseyInitializeSdCardBeforeBle() {')[1].split('bool odysseyRecoverSdCard(')[0],
