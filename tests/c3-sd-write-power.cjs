@@ -66,7 +66,7 @@ test('single-file SD deletion tolerates untrusted ADC; bulk cleanup keeps conser
  // and on missing, unmounted, or inaccessible FAT, with verified unlink.
  const remove=transfer.split('static uint8_t removeFile(const char* path) {')[1]
    .split('static uint16_t clearRecordings()')[0];
- assert.match(remove,/batteryAvailable\.load\(\) && batteryMillivolts<ODYSSEY_SD_WRITE_START_MIN_MV/);
+ assert.match(remove,/batteryAvailable\.load\(\) && batteryMillivolts<ODYSSEY_SD_WRITE_CONTINUE_MIN_MV/);
  assert.match(remove,/if \(!guard \|\| !storageReady\(\) \|\|/);
  assert.match(remove,/if \(unlink\(full\)!=0\) \{[\s\S]*?removeFailureStep=2;/);
  assert.doesNotMatch(remove.split('if (unlink(full)!=0)')[1],/stat\(|odysseyRecoverSdCard/);
