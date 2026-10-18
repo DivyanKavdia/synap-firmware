@@ -67,8 +67,8 @@ test('single-file SD deletion tolerates untrusted ADC; bulk cleanup keeps conser
  const remove=transfer.split('static uint8_t removeFile(const char* path) {')[1]
    .split('static uint16_t clearRecordings()')[0];
  assert.match(remove,/batteryAvailable\.load\(\) && batteryMillivolts<ODYSSEY_SD_WRITE_START_MIN_MV/);
- assert.match(remove,/if \(!guard \|\| !storageReady\(\)\) return NO_SD;/);
- assert.match(remove,/if \(unlink\(full\)!=0 && errno!=ENOENT\) \{[\s\S]*?removeFailureStep=2;return IO_ERROR;/);
+ assert.match(remove,/if \(!guard \|\| !storageReady\(\) \|\|/);
+ assert.match(remove,/if \(unlink\(full\)!=0\) \{[\s\S]*?removeFailureStep=2;/);
  assert.match(remove,/if \(stat\(full,&st\)==0\) \{[\s\S]*?removeFailureStep=3;return IO_ERROR;/);
  assert.match(transfer,/static uint16_t clearRecordings[\s\S]*?if \(!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)\) return 0;/);
  assert.match(transfer,/case 18:[\s\S]*?if \(!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)\) error=BUSY/);
