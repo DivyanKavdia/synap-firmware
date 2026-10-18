@@ -640,7 +640,7 @@ static void worker(void*) {
           unsigned(odysseySdVfsStepValue()),
           static_cast<long>(odysseySdVfsErrnoValue()),
           static_cast<unsigned long>(failureOffset),
-          static_cast<unsigned long>(ODYSSEY_SD_DATA_FREQ_HZ/1000u),
+          static_cast<unsigned long>(odysseyLastWireClockKhz()),
           unsigned(sdLastMediaFaultOperation.load()),
           unsigned(sdLastMediaFaultStep.load()),
           static_cast<long>(sdLastMediaFaultErrno.load()),
