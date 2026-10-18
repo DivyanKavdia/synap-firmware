@@ -3878,6 +3878,9 @@ static bool odysseySdColdCleanupLocked() {
       return false;
     }
     odysseySdBootCleanupRemoved=uint16_t(i+1u);
+    // Defer the next independent FAT metadata mutation so cleanup does not
+    // burst back-to-back card program operations on the sealed C3 module.
+    if (i+1u<found) vTaskDelay(pdMS_TO_TICKS(250u));
   }
   odysseySdBootCleanupState=more?3u:1u;
   if (found) vTaskDelay(pdMS_TO_TICKS(250)); // settle after last FAT mutation
