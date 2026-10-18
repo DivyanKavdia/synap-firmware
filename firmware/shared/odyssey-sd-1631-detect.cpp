@@ -1241,7 +1241,7 @@ static void odysseySdMarkHistoricalFaultResolved() {
 // interpret volatile flags resetting to zero as a genuine SD power cycle.
 static bool odysseySdRailUnsafePersisted() {
   Preferences prefs;
-  if (!prefs.begin("sd-recstate",true)) return true; // fail closed
+  if (!prefs.begin("sd-recstate",true)) return false; // absent namespace on new units
   const bool unsafe=prefs.getUChar("railBad",0)!=0;
   prefs.end();
   return unsafe;
