@@ -3,14 +3,18 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 const tx=fs.readFileSync('firmware/shared/odyssey-sd-1631-transfer.cpp','utf8');
 const ino=fs.readFileSync('synap_esp32s3/synap_esp32s3.ino','utf8');
 
-test('shipping C3 BLE SD maintenance is fail-closed BEFORE any FAT operation',()=>{
-  assert.match(tx,/static constexpr bool ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
+test('C3 BLE allows only explicit single-file delete, blocks bulk clear before FAT access',()=>{
+  assert.match(tx,/static constexpr bool ODYSSEY_C3_SD_BLE_SINGLE_DELETE_ENABLED=true/);
+  assert.match(tx,/static constexpr bool ODYSSEY_C3_SD_BLE_BULK_CLEAR_ENABLED=false/);
   const worker=tx.split('static void worker(void*) {')[1].split('class CommandCallbacks :')[0];
-  const guard=worker.indexOf('if ((!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED &&');
+  const guard=worker.indexOf('if ((!ODYSSEY_C3_SD_BLE_SINGLE_DELETE_ENABLED &&');
   const mutation=worker.indexOf('case 17:');
   assert(guard>=0 && mutation>guard,'reject destructive commands before worker enters switch');
-  for(const op of [17,18])
-    assert(worker.slice(guard,mutation).includes('request.operation=='+op+'u'),'block media operation '+op);
+  assert(worker.slice(guard,mutation).includes('request.operation==17u'));
+  assert(worker.slice(guard,mutation).includes('request.operation==18u'));
+  assert.match(tx,/if \(!guard \|\| !storageReady\(\) \|\|/);
+  assert.match(tx,/odysseySdWriteTimeoutQuarantined\(\)/);
+  assert.match(tx,/odysseySdReadTimeoutQuarantined\(\)/);
   const refusal=worker.slice(guard,worker.indexOf('sdBleTransferInFlight=true;',guard));
   assert.match(refusal,/reply\(request,BAD_COMMAND\)/);
   assert.match(refusal,/continue;/);
@@ -22,7 +26,7 @@ test('shipping C3 BLE SD maintenance is fail-closed BEFORE any FAT operation',()
   assert.match(tx,/ODYSSEY_C3_SD_EXPLICIT_FORMAT_ENABLED=true/);
   assert.match(tx,/request.offset!=ODYSSEY_C3_SD_FORMAT_TOKEN/);
   assert.match(tx,/recordedFault>=40u && recordedFault!=43u && recordedFault!=48u/ );
-  assert.match(ino,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
+  assert.match(ino,/ODYSSEY_C3_SD_BLE_SINGLE_DELETE_ENABLED=true/);
 });
 
 test('live op29 remains RAM-only and reports the first physical SDSPI command fault',()=>{
