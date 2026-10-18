@@ -330,6 +330,14 @@ void worker(void*) {
         if(!validPath(request.path)){error=2;break;}
         error=selectFile(request.path,total);
         break;
+      case 35: {
+        // RAM-only SD health: never probe raw sectors, reopen a FAT handle,
+        // format, remount or delete a file in response to a status read.
+        size=ChakshuStorage::diagnostics(bytes,sizeof(bytes));
+        total=size;
+        if(!size)error=ChakshuMedia::IO_ERROR;
+        break;
+      }
       case 14: {
         if(streamingEnabled.load()){error=ChakshuMedia::BUSY;break;}
         error=ChakshuStorage::begin(true)?0:ChakshuMedia::NO_SD;
