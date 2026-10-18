@@ -13,8 +13,22 @@ uint32_t clockHz=10000000u;
 uint32_t mountAttempts=0;
 const char* mountStage="not-started";
 bool recoveryClockLocked=false;
+// C3-inspired safeguard: a controller that failed all cold mount clocks, or
+// failed an in-flight read/write, is not reinitialized again on the same
+// powered SD rail. BLE reconnection and app-side catalogue requests are not
+// evidence that the card controller has been electrically reset.
+std::atomic<bool> sdQuarantined{false};
+const char* sdQuarantineReason="none";
+bool captureDirectoryPresent=false;
 uint8_t probeCardType=CARD_NONE;
+bool probeSectorAttempted=false;
 bool probeSector0=false,probeBootSignature=false,probeFilesystem=false;
+void quarantine(const char* reason) {
+  if(!sdQuarantined.exchange(true))sdQuarantineReason=reason;
+  ready=false;
+  // Intentionally do NOT call SD.end(), SPI.end(), fclose, or remount here:
+  // the previous card transaction may still be busy, like CMD24/25 on C3.
+}
 // RAM-only SD file-selection outcomes. No card read, remount or FAT mutation.
 const char* lastFileSelectStage="none";
 int lastFileSelectErrno=0;
@@ -26,11 +40,12 @@ void noteFileSelect(const char* stage,int error=0) {
 }
 
 void clearProbe() {
-  probeCardType=CARD_NONE;probeSector0=false;probeBootSignature=false;probeFilesystem=false;
+  probeCardType=CARD_NONE;probeSectorAttempted=false;
+  probeSector0=false;probeBootSignature=false;probeFilesystem=false;
 }
 
 bool prepareBus() {
-  ready=false;mountStage="spi";
+  ready=false;captureDirectoryPresent=false;mountStage="spi";
   SD.end();
   SPI.end();
   // The Sense slot shares GPIO21 with the board's user LED. For SD it must
@@ -63,9 +78,12 @@ bool validateMount(uint32_t hz) {
   // opening the device.
   if(!usable)mountStage="mount-failed";
   else if(SD.cardType()==CARD_NONE){usable=false;mountStage="no-card";}
-  if(usable){mountStage="directory";if(!SD.exists("/synap"))usable=SD.mkdir("/synap");}
+  // Mount and catalogue are observational. Do not create /synap and write FAT
+  // metadata merely because a card was inserted or firmware rebooted.
   if(usable) {
-    File directory=SD.open("/synap");
+    mountStage="directory";
+    captureDirectoryPresent=SD.exists("/synap");
+    File directory=SD.open(captureDirectoryPresent?"/synap":"/");
     usable=directory && directory.isDirectory();
     directory.close();
   }
@@ -94,6 +112,7 @@ void inspectFailedMount() {
   probeCardType=uint8_t(sdcard_type(drive));
   uint8_t sector[512]{};
   if(probeCardType!=CARD_NONE && probeCardType!=CARD_UNKNOWN) {
+    probeSectorAttempted=true;
     probeSector0=sd_read_raw(drive,sector,0);
     probeBootSignature=probeSector0 && sector[510]==0x55 && sector[511]==0xAA;
   }
@@ -101,8 +120,9 @@ void inspectFailedMount() {
   sdcard_uninit(drive);
   SPI.end();
   if(probeFilesystem)mountStage="probe-mounted";
+  else if(probeCardType==CARD_UNKNOWN)mountStage="card-unknown";
   else if(probeSector0)mountStage="filesystem";
-  else if(probeCardType!=CARD_NONE)mountStage="card-read";
+  else if(probeSectorAttempted)mountStage="card-read";
   else mountStage="card";
 }
 
@@ -126,6 +146,7 @@ bool detectCard() {
     if(resetMountAt(hz))return true;
   }
   inspectFailedMount();
+  quarantine("cold-mount-failed");
   return false;
 }
 
@@ -140,6 +161,9 @@ bool recoverMount() {
 }
 
 bool begin(bool remount) {
+  // Both BLE catalogues and explicit op14 honor the same quarantine.
+  // Avoid a destructive same-rail reset storm after a failed card operation.
+  if(sdQuarantined.load())return false;
   if(remount || !ready) {
     if(recoveryClockLocked)recoverMount();
     else detectCard();
@@ -150,21 +174,23 @@ bool begin(bool remount) {
 }
 
 bool recoverIO() {
-  // A real mounted-card I/O failure locks recovery to conservative clocks for
-  // this boot. It never returns to 10 or 4 MHz without a restart.
+  // Odyssey C3's controller-quarantine principle: after uncertain I/O do
+  // not tear down or remount the same-powered SD rail, even at 400 kHz.
+  // Cold boot still gets the original conservative-clock detection ladder.
   recoveryClockLocked=true;
-  recoverMount();
-  refresh();
-  return ready;
+  quarantine("inflight-io");
+  return false;
 }
 
 size_t diagnostics(uint8_t* bytes,size_t length) {
   const int size=snprintf(reinterpret_cast<char*>(bytes),length,
-    "{\"sdReady\":%s,\"sdClockHz\":%lu,\"sdMountStage\":\"%s\",\"sdMountAttempts\":%lu,\"sdRecoveryLocked\":%s,\"sdCsPin\":%u,\"sdProbeCardType\":%u,\"sdProbeSector0\":%s,\"sdProbeBootSignature\":%s,\"sdProbeFilesystem\":%s,\"resetReason\":%u,\"uptimeMs\":%lu,\"freeHeap\":%lu,\"fileStage\":\"%s\",\"fileErrno\":%d,\"fileFaults\":%lu}",
+    "{\"sdReady\":%s,\"sdClockHz\":%lu,\"sdMountStage\":\"%s\",\"sdMountAttempts\":%lu,\"sdRecoveryLocked\":%s,\"sdCsPin\":%u,\"sdProbeCardType\":%u,\"sdProbeSector0\":%s,\"sdProbeBootSignature\":%s,\"sdProbeFilesystem\":%s,\"sdProbeSectorAttempted\":%s,\"sdQuarantined\":%s,\"sdQuarantineReason\":\"%s\",\"resetReason\":%u,\"uptimeMs\":%lu,\"freeHeap\":%lu,\"fileStage\":\"%s\",\"fileErrno\":%d,\"fileFaults\":%lu}",
     ready?"true":"false",(unsigned long)clockHz,mountStage,
     (unsigned long)mountAttempts,recoveryClockLocked?"true":"false",unsigned(SD_CS),
     unsigned(probeCardType),probeSector0?"true":"false",probeBootSignature?"true":"false",
-    probeFilesystem?"true":"false",unsigned(esp_reset_reason()),(unsigned long)millis(),
+    probeFilesystem?"true":"false",probeSectorAttempted?"true":"false",
+    sdQuarantined.load()?"true":"false",sdQuarantineReason,
+    unsigned(esp_reset_reason()),(unsigned long)millis(),
     (unsigned long)ESP.getFreeHeap(),lastFileSelectStage,lastFileSelectErrno,
     (unsigned long)fileSelectFailures);
   return size>0 && size_t(size)<length?size_t(size):0;
@@ -289,7 +315,13 @@ uint16_t clearCaptures() {
 }
 
 File create(char* path,size_t length,const char* extension) {
-  if(!ensureSpace())return File();
+  if(!ensureSpace()||sdQuarantined.load())return File();
+  // The first explicit capture may create its own directory. Merely mounting
+  // or browsing an empty card never writes FAT metadata.
+  if(!captureDirectoryPresent) {
+    if(!SD.mkdir("/synap")){quarantine("capture-directory");return File();}
+    captureDirectoryPresent=true;
+  }
   for (uint8_t attempt=0;attempt<8;++attempt) {
     snprintf(path,length,"/synap/%08lx-%08lx.%s",
       (unsigned long)bootId,(unsigned long)++sequence,extension);
