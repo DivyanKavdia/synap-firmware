@@ -32,7 +32,9 @@ test('Chakshu uses onboard PDM plus configured touch, battery and NeoPixel hardw
   assert.match(source,/esp_deep_sleep_start\(\)/);
   assert.match(source,/#define SYNAP_SUPPORTED_CAPABILITIES 1023/);
   assert.match(source,/constexpr uint8_t SD_SCK=7,SD_MISO=8,SD_MOSI=9,SD_CS=21/);
-  assert.match(source,/SPI\.begin\(SD_SCK,SD_MISO,SD_MOSI,SD_CS\)/);
+  assert.match(source,/spi_bus_initialize\(SPI2_HOST/);
+  assert.match(source,/esp_vfs_fat_sdspi_mount\(/);
+  assert.match(source,/SD\.probeReadOnly\(/);
   assert.match(source,/config.pin_d7=48/);
   assert.match(source,/SYNAP-CHAKSHU-OTA-ID-V3/);
   assert.doesNotMatch(source,/SYNAP-ESP32S3-OTA-ID-V3/);
