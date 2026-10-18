@@ -14,8 +14,10 @@ struct Request {
 // and SDSPI fix exists, firmware itself must reject ALL BLE filesystem
 // mutators, including commands issued by cached/older PWA clients.
 // Does not gate disconnected recording, catalogue or verified SD reads.
-static constexpr bool ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false;
-// Delete and Clear remain disabled. Format has its own explicit request token.
+static constexpr bool ODYSSEY_C3_SD_BLE_SINGLE_DELETE_ENABLED=true;
+static constexpr bool ODYSSEY_C3_SD_BLE_BULK_CLEAR_ENABLED=false;
+// One-file Delete is opt-in and guarded; bulk Clear stays disabled.
+// Format has its own explicit request token.
 static constexpr bool ODYSSEY_C3_SD_EXPLICIT_FORMAT_ENABLED=true;
 static constexpr uint32_t ODYSSEY_C3_SD_FORMAT_TOKEN=0x5344464Du; // "SDFM"
 static constexpr uint32_t ODYSSEY_C3_SD_RESCUE_TOKEN=0x53445246u; // "SDRF"
@@ -391,15 +393,16 @@ static uint8_t catalogue(uint32_t& total) {
 static uint8_t removeFailureStep=0;
 static uint8_t removeFile(const char* path) {
   removeFailureStep=0;
-  selectedPath[0]=0;
   if (!safeWavPath(path)) return BAD_COMMAND;
   // Manual, single-file deletion must not be blocked by the C3+SD's
   // independently reported untrusted battery ADC (batteryAvailable=false).
   // Still reject a *trusted* low-voltage measurement. Never attempt FAT
   // changes when the card is not mounted/ready or an SD take owns the lock.
   if (batteryAvailable.load() && batteryMillivolts<ODYSSEY_SD_WRITE_START_MIN_MV) return BUSY;
-  OdysseySdGuard guard;
-  if (!guard || !storageReady()) return NO_SD;
+  OdysseySdGuard guard(pdMS_TO_TICKS(1000));
+  if (!guard || !storageReady() ||
+      odysseySdWriteTimeoutQuarantined() ||
+      odysseySdReadTimeoutQuarantined()) return NO_SD;
   char full[96];
   if (!fullPath(path,full,sizeof(full))) return BAD_COMMAND;
   struct stat st{};
@@ -410,18 +413,18 @@ static uint8_t removeFile(const char* path) {
   }
   if (!S_ISREG(st.st_mode)) return FILE_UNAVAILABLE;
   errno=0;
-  if (unlink(full)!=0 && errno!=ENOENT) {
-    removeFailureStep=2;return IO_ERROR; // FAT unlink itself
+  if (unlink(full)!=0) {
+    if (errno==ENOENT) return OK; // idempotent exact-path delete
+    removeFailureStep=2;
+    return IO_ERROR; // failed FAT write: no retry, read, or remount
   }
-  // Do not tell the PWA that deletion succeeded until FAT no longer
-  // resolves this exact file. No wildcard or automatic cleanup is used.
-  errno=0;
-  if (stat(full,&st)==0) {
-    errno=EIO;removeFailureStep=3;return IO_ERROR; // still present
-  }
-  if (errno!=ENOENT) {
-    removeFailureStep=3;return IO_ERROR; // post-delete directory I/O
-  }
+  // Do not issue an immediate post-unlink FAT stat: the card may still be
+  // programming. PWA verifies deletion after a settle interval with a new
+  // catalogue, and preserves the sync receipt if verification fails.
+  selectedPath[0]=0;
+  selectedSessionToken=0;
+  selectedFileSize=0;
+  catalogueBuffer="";
   return OK;
 }
 
@@ -576,8 +579,8 @@ static void worker(void*) {
     if (request.connection!=connectionGeneration.load() || !deviceConnected.load()) continue;
     // Gate before touching FAT, the read cache, catalogue, or any remount.
     // BAD_COMMAND is the existing media-v1 'unsupported' error: no new ABI.
-    if ((!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED &&
-         (request.operation==17u || request.operation==18u)) ||
+    if ((!ODYSSEY_C3_SD_BLE_SINGLE_DELETE_ENABLED && request.operation==17u) ||
+        (!ODYSSEY_C3_SD_BLE_BULK_CLEAR_ENABLED && request.operation==18u) ||
         (request.operation==19u &&
          (!ODYSSEY_C3_SD_EXPLICIT_FORMAT_ENABLED ||
           request.offset!=ODYSSEY_C3_SD_FORMAT_TOKEN ||
