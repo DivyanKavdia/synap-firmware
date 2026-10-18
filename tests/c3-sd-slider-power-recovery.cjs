@@ -8,7 +8,8 @@ const ino=fs.readFileSync('synap_esp32s3/synap_esp32s3.ino','utf8');
 test('C3 slider power-on cold-recovery records only actual verified mount',()=>{
  for (const source of [sd,ino]){
    const cold=source.split('bool odysseyInitializeSdCardBeforeBle() {')[1].split('bool odysseyRecoverSdCard(')[0];
-   assert.match(cold,/odysseySdUnresolvedHistoricalStorageFault\(\)/);
+   assert.match(cold,/previousRecordStage>=44u/);
+   assert.match(cold,/!odysseySdHistoricalFaultResolved\(\)/);
    assert.match(cold,/if \(bootResetReason!=ESP_RST_POWERON\)/);
    assert.match(cold,/odysseySdColdRecoveryState=3/);
    assert.match(cold,/odysseySdColdRecoveryState=2/);
