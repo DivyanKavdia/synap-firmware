@@ -398,7 +398,12 @@ static uint8_t removeFile(const char* path) {
   // independently reported untrusted battery ADC (batteryAvailable=false).
   // Still reject a *trusted* low-voltage measurement. Never attempt FAT
   // changes when the card is not mounted/ready or an SD take owns the lock.
-  if (batteryAvailable.load() && batteryMillivolts<ODYSSEY_SD_WRITE_START_MIN_MV) return BUSY;
+  // A single explicit unlink is one bounded FAT metadata mutation, not a
+  // long recording or full-card format. Reuse the established 3.8 V
+  // CONTINUE floor; the 3.9 V START floor remains for bulk/format actions.
+  // Rev K battery supply uses a diode into SuperMini VIN: never bypass the
+  // trusted low-voltage guard or claim the unmeasured SD 3.3 V rail is stable.
+  if (batteryAvailable.load() && batteryMillivolts<ODYSSEY_SD_WRITE_CONTINUE_MIN_MV) return BUSY;
   OdysseySdGuard guard(pdMS_TO_TICKS(1000));
   if (!guard || !storageReady() ||
       odysseySdWriteTimeoutQuarantined() ||
