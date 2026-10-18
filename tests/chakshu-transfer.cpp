@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
+#include <string>
 #include <vector>
 namespace ChakshuMedia {enum {NO_SD=3,IO_ERROR=7,FILE_UNAVAILABLE=11};}
 constexpr int CARD_NONE=0;
@@ -12,6 +14,9 @@ namespace ChakshuStorage {
 bool ready=true;bool protectedCapture=false;
 void protect(const char*){protectedCapture=true;}
 void clearProtection(){protectedCapture=false;}
+std::string lastFileStage;
+int lastFileErrno=0;
+void noteFileSelect(const char* stage,int error=0){lastFileStage=stage;lastFileErrno=error;}
 bool begin(bool){return ready;}
 bool recoverIO(){if(!ready)return false;++mounted;return true;}
 }
@@ -33,7 +38,7 @@ struct File {
 struct {
  int cardType(){return cardPresent?1:CARD_NONE;}
  bool exists(const char*){return ::exists;}
- File open(const char*,int){return File(::exists);}
+ File open(const char*,int){errno=::exists?0:ENOENT;return File(::exists);}
 } SD;
 char selectedPath[64]{};uint8_t* buffer=nullptr;size_t bufferSize=0;
 // INSERT FILE HELPERS
@@ -41,6 +46,11 @@ int main(){
  for(size_t i=0;i<disk.size();++i)disk[i]=uint8_t(i);
  uint32_t total=0;uint8_t bytes[480];size_t size=0;
  assert(selectFile("/synap/12345678-12345678.wav",total)==0&&total==1000&&handles==0&&ChakshuStorage::protectedCapture);
+ assert(ChakshuStorage::lastFileStage=="open-ok");
+ clearSelection();exists=false;
+ assert(selectFile("/synap/12345678-12345678.wav",total)==11&&handles==0&&ChakshuStorage::ready);
+ assert(ChakshuStorage::lastFileStage=="missing"&&ChakshuStorage::lastFileErrno==ENOENT);
+ exists=true;assert(selectFile("/synap/12345678-12345678.wav",total)==0&&handles==0);
  assert(readSelection(0,total,bytes,size)==0&&size==480&&bytes[479]==uint8_t(479)&&handles==0);
  // Hardware refresh/remount while the PWA waits for the next chunk.
  ++mounted;

@@ -15,6 +15,15 @@ const char* mountStage="not-started";
 bool recoveryClockLocked=false;
 uint8_t probeCardType=CARD_NONE;
 bool probeSector0=false,probeBootSignature=false,probeFilesystem=false;
+// RAM-only SD file-selection outcomes. No card read, remount or FAT mutation.
+const char* lastFileSelectStage="none";
+int lastFileSelectErrno=0;
+uint32_t fileSelectFailures=0;
+void noteFileSelect(const char* stage,int error=0) {
+  lastFileSelectStage=stage;
+  lastFileSelectErrno=error;
+  if(error || strcmp(stage,"not-file")==0)++fileSelectFailures;
+}
 
 void clearProbe() {
   probeCardType=CARD_NONE;probeSector0=false;probeBootSignature=false;probeFilesystem=false;
@@ -151,12 +160,13 @@ bool recoverIO() {
 
 size_t diagnostics(uint8_t* bytes,size_t length) {
   const int size=snprintf(reinterpret_cast<char*>(bytes),length,
-    "{\"sdReady\":%s,\"sdClockHz\":%lu,\"sdMountStage\":\"%s\",\"sdMountAttempts\":%lu,\"sdRecoveryLocked\":%s,\"sdCsPin\":%u,\"sdProbeCardType\":%u,\"sdProbeSector0\":%s,\"sdProbeBootSignature\":%s,\"sdProbeFilesystem\":%s,\"resetReason\":%u,\"uptimeMs\":%lu,\"freeHeap\":%lu}",
+    "{\"sdReady\":%s,\"sdClockHz\":%lu,\"sdMountStage\":\"%s\",\"sdMountAttempts\":%lu,\"sdRecoveryLocked\":%s,\"sdCsPin\":%u,\"sdProbeCardType\":%u,\"sdProbeSector0\":%s,\"sdProbeBootSignature\":%s,\"sdProbeFilesystem\":%s,\"resetReason\":%u,\"uptimeMs\":%lu,\"freeHeap\":%lu,\"fileStage\":\"%s\",\"fileErrno\":%d,\"fileFaults\":%lu}",
     ready?"true":"false",(unsigned long)clockHz,mountStage,
     (unsigned long)mountAttempts,recoveryClockLocked?"true":"false",unsigned(SD_CS),
     unsigned(probeCardType),probeSector0?"true":"false",probeBootSignature?"true":"false",
     probeFilesystem?"true":"false",unsigned(esp_reset_reason()),(unsigned long)millis(),
-    (unsigned long)ESP.getFreeHeap());
+    (unsigned long)ESP.getFreeHeap(),lastFileSelectStage,lastFileSelectErrno,
+    (unsigned long)fileSelectFailures);
   return size>0 && size_t(size)<length?size_t(size):0;
 }
 
