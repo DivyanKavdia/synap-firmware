@@ -17,8 +17,11 @@ test('C3 SD clock is an intentionally bounded hardware-qualified 2 MHz data phas
  }
  assert.match(detect,/host\.do_transaction=\[\]\(int slot,sdmmc_command_t\* cmd\)->esp_err_t/);
  const capture=detect.split('host.do_transaction=[](int slot,sdmmc_command_t* cmd)->esp_err_t {')[1].split('sdspi_device_config_t device=')[0];
- assert.equal((capture.match(/sdspi_host_do_transaction\(slot,cmd\)/g)||[]).length,1);
- assert.doesNotMatch(capture,/delay\(|vTaskDelay|cmd->timeout_ms\s*=/);
+ assert.equal((capture.match(/sdspi_host_do_transaction\(slot,cmd\)/g)||[]).length,2);
+ assert.match(capture,/cmd->opcode==59u && cmd->arg==1u &&\s*result==ESP_ERR_NOT_SUPPORTED/);
+ assert.match(capture,/vTaskDelay\(pdMS_TO_TICKS\(10u\) \? pdMS_TO_TICKS\(10u\) : 1u\)/);
+ assert.equal((capture.match(/vTaskDelay\(/g)||[]).length,1);
+ assert.doesNotMatch(capture,/delay\(|cmd->timeout_ms\s*=/);
  const compile=nativeTest('#include <cstdint>\n'+
  'static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=2000000u;\n'+
  'static_assert(ODYSSEY_SD_DATA_FREQ_HZ/1000u==2000u);\n'+
