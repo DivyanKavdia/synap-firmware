@@ -19,12 +19,8 @@ test('empty FAT cards create recording directly in root 8.3 entry with no mkdir'
   assert.doesNotMatch(take,/\brmdir\s*\(/);
   assert.doesNotMatch(take,/\bunlink\s*\(/);
   assert.match(take,/odysseySdWriteTimeoutQuarantined\(\)/);
-  assert.match(capture,/ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=60000u/);
-  assert.match(capture,/ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES=262144u/);
-  assert.match(capture,/firstCheckpointDue=checkpointedPcmBytes==0u/);
-  assert.match(capture,/bytes>=ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES/);
-  assert.match(capture,/if \(firstCheckpointDue \|\| periodicCheckpointDue\)/);
-  assert.match(capture,/checkpointedPcmBytes=bytes/);
+  assert.doesNotMatch(capture,/ODYSSEY_SD_CHECKPOINT_INTERVAL_MS|ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES|firstCheckpointDue|periodicCheckpointDue|checkpointedPcmBytes|odysseyCheckpointWav/);
+  assert.match(capture,/fclose\\(file\\)!=0/);
   assert.match(capture,/uncertainSdWrite=true/);
 
 });
