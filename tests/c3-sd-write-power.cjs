@@ -154,7 +154,8 @@ test('verified cold FAT mount resolves historical failure boot veto without dele
  assert.match(detect,/odysseySdHistoricalFaultResolved\(\)/);
  assert.match(detect,/witness\[1\]==uint32_t\(stage\)/);
  assert.match(detect,/witness\[2\]==odysseyLastRecordFailureBytes\(\)/);
- assert.match(boot,/!odysseySdHistoricalFaultResolved\(\)/);
+ assert.match(boot,/odysseySdUnresolvedHistoricalStorageFault\(\)/);
+ assert.match(detect,/!odysseySdHistoricalFaultResolved\(\)/);
  assert.match(boot,/if \(ready && bootResetReason==ESP_RST_POWERON\)/);
  assert.match(boot,/odysseySdMarkHistoricalFaultResolved\(\)/);
  assert.match(recording,/odysseySdInvalidateHistoricalFaultResolution\(\);[\s\S]*?odysseyPersistRecordFailure\(persistedStage,bytes\)/);
