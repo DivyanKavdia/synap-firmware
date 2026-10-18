@@ -1285,7 +1285,7 @@ void odysseySdInvalidateHistoricalFaultResolution() {
 static std::atomic<uint16_t> odysseySdBootCleanupRemoved{0};
 static std::atomic<uint8_t> odysseySdBootCleanupState{0};
 // state: 0=not performed; 1=cold scan succeeded; 2=scan/write error,
-// 3=more matching files than bounded budget (no deletion this boot).
+// 3=more matching files than bounded budget; 4=disabled (no boot file deletion).
 uint16_t odysseySdColdCleanupRemoved() { return odysseySdBootCleanupRemoved.load(); }
 uint8_t odysseySdColdCleanupStatus() { return odysseySdBootCleanupState.load(); }
 
@@ -1342,6 +1342,7 @@ bool odysseyInitializeSdCardBeforeBle() {
     (void)odysseySdRememberRailUnsafe(false);
     odysseySdMarkHistoricalFaultResolved();
     if (previousStorageFault) odysseySdColdRecoveryState=1;
+  }
 
   Serial.printf("[SD] boot initialization complete state=%u stage=%u before BLE\n",
     unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()));
