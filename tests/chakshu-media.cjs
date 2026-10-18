@@ -56,7 +56,7 @@ test('cold mount retains low-speed fallback but uncertain I/O is quarantined',()
   const recovery=storage.slice(start,end);
   assert.match(recovery,/\{1000000u,400000u\}/);
   assert.doesNotMatch(recovery,/10000000u|4000000u/);
-  assert.match(storage,/for\(const uint32_t hz:\{4000000u,1000000u,400000u\}\)/);
+  assert.match(storage,/for\(const uint32_t hz:\{2000000u,1000000u,400000u\}\)/);
   assert.match(storage,/SD\.begin\(SD_CS,SPI,hz,"\/sd",5,false\)/);
   const select=transfer.slice(transfer.indexOf('uint8_t selectFile('),transfer.indexOf('uint8_t readSelection('));
   const read=transfer.slice(transfer.indexOf('uint8_t readSelection('),transfer.indexOf('bool validPath('));

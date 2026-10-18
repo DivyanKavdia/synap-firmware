@@ -89,7 +89,7 @@ int main(){
  // Sense-pin session while falling back through compatibility clocks.
  busStarted=true;
  assert(begin(false)&&clockHz==1000000&&capacity==8000000&&freeBytes==7000000);
- assert((clocks==std::vector<uint32_t>{4000000u,1000000u}));
+ assert((clocks==std::vector<uint32_t>{2000000u,1000000u}));
  assert(!recoveryClockLocked);
  const unsigned before=resets;assert(begin(false)&&resets==before);
 
@@ -101,10 +101,10 @@ int main(){
  sdQuarantined=false;sdQuarantineReason="none";recoveryClockLocked=false;ready=false;
 
  // A card that never mounted is not falsely treated as a recovered card.
- ready=false;recoveryClockLocked=false;clockHz=4000000u;mountHealthy=false;clocks.clear();
+ ready=false;recoveryClockLocked=false;clockHz=2000000u;mountHealthy=false;clocks.clear();
  probeCardVisible=false;probeRawHealthy=false;probeFsHealthy=false;
  assert(!begin(true));
- assert((clocks==std::vector<uint32_t>{4000000u,1000000u,400000u}));
+ assert((clocks==std::vector<uint32_t>{2000000u,1000000u,400000u}));
  assert(!recoveryClockLocked&&!busStarted&&!fsMounted&&sdQuarantined.load());
  clocks.clear();assert(!begin(true)&&clocks.empty());
  // Diagnostics must show the full ladder and then classify the low-level
@@ -137,8 +137,8 @@ int main(){
  assert(!begin(true)&&std::string(mountStage)=="probe-mounted"&&probeFilesystem);
 
  sdQuarantined=false;mountHealthy=true;limitHz=10000000u;cardPresent=true;clocks.clear();
- assert(begin(false)&&clockHz==4000000u);
- assert((clocks==std::vector<uint32_t>{4000000u}));
+ assert(begin(false)&&clockHz==2000000u);
+ assert((clocks==std::vector<uint32_t>{2000000u}));
 
  // Mount success is insufficient: directory and capacity must also be usable.
  rootHealthy=false;assert(!begin(true)&&!ready&&capacity==0&&sdQuarantined.load());
@@ -159,8 +159,8 @@ int main(){
  assert(resets==stalledResets);
  sdQuarantined=false;recoveryClockLocked=false;
  mountHealthy=true;limitHz=10000000u;clocks.clear();
- assert(begin(false)&&lastHz==4000000u);
- assert((clocks==std::vector<uint32_t>{4000000u}));
+ assert(begin(false)&&lastHz==2000000u);
+ assert((clocks==std::vector<uint32_t>{2000000u}));
  uint8_t diagnostic[480]{};
  const size_t diagnosticSize=diagnostics(diagnostic,sizeof(diagnostic));
  assert(diagnosticSize>0);
