@@ -13,15 +13,18 @@ test('committed C3 OTA restarts when card unmounted despite persisted SD failure
   assert(block);
   assert.match(block,/OdysseySdGuard guard\(pdMS_TO_TICKS\(timeoutMs\)\)/);
   assert.match(block,/if \(!guard \|\| odysseyRecording\.load\(\)\)/);
-  const notReady=block.split('if (!ready) {')[1].split('return true;')[0];
-  assert.match(notReady,/odysseySdReleaseLocked\(\)/);
+  const notReady=block.split('if (!ready) {')[1].split('const uint8_t idle=')[0];
+  assert.match(notReady,/if \(odysseySdReadTimeoutQuarantined\(\) \|\|[\s\S]*?odysseySdWriteTimeoutQuarantined\(\)\)/);
+  assert.match(notReady,/restart permitted without touching quarantined SPI2/);
+  assert.match(notReady,/if \(!odysseySdReleaseLocked\(\)\) return false;/);
+  assert(notReady.indexOf('restart permitted without touching quarantined SPI2')<notReady.indexOf('odysseySdReleaseLocked()'));
   assert.doesNotMatch(notReady,/odysseySdUnsafeToSleep\.load\(\).*return false;/);
   assert.match(block,/odysseySdQuiesceLocked\(ODYSSEY_SD_QUIESCE_BUDGET_MS\)/);
   assert.match(block,/if \(idle!=1\) \{[\s\S]*?return false;/);
   assert.match(ota,/if \(!odysseyPrepareSdForCommittedOtaRestart\(1000u\)\) return;/);
   assert.match(runtime,/bool odysseyPrepareSdForCommittedOtaRestart\(uint32_t timeoutMs\);/);
   const ordinary=sd.split('bool odysseyPrepareSdForPowerTransition(uint32_t timeoutMs) {')[1].split('bool odysseyPrepareSdForCommittedOtaRestart')[0];
-  assert.match(ordinary,/if \(odysseySdUnsafeToSleep\.load\(\)\) \{[\s\S]*?return false;/);
+  assert.match(ordinary,/if \(odysseySdUnsafeToSleep\.load\(\) \|\|[\s\S]*?odysseySdWriteTimeoutQuarantined\(\)\) \{[\s\S]*?return false;/);
   assert.match(ordinary,/if \(idle!=1\) \{[\s\S]*?return false;/);
 });
 
