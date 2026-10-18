@@ -6,28 +6,19 @@ const detect=fs.readFileSync('firmware/shared/odyssey-sd-1631-detect.cpp','utf8'
 const ino=fs.readFileSync('synap_esp32s3/synap_esp32s3.ino','utf8');
 const transfer=fs.readFileSync('firmware/shared/odyssey-sd-1631-transfer.cpp','utf8');
 
-test('slider cold boot removes only empty generated WAV / PART; usable partial audio is retained',()=>{
+test('slider boot does no automatic FAT unlink, only read validation and explicit deletion',()=>{
  for(const src of [detect,ino]){
-  const scan=src.split('static bool odysseySdColdCleanupLocked() {')[1]
-    .split('bool odysseyInitializeSdCardBeforeBle() {')[0];
-  assert.match(scan,/bootResetReason!=ESP_RST_POWERON/);
-  assert.match(scan,/!odysseySdReady\(\)/);
-  assert.match(scan,/odysseySdTimedOutWriteQuarantined\.load\(\)/);
-  assert.match(scan,/odysseySdTimedOutReadQuarantined\.load\(\)/);
-  assert.match(scan,/odysseySdCleanupName\(e->d_name,part\)/);
-  assert.match(scan,/odysseySdColdCleanupPartName\(e->d_name\)/);
-  assert.match(scan,/if \(st\.st_size<0 \|\| st\.st_size>44\) continue/);
-  assert.doesNotMatch(scan,/if \(!part && \(st\.st_size<0 \|\| st\.st_size>44\)\)/);
-  assert.match(scan,/closedir\(dir\)/);
-  assert(scan.indexOf('closedir(dir)')<scan.indexOf('unlink(candidates[i])'));
-  assert.match(scan,/if \(found && !odysseySdRememberCleanupUnsafe\(true\)\)/);
-  assert(scan.indexOf('odysseySdRememberCleanupUnsafe(true)')<scan.indexOf('unlink(candidates[i])'));
-  assert.match(scan,/odysseySdQuarantineUncertainWrite\(\)/);
-  assert.doesNotMatch(scan,/format\(|esp_vfs_fat_sdcard_format\(|odysseyRecoverSdCard\(/);
   const boot=src.split('bool odysseyInitializeSdCardBeforeBle() {')[1]
-    .split('bool odysseyRecoverSdCard(const char* reason) {')[0];
-  assert(boot.indexOf('odysseySdMountLocked("boot"')<boot.indexOf('odysseySdColdCleanupLocked()'));
-  assert.match(boot,/odysseySdMarkHistoricalFaultResolved\(\)/);
+   .split('bool odysseyRecoverSdCard(const char* reason) {')[0];
+  assert.match(boot,/const bool ready=odysseySdMountLocked\\("boot",ODYSSEY_SD_BOOT_ATTEMPTS\\)/);
+  assert.match(boot,/odysseySdBootCleanupState=4/);
+  assert.match(boot,/odysseySdBootCleanupRemoved=0/);
+  assert.match(boot,/odysseySdMarkHistoricalFaultResolved\\(\\)/);
+  assert.match(boot,/odysseySdRememberCleanupUnsafe\\(false\\)/);
+  assert.doesNotMatch(boot,/unlink\\(|odysseySdColdCleanupLocked\\(|fopen\\(|fwrite\\(|fsync\\(|esp_vfs_fat_sdcard_format\\(/);
+  assert.doesNotMatch(src,/static bool odysseySdColdCleanupLocked\\(/);
+  assert.doesNotMatch(src,/odysseySdCleanupName\\(|odysseySdColdCleanupPartName\\(/);
+  assert.match(src,/odysseySdUnresolvedHistoricalStorageFault\\(\\)/);
  }
 });
 
@@ -46,7 +37,7 @@ test('SD filesystem operations are independent of battery-voltage estimate',()=>
  assert.match(worker,/case 17:/);
 });
 
-test('cold empty cleanup is included in read-only recorder diagnostics',()=>{
+test('disabled cold cleanup is visible in read-only recorder diagnostics',()=>{
  const op=transfer.split('case 34: {')[1].split('case 29: {')[0];
  for(const field of ['cleanupRemoved','cleanupStatus','coldRecovery','resetReason']){
   assert(op.includes('\\"'+field+'\\"'),field);
