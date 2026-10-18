@@ -92,7 +92,11 @@ test('missing or stale SD files do not mark the entire card unavailable',()=>{
   assert.match(media,/FILE_UNAVAILABLE=11/);
   const select=transfer.slice(transfer.indexOf('uint8_t selectFile('),transfer.indexOf('uint8_t readSelection('));
   const read=transfer.slice(transfer.indexOf('uint8_t readSelection('),transfer.indexOf('bool validPath('));
-  assert.match(select,/!SD\.exists\(path\)\)return ChakshuMedia::FILE_UNAVAILABLE/);
+  assert.match(select,/File file=SD\.open\(path,FILE_READ\)/);
+  assert.doesNotMatch(select,/SD\.exists\(path\)/,'avoid duplicate FAT lookup before opening WAV');
+  assert.match(select,/openErr==ENOENT/);
+  assert.match(select,/ChakshuStorage::noteFileSelect\("missing"/);
+  assert.match(select,/return ChakshuMedia::FILE_UNAVAILABLE/);
   assert.match(read,/!SD\.exists\(selectedPath\)\)return ChakshuMedia::FILE_UNAVAILABLE/);
   assert.match(read,/offset>=total\).*FILE_UNAVAILABLE/);
   const worker=transfer.slice(transfer.indexOf('void worker(void*)'),transfer.indexOf('class CommandCallbacks'));
