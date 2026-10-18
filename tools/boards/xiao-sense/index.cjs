@@ -29,7 +29,7 @@ function materializeChakshu(source,target) {
   replace('  static int32_t raw[SAMPLES_PER_FRAME];','  static int16_t raw[SAMPLES_PER_FRAME];','Native PCM16 capture buffer');
   replace('    const int32_t sample=raw[i] >> 16;','    const int32_t sample=raw[i];','Preserve onboard PCM samples');
   replace('// SYNAP_BOARD_FEATURES',
-    ['voice-contract.cpp','tiny-voice-model.h','camera.cpp','sd-storage.cpp','media.cpp','media-buffers.cpp','sd-recording.cpp','wifi-downloads.cpp','media-transfer.cpp','voice.cpp'].map(name=>readTemplate('xiao-sense',name)).join('\n'),'Camera, SD and local voice drivers');
+    ['voice-contract.cpp','tiny-voice-model.h','camera.cpp','native-sd.cpp','sd-storage.cpp','media.cpp','media-buffers.cpp','sd-recording.cpp','wifi-downloads.cpp','media-transfer.cpp','voice.cpp'].map(name=>readTemplate('xiao-sense',name)).join('\n'),'Camera, SD and local voice drivers');
   replace('std::atomic<bool> batteryAvailable{false};',
     'std::atomic<bool> batteryAvailable{false};\nstd::atomic<uint32_t> touchTransitions{0},touchActions{0};\nstd::atomic<uint16_t> touchLastHoldMs{0};',
     'Retain Chakshu hardware input evidence');

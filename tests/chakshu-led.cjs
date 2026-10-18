@@ -22,4 +22,6 @@ test('Chakshu uses the external GPIO5 / D4 NeoPixel and never repurposes SD chip
  assert.match(source,/pinMode\(SD_CS,OUTPUT\)/);
  assert.match(source,/digitalWrite\(SD_CS,HIGH\)/);
  assert.match(source,/SD\.begin\(SD_CS,SPI/);
+ assert.match(source,/esp_vfs_fat_sdspi_mount\(/);
+ assert.doesNotMatch(source,/#include <SD\.h>/);
 });

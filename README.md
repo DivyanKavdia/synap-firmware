@@ -74,7 +74,7 @@ A successful BLE notification enqueue is not proof that the browser persisted th
 
 ## Chakshu baseline
 
-Chakshu is the camera, SD-photo/video and local Hey Snap member of the Synap family; Odyssey C3 + SD separately supports offline WAV recording. Its current firmware path includes BLE audio, camera, SD media, OTA and a lightweight local TinyML wake/command runtime.
+Chakshu is the camera, native ESP-IDF SDSPI/FatFs SD-photo/video and local Hey Snap member of the Synap family; Odyssey C3 + SD separately supports offline WAV recording. Its current firmware path includes BLE audio, camera, SD media, OTA and a lightweight local TinyML wake/command runtime.
 
 ### Hey Snap
 

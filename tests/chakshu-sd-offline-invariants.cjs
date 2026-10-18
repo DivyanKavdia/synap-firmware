@@ -12,7 +12,11 @@ test('Chakshu SD remains the durable offline inbox without capture-time remounts
   // The working Sense wiring is a production invariant. GPIO21 is SD CS, not
   // an application LED. Media code must never tear the bus down mid-capture.
   assert.match(storage,/SD_SCK=7,SD_MISO=8,SD_MOSI=9,SD_CS=21/);
-  assert.match(storage,/SPI\.begin\(SD_SCK,SD_MISO,SD_MOSI,SD_CS\)/);
+  const native=fs.readFileSync('firmware/xiao-sense/native-sd.cpp','utf8');
+  assert.match(native,/esp_vfs_fat_sdspi_mount\(/);
+  assert.match(native,/SDSPI_HOST_DEFAULT\(/);
+  assert.match(native,/cfg\.format_if_mount_failed=false/);
+  assert.doesNotMatch(storage,/#include <SD\.h>/);
   assert.doesNotMatch(transfer,/SD\.end\(\)|SPI\.end\(\)/);
   assert.doesNotMatch(recording,/SD\.end\(\)|SPI\.end\(\)/);
 
@@ -25,7 +29,8 @@ test('Chakshu SD remains the durable offline inbox without capture-time remounts
 
   // Recovery/probing is non-destructive. Never make a future readiness change
   // silently format a card containing unsynced memories.
-  assert.match(storage,/sdcard_mount\(drive,"\/sd-probe",1,false\)/);
+  assert.match(storage,/SD\.probeReadOnly\(probeCardType,probeSectorAttempted,probeSector0/);
+  assert.match(native,/sdmmc_read_sectors\(&probe,sector,0,1\)/);
   assert.doesNotMatch(storage,/format_if_empty\s*=\s*true|SD_MMC\.format|\.format\(/);
 
   // Every capture still on SD is unsynced. Space checks may reject a new take,

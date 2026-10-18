@@ -1,7 +1,6 @@
 // Media jobs serialize filesystem ownership. Never format a mounted card.
-#include <SD.h>
-#include <SPI.h>
-#include <sd_diskio.h>
+// Native ESP-IDF SDSPI backend is declared in native-sd.cpp before storage.
+// Its fs::File-compatible facade preserves the camera/transfer code.
 namespace ChakshuStorage {
 constexpr uint32_t RESERVE_BYTES=4u*1024u*1024u;
 constexpr uint8_t SD_SCK=7,SD_MISO=8,SD_MOSI=9,SD_CS=21;
@@ -46,15 +45,14 @@ void clearProbe() {
 
 bool prepareBus() {
   ready=false;captureDirectoryPresent=false;mountStage="spi";
+  if(SD.mountUncertain())return false;
   SD.end();
-  SPI.end();
-  // The Sense slot shares GPIO21 with the board's user LED. For SD it must
-  // remain an inactive-high chip select; no status path may pulse this pin.
+  // GPIO21 also drives XIAO's orange USER LED, but is reserved as SD CS.
   pinMode(SD_CS,OUTPUT);
   digitalWrite(SD_CS,HIGH);
+  pinMode(SD_MISO,INPUT_PULLUP);
   delay(2);
-  if(!SPI.begin(SD_SCK,SD_MISO,SD_MOSI,SD_CS)){SPI.end();return false;}
-  return true;
+  return !SD.mountUncertain();
 }
 
 void refresh() {
@@ -91,35 +89,22 @@ bool validateMount(uint32_t hz) {
   if(usable){mountStage="capacity";usable=SD.totalBytes()>0;}
   ready=usable;
   if(usable)mountStage="ready";
-  else SD.end();
+  else if(!SD.mountUncertain())SD.end();
   Serial.printf("[CHAKSHU] sd mount hz=%lu ready=%u heap=%lu\n",
     (unsigned long)hz,unsigned(ready),(unsigned long)ESP.getFreeHeap());
   return ready;
 }
 
 void inspectFailedMount() {
-  // SD.begin() collapses card-initialisation and FAT-mount failures into one
-  // boolean. After all normal attempts fail, use Arduino-ESP32's pinned SD
-  // driver directly to preserve the card state long enough to tell those
-  // failures apart. This probe is read-only: format_if_empty=false and the only
-  // sector operation is a read of sector zero.
+  // Native C3-style read-only sector-zero probe; never touches FAT metadata,
+  // formats or remounts after an uncertain transaction.
   clearProbe();
-  if(!prepareBus())return;
+  if(SD.mountUncertain()){mountStage="controller-uncertain";return;}
   mountStage="probe";
-  const uint8_t drive=sdcard_init(SD_CS,&SPI,400000);
-  if(drive==0xFF){mountStage="driver";SPI.end();return;}
-  probeFilesystem=sdcard_mount(drive,"/sd-probe",1,false);
-  probeCardType=uint8_t(sdcard_type(drive));
-  uint8_t sector[512]{};
-  if(probeCardType!=CARD_NONE && probeCardType!=CARD_UNKNOWN) {
-    probeSectorAttempted=true;
-    probeSector0=sd_read_raw(drive,sector,0);
-    probeBootSignature=probeSector0 && sector[510]==0x55 && sector[511]==0xAA;
-  }
-  sdcard_unmount(drive);
-  sdcard_uninit(drive);
-  SPI.end();
-  if(probeFilesystem)mountStage="probe-mounted";
+  SD.probeReadOnly(probeCardType,probeSectorAttempted,probeSector0,
+                   probeBootSignature,probeFilesystem);
+  if(SD.mountUncertain())mountStage="controller-uncertain";
+  else if(probeFilesystem)mountStage="probe-mounted";
   else if(probeCardType==CARD_UNKNOWN)mountStage="card-unknown";
   else if(probeSector0)mountStage="filesystem";
   else if(probeSectorAttempted)mountStage="card-read";
@@ -131,8 +116,8 @@ bool resetMountAt(uint32_t hz) {
   // This avoids carrying a wedged card/SPI transaction into the next clock.
   if(!prepareBus())return false;
   if(validateMount(hz))return true;
+  if(SD.mountUncertain())quarantine("mount-io-uncertain");
   digitalWrite(SD_CS,HIGH);
-  SPI.end();
   delay(2);
   return false;
 }
@@ -146,6 +131,7 @@ bool detectCard() {
   // No formatting, writes, or same-powered retries after detection is exhausted.
   for(const uint32_t hz:{4000000u,1000000u,400000u}) {
     if(resetMountAt(hz))return true;
+    if(sdQuarantined.load())return false;
   }
   inspectFailedMount();
   quarantine("cold-mount-failed");
