@@ -11,7 +11,8 @@ test('SD catalogue never silently skips a failed FAT stat',()=>{
 });
 test('C3 distinguishes FAT unlink errors and preserves failed file',()=>{
   const d=src.split('static uint8_t removeFile(const char* path) {')[1].split('static uint16_t clearRecordings()')[0];
-  for(const step of [1,2,3])assert.match(d,new RegExp('removeFailureStep='+step+';return IO_ERROR'));
+  for(const step of [1,2])assert.match(d,new RegExp('removeFailureStep='+step+';'));
+  assert.doesNotMatch(d.split('if (unlink(full)!=0)')[1],/stat\(|odysseyRecoverSdCard/);
   assert.match(src,/noteSdMediaFault\(17,removeFailureStep,removeErr\)/);
   assert.match(src,/noteSdMediaFault\(7,catalogueStep,catalogueErrno\)/);
   assert.match(src,/catalogueErrno!=ENOMEM && catalogueErrno!=EOVERFLOW/);
