@@ -95,7 +95,7 @@ test('missing or stale SD files do not mark the entire card unavailable',()=>{
   assert.match(select,/File file=SD\.open\(path,FILE_READ\)/);
   assert.doesNotMatch(select,/SD\.exists\(path\)/,'avoid duplicate FAT lookup before opening WAV');
   assert.match(select,/openErr==ENOENT/);
-  assert.match(select,/ChakshuStorage::noteFileSelect\("missing"/);
+  assert.match(select,/ChakshuStorage::noteFileSelect\(directory\?"not-file":"missing",openErr\)/);
   assert.match(select,/return ChakshuMedia::FILE_UNAVAILABLE/);
   assert.match(read,/!SD\.exists\(selectedPath\)\)return ChakshuMedia::FILE_UNAVAILABLE/);
   assert.match(read,/offset>=total\).*FILE_UNAVAILABLE/);
