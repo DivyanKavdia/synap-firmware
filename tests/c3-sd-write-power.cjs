@@ -69,7 +69,7 @@ test('single-file SD deletion tolerates untrusted ADC; bulk cleanup keeps conser
  assert.match(remove,/batteryAvailable\.load\(\) && batteryMillivolts<ODYSSEY_SD_WRITE_START_MIN_MV/);
  assert.match(remove,/if \(!guard \|\| !storageReady\(\) \|\|/);
  assert.match(remove,/if \(unlink\(full\)!=0\) \{[\s\S]*?removeFailureStep=2;/);
- assert.match(remove,/if \(stat\(full,&st\)==0\) \{[\s\S]*?removeFailureStep=3;return IO_ERROR;/);
+ assert.doesNotMatch(remove.split('if (unlink(full)!=0)')[1],/stat\(|odysseyRecoverSdCard/);
  assert.match(transfer,/static uint16_t clearRecordings[\s\S]*?if \(!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)\) return 0;/);
  assert.match(transfer,/case 18:[\s\S]*?if \(!odysseySdPowerSafe\(ODYSSEY_SD_WRITE_START_MIN_MV\)\) error=BUSY/);
  assert.doesNotMatch(transfer,/SD\.format\(/);
