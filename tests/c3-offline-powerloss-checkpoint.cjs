@@ -6,80 +6,18 @@ const fs=require('node:fs');
 const {nativeTest}=require('./support/native.cjs');
 const recorder=fs.readFileSync('firmware/shared/odyssey-sd-1631-recording.cpp','utf8');
 const transfer=fs.readFileSync('firmware/shared/odyssey-sd-1631-transfer.cpp','utf8');
-test('C3 FatFs checkpoints use genuine POSIX fsync, not fflush-only or filesystem remount',()=>{
- const start=recorder.indexOf('static constexpr uint32_t ODYSSEY_SD_CHECKPOINT_INTERVAL_MS');
- const end=recorder.indexOf('// Explicit disconnected double-tap is the sole entry',start);
- assert(start>=0&&end>start);
- const helper=recorder.slice(start,end);
- assert.match(helper,/ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=60000u/);
- assert.match(helper,/if \(fflush\(file\)!=0\)/);
- assert.match(helper,/const int fd=fileno\(file\)/);
- assert.match(helper,/if \(fsync\(fd\)!=0\)/);
- assert(helper.indexOf('fflush(file)')<helper.indexOf('fsync(fd)'));
- assert.doesNotMatch(helper,/SD\.end\(|SD\.begin\(|ftruncate\(|fseek\(|unlink\(/);
- const output=nativeTest(`
-#include <cstdint>
-#include <cassert>
-#include <cstdio>
-#include <cerrno>
-#include <iostream>
-int mode=0,flushCalls=0,fdCalls=0,syncCalls=0;
-int fakeFlush(FILE*) {
- ++flushCalls;
- if(mode==1){errno=EIO;return -1;}
- return 0;
-}
-int fakeFileno(FILE*) {
- ++fdCalls;
- if(mode==2){errno=EBADF;return -1;}
- return 10;
-}
-int fakeSync(int fd) {
- assert(fd==10);++syncCalls;
- if(mode==3){errno=ENODEV;return -1;}
- return 0;
-}
-#define fflush fakeFlush
-#define fileno fakeFileno
-#define fsync fakeSync
-${helper}
-#undef fflush
-#undef fileno
-#undef fsync
-int main() {
- assert(ODYSSEY_SD_CHECKPOINT_INTERVAL_MS==60000);
- FILE* f=reinterpret_cast<FILE*>(uintptr_t(1));
- int error=0;
- mode=0;assert(odysseyCheckpointWav(f,error)==0&&error==0);
- assert(flushCalls==1&&fdCalls==1&&syncCalls==1);
- mode=1;assert(odysseyCheckpointWav(f,error)==71&&error==EIO);
- assert(fdCalls==1&&syncCalls==1);
- mode=2;assert(odysseyCheckpointWav(f,error)==73&&error==EBADF);
- assert(syncCalls==1);
- mode=3;assert(odysseyCheckpointWav(f,error)==72&&error==ENODEV);
- assert(syncCalls==2);
- std::cout<<"PASS power-loss checkpoint helper\\n";
-}
-`);
- assert.match(output,/PASS power-loss checkpoint helper/);
-});
-test('single 256 KiB early checkpoint and 60-second periodic FatFs checkpoints follow complete PCM batches',()=>{
- const capture=recorder.split('static void odysseyRecordTake() {')[1].split('static void odysseyRecordTask(void*) {')[0];
- assert.match(capture,/OdysseySdGuard storage;/);
- const batch=capture.split('if (batchUsed==sizeof(batch)) {')[1].split('// Capture performs only sequential')[0];
- assert(batch.indexOf('const size_t written=fwrite(batch')<batch.indexOf('bytes+=batchPcmBytes'));
- assert(batch.indexOf('bytes+=batchPcmBytes')<batch.indexOf('odysseyCheckpointWav(file,checkpointErrno)'));
- assert.match(batch,/firstCheckpointDue=checkpointedPcmBytes==0u/);
- assert.match(batch,/bytes>=ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES/);
- assert.match(batch,/periodicCheckpointDue=[\s\S]*?ODYSSEY_SD_CHECKPOINT_INTERVAL_MS/);
- assert.match(batch,/if \(firstCheckpointDue \|\| periodicCheckpointDue\)/);
- assert.match(batch,/if \(checkpointStage\) \{[\s\S]*?failed=true;[\s\S]*?failureStage=checkpointStage;[\s\S]*?break;/);
- assert.match(batch,/odysseyPersistedWriteErrno=uint32_t\(checkpointErrno\)/);
- assert.match(batch,/checkpointedPcmBytes=bytes;/);
- assert.equal((batch.match(/odysseyCheckpointWav\(file,checkpointErrno\)/g)||[]).length,1);
- assert.match(capture,/fclose\(file\)!=0/);
- assert.doesNotMatch(capture,/fseek\(file,0|ftruncate\(|SD\.format\(|unlink\(/);
- assert.match(capture,/odysseyPersistRecordFailure\(persistedStage,bytes\)/);
+test('C3 does not issue mid-record FAT metadata checkpoints after observed CMD24 timeout',()=>{
+ const capture=recorder.split('static void odysseyRecordTake() {')[1]
+   .split('static void odysseyRecordTask(void*) {')[0];
+ assert.match(capture,/ODYSSEY_SD_RECORD_BATCH_BYTES/);
+ assert.match(capture,/fwrite\\(batch,1,sizeof\\(batch\\),file\\)/);
+ assert.match(capture,/fclose\\(file\\)!=0/);
+ assert.match(capture,/odysseySdWriteTimeoutQuarantined\\(\\)/);
+ assert.match(capture,/odysseySdQuarantineUncertainWrite\\(\\)/);
+ assert.doesNotMatch(recorder,/ODYSSEY_SD_FIRST_CHECKPOINT_PCM_BYTES|ODYSSEY_SD_CHECKPOINT_INTERVAL_MS|odysseyCheckpointWav|\\bfsync\\(/);
+ const active=capture.split('while (!failed && !odysseyStopRequested.load()) {')[1]
+   .split('stopMicrophone();')[0];
+ assert.doesNotMatch(active,/fflush\\(|fclose\\(|fsync\\(|fseek\\(|unlink\\(/);
 });
 test('power-interrupted WAV remains discoverable; download restores virtual RIFF header in RAM',()=>{
  const read=transfer.split('static uint8_t readWavChunk(')[1].split('static uint8_t readSelected(')[0];
