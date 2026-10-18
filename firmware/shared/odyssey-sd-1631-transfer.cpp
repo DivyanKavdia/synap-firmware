@@ -709,7 +709,7 @@ static void worker(void*) {
         char detail[280];
         const uint8_t stage=odysseyLastRecordFailureStage();
         const int n=snprintf(detail,sizeof(detail),
-          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"stage\":%u,\"bytes\":%lu,\"faultLed\":%u,\"micRestarts\":%u,\"recording\":%u,\"stopPending\":%u,\"readQuarantine\":%u,\"writeQuarantine\":%u,\"coldRecovery\":%u,\"resetReason\":%u}",
+          "{\"version\":1,\"sdState\":%u,\"sdLiveProbe\":%u,\"stage\":%u,\"bytes\":%lu,\"faultLed\":%u,\"micRestarts\":%u,\"recording\":%u,\"stopPending\":%u,\"readQuarantine\":%u,\"writeQuarantine\":%u,\"coldRecovery\":%u,\"resetReason\":%u,\"cleanupRemoved\":%u,\"cleanupStatus\":%u}",
           unsigned(odysseySdDetectionState()),unsigned(odysseySdProbeState()),
           unsigned(stage),static_cast<unsigned long>(odysseyLastRecordFailureBytes()),
           unsigned(odysseyRecorderFaultLedCode.load()),
@@ -719,7 +719,9 @@ static void worker(void*) {
           unsigned(odysseySdReadTimeoutQuarantined()?1u:0u),
           unsigned(odysseySdWriteTimeoutQuarantined()?1u:0u),
           unsigned(odysseySdColdRecoveryStatus()),
-          unsigned(bootResetReason));
+          unsigned(bootResetReason),
+          unsigned(odysseySdColdCleanupRemoved()),
+          unsigned(odysseySdColdCleanupStatus()));
         if (n<=0 || size_t(n)>=sizeof(detail)) { error=IO_ERROR;break; }
         reply(request,OK,uint32_t(n),0,reinterpret_cast<const uint8_t*>(detail),size_t(n));
         sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
