@@ -37,7 +37,7 @@ int main(){
   assert.match(nativeTest(fixture),/PASS connection-scoped hardware status/);
 });
 
-test('catalogue remounts a present card after transient readiness loss',()=>{
+test('catalogue reports cold-mount readiness without mutating a quarantined card',()=>{
   const source=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/media-transfer.cpp'),'utf8');
   const start=source.indexOf('uint8_t catalogue()');
   const end=source.indexOf('\n}\n\nvoid recordOffline',start)+2;
@@ -47,7 +47,7 @@ test('catalogue remounts a present card after transient readiness loss',()=>{
   assert.match(catalogue,/return ChakshuMedia::NO_SD/);
 });
 
-test('transient SD I/O recovery drops to conservative SPI speeds before failing',()=>{
+test('cold mount retains low-speed fallback but uncertain I/O is quarantined',()=>{
   const storage=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/sd-storage.cpp'),'utf8');
   const transfer=fs.readFileSync(path.join(__dirname,'../firmware/xiao-sense/media-transfer.cpp'),'utf8');
   const start=storage.indexOf('bool recoverMount()');
@@ -63,8 +63,10 @@ test('transient SD I/O recovery drops to conservative SPI speeds before failing'
   const catalogue=transfer.slice(transfer.indexOf('uint8_t catalogue()'),transfer.indexOf('void recordOffline'));
   assert.match(select,/ChakshuStorage::recoverIO\(\)/);
   assert.match(read,/ChakshuStorage::recoverIO\(\)/);
-  assert.match(catalogue,/ChakshuStorage::recoverIO\(\)/);
-  assert.equal((read.match(/recoverIO\(\)/g)||[]).length,1,'a chunk read gets one recovery attempt');
+  assert.doesNotMatch(catalogue,/ChakshuStorage::recoverIO\(\)/);
+  assert.equal((read.match(/recoverIO\(\)/g)||[]).length,1,'SD read failure quarantines instead of remounting');
+  assert.match(storage,/quarantine\("inflight-io"\)/);
+  assert.match(storage,/if\(sdQuarantined\.load\(\)\)return false/);
 });
 
 
