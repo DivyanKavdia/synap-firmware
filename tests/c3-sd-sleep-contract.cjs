@@ -74,7 +74,7 @@ test('all automatic and touch-triggered sleep entries defer until recording fina
 test('C3 SD firmware still retains append-only WAV and non-formatting SPI mount',()=>{
  assert.match(recorder,/alignas\(4\) static uint8_t batch\[ODYSSEY_SD_RECORD_BATCH_BYTES\]/);
  assert.doesNotMatch(recorder,/fseek\(file,0|ftruncate\(/);
- assert.match(detect,/ODYSSEY_SD_DATA_FREQ_HZ=800000u/);
+ assert.match(detect,/ODYSSEY_SD_DATA_FREQ_HZ=2000000u/);
  assert.match(detect,/odysseySdBeginLocked\(\)/);
 });
 
