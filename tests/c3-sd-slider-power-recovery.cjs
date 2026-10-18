@@ -51,3 +51,14 @@ test('BLE op34 exposes cold recovery state and reset reason without touching FAT
   assert.doesNotMatch(health,/odysseyRecoverSdCard\(|sdspi_host_do_transaction|unlink\(|fopen\(|fwrite\(|esp_vfs_fat_sdspi_mount/);
  }
 });
+
+test('read-only raw sectors cannot bypass unresolved retained timeout after warm reboot',()=>{
+ const fn=sd.split('void odysseySdRawProbeOnce() {')[1].split('uint16_t odysseySdRawFFCount()')[0];
+ assert.match(fn,/odysseySdWriteTimeoutQuarantined\(\)/);
+ assert.match(fn,/odysseySdReadTimeoutQuarantined\(\)/);
+ assert.match(fn,/odysseySdUnresolvedHistoricalStorageFault\(\)/);
+ assert.match(fn,/bootResetReason!=ESP_RST_POWERON/);
+ assert.match(fn,/odysseySdColdRecoveryStatus\(\)==2u/);
+ const guarded=fn.indexOf('odysseySdUnresolvedHistoricalStorageFault()');
+ assert(guarded>=0&&guarded<fn.indexOf('spi_bus_initialize('),'veto raw commands before initializing native SPI');
+});
