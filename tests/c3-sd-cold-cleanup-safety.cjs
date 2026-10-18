@@ -10,15 +10,15 @@ test('slider boot does no automatic FAT unlink, only read validation and explici
  for(const src of [detect,ino]){
   const boot=src.split('bool odysseyInitializeSdCardBeforeBle() {')[1]
    .split('bool odysseyRecoverSdCard(const char* reason) {')[0];
-  assert.match(boot,/const bool ready=odysseySdMountLocked\\("boot",ODYSSEY_SD_BOOT_ATTEMPTS\\)/);
+  assert.match(boot,/const bool ready=odysseySdMountLocked\("boot",ODYSSEY_SD_BOOT_ATTEMPTS\)/);
   assert.match(boot,/odysseySdBootCleanupState=4/);
   assert.match(boot,/odysseySdBootCleanupRemoved=0/);
-  assert.match(boot,/odysseySdMarkHistoricalFaultResolved\\(\\)/);
-  assert.match(boot,/odysseySdRememberCleanupUnsafe\\(false\\)/);
-  assert.doesNotMatch(boot,/unlink\\(|odysseySdColdCleanupLocked\\(|fopen\\(|fwrite\\(|fsync\\(|esp_vfs_fat_sdcard_format\\(/);
-  assert.doesNotMatch(src,/static bool odysseySdColdCleanupLocked\\(/);
-  assert.doesNotMatch(src,/odysseySdCleanupName\\(|odysseySdColdCleanupPartName\\(/);
-  assert.match(src,/odysseySdUnresolvedHistoricalStorageFault\\(\\)/);
+  assert.match(boot,/odysseySdMarkHistoricalFaultResolved\(\)/);
+  assert.match(boot,/odysseySdRememberCleanupUnsafe\(false\)/);
+  assert.doesNotMatch(boot,/unlink\(|odysseySdColdCleanupLocked\(|fopen\(|fwrite\(|fsync\(|esp_vfs_fat_sdcard_format\(/);
+  assert.doesNotMatch(src,/static bool odysseySdColdCleanupLocked\(/);
+  assert.doesNotMatch(src,/odysseySdCleanupName\(|odysseySdColdCleanupPartName\(/);
+  assert.match(src,/odysseySdUnresolvedHistoricalStorageFault\(\)/);
  }
 });
 
@@ -40,7 +40,7 @@ test('SD filesystem operations are independent of battery-voltage estimate',()=>
 test('disabled cold cleanup is visible in read-only recorder diagnostics',()=>{
  const op=transfer.split('case 34: {')[1].split('case 29: {')[0];
  for(const field of ['cleanupRemoved','cleanupStatus','coldRecovery','resetReason']){
-  assert(op.includes('\\"'+field+'\\"'),field);
+  assert(op.includes('\"'+field+'\"'),field);
  }
  assert.match(op,/odysseySdColdCleanupRemoved\(\)/);
  assert.match(op,/odysseySdColdCleanupStatus\(\)/);
