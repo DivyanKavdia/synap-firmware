@@ -121,11 +121,11 @@ public:
     return card_->ocr & (1u<<30) ? CARD_SDHC : CARD_SD;
   }
   uint64_t totalBytes() {
-    size_t total=0,free=0;
+    uint64_t total=0,free=0;
     return card_ && esp_vfs_fat_info(mountedAt_,&total,&free)==ESP_OK?total:0;
   }
   uint64_t usedBytes() {
-    size_t total=0,free=0;
+    uint64_t total=0,free=0;
     return card_ && esp_vfs_fat_info(mountedAt_,&total,&free)==ESP_OK && total>=free
       ?total-free:0;
   }
