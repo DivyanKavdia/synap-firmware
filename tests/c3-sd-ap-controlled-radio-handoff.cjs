@@ -13,5 +13,5 @@ test('C3 no longer reboots into a Wi-Fi-only boot; BLE remains available',()=>{
 test('C3 still protects offline recordings during BLE SD reads',()=>{
  assert.match(tx,/odysseyRecording\.load\(\)/);
  assert.match(tx,/OdysseySdGuard guard/);
- assert.match(tx,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
+ assert.match(tx,/ODYSSEY_C3_SD_BLE_BULK_CLEAR_ENABLED=false/);
 });
