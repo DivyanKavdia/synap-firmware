@@ -54,8 +54,8 @@ test('C3 production image uses guarded append-only multi-block offline recording
   assert.match(c3,/case ENOSPC: return 68/);
   assert.match(c3,/const uint8_t persistedStage=failureStage\?failureStage:40/);
   assert.match(c3,/odysseyPersistRecordFailure\(persistedStage,bytes\)/);
-  assert.match(c3,/previousRecordStage>=44u/);
-  assert.match(c3,/previousRecordStage!=48u/);
+  assert.match(c3,/stage>=44u/);
+  assert.match(c3,/stage!=48u/);
   assert.match(c3,/static void virtualWavHeader/);
   assert.match(c3,/patchVirtualWavHeader\(bytes,size,offset,total\)/);
   assert.doesNotMatch(c3,/odysseySustainedWriteProbe|\.synap-sustained-write\.tmp/);
