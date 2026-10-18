@@ -22,13 +22,15 @@ test('C3 persisted stage 70 diagnostics migrate from legacy NVS and survive soft
 #include <vector>
 #include <cstdio>
 #include <iostream>
-static std::vector<uint8_t> saved, extra, wireJournal, timeJournal;
+static constexpr uint32_t ODYSSEY_SD_DATA_FREQ_HZ=2000000u;
+static std::vector<uint8_t> saved, extra, wireJournal, timeJournal, clockJournal;
 struct Preferences {
   bool begin(const char*,bool){return true;}
   std::vector<uint8_t>& bucket(const char* k){
     if(std::strcmp(k,"write")==0)return extra;
     if(std::strcmp(k,"wire")==0)return wireJournal;
     if(std::strcmp(k,"wtime")==0)return timeJournal;
+    if(std::strcmp(k,"wclk")==0)return clockJournal;
     return saved;
   }
   size_t getBytesLength(const char* k){return bucket(k).size();}
@@ -65,6 +67,7 @@ static void resetLoaded(){
   odysseyPersistedWireMs=0;odysseyPersistedWireBudget=0;
   odysseyPersistedWireLen=0;odysseyPersistedWirePrev=UINT32_MAX;
   odysseyPersistedWireGoodWrites=0;
+  odysseyPersistedWireClockKhz=0;
 }
 int main(){
   uint32_t old[3]={1,70,2040u*1024u};
@@ -85,6 +88,7 @@ int main(){
   assert(extra.size()==7u*sizeof(uint32_t));
   assert(wireJournal.size()==7u*sizeof(uint32_t));
   assert(timeJournal.size()==7u*sizeof(uint32_t));
+  assert(clockJournal.size()==3u*sizeof(uint32_t));
   uint32_t retained[3]{};std::memcpy(retained,saved.data(),sizeof(retained));
   assert(retained[0]==1&&retained[1]==70&&retained[2]==2040u*1024u);
   resetLoaded();
@@ -100,6 +104,7 @@ int main(){
   assert(odysseyLastWireLen()==4096);
   assert(odysseyLastWirePrev()==13);
   assert(odysseyLastWireGoodWrites()==8);
+  assert(odysseyLastWireClockKhz()==2000u);
 
   odysseyPersistRecordFailure(0,0);
   resetLoaded();
@@ -108,6 +113,7 @@ int main(){
   assert(odysseyLastDriverWriteFault()==0);
   assert(odysseyLastWireMs()==0);
   assert(odysseyLastWireGoodWrites()==0);
+  assert(odysseyLastWireClockKhz()==0);
   std::cout<<"PASS C3 SD write diagnostics\n";
 }
 `);
