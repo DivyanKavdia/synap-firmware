@@ -275,7 +275,8 @@ void worker(void*) {
     if(!request.local&&(request.connection!=connectionGeneration.load()||!deviceConnected.load()))continue;
     ChakshuResources::Lease admission;
     if(!admission||otaBusySnapshot.load()) {replyFor(request,1);continue;}
-    if(selectedConnection!=request.connection){clearSelection();originalPath[0]=0;selectedConnection=request.connection;}
+    // Diagnostic op35 must not close an old SD file on BLE reconnection.
+    if(request.operation!=35 && selectedConnection!=request.connection){clearSelection();originalPath[0]=0;selectedConnection=request.connection;}
     if(request.operation==5||request.operation==10) {
       // SD capture is local-input-only. Hey Snap may start it with BLE connected
       // or disconnected; remote BLE media commands can never redirect PWA capture to SD.
