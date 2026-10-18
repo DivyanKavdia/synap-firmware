@@ -13,9 +13,9 @@ test('explicit emergency FAT rescue refuses warm boots, read/write quarantine an
  for(const key of ['esp_reset_reason()!=ESP_RST_POWERON','odysseySdProbeStage.load()!=3','odysseySdLastMountError.load()!=ESP_FAIL','odysseySdTimedOutReadQuarantined.load()','odysseySdTimedOutWriteQuarantined.load()','odysseySdControllerBusyLow()','odysseyRecording.load()','odysseySdEmergencyProvisionAttempted=true','odysseySdBeginLocked(true)','odysseySdValidateVfsLocked("emergency-format",1)','odysseySdMarkHistoricalFaultResolved()'])assert(fn.includes(key),key);
  assert.doesNotMatch(fn,/odysseyPersistRecordFailure\(0,0\)/);
 });
-test('emergency media op33 requires token, leaves 17/18 blocked and runs once',()=>{
+test('emergency media op33 requires token, leaves bulk clear blocked and runs once',()=>{
  assert.match(tx,/ODYSSEY_C3_SD_RESCUE_TOKEN=0x53445246u/);
- const guard=tx.split('if ((!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED &&')[1].split('sdBleTransferInFlight=true;')[0];
+ const guard=tx.split('if ((!ODYSSEY_C3_SD_BLE_SINGLE_DELETE_ENABLED &&')[1].split('sdBleTransferInFlight=true;')[0];
  for(const n of [17,18,19,33])assert(guard.includes('request.operation=='+n+'u'),String(n));
  assert.match(guard,/request.offset!=ODYSSEY_C3_SD_RESCUE_TOKEN/);
  const operation=tx.split('case 33: {')[1].split('case 32: {')[0];
