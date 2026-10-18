@@ -42,7 +42,7 @@ test('purple remains visible until WAV finalization completes; verified recorder
   assert.match(led,/const bool finalizing=odysseyStopRequested\.load\(\)/);
   assert.match(led,/finalizing\?550u:1800u/);
   assert.doesNotMatch(led,/!odysseyStopRequested\.load\(\) && phase<260u/);
-  assert.match(power,/trusted critical battery requested offline SD STOP/);
+  assert.match(power,/User requested no battery threshold for SD recording operations/);
   assert.match(rec,/alignas\(4\) static uint8_t batch\[ODYSSEY_SD_RECORD_BATCH_BYTES\]/);
   assert.match(rec,/odysseyCheckpointWav\(file,checkpointErrno\)/);
   assert.match(rec,/fwrite\(batch,1,sizeof\(batch\),file\)/);
