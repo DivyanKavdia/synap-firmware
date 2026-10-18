@@ -1320,6 +1320,123 @@ void odysseySdInvalidateHistoricalFaultResolution() {
   prefs.end();
 }
 
+
+static std::atomic<uint16_t> odysseySdBootCleanupRemoved{0};
+static std::atomic<uint8_t> odysseySdBootCleanupState{0};
+// state: 0=not performed; 1=cold scan succeeded; 2=scan/write error,
+// 3=more matching files than bounded budget (no deletion this boot).
+uint16_t odysseySdColdCleanupRemoved() { return odysseySdBootCleanupRemoved.load(); }
+uint8_t odysseySdColdCleanupStatus() { return odysseySdBootCleanupState.load(); }
+
+// Accept ONLY our 8.3 names: R + 7 hex digits + .WAV or .PART.
+// PART belongs to legacy interrupted recorder artefacts. Every non-empty WAV
+// remains untouched, even if its RIFF header is still provisional.
+static bool odysseySdCleanupName(const char* name,bool& part) {
+  if (!name || strlen(name)!=12u) return false;
+  if (name[0]!='R' && name[0]!='r') return false;
+  for (size_t i=1;i<8;i++) {
+    const char c=name[i];
+    if (!((c>='0' && c<='9') || (c>='A' && c<='F') ||
+          (c>='a' && c<='f'))) return false;
+  }
+  if (name[8]!='.') return false;
+  const char* ext=name+9;
+  const bool wav=(ext[0]=='W'||ext[0]=='w') &&
+    (ext[1]=='A'||ext[1]=='a') && (ext[2]=='V'||ext[2]=='v');
+  // A 3-character .PAR entry is not a .PART file; require the full suffix.
+  part=false;
+  return wav;
+}
+static bool odysseySdColdCleanupPartName(const char* name) {
+  if (!name || strlen(name)!=13u || (name[0]!='R'&&name[0]!='r') ||
+      name[8]!='.') return false;
+  for (size_t i=1;i<8;i++) {
+    const char c=name[i];
+    if (!((c>='0'&&c<='9')||(c>='A'&&c<='F')||
+          (c>='a'&&c<='f'))) return false;
+  }
+  const char* ext=name+9;
+  return (ext[0]=='P'||ext[0]=='p')&&(ext[1]=='A'||ext[1]=='a')&&
+    (ext[2]=='R'||ext[2]=='r')&&(ext[3]=='T'||ext[3]=='t');
+}
+
+// Run inside the existing SD mutex, once per genuine slider power-on, only
+// AFTER a successful read-only FAT validation. Never auto-clean on warm/OTA
+// boot, on a timed-out rail or during a recording. Collect/close all directory
+// reads first so unlink is not interleaved with an open FAT DIR handle.
+static bool odysseySdColdCleanupLocked() {
+  odysseySdBootCleanupRemoved=0;
+  odysseySdBootCleanupState=0;
+  if (bootResetReason!=ESP_RST_POWERON || !odysseySdReady() ||
+      odysseySdTimedOutWriteQuarantined.load() ||
+      odysseySdTimedOutReadQuarantined.load() ||
+      odysseyRecording.load() || otaBusy() || streamingEnabled.load()) return true;
+  constexpr size_t MAX_CANDIDATES=16;
+  char candidates[MAX_CANDIDATES][96]{};
+  size_t found=0;
+  const char* dirs[2]={ODYSSEY_SD_MOUNT_POINT,ODYSSEY_SD_RECORDING_DIR};
+  bool scanFailed=false;
+  for (uint8_t index=0;index<2 && !scanFailed;++index) {
+    errno=0;
+    DIR* dir=opendir(dirs[index]);
+    if (!dir) {
+      if (index==1u && errno==ENOENT) continue;
+      scanFailed=true;break;
+    }
+    while (true) {
+      errno=0;
+      dirent* e=readdir(dir);
+      if (!e) { if (errno) scanFailed=true;break; }
+      bool part=false;
+      const bool wav=odysseySdCleanupName(e->d_name,part);
+      part=odysseySdColdCleanupPartName(e->d_name);
+      if (!wav && !part) continue;
+      char path[96]{};
+      const int n=snprintf(path,sizeof(path),"%s/%s",dirs[index],e->d_name);
+      if (n<=0 || size_t(n)>=sizeof(path)) { scanFailed=true;break; }
+      struct stat st{};
+      errno=0;
+      if (stat(path,&st)!=0) {scanFailed=true;break;}
+      if (!S_ISREG(st.st_mode)) continue;
+      // Only header-only/empty WAVs or strictly named .PART artifacts.
+      if (!part && (st.st_size<0 || st.st_size>44)) continue;
+      if (found==MAX_CANDIDATES) {
+        odysseySdBootCleanupState=3;
+        scanFailed=true;break;
+      }
+      memcpy(candidates[found++],path,size_t(n)+1u);
+    }
+    if (closedir(dir)!=0) scanFailed=true;
+  }
+  if (scanFailed) {
+    if (odysseySdBootCleanupState.load()!=3u) odysseySdBootCleanupState=2;
+    // A read failure is not permission to reinitialize or mutate FAT.
+    odysseySdBootState=2;odysseySdProbeStage=4;
+    odysseySdUnsafeToSleep=true;
+    return false;
+  }
+  for (size_t i=0;i<found;++i) {
+    if (odysseySdTimedOutWriteQuarantined.load() ||
+        odysseySdTimedOutReadQuarantined.load()) break;
+    errno=0;
+    if (unlink(candidates[i])!=0 ||
+        odysseySdTimedOutWriteQuarantined.load() ||
+        odysseySdTimedOutReadQuarantined.load()) {
+      // Uncertain metadata write: do NOT issue a stat, retry unlink, mount or
+      // any further physical command. Leave all other WAVs intact.
+      odysseySdQuarantineUncertainWrite();
+      odysseySdBootState=2;odysseySdProbeStage=82;
+      odysseySdBootCleanupState=2;
+      return false;
+    }
+    odysseySdBootCleanupRemoved=uint16_t(i+1u);
+  }
+  odysseySdBootCleanupState=1;
+  Serial.printf("[SD] slider cold cleanup: removed=%u empty/header-only WAV or PART entries\\n",
+    unsigned(odysseySdBootCleanupRemoved.load()));
+  return true;
+}
+
 bool odysseyInitializeSdCardBeforeBle() {
   OdysseySdGuard guard;
   if (!guard) { odysseySdBootState=2;odysseySdProbeStage=1; return false; }
@@ -1350,7 +1467,10 @@ bool odysseyInitializeSdCardBeforeBle() {
       unsigned(previousRecordStage));
   }
 
-  const bool ready=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
+  const bool mounted=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
+  // Only cold, fully validated mounts are eligible for bounded orphan cleanup.
+  // On a metadata failure leave storage unavailable; no automatic retry.
+  const bool ready=mounted && odysseySdColdCleanupLocked();
   // Only an actual cold card power-on + successful VFS validation can clear
   // this historical boot veto. Software/OTA reset alone is insufficient.
   if (ready && bootResetReason==ESP_RST_POWERON) {
