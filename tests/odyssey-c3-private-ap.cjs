@@ -13,5 +13,5 @@ test('C3 retirement removes credentials and reboot-exclusive Wi-Fi mode',()=>{
 test('read-only C3 SD BLE sync retains both root and legacy WAV paths',()=>{
  assert.match(tx,/odysseySdRootWavName\(name\)/);
  assert.match(tx,/odysseySdMountPoint\(\),ODYSSEY_SD_RECORDING_DIR/);
- assert.match(tx,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
+ assert.match(tx,/ODYSSEY_C3_SD_BLE_BULK_CLEAR_ENABLED=false/);
 });

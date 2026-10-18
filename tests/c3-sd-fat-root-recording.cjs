@@ -54,7 +54,7 @@ test('BLE catalogue reads new root and legacy /synap and does not mutate either'
   assert.match(catalogue,/catalogueBuffer\+="\]"/);
   assert.match(catalogue,/return IO_ERROR/);
   assert.doesNotMatch(catalogue,/\bmkdir\s*\(|\bfwrite\s*\(|\bunlink\s*\(|odysseyRecoverSdCard\(/);
-  assert.match(tx,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
+  assert.match(tx,/ODYSSEY_C3_SD_BLE_BULK_CLEAR_ENABLED=false/);
 });
 
 test('C3 BLE-only build retains root and /synap catalogue with no Wi-Fi server',()=>{
@@ -62,5 +62,5 @@ test('C3 BLE-only build retains root and /synap catalogue with no Wi-Fi server',
   assert.match(tx,/odysseySdRootWavName\(name\)/);
   assert.doesNotMatch(ap,/#include <WiFi|WiFi\.softAP|WebServer\(/);
   assert.doesNotMatch(ino,/WiFi\.softAP|WiFiClientSecure/);
-  assert.match(tx,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
+  assert.match(tx,/ODYSSEY_C3_SD_BLE_BULK_CLEAR_ENABLED=false/);
 });
