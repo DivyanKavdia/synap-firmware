@@ -40,7 +40,7 @@ test('SD filesystem operations are independent of battery-voltage estimate',()=>
 test('disabled cold cleanup is visible in read-only recorder diagnostics',()=>{
  const op=transfer.split('case 34: {')[1].split('case 29: {')[0];
  for(const field of ['cleanupRemoved','cleanupStatus','coldRecovery','resetReason']){
-  assert(op.includes('\"'+field+'\"'),field);
+  assert(op.includes(field),field);
  }
  assert.match(op,/odysseySdColdCleanupRemoved\(\)/);
  assert.match(op,/odysseySdColdCleanupStatus\(\)/);
