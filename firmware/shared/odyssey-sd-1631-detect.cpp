@@ -1061,6 +1061,16 @@ static bool odysseySdMountOnceLocked(const char* reason,uint8_t attempt) {
         : "[SD] SD initialized, FAT mount failed; originals preserved");
       return false;
     }
+    // If native SDSPI already observed a timed-out/uncertain write or read
+    // during this fresh mount, do not inject GPIO CMD12/CMD0 on the same
+    // powered card. The slider must cut SD power before another attempt.
+    if (odysseySdTimedOutWriteQuarantined.load() ||
+        odysseySdTimedOutReadQuarantined.load()) {
+      odysseySdBootState=2;odysseySdProbeStage=4;
+      odysseySdUnsafeToSleep=true;
+      Serial.println("[SD] cold mount native timeout: no bit-bang retry; cycle slider power");
+      return false;
+    }
     const uint8_t bitBangCmd0=odysseySdBitBangRecoverLocked(reason);
     // If direct GPIO recovery returns the card to SPI idle, retry the exact
     // stock Arduino path once. No formatting or media mutation is performed.
@@ -1165,6 +1175,13 @@ void odysseyDetectSdCard() {
 // Keep the original first-fault journal intact for field diagnostics.
 // New recording faults revoke this separate recovery witness BEFORE journaling.
 static constexpr uint32_t ODYSSEY_SD_RECOVERY_WITNESS=0x53445231u;
+// RAM-only result of the retained-fault power-on gate:
+// 0=no retained unresolved fault, 1=cold mount verified,
+// 2=cold mount failed, 3=warm/OTA restart deferred.
+// This is not evidence of electrical discharge: slider OFF and USB unplugged
+// are the required physical preconditions of a true card power cycle.
+static std::atomic<uint8_t> odysseySdColdRecoveryState{0};
+uint8_t odysseySdColdRecoveryStatus() { return odysseySdColdRecoveryState.load(); }
 bool odysseySdHistoricalFaultResolved() {
   const uint8_t stage=odysseyLastRecordFailureStage();
   if (stage<44u || stage==48u) return false;
@@ -1187,6 +1204,11 @@ static void odysseySdMarkHistoricalFaultResolved() {
   (void)prefs.putBytes("resolved",witness,sizeof(witness));
   prefs.end();
 }
+static bool odysseySdUnresolvedHistoricalStorageFault() {
+  const uint8_t stage=odysseyLastRecordFailureStage();
+  return stage>=44u && stage!=48u && stage!=52u && stage!=68u &&
+    !odysseySdHistoricalFaultResolved();
+}
 void odysseySdInvalidateHistoricalFaultResolution() {
   const uint32_t witness[3]={0u,0u,0u};
   Preferences prefs;
@@ -1205,19 +1227,19 @@ bool odysseyInitializeSdCardBeforeBle() {
   // still be programming. A true cold power-on may try one normal mount,
   // followed only by guarded/passive recovery. User op14 remains explicit.
   const uint8_t previousRecordStage=odysseyLastRecordFailureStage();
-  const bool previousStorageFault=previousRecordStage>=44u &&
-    previousRecordStage!=48u && previousRecordStage!=52u &&
-    previousRecordStage!=68u &&
-    !odysseySdHistoricalFaultResolved();
+  const bool previousStorageFault=odysseySdUnresolvedHistoricalStorageFault();
+  odysseySdColdRecoveryState=0;
   if (previousStorageFault) {
     odysseySdUnsafeToSleep=true;
     if (bootResetReason!=ESP_RST_POWERON) {
+      odysseySdColdRecoveryState=3; // warm reset: no SD mount attempt
       odysseySdBootState=2;
       odysseySdProbeStage=previousRecordStage;
       Serial.printf("[SD] warm boot deferred: historical record stage=%u, SD rail not known to have reset\\n",
         unsigned(previousRecordStage));
       return false;
     }
+    odysseySdColdRecoveryState=2; // conservative until mount succeeds
     Serial.printf("[SD] cold CPU power-on: try one SD mount after retained stage=%u\\n",
       unsigned(previousRecordStage));
   }
@@ -1225,13 +1247,27 @@ bool odysseyInitializeSdCardBeforeBle() {
   const bool ready=odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS);
   // Only an actual cold card power-on + successful VFS validation can clear
   // this historical boot veto. Software/OTA reset alone is insufficient.
-  if (ready && bootResetReason==ESP_RST_POWERON)
+  if (ready && bootResetReason==ESP_RST_POWERON) {
     odysseySdMarkHistoricalFaultResolved();
+    if (previousStorageFault) odysseySdColdRecoveryState=1;
+  }
   Serial.printf("[SD] boot initialization complete state=%u stage=%u before BLE\n",
     unsigned(odysseySdBootState.load()),unsigned(odysseySdProbeStage.load()));
   return ready;
 }
 bool odysseyRecoverSdCard(const char* reason) {
+  // Before touching the current SPI bus, respect an unresolved fault from
+  // NVS. On a software/OTA reset the controller may still be powered, even
+  // though volatile timeout-quarantine flags have returned to zero.
+  // If the one allowed cold mount failed, don't turn touch or op14 into a
+  // same-rail retry loop. A verified mount lifts this veto via the witness.
+  if (odysseySdUnresolvedHistoricalStorageFault() &&
+      (bootResetReason!=ESP_RST_POWERON ||
+       odysseySdColdRecoveryState.load()==2u)) {
+    odysseySdUnsafeToSleep=true;
+    Serial.println("[SD] manual recovery refused: unresolved pre-boot storage fault; turn slider OFF with USB unplugged, then cold ON");
+    return false;
+  }
   // A timed-out read or write is not proof that the card returned to SPI
   // idle. Never attempt CMD0/CMD12, remount or FAT access on that same rail;
   // require actual card power cycling, retaining all original recordings.
