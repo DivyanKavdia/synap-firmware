@@ -172,7 +172,7 @@ bool recoverIO() {
 
 size_t diagnostics(uint8_t* bytes,size_t length) {
   const int size=snprintf(reinterpret_cast<char*>(bytes),length,
-    "{\"sdReady\":%s,\"sdClockHz\":%lu,\"sdMountStage\":\"%s\",\"sdMountAttempts\":%lu,\"sdRecoveryLocked\":%s,\"sdCsPin\":%u,\"sdProbeCardType\":%u,\"sdProbeSector0\":%s,\"sdProbeBootSignature\":%s,\"sdProbeFilesystem\":%s,\"sdProbeSectorAttempted\":%s,\"sdQuarantined\":%s,\"sdQuarantineReason\":\"%s\",\"resetReason\":%u,\"uptimeMs\":%lu,\"freeHeap\":%lu,\"fileStage\":\"%s\",\"fileErrno\":%d,\"fileFaults\":%lu}",
+    "{\"sdReady\":%s,\"sdClockHz\":%lu,\"sdMountStage\":\"%s\",\"sdMountAttempts\":%lu,\"sdRecoveryLocked\":%s,\"sdCsPin\":%u,\"sdProbeCardType\":%u,\"sdProbeSector0\":%s,\"sdProbeBootSignature\":%s,\"sdProbeFilesystem\":%s,\"sdProbeSectorAttempted\":%s,\"sdQuarantined\":%s,\"sdQuarantineReason\":\"%s\",\"resetReason\":%u,\"uptimeMs\":%lu,\"freeHeap\":%lu,\"fileStage\":\"%s\",\"fileErrno\":%d,\"fileFaults\":%lu,\"nativeCmd\":%lu,\"nativeErr\":%lu,\"nativeUnsafe\":%s}",
     ready?"true":"false",(unsigned long)clockHz,mountStage,
     (unsigned long)mountAttempts,recoveryClockLocked?"true":"false",unsigned(SD_CS),
     unsigned(probeCardType),probeSector0?"true":"false",probeBootSignature?"true":"false",
@@ -180,7 +180,8 @@ size_t diagnostics(uint8_t* bytes,size_t length) {
     sdQuarantined.load()?"true":"false",sdQuarantineReason,
     unsigned(esp_reset_reason()),(unsigned long)millis(),
     (unsigned long)ESP.getFreeHeap(),lastFileSelectStage,lastFileSelectErrno,
-    (unsigned long)fileSelectFailures);
+    (unsigned long)fileSelectFailures,(unsigned long)SD.lastWireCommand(),
+    (unsigned long)SD.lastWireError(),SD.mountUncertain()?"true":"false");
   return size>0 && size_t(size)<length?size_t(size):0;
 }
 
