@@ -18,8 +18,7 @@ test('C3 offline recorder is append-only and writes aligned multi-sector batches
   assert.match(take,/failureStage=75/);
   assert.match(take,/startMicrophone\(\)/);
   assert(take.indexOf('file=fopen(fullPath,"wb")')<take.indexOf('startMicrophone()'));
-  assert.match(take,/odysseyCheckpointWav\(file,checkpointErrno\)/);
-  assert.match(take,/uint32_t\(millis\(\)-lastCheckpointAt\)>=ODYSSEY_SD_CHECKPOINT_INTERVAL_MS/);
+  assert.doesNotMatch(take,/odysseyCheckpointWav|lastCheckpointAt|ODYSSEY_SD_CHECKPOINT_INTERVAL_MS/);
   assert.doesNotMatch(take,/fseek\(file,0|ftruncate\(|SD\.format\(/);
   assert.match(source,/ODYSSEY_SD_RECORD_BATCH_BYTES=2048u/);
   assert.match(source,/static_assert\(ODYSSEY_SD_RECORD_BATCH_BYTES>=1024u/);
