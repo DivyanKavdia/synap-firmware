@@ -22,6 +22,9 @@ static std::atomic<uint32_t> odysseyPersistedWireBudget{0};
 static std::atomic<uint32_t> odysseyPersistedWireLen{0};
 static std::atomic<uint32_t> odysseyPersistedWirePrev{UINT32_MAX};
 static std::atomic<uint32_t> odysseyPersistedWireGoodWrites{0};
+// Failure-time clock is stage/byte-paired in optional NVS. A later firmware
+// update must not relabel historical 800 kHz CMD25 faults as 2 MHz faults.
+static std::atomic<uint32_t> odysseyPersistedWireClockKhz{0};
 void odysseySdClearWireFault();
 uint32_t odysseySdWireFaultCmd();
 uint32_t odysseySdWireFaultError();
@@ -94,6 +97,12 @@ static void odysseyLoadPersistedRecordFailure() {
       odysseyPersistedWirePrev=timing[5];
       odysseyPersistedWireGoodWrites=timing[6];
     }
+    uint32_t clock[3]{};
+    if (prefs.getBytesLength("wclk")==sizeof(clock) &&
+        prefs.getBytes("wclk",clock,sizeof(clock))==sizeof(clock) &&
+        clock[0]==record[1] && clock[1]==record[2]) {
+      odysseyPersistedWireClockKhz=clock[2];
+    }
   }
   prefs.end();
 }
@@ -120,6 +129,7 @@ uint32_t odysseyLastWireBudget() { odysseyLoadPersistedRecordFailure(); return o
 uint32_t odysseyLastWireLen() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireLen.load(); }
 uint32_t odysseyLastWirePrev() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWirePrev.load(); }
 uint32_t odysseyLastWireGoodWrites() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireGoodWrites.load(); }
+uint32_t odysseyLastWireClockKhz() { odysseyLoadPersistedRecordFailure(); return odysseyPersistedWireClockKhz.load(); }
 static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   odysseyPersistedRecordLoaded=true;
   odysseyPersistedRecordStage=stage;
@@ -134,6 +144,7 @@ static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
   odysseyPersistedWireLen=stage?odysseySdWireFaultLength():0u;
   odysseyPersistedWirePrev=stage?odysseySdWireFaultPreviousCmd():UINT32_MAX;
   odysseyPersistedWireGoodWrites=stage?odysseySdWireFaultGoodWrites():0u;
+  odysseyPersistedWireClockKhz=stage?ODYSSEY_SD_DATA_FREQ_HZ/1000u:0u;
   if (!stage) {
     odysseyPersistedWriteErrno=0;
     odysseyPersistedWriteReturned=0;
@@ -161,6 +172,8 @@ static void odysseyPersistRecordFailure(uint8_t stage,uint32_t bytes) {
       odysseyPersistedWireLen.load(),odysseyPersistedWirePrev.load(),
       odysseyPersistedWireGoodWrites.load()};
     (void)prefs.putBytes("wtime",timing,sizeof(timing));
+    const uint32_t clock[3]={uint32_t(stage),bytes,odysseyPersistedWireClockKhz.load()};
+    (void)prefs.putBytes("wclk",clock,sizeof(clock));
   }
   const uint32_t record[3]={stage?1u:0u,uint32_t(stage),bytes};
   (void)prefs.putBytes("last",record,sizeof(record));
