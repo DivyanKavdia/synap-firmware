@@ -89,8 +89,12 @@ uint8_t readSelection(uint32_t offset,uint32_t& total,uint8_t* bytes,size_t& siz
     if(!ChakshuStorage::ready&&!ChakshuStorage::begin(false))return ChakshuMedia::NO_SD;
     for(uint8_t attempt=0;attempt<2;++attempt) {
       if(SD.cardType()==CARD_NONE){ChakshuStorage::ready=false;return ChakshuMedia::NO_SD;}
-      if(!SD.exists(selectedPath))return ChakshuMedia::FILE_UNAVAILABLE;
+      // A verified selected WAV needs just one direct file-open per chunk.
+      // SD.exists() doubled FAT lookups and could falsely mark a readable
+      // recording absent; no need to stat the same file first.
+      errno=0;
       File file=SD.open(selectedPath,FILE_READ);
+      const int openErr=errno;
       if(file&&!file.isDirectory()) {
         total=file.size();
         if(offset>=total){file.close();return ChakshuMedia::FILE_UNAVAILABLE;}
@@ -99,7 +103,13 @@ uint8_t readSelection(uint32_t offset,uint32_t& total,uint8_t* bytes,size_t& siz
           size=wanted;file.close();return 0;
         }
       }
+      const bool directory=bool(file);
       file.close();
+      if(!directory && openErr==ENOENT) {
+        ChakshuStorage::noteFileSelect("read-missing",openErr);
+        return ChakshuMedia::FILE_UNAVAILABLE;
+      }
+      ChakshuStorage::noteFileSelect("read-io",openErr?openErr:EIO);
       if(attempt==0&&ChakshuStorage::recoverIO())continue;
       return ChakshuStorage::ready?ChakshuMedia::IO_ERROR:ChakshuMedia::NO_SD;
     }
