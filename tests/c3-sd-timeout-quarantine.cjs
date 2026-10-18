@@ -38,10 +38,10 @@ test('reduce forced FAT metadata updates, tolerate brief I2S starvation, never e
     assert.match(source,/ODYSSEY_SD_CHECKPOINT_INTERVAL_MS=60000u/);
     assert.match(source,/uint32_t\(millis\(\)-noAudioSince\)>=1000u/);
   }
-  assert.match(transfer,/ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED=false/);
+  assert.match(transfer,/ODYSSEY_C3_SD_BLE_BULK_CLEAR_ENABLED=false/);
   const worker=transfer.split('static void worker(void*) {')[1];
-  assert(worker.indexOf('!ODYSSEY_C3_SD_BLE_MUTATIONS_ENABLED')<worker.indexOf('case 17:'));
-  assert.match(worker,/request.operation==17u \|\| request.operation==18u/);
+  assert(worker.indexOf('!ODYSSEY_C3_SD_BLE_BULK_CLEAR_ENABLED')<worker.indexOf('case 17:'));
+  assert.match(worker,/request.operation==18u/);
   assert.match(worker,/reply\(request,BAD_COMMAND\)/);
 });
 
