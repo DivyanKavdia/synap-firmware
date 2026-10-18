@@ -8,7 +8,7 @@ test('C3 explicit SD delete permits untrusted ADC but blocks trusted low voltage
   const method=source.split('static uint8_t removeFile(const char* path) {')[1]
     .split('static uint16_t clearRecordings()')[0];
   assert.match(method,/safeWavPath\(path\)/);
-  assert.match(method,/batteryAvailable\.load\(\) && batteryMillivolts<ODYSSEY_SD_WRITE_START_MIN_MV/);
+  assert.match(method,/batteryAvailable\.load\(\) && batteryMillivolts<ODYSSEY_SD_WRITE_CONTINUE_MIN_MV/);
   assert.doesNotMatch(method,/if \(!odysseySdPowerSafe\(/);
   assert.match(method,/OdysseySdGuard guard/);
   assert.match(method,/!storageReady\(\)/);
