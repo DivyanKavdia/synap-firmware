@@ -43,6 +43,8 @@ struct Spi {
 struct Card {
  void end(){assert(handles==0);fsMounted=false;busStarted=false;++resets;}
  bool mountUncertain(){return false;}
+ uint32_t lastWireCommand(){return UINT32_MAX;}
+ uint32_t lastWireError(){return 0;}
  void probeReadOnly(uint8_t& type,bool& attempted,bool& sectorOk,bool& signature,bool& filesystem){
    type=probeCardUnknown?CARD_UNKNOWN:(probeCardVisible?CARD_SDHC:CARD_NONE);
    attempted=probeCardVisible;sectorOk=probeCardVisible&&probeRawHealthy;
