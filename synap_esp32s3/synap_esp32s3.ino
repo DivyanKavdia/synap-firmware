@@ -4842,14 +4842,15 @@ struct Request {
   bool compact=false;
   char path[64]{};
 };
-// Shipping safety policy: physical C3+SD units have timed out on CMD24/CMD25
-// and become unavailable after FAT unlink/format. Until a verified hardware
-// and SDSPI fix exists, firmware itself must reject ALL BLE filesystem
-// mutators, including commands issued by cached/older PWA clients.
-// Does not gate disconnected recording, catalogue or verified SD reads.
-static constexpr bool ODYSSEY_C3_SD_BLE_SINGLE_DELETE_ENABLED=true;
+// Field build 2321: successful BLE WAV transfer followed by user-requested
+// op17 unlink failed with EIO after ~5 seconds and quarantined SD (stage 4).
+// Disable single-file FAT deletion in FIRMWARE, not just PWA: older clients
+// must never cause another unsafe CMD24 FAT metadata write after sync.
+// Both SD recordings and verified BLE reads are unchanged; no battery gate.
+// Original WAVs stay on SD until externally backed up/managed with card reader.
+static constexpr bool ODYSSEY_C3_SD_BLE_SINGLE_DELETE_ENABLED=false;
 static constexpr bool ODYSSEY_C3_SD_BLE_BULK_CLEAR_ENABLED=false;
-// One-file Delete is opt-in and guarded; bulk Clear stays disabled.
+// BLE Delete and Clear cannot mutate FAT on affected C3+SD hardware.
 // Format has its own explicit request token.
 static constexpr bool ODYSSEY_C3_SD_EXPLICIT_FORMAT_ENABLED=true;
 static constexpr uint32_t ODYSSEY_C3_SD_FORMAT_TOKEN=0x5344464Du; // "SDFM"
