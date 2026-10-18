@@ -93,6 +93,7 @@ void put32le(uint8_t* p,uint32_t n){for(int i=0;i<4;++i)p[i]=n>>(8*i);}
 namespace ChakshuStorage {
  bool ready=true;constexpr uint32_t RESERVE_BYTES=4*1024*1024;uint64_t freeBytes=64*1024*1024;
  bool protectedCapture=false;
+ void quarantine(const char*){ready=false;}
  void refresh(){}
  bool ensureSpace(uint64_t expected=0){return ready && freeBytes>=uint64_t(RESERVE_BYTES)+expected;}
  void protect(const char*){protectedCapture=true;}

@@ -2,7 +2,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs');
 const {nativeTest}=require('./support/native.cjs');
 
-test('SD boot detection retries all clocks while I/O recovery alone becomes sticky',()=>{
+test('Chakshu cold-mount diagnostics quarantine controller faults until next boot',()=>{
  const source=fs.readFileSync('firmware/xiao-sense/sd-storage.cpp','utf8');
  const lifecycle=source.slice(source.indexOf('namespace ChakshuStorage {'),source.indexOf('bool capturePath('))+'}\n';
  assert.match(nativeTest(`#include <atomic>
@@ -17,7 +17,7 @@ constexpr int OUTPUT=1,HIGH=1;
 using sdcard_type_t=int;
 bool spiHealthy=true,mountHealthy=true,rootHealthy=true,rootDirectory=true,spaceHealthy=true,rootExists=true,mkdirHealthy=true,cardPresent=true;
 bool busStarted=false,fsMounted=false;unsigned resets=0,handles=0;uint32_t lastHz=0,limitHz=4000000;
-bool probeCardVisible=false,probeRawHealthy=false,probeFsHealthy=false;
+bool probeCardVisible=false,probeCardUnknown=false,probeRawHealthy=false,probeFsHealthy=false;
 std::vector<uint32_t> clocks;
 void pinMode(int pin,int mode){assert(pin==21&&mode==OUTPUT);}
 void digitalWrite(int pin,int level){assert(pin==21&&level==HIGH);}
@@ -62,7 +62,7 @@ bool sdcard_mount(uint8_t,const char* path,uint8_t files,bool format){
  return probeFsHealthy;
 }
 uint8_t sdcard_unmount(uint8_t){return 0;}
-sdcard_type_t sdcard_type(uint8_t){return probeCardVisible?CARD_SDHC:CARD_NONE;}
+sdcard_type_t sdcard_type(uint8_t){return probeCardUnknown?CARD_UNKNOWN:(probeCardVisible?CARD_SDHC:CARD_NONE);}
 uint32_t sdcard_num_sectors(uint8_t){return probeFsHealthy?16000u:0u;}
 uint32_t sdcard_sector_size(uint8_t){return 512u;}
 bool sd_read_raw(uint8_t,uint8_t* bytes,uint32_t sector){
@@ -84,60 +84,75 @@ int main(){
  assert(!recoveryClockLocked);
  const unsigned before=resets;assert(begin(false)&&resets==before);
 
- // A real mounted-card I/O fault is the only event that locks this boot to 1 MHz.
- assert(recoverIO()&&clockHz==1000000&&recoveryClockLocked&&resets>before&&handles==0);
- ready=false;clocks.clear();assert(begin(false));
- assert((clocks==std::vector<uint32_t>{1000000u}));
- assert(begin(true)&&lastHz==1000000u);
+ // In-flight I/O uncertainty never triggers another same-rail mount attempt.
+ assert(!recoverIO()&&sdQuarantined.load()&&recoveryClockLocked&&!ready);
+ assert(resets==before&&busStarted&&fsMounted);
+ clocks.clear();assert(!begin(false)&&!begin(true)&&clocks.empty());
+ // This native mock now simulates a physical MCU reboot.
+ sdQuarantined=false;sdQuarantineReason="none";recoveryClockLocked=false;ready=false;
 
  // A card that never mounted is not falsely treated as a recovered card.
  ready=false;recoveryClockLocked=false;clockHz=10000000u;mountHealthy=false;clocks.clear();
  probeCardVisible=false;probeRawHealthy=false;probeFsHealthy=false;
  assert(!begin(true));
  assert((clocks==std::vector<uint32_t>{10000000u,4000000u,1000000u,400000u}));
- assert(!recoveryClockLocked&&!busStarted&&!fsMounted);
+ assert(!recoveryClockLocked&&!busStarted&&!fsMounted&&sdQuarantined.load());
+ clocks.clear();assert(!begin(true)&&clocks.empty());
  // Diagnostics must show the full ladder and then classify the low-level
  // failure instead of calling every SD.begin() failure a bus fault.
  assert(clockHz==400000u);
  assert(std::string(mountStage)=="card");
  assert(probeCardType==CARD_NONE&&!probeSector0&&!probeFilesystem);
+ // CARD_UNKNOWN must never claim that sector zero actually failed: no raw
+ // sector request was issued. The old 'card-read' label was misleading.
+ sdQuarantined=false;probeCardUnknown=true;clocks.clear();
+ assert(!begin(true)&&sdQuarantined.load());
+ assert(std::string(mountStage)=="card-unknown"&&!probeSectorAttempted&&!probeSector0);
+ sdQuarantined=false;probeCardUnknown=false;
 
  // If the card initializes and raw sector zero is readable but FAT mounting
  // still fails, the fault is the filesystem, not SPI wiring. The probe never
  // formats or writes the card.
- probeCardVisible=true;probeRawHealthy=true;probeFsHealthy=false;clocks.clear();
+ sdQuarantined=false;probeCardVisible=true;probeRawHealthy=true;probeFsHealthy=false;clocks.clear();
  assert(!begin(true)&&!ready);
  assert(std::string(mountStage)=="filesystem");
  assert(probeCardType==CARD_SDHC&&probeSector0&&probeBootSignature&&!probeFilesystem);
 
  // A card that identifies but cannot read a sector remains a transport/media
  // fault rather than being mislabeled as a filesystem problem.
- probeRawHealthy=false;clocks.clear();
+ sdQuarantined=false;probeRawHealthy=false;clocks.clear();
  assert(!begin(true)&&std::string(mountStage)=="card-read");
 
  // A filesystem which mounts in the direct diagnostic path is explicitly
  // reported as such; it is still left unmounted for the normal owner to retry.
- probeRawHealthy=true;probeFsHealthy=true;clocks.clear();
+ sdQuarantined=false;probeRawHealthy=true;probeFsHealthy=true;clocks.clear();
  assert(!begin(true)&&std::string(mountStage)=="probe-mounted"&&probeFilesystem);
 
- mountHealthy=true;limitHz=10000000u;cardPresent=true;clocks.clear();
+ sdQuarantined=false;mountHealthy=true;limitHz=10000000u;cardPresent=true;clocks.clear();
  assert(begin(false)&&clockHz==10000000u);
  assert((clocks==std::vector<uint32_t>{10000000u}));
 
  // Mount success is insufficient: directory and capacity must also be usable.
- rootHealthy=false;assert(!begin(true)&&!ready&&capacity==0);rootHealthy=true;
- rootDirectory=false;assert(!begin(true)&&!ready&&handles==0);rootDirectory=true;
- spaceHealthy=false;assert(!begin(true)&&!ready);spaceHealthy=true;
- rootExists=false;mkdirHealthy=false;assert(!begin(true));mkdirHealthy=true;assert(begin(true));
+ rootHealthy=false;assert(!begin(true)&&!ready&&capacity==0&&sdQuarantined.load());
+ sdQuarantined=false;rootHealthy=true;
+ rootDirectory=false;assert(!begin(true)&&!ready&&handles==0&&sdQuarantined.load());
+ sdQuarantined=false;rootDirectory=true;
+ spaceHealthy=false;assert(!begin(true)&&!ready&&sdQuarantined.load());
+ sdQuarantined=false;spaceHealthy=true;
+ rootExists=false;mkdirHealthy=false;assert(begin(true)&&!captureDirectoryPresent);
+ assert(!mkdirHealthy); // Mount never creates a FAT directory.
+ rootExists=true;mkdirHealthy=true;assert(begin(true)&&captureDirectoryPresent);
 
- // A real recovery failure remains conservative rather than returning to the
- // 10/4 MHz boot clocks, and gets a 400 kHz last-resort retry.
+ // A timed-out read/write cannot reinitialize a possibly busy controller.
  recoveryClockLocked=false;assert(begin(true));mountHealthy=false;
- assert(!recoverIO()&&recoveryClockLocked&&!ready&&!busStarted&&!fsMounted);
- assert((clocks.size()>=2&&clocks[clocks.size()-2]==1000000u&&clocks.back()==400000u));
+ const unsigned stalledResets=resets;
+ assert(!recoverIO()&&recoveryClockLocked&&!ready&&sdQuarantined.load());
+ clocks.clear();assert(!begin(false)&&!begin(true)&&clocks.empty());
+ assert(resets==stalledResets);
+ sdQuarantined=false;recoveryClockLocked=false;
  mountHealthy=true;limitHz=10000000u;clocks.clear();
- assert(begin(false)&&lastHz==1000000u);
- assert((clocks==std::vector<uint32_t>{1000000u}));
+ assert(begin(false)&&lastHz==10000000u);
+ assert((clocks==std::vector<uint32_t>{10000000u}));
  uint8_t diagnostic[480]{};
  const size_t diagnosticSize=diagnostics(diagnostic,sizeof(diagnostic));
  assert(diagnosticSize>0);

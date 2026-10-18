@@ -202,21 +202,27 @@ uint8_t captureSavedPreview() {
 bool writeDescribeMarker();
 uint8_t catalogue() {
   clearSelection();
-  // Catalogue is serialized by the media lease. Recover a mounted-but-unstable
-  // card once at a conservative SPI clock before surfacing an I/O error.
+  // Catalogue is serialized by the media lease. A quarantined card is never
+  // reopened by BLE reconnect or repeated listing requests on the same rail.
   if(!ChakshuStorage::ready&&!ChakshuStorage::begin(false))return ChakshuMedia::NO_SD;
   // Keep the capability characteristic aligned with a successful catalogue
   // re-detection so the PWA immediately sees SD / SD-audio readiness restored.
   {ChakshuMedia::Snapshot state;ChakshuMedia::copy(state);ChakshuMedia::refresh(state);ChakshuMedia::save(state);}
-  File directory=SD.open("/synap");
-  if(!directory) {
-    directory.close();
-    if(!ChakshuStorage::recoverIO())return ChakshuMedia::NO_SD;
+  // A formatted empty card may have no /synap directory; mounting and
+  // browsing must not create it. Only an explicit new capture may mkdir.
+  File directory;
+  if(ChakshuStorage::captureDirectoryPresent) {
     directory=SD.open("/synap");
-    if(!directory){directory.close();return ChakshuMedia::IO_ERROR;}
+    if(!directory || !directory.isDirectory()) {
+      directory.close();
+      ChakshuStorage::quarantine("catalogue-io");
+      return ChakshuMedia::NO_SD;
+    }
   }
   String json="[";unsigned count=0;
-  for(File entry=directory.openNextFile();entry;entry=directory.openNextFile()) {
+  while(directory) {
+    File entry=directory.openNextFile();
+    if(!entry)break;
     String path=entry.path();
     if(!entry.isDirectory()&&validPath(path.c_str())&&(path.endsWith(".jpg")||path.endsWith(".mjpeg")||(path.endsWith(".wav")&&!SD.exists(path.substring(0,path.length()-4)+".mjpeg")))) {
       if(count++)json+=",";
@@ -391,7 +397,10 @@ void worker(void*) {
     }
     if(error)size=0;
     if(error==ChakshuMedia::IO_ERROR||error==ChakshuMedia::NO_SD) {
-      ChakshuStorage::ready=false;
+      // Unlike older Chakshu releases, never start another same-powered-rail
+      // SD driver reinitialisation after a failed media operation. Keep the
+      // first fault visible through RAM-only op35.
+      ChakshuStorage::quarantine("media-io");
       size=ChakshuStorage::diagnostics(bytes,sizeof(bytes));
     }
     replyFor(request,error,total,request.offset,bytes,size);
