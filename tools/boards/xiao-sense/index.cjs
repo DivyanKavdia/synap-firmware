@@ -45,16 +45,19 @@ function materializeChakshu(source,target) {
   replace("  pinMode(TOUCH_INPUT_PIN, INPUT);","  pinMode(TOUCH_INPUT_PIN, INPUT_PULLDOWN);","Stabilize TTP223 input after boot");
   replace("  statusLed.begin();\n  statusLed.clear();\n  statusLed.show();","  pinMode(RGB_LED_PIN,OUTPUT);\n  digitalWrite(RGB_LED_PIN,LOW);\n  delay(2);\n  statusLed.begin();\n  statusLed.clear();\n  statusLed.show();\n  delay(1);\n  statusLed.clear();\n  statusLed.show();","Force external NeoPixel dark at startup");
   replace("  statusLed.setPixelColor(0,statusLed.Color(r,g,b));\n  statusLed.show();","  statusLed.clear();\n  if(pattern)statusLed.setPixelColor(0,statusLed.Color(r,g,b));\n  statusLed.show();","Clear stale NeoPixel state before every pattern");
-  replace("#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU\nconstexpr uint8_t LED_DIM = 16;\n#else\nconstexpr uint8_t LED_DIM = 4;\n#endif","constexpr uint8_t LED_DIM = 2;","Use minimum practical Chakshu NeoPixel brightness");
+  replace("#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU\nconstexpr uint8_t LED_DIM = 16;\n#else\nconstexpr uint8_t LED_DIM = 4;\n#endif","constexpr uint8_t LED_DIM = 9;","Use minimum practical Chakshu NeoPixel brightness");
   replace("    const uint32_t phase=now%1400u;\n    if (phase<140u || (phase>=290u && phase<430u)) { r=LED_DIM; g=LED_DIM/2; }",
-    "    const uint32_t phase=now%3000u;\n    if (phase<20u) { r=LED_DIM; g=1; }","Minimize Chakshu OTA LED duty cycle");
+    "    const uint32_t phase=now%1700u;\n    if (phase<150u || (phase>=300u && phase<450u)) { r=LED_DIM; g=LED_DIM/2; }","Minimize Chakshu OTA LED duty cycle");
   replace("    const uint32_t phase=now%5000u;\n    if (phase<40u || (phase>=180u && phase<220u)) r=LED_DIM;",
-    "    if (now%15000u<20u) r=LED_DIM;","Minimize Chakshu low-battery LED duty cycle");
+    "    if (now%5000u<120u || (now%5000u>=270u && now%5000u<390u)) r=LED_DIM;","Minimize Chakshu low-battery LED duty cycle");
   replace("  } else if (deviceState == DeviceState::DISCONNECTED) {\n    if (now%5000u<180u) r=LED_DIM;\n  } else if (deviceState == DeviceState::CONNECTED_IDLE) {\n    // Three visible green acknowledgements confirm the PWA/BLE connection.\n    // Connected idle stays dark after the burst to conserve battery.\n    const uint32_t connectedAt=connectedLedAt.load();\n    const uint32_t elapsed=uint32_t(now-connectedAt);\n    if (connectedAt && elapsed<1500u && elapsed%500u<180u) g=LED_DIM+5;",
-    "  } else if (deviceState == DeviceState::DISCONNECTED) {\n    // Dark by default for maximum battery life.\n  } else if (deviceState == DeviceState::CONNECTED_IDLE) {\n    // Dark by default for maximum battery life.","Disable Chakshu idle heartbeats");
+    "  } else if (deviceState == DeviceState::DISCONNECTED) {\n    if (now%5000u<120u) r=LED_DIM;\n  } else if (deviceState == DeviceState::CONNECTED_IDLE) {\n    const uint32_t connectedAt=connectedLedAt.load();\n    const uint32_t elapsed=uint32_t(now-connectedAt);\n    if(connectedAt && elapsed<1500u && elapsed%500u<180u) g=LED_DIM;","Disable Chakshu idle heartbeats");
   replace("  } else if (deviceState == DeviceState::STREAMING) {\n    if (now%1800u<150u) {\n#if CONFIG_IDF_TARGET_ESP32C3 && !SYNAP_CHAKSHU\n      b=LED_DIM; // Blue = live BLE audio on Odyssey C3.\n#else\n      g=LED_DIM+1;\n#endif\n    }\n  } else {\n    if (now%1200u<160u) { r=LED_DIM; b=LED_DIM; }",
-    "  } else if (deviceState == DeviceState::STREAMING) {\n    if (now%5000u<20u) g=LED_DIM;\n  } else {\n    if (now%10000u<25u) { r=LED_DIM; b=LED_DIM; }","Minimize Chakshu active and error LED duty cycle");
-  replace("  } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {","  } else if (mediaBusy()) {\n    if (now%5000u<20u) g=LED_DIM;\n  } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {","Show low-duty Chakshu media activity on NeoPixel");
+    "  } else if (deviceState == DeviceState::STREAMING) {\n    if (now%1800u<180u) b=LED_DIM;\n  } else {\n    if (now%1800u<180u) r=LED_DIM;","Minimize Chakshu active and error LED duty cycle");
+  replace("  } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {","  } else if (mediaBusy()) {\n    if (now%1800u<150u) {g=LED_DIM;b=LED_DIM;}\n  } else if (batteryAvailable && batteryMillivolts<=BATTERY_LOW_MV) {","Show low-duty Chakshu media activity on NeoPixel");
+  replace('  } else if (remoteStandby) {',
+    '  } else if (ChakshuTransfer::offline.load()) {\n    const bool closing=ChakshuTransfer::stopRequested.load();\n    if (now%(closing?550u:1600u)<(closing?125u:320u)) {r=LED_DIM;b=LED_DIM;}\n  } else if (ChakshuStorage::sdQuarantined.load()) {\n    const uint32_t phase=now%5000u;\n    if(phase<140u || (phase>=280u && phase<420u)) r=LED_DIM;\n  } else if (remoteStandby) {',
+    'Distinct purple SD recording and double-red SD failure status');
   // Preserve Chakshu's established 4 warmups / 24 samples. The generic
   // source now has a C3-only trim buffer between the accumulator and loop,
   // so patch the sampling pieces separately rather than using a stale block.

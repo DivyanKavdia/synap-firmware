@@ -9,7 +9,7 @@ std::atomic<bool> ready{false};
 uint64_t capacity=0,freeBytes=0;
 uint32_t sequence=0,bootId=0;
 char protectedStem[64]{};
-uint32_t clockHz=10000000u;
+uint32_t clockHz=4000000u;
 uint32_t mountAttempts=0;
 const char* mountStage="not-started";
 bool recoveryClockLocked=false;
@@ -142,7 +142,9 @@ bool detectCard() {
   // 400 kHz is intentionally retained as the last-resort operating clock. The
   // SD driver also uses a slow clock during card initialization, but marginal
   // links can still fail once filesystem traffic begins.
-  for(const uint32_t hz:{10000000u,4000000u,1000000u,400000u}) {
+  // Avoid a 10 MHz first transaction that can strand marginal card controllers.
+  // No formatting, writes, or same-powered retries after detection is exhausted.
+  for(const uint32_t hz:{4000000u,1000000u,400000u}) {
     if(resetMountAt(hz))return true;
   }
   inspectFailedMount();

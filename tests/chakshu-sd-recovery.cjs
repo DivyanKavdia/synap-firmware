@@ -16,7 +16,7 @@ constexpr int CARD_NONE=0,CARD_MMC=1,CARD_SD=2,CARD_SDHC=3,CARD_UNKNOWN=4;
 constexpr int OUTPUT=1,HIGH=1;
 using sdcard_type_t=int;
 bool spiHealthy=true,mountHealthy=true,rootHealthy=true,rootDirectory=true,spaceHealthy=true,rootExists=true,mkdirHealthy=true,cardPresent=true;
-bool busStarted=false,fsMounted=false;unsigned resets=0,handles=0;uint32_t lastHz=0,limitHz=4000000;
+bool busStarted=false,fsMounted=false;unsigned resets=0,handles=0;uint32_t lastHz=0,limitHz=1000000;
 bool probeCardVisible=false,probeCardUnknown=false,probeRawHealthy=false,probeFsHealthy=false;
 std::vector<uint32_t> clocks;
 void pinMode(int pin,int mode){assert(pin==21&&mode==OUTPUT);}
@@ -79,8 +79,8 @@ int main(){
  // Cold detection first resets any inherited SPI state, then keeps one owned
  // Sense-pin session while falling back through compatibility clocks.
  busStarted=true;
- assert(begin(false)&&clockHz==4000000&&capacity==8000000&&freeBytes==7000000);
- assert((clocks==std::vector<uint32_t>{10000000u,4000000u}));
+ assert(begin(false)&&clockHz==1000000&&capacity==8000000&&freeBytes==7000000);
+ assert((clocks==std::vector<uint32_t>{4000000u,1000000u}));
  assert(!recoveryClockLocked);
  const unsigned before=resets;assert(begin(false)&&resets==before);
 
@@ -92,10 +92,10 @@ int main(){
  sdQuarantined=false;sdQuarantineReason="none";recoveryClockLocked=false;ready=false;
 
  // A card that never mounted is not falsely treated as a recovered card.
- ready=false;recoveryClockLocked=false;clockHz=10000000u;mountHealthy=false;clocks.clear();
+ ready=false;recoveryClockLocked=false;clockHz=4000000u;mountHealthy=false;clocks.clear();
  probeCardVisible=false;probeRawHealthy=false;probeFsHealthy=false;
  assert(!begin(true));
- assert((clocks==std::vector<uint32_t>{10000000u,4000000u,1000000u,400000u}));
+ assert((clocks==std::vector<uint32_t>{4000000u,1000000u,400000u}));
  assert(!recoveryClockLocked&&!busStarted&&!fsMounted&&sdQuarantined.load());
  clocks.clear();assert(!begin(true)&&clocks.empty());
  // Diagnostics must show the full ladder and then classify the low-level
@@ -129,8 +129,8 @@ int main(){
  assert(!begin(true)&&std::string(mountStage)=="probe-mounted"&&probeFilesystem);
 
  sdQuarantined=false;mountHealthy=true;limitHz=10000000u;cardPresent=true;clocks.clear();
- assert(begin(false)&&clockHz==10000000u);
- assert((clocks==std::vector<uint32_t>{10000000u}));
+ assert(begin(false)&&clockHz==4000000u);
+ assert((clocks==std::vector<uint32_t>{4000000u}));
 
  // Mount success is insufficient: directory and capacity must also be usable.
  rootHealthy=false;assert(!begin(true)&&!ready&&capacity==0&&sdQuarantined.load());
@@ -151,8 +151,8 @@ int main(){
  assert(resets==stalledResets);
  sdQuarantined=false;recoveryClockLocked=false;
  mountHealthy=true;limitHz=10000000u;clocks.clear();
- assert(begin(false)&&lastHz==10000000u);
- assert((clocks==std::vector<uint32_t>{10000000u}));
+ assert(begin(false)&&lastHz==4000000u);
+ assert((clocks==std::vector<uint32_t>{4000000u}));
  uint8_t diagnostic[480]{};
  const size_t diagnosticSize=diagnostics(diagnostic,sizeof(diagnostic));
  assert(diagnosticSize>0);

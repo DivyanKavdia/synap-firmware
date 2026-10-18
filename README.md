@@ -118,7 +118,7 @@ The current Chakshu hardware revision extends the shared Odyssey power/status co
 
 - **TTP223 touch:** GPIO1 / D0, active high. It uses the shared double-tap recording/power-saver gestures and 4-second deep-sleep / wake hold.
 - **Battery ADC:** GPIO2 / D1 through the same 1 MΩ / 470 kΩ divider calibration used by Odyssey S3 (4130 mV cell ↔ 1320 mV ADC, 6 dB attenuation). Battery telemetry and critical-battery protection are enabled.
-- **Status NeoPixel:** external WS2812/NeoPixel on GPIO5 / D4. Chakshu keeps it dark while disconnected or connected-idle; only very short, dim activity/OTA/error/low-battery pulses remain.
+- **Status NeoPixel:** external WS2812/NeoPixel on GPIO5 / D4. Chakshu uses red disconnected, three green connection pulses, blue live BLE capture, purple offline SD capture, amber OTA and double-red SD quarantine. The external NeoPixel colour order remains GRB pending physical calibration.
 - **SD chip-select remains GPIO21.** On XIAO ESP32-S3 Sense this signal is electrically shared with the active-low orange USER_LED. Synap never uses that LED as a status indicator, but SD transactions necessarily pull CS low and can therefore flash the orange LED. Software can reduce unnecessary SD reads but cannot suppress that electrical flash while accessing the onboard SD slot.
 
 

@@ -10,11 +10,12 @@ test('Chakshu uses the external GPIO5 / D4 NeoPixel and never repurposes SD chip
  assert.match(source,/Adafruit_NeoPixel statusLed\(1, RGB_LED_PIN, NEO_GRB \+ NEO_KHZ800\)/);
  assert.match(led,/statusLed\.setPixelColor/);
  assert.match(led,/statusLed\.show\(\)/);
- assert.match(source,/constexpr uint8_t LED_DIM = 2;/);
- assert.match(led,/DeviceState::DISCONNECTED[\s\S]*Dark by default for maximum battery life/);
- assert.match(led,/DeviceState::CONNECTED_IDLE[\s\S]*Dark by default for maximum battery life/);
- assert.match(led,/DeviceState::STREAMING[\s\S]*now%5000u<20u/);
- assert.doesNotMatch(led,/now%5000u<35u|now%6000u<30u|now%1800u<45u/);
+ assert.match(source,/constexpr uint8_t LED_DIM = 9;/);
+ assert.match(led,/DeviceState::DISCONNECTED[\s\S]*now%5000u<120u/);
+ assert.match(led,/DeviceState::CONNECTED_IDLE[\s\S]*connectedLedAt\.load\(\)/);
+ assert.match(led,/DeviceState::STREAMING[\s\S]*b=LED_DIM/);
+ assert.match(led,/ChakshuTransfer::offline\.load\(\)/);
+ assert.match(led,/ChakshuStorage::sdQuarantined\.load\(\)/);
  assert.doesNotMatch(source,/Adafruit_NeoPixel statusLed\(1,\s*(?:21|LED_BUILTIN)/);
  assert.doesNotMatch(source,/pinMode\(LED_BUILTIN|digitalWrite\(LED_BUILTIN/);
  assert.match(source,/constexpr uint8_t SD_SCK=7,SD_MISO=8,SD_MOSI=9,SD_CS=21/);
