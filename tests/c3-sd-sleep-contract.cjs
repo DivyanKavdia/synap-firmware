@@ -90,7 +90,8 @@ test('native C3 checks card status and cleanly unmounts before power transition'
 
 test('C3 restores the SD sleep veto from retained recorder write failure',()=>{
  const start=detect.split('bool odysseyInitializeSdCardBeforeBle() {')[1].split('bool odysseyRecoverSdCard(')[0];
- assert.match(start,/previousRecordStage>=44u &&[\s\S]*?previousRecordStage!=48u/);
+ assert.match(start,/odysseySdUnresolvedHistoricalStorageFault\(\)/);
+ assert.match(detect,/stage>=44u && stage!=48u/);
  const latch=start.indexOf('odysseySdUnsafeToSleep=true;');
  const recovery=start.indexOf('warm boot deferred');
  const mount=start.indexOf('odysseySdMountLocked("boot",ODYSSEY_SD_BOOT_ATTEMPTS)');
