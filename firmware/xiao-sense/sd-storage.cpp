@@ -25,7 +25,9 @@ bool probeSector0=false,probeBootSignature=false,probeFilesystem=false;
 void quarantine(const char* reason) {
   if(!sdQuarantined.exchange(true))sdQuarantineReason=reason;
   ready=false;
-  mountStage="quarantined"; // Never report last successful mount as current readiness.
+  // Preserve the diagnostic classification of a failed cold mount; only a
+  // previously successful mount is superseded by a later I/O quarantine.
+  if(strcmp(mountStage,"ready")==0)mountStage="quarantined";
   // Intentionally do NOT call SD.end(), SPI.end(), fclose, or remount here:
   // the previous card transaction may still be busy, like CMD24/25 on C3.
 }
