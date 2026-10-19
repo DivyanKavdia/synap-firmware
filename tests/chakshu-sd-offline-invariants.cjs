@@ -44,6 +44,15 @@ test('Chakshu SD remains the durable offline inbox without capture-time remounts
 });
 
 
+test('Chakshu cold-mount clock is deliberately below 2 MHz and never retries a timed-out SD controller',()=>{
+  const storage=fs.readFileSync('firmware/xiao-sense/sd-storage.cpp','utf8');
+  const cold=storage.slice(storage.indexOf('bool detectCard()'),storage.indexOf('bool recoverMount()'));
+  assert.match(cold,/1000000u,400000u/);
+  assert.doesNotMatch(cold,/2000000u/);
+  assert.match(cold,/if\(sdQuarantined\.load\(\)\)return false/);
+  assert.match(storage,/mountStage="quarantined"/);
+});
+
 test('Hey Snap photo and video commands remain routed to durable SD operations',()=>{
   const voice=fs.readFileSync('firmware/xiao-sense/voice.cpp','utf8');
   const transfer=fs.readFileSync('firmware/xiao-sense/media-transfer.cpp','utf8');

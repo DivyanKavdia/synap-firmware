@@ -25,6 +25,7 @@ bool probeSector0=false,probeBootSignature=false,probeFilesystem=false;
 void quarantine(const char* reason) {
   if(!sdQuarantined.exchange(true))sdQuarantineReason=reason;
   ready=false;
+  mountStage="quarantined"; // Never report last successful mount as current readiness.
   // Intentionally do NOT call SD.end(), SPI.end(), fclose, or remount here:
   // the previous card transaction may still be busy, like CMD24/25 on C3.
 }
@@ -127,9 +128,11 @@ bool detectCard() {
   // 400 kHz is intentionally retained as the last-resort operating clock. The
   // SD driver also uses a slow clock during card initialization, but marginal
   // links can still fail once filesystem traffic begins.
-  // Match Odyssey C3's proven 2 MHz native data clock at first mount.
-  // No formatting, writes, or same-powered retries after detection is exhausted.
-  for(const uint32_t hz:{2000000u,1000000u,400000u}) {
+  // The field card mounted at 2 MHz yet timed out on its first CMD24 write.
+  // Prefer 1 MHz for reliable 32 kB/s audio, with a 400 kHz cold-mount fallback.
+  // Never retrain a timed-out, same-powered controller after a write failure.
+  // No formatting, writes or same-powered retries after detection is exhausted.
+  for(const uint32_t hz:{1000000u,400000u}) {
     if(resetMountAt(hz))return true;
     if(sdQuarantined.load())return false;
   }

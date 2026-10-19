@@ -193,7 +193,7 @@ Current Chakshu media handling also:
 - retries bounded file-selection/read/catalogue operations through the conservative recovery path,
 - preserves the current capture from FIFO deletion while it is active.
 
-The remaining field question is physical: whether the expansion-board/card path can sustain the required camera/video workload at the conservative clock without recurring I/O faults.
+The remaining field question is physical: whether the Sense expansion-board/card power and SPI path can complete CMD24 writes without timeouts. Chakshu starts SD at 1 MHz (400 kHz cold-mount fallback), quarantines any uncertain write without remounting on the same powered rail, and preserves failed originals for inspection. A successful FAT mount is not evidence that the card can write. Offline WAV needs 32 kB/s, so 400 kHz is a diagnostic fallback rather than a high-throughput video solution.
 
 ## Companion PWA contract
 

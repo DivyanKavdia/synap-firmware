@@ -350,15 +350,35 @@ bool queueLocal(uint8_t operation,uint32_t offset=0){
 }
 bool touchAudioToggle(){
   using namespace ChakshuTransfer;
+  // Connected double-taps belong to the PWA; the local recorder starts only
+  // while disconnected. Do not convert OTA or sleep gestures to SD actions.
   if(deviceConnected.load()||sleepPending||otaBusy())return false;
   if(offline.load()){
     stopRequested.store(true);
     Serial.println("[TOUCH] offline audio stop requested");
     return true;
   }
-  if(!ChakshuStorage::ready||streamingEnabled.load()||remoteStandby)return false;
+  if(!ChakshuStorage::ready||ChakshuStorage::sdQuarantined.load()){
+    actionFailedAt=millis();
+    Serial.printf("[TOUCH] offline SD audio refused: sdReady=%u quarantined=%u reason=%s nativeCmd=%lu nativeErr=%lu\n",
+      unsigned(ChakshuStorage::ready.load()),unsigned(ChakshuStorage::sdQuarantined.load()),
+      ChakshuStorage::sdQuarantineReason,
+      (unsigned long)SD.lastWireCommand(),(unsigned long)SD.lastWireError());
+    return false;
+  }
+  if(streamingEnabled.load()||remoteStandby){
+    actionFailedAt=millis();
+    Serial.println("[TOUCH] offline SD audio refused: capture or standby active");
+    return false;
+  }
   const bool queued=queueLocal(10,0u);
-  if(queued)Serial.println("[TOUCH] offline audio start queued");
+  if(queued){
+    actionAcceptedAt=millis();
+    Serial.println("[TOUCH] offline audio start queued; waiting for SD recorder");
+  } else {
+    actionFailedAt=millis();
+    Serial.println("[TOUCH] offline SD audio refused: job queue full");
+  }
   return queued;
 }
 void mediaCompleted(uint8_t operation,uint8_t error){
