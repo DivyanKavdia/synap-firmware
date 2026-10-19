@@ -13,7 +13,7 @@ std::atomic<uint32_t> candidateAt{0},candidateCount{0};
 // External GPIO5 NeoPixel status is controlled by the Chakshu status task.
 std::atomic<uint32_t> wakeAcceptedAt{0},actionAcceptedAt{0},actionFailedAt{0};
 std::atomic<uint32_t> mediaCompletion{0};
-std::atomic<uint8_t> photoCompletionCommand{PHOTO};
+std::atomic<uint8_t> photoCompletionCommand{DESCRIBE};
 struct Block { uint16_t count;int16_t samples[800]; };
 struct PendingCommand { uint8_t command;uint32_t epoch,at; };
 struct Inference { uint8_t cls;float confidence,margin; };
@@ -32,6 +32,29 @@ BLECharacteristic* diagnostics=nullptr;
 portMUX_TYPE stateMux=portMUX_INITIALIZER_UNLOCKED;
 uint32_t serial=0,lastAt=0;uint8_t lastCommand=0,lastResult=0;uint16_t lastValue=0;
 Gate gate;
+// Only two Hey Snap actions: describe one saved photo, or record a bounded video.
+// Video length is adjustable in Chakshu settings and survives a physical power cycle.
+constexpr uint8_t DEFAULT_VIDEO_SECONDS=10;
+std::atomic<uint8_t> videoSeconds{DEFAULT_VIDEO_SECONDS},pendingVideoSeconds{0};
+bool validVideoSeconds(uint8_t seconds){return seconds==5 || seconds==10 || seconds==15 || seconds==30;}
+void loadVideoSettings(){
+  Preferences prefs;
+  if(prefs.begin("chakshuvoice",true)) {
+    const uint8_t saved=prefs.getUChar("clipsecs",DEFAULT_VIDEO_SECONDS);
+    if(validVideoSeconds(saved))videoSeconds=saved;
+    prefs.end();
+  }
+}
+void saveVideoSettings(){
+  const uint8_t requested=pendingVideoSeconds.exchange(0);
+  if(!validVideoSeconds(requested))return;
+  // NVS writes run on the control task, never in the NimBLE GATT callback.
+  Preferences prefs;
+  if(prefs.begin("chakshuvoice",false)) {
+    prefs.putUChar("clipsecs",requested);
+    prefs.end();
+  }
+}
 
 bool ownershipAllowsVoice(){return enabled.load()&&!sleepPending;}
 bool active(){
@@ -167,11 +190,11 @@ Inference infer(){
 }
 uint8_t classCommand(uint8_t cls){
   if(cls==ChakshuTinyModel::HEY_SNAP)return WAKE;
-  if(cls==ChakshuTinyModel::PHOTO)return PHOTO;
+  // Existing trained PHOTO and DESCRIBE phrases both request comprehension.
+  if(cls==ChakshuTinyModel::PHOTO || cls==ChakshuTinyModel::DESCRIBE)return DESCRIBE;
   if(cls==ChakshuTinyModel::VIDEO)return VIDEO_START;
-  if(cls==ChakshuTinyModel::STOP)return STOP;
-  if(cls==ChakshuTinyModel::AUDIO)return AUDIO_ON;
-  if(cls==ChakshuTinyModel::DESCRIBE)return DESCRIBE;
+  // The old STOP / AUDIO classes remain in the experimental model weights,
+  // but are intentionally NOT actionable. Touch-based SD audio is independent.
   return 0;
 }
 void consider(const Inference& result,uint32_t now,uint32_t epoch){
@@ -192,7 +215,7 @@ void consider(const Inference& result,uint32_t now,uint32_t epoch){
   if(accepted){
     // The wake phrase and action must never share the same 1.5 s inference
     // history. Keep Gate armed, but discard all wake audio so only fresh
-    // speech can become PHOTO/VIDEO/AUDIO/DESCRIBE/STOP.
+    // speech can become a visual comprehension or fixed-length video action.
     if(accepted==WAKE)resetClassifierWindow();
     PendingCommand pending{accepted,epoch,now};
     if(xQueueSend(commandQueue,&pending,0)!=pdTRUE){
@@ -285,6 +308,7 @@ void initialize(){
     (unsigned long)(WINDOW_SAMPLES*sizeof(int16_t)),(unsigned long)ESP.getFreeHeap(),(unsigned long)ESP.getFreePsram());
 }
 void initTask(void*){
+  loadVideoSettings();
   // Start after the proven BLE/SD boot window is healthy. Hey Snap remains
   // available whether BLE is connected or not; live PWA capture pre-empts the
   // idle listener through the shared microphone mutex.
@@ -306,6 +330,7 @@ void encode(uint8_t* bytes,size_t length=22){
   memset(bytes,0,length);bytes[0]=0xCD;bytes[1]=2;bytes[2]=status.load();bytes[3]=ownershipAllowsVoice()?1:0;
   portENTER_CRITICAL(&stateMux);put32le(bytes+4,serial);bytes[8]=lastCommand;bytes[9]=lastResult;put32le(bytes+10,lastAt);put16le(bytes+20,lastValue);portEXIT_CRITICAL(&stateMux);
   put32le(bytes+14,discontinuities.load());bytes[18]=ChakshuTransfer::offline.load()?1:0;
+  bytes[19]=videoSeconds.load(); // Reserved byte in voice-v2 status; no ABI growth.
 }
 void encodeDiagnostics(uint8_t* bytes,size_t length=20){
   memset(bytes,0,length);bytes[0]=0xCE;bytes[1]=1;bytes[2]=status.load();bytes[3]=ownershipAllowsVoice()?1:0;
@@ -338,12 +363,13 @@ bool touchAudioToggle(){
 }
 void mediaCompleted(uint8_t operation,uint8_t error){
   uint8_t command=0;
-  if(operation==11)command=photoCompletionCommand.exchange(PHOTO);
+  if(operation==11)command=photoCompletionCommand.exchange(DESCRIBE);
   else if(operation==5)command=VIDEO_START;
   else if(operation==10)command=AUDIO_ON;
   if(command)mediaCompletion.store(0x10000u|(uint32_t(command)<<8)|error);
 }
 void tick(){
+  saveVideoSettings();
   // Publish completion only after the SD worker has closed the capture files.
   const uint32_t completed=mediaCompletion.exchange(0);
   if(completed){
@@ -355,7 +381,7 @@ void tick(){
   PendingCommand pending;if(!commandQueue||xQueueReceive(commandQueue,&pending,0)!=pdTRUE)return;
   if(!active()||otaBusy()||pending.epoch!=discontinuities.load()||uint32_t(millis()-pending.at)>2200u)return;
   const uint8_t command=pending.command;
-  const uint16_t value=command==VIDEO_START?10:command==AUDIO_ON?60:0;
+  const uint16_t value=command==VIDEO_START?videoSeconds.load():0;
   const bool online=deviceConnected.load();
   if(command==WAKE){
     wakeAcceptedAt=millis();actionAcceptedAt=0;
@@ -364,32 +390,20 @@ void tick(){
     Serial.printf("[VOICE] TinyML Hey Snap confidence=%u online=%u\n",unsigned(candidateConfidence.load()),unsigned(online));return;
   }
   uint8_t result=0;using namespace ChakshuTransfer;
-  if(command==STOP){++localEpoch;if(offline.load())stopRequested.store(true);}
-  else if(command==PHOTO || command==DESCRIBE){
+  if(command==DESCRIBE) {
     if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;
     else if(streamingEnabled.load()||offline.load())result=ChakshuMedia::BUSY;
     else {
-      photoCompletionCommand.store(command);
-      // Offset 1 tags a saved JPG as an offline visual-description request.
-      // The SD worker writes a tiny companion marker after the JPG is closed.
-      if(!queueLocal(11,command==DESCRIBE?1u:0u)) {
-        photoCompletionCommand.store(PHOTO);
-        result=ChakshuMedia::BUSY;
-      }
+      photoCompletionCommand.store(DESCRIBE);
+      // Save the original JPG and explicit describe marker. PWA may offer
+      // comprehension after verified sync; no unsupported on-device vision.
+      if(!queueLocal(11,1u))result=ChakshuMedia::BUSY;
     }
-  }
-  else if(command==VIDEO_START){
+  } else if(command==VIDEO_START) {
     if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;
-    else if(streamingEnabled.load()||!exitRemoteStandby()||!queueLocal(5,uint32_t(10u)<<8))result=ChakshuMedia::BUSY;
-  }
-  else if(command==AUDIO_ON){
-    // Voice-started audio is bounded to 60 seconds because the same microphone
-    // is occupied by the recorder while the WAV is being written. BLE reconnect
-    // or the recorder limit safely finalizes the file; future training/runtime
-    // work can add reliable in-recording voice stop.
-    if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;
-    else if(streamingEnabled.load()||offline.load()||!queueLocal(10,60u))result=ChakshuMedia::BUSY;
-  }
+    else if(streamingEnabled.load()||offline.load()||!exitRemoteStandby()||
+            !queueLocal(5,uint32_t(videoSeconds.load())<<8))result=ChakshuMedia::BUSY;
+  } else result=ChakshuMedia::BAD_COMMAND;
   wakeAcceptedAt=0;
   if(result)actionFailedAt=millis();else actionAcceptedAt=millis();
   portENTER_CRITICAL(&stateMux);++serial;lastCommand=command;lastResult=result?1:(online?2:0);lastAt=millis();lastValue=result?result:value;portEXIT_CRITICAL(&stateMux);
@@ -398,9 +412,17 @@ void tick(){
 class Callbacks : public BLECharacteristicCallbacks {
   void onRead(BLECharacteristic* c)override{uint8_t bytes[22];encode(bytes,sizeof(bytes));c->setValue(bytes,sizeof(bytes));}
   void onWrite(BLECharacteristic* c)override{
-    const String value=c->getValue();if(value.length()!=3||uint8_t(value[0])!=0xCC||uint8_t(value[1])!=2)return;
-    const uint8_t op=value[2];
-    if(op>1)return;
+    const String value=c->getValue();
+    if((value.length()!=3&&value.length()!=4)||uint8_t(value[0])!=0xCC||uint8_t(value[1])!=2)return;
+    const uint8_t op=uint8_t(value[2]);
+    if(op==2 && value.length()==4) {
+      const uint8_t seconds=uint8_t(value[3]);
+      if(!validVideoSeconds(seconds))return;
+      videoSeconds=seconds;
+      pendingVideoSeconds=seconds; // NVS commit deferred out of GATT callback.
+      return;
+    }
+    if(value.length()!=3||op>1)return;
     enabled=op==1;++discontinuities;refreshRuntimeStatus();
   }
 };
