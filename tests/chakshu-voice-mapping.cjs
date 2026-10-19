@@ -18,7 +18,7 @@ test('wake recognition clears only classifier audio while keeping the action gat
   assert.match(voice.slice(resetEnd, voice.indexOf('inline int16_t sampleAt', resetEnd)), /resetClassifierWindow\(\);gate\.reset\(\)/);
 });
 
-test('only visual comprehension and bounded video are voice-actionable after a wake', () => {
+test('only ordinary photos, visual comprehension and bounded video are voice-actionable after a wake', () => {
   const voice = fs.readFileSync('firmware/xiao-sense/voice.cpp', 'utf8');
   const model = fs.readFileSync('firmware/xiao-sense/tiny-voice-model.h', 'utf8');
   const contract = fs.readFileSync('firmware/xiao-sense/voice-contract.cpp', 'utf8');
@@ -32,21 +32,23 @@ ${contract}
 ${model}
 namespace ChakshuVoice { using namespace ChakshuTinyModel; ${mapping} }
 int main(){
- const uint8_t expected[]={0,0,1,7,3,0,0,7};
+ const uint8_t expected[]={0,0,1,2,3,0,0,7};
  for(uint8_t i=0;i<8;++i)assert(ChakshuVoice::classCommand(i)==expected[i]);
  assert(ChakshuVoice::classCommand(99)==0);
  ChakshuVoice::Gate gate;
- assert(gate.accept(7,0.99f,100)==0);
+ assert(gate.accept(2,0.99f,100)==0);
  assert(gate.accept(1,0.99f,200)==1);
- assert(gate.accept(7,0.99f,400)==0);
- assert(gate.accept(7,0.99f,1099)==0);
- assert(gate.accept(7,0.99f,1100)==7);
+ assert(gate.accept(2,0.99f,400)==0);
+ assert(gate.accept(2,0.99f,1099)==0);
+ assert(gate.accept(2,0.99f,1100)==2);
  assert(gate.accept(3,0.99f,1300)==0);
  assert(gate.accept(1,0.99f,2000)==1);
  assert(gate.accept(5,0.99f,2900)==0);
  assert(gate.accept(8,0.99f,3000)==0);
- assert(gate.accept(2,0.99f,3100)==0);
- assert(gate.accept(3,0.99f,3200)==3);
+ assert(gate.accept(7,0.99f,3100)==0);
+ assert(gate.accept(7,0.99f,3200)==7);
+ assert(gate.accept(1,0.99f,4000)==1);
+ assert(gate.accept(3,0.99f,4900)==3);
  puts("PASS class mapping and wake gate");
 }`), /PASS class mapping/);
 });
@@ -142,7 +144,8 @@ test('Hey Snap stays available while connected idle but is hard-suspended by PWA
   const callback = voice.slice(voice.indexOf('class Callbacks'), voice.indexOf('void ble('));
   assert.match(callback, /enabled=op==1;\+\+discontinuities;refreshRuntimeStatus\(\)/);
   assert.match(voice, /const bool online=deviceConnected\.load\(\)/);
-  assert.match(voice, /if\(command==DESCRIBE\)/);
+  assert.match(voice, /if\(command==PHOTO \|\| command==DESCRIBE\)/);
+  assert.match(voice, /queueLocal\(11,command==DESCRIBE\?1u:0u\)/);
   assert.match(voice, /else if\(command==VIDEO_START\)/);
   assert.doesNotMatch(voice, /if\(command==STOP\)\{\+\+localEpoch/);
   assert.match(voice, /validVideoSeconds\(uint8_t seconds\)/);

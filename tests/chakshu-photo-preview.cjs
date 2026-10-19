@@ -97,7 +97,9 @@ test('voice photo reuses hardened saved-photo path and never races live audio st
  assert(saved.indexOf('ChakshuCamera::endOriginal();') < saved.indexOf('ChakshuStorage::ensureSpace(bufferSize)'));
  assert.match(saved,/if\(!saved\)\{ChakshuStorage::ready=false/);
  assert.match(transfer,/if\(error==ChakshuMedia::IO_ERROR\|\|error==ChakshuMedia::NO_SD\)\s*\{\s*[\s\S]*ChakshuStorage::quarantine\("media-io"\)/);
- const commands=voice.slice(voice.indexOf('if(command==DESCRIBE)'),voice.indexOf('wakeAcceptedAt=0',voice.indexOf('if(command==DESCRIBE)')));
- assert.match(commands,/command==DESCRIBE[\s\S]*streamingEnabled\.load\(\)/);
+ const commands=voice.slice(voice.indexOf('if(command==PHOTO || command==DESCRIBE)'),voice.indexOf('wakeAcceptedAt=0',voice.indexOf('if(command==PHOTO || command==DESCRIBE)')));
+ assert.match(commands,/command==PHOTO \|\| command==DESCRIBE[\s\S]*streamingEnabled\.load\(\)/);
+ assert.match(commands,/queueLocal\(11,command==DESCRIBE\?1u:0u\)/);
+ assert.match(commands,/photoCompletionCommand\.store\(PHOTO\)/);
  assert.match(commands,/command==VIDEO_START[\s\S]*streamingEnabled\.load\(\)/);
 });

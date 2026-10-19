@@ -23,7 +23,7 @@ Every production release is compiled in CI, published atomically, attested with 
 | **Odyssey S3** | `esp32s3-fh4r2-qspi-4m` / 1 | BLE/PWA audio | No offline SD recorder |
 | **Odyssey C3 (standard)** | `esp32c3-supermini-4m` / 2 | BLE/PWA audio | No SD recording without a ready card |
 | **Odyssey C3 + SD** | **Same** `esp32c3-supermini-4m` / 2 | BLE/PWA audio; catalogue/sync of prior SD takes | Double-tap local SD WAV, purple indicator |
-| **Chakshu** | `xiao-esp32s3-sense-8m` / 3 | PWA audio/photo/video; Hey Snap to SD when PWA capture idle | Hey Snap photo/video/audio and touch SD audio |
+| **Chakshu** | `xiao-esp32s3-sense-8m` / 3 | PWA audio/photo/video; Hey Snap to SD when PWA capture idle | Hey Snap plain photo, marked photo comprehension, short video; separate touch SD audio |
 
 See [Firmware variants](docs/FIRMWARE_VARIANTS.md) for routing, storage safety and the physical acceptance matrix. The build workflow compiles three binaries, not one binary per functional variant.
 
@@ -103,12 +103,12 @@ Chakshu no longer uses BLE connection state to enable or disable Hey Snap. The i
 
 | Trigger | BLE connected | BLE disconnected |
 | --- | --- | --- |
-| **Hey Snap → audio/photo/video/describe** | Save to Chakshu SD | Save to Chakshu SD |
+| **Hey Snap → photo/describe/short video** | Save to Chakshu SD | Save to Chakshu SD |
 | **PWA mic/photo/video controls** | Stream/capture directly to the PWA/phone | Not available |
 | **TTP223 double tap** | Start/stop PWA audio stream | Start/stop SD audio |
 | **TTP223 image/video** | Never | Never |
 
-Hey Snap stays armed across BLE connect/disconnect. A PWA START takes the shared microphone mutex before live capture begins, so the idle wake listener cannot race the first BLE audio read. During live PWA capture, voice media commands that need the same camera/microphone/SD path fail busy rather than redirecting or corrupting the active take. A voice **Stop** stops only a voice/TTP SD capture and never terminates a PWA-started recording.
+Hey Snap stays armed across BLE connect/disconnect. A PWA START takes the shared microphone mutex before live capture begins, so the idle wake listener cannot race the first BLE audio read. During live PWA capture, voice media commands that need the same camera/microphone/SD path fail busy rather than redirecting or corrupting the active take. Voice **Stop** and **Record audio** are disabled; touch-based SD audio control remains independent of Hey Snap.
 
 Voice control opcodes 0/1 remain available as explicit diagnostic enable/disable controls; they are no longer BLE-session ownership handoff signals.
 
@@ -288,4 +288,4 @@ Keep this README focused on current product truth. Detailed implementation histo
 
 ### Hey Snap — Chakshu-only voice
 
-The experimental on-device TinyML wake + action model runs only on Chakshu's XIAO ESP32S3 Sense. Say **Hey Snap**, followed by a *fresh* command within five seconds, e.g. **take a snap**, **record video**, **record audio**, **stop**, or **explain what you see**. The external GPIO5 NeoPixel displays green wake acknowledgements, cyan action acknowledgements and red failures; offline SD recording remains purple. SD actions require a mounted, writable microSD card. The current tiny model has weak independent real-utterance validation and is not production-accurate yet. Odyssey C3 remains unchanged without a wake model.
+The experimental on-device TinyML wake + action model runs only on Chakshu's XIAO ESP32S3 Sense. Say **Hey Snap**, followed by a *fresh* command within five seconds: **take a snap** (ordinary local photo), **explain what you see** (tag one photo for cloud vision only after sync), or **record video** (a bounded 5/10/15/30-second clip). Voice audio/stop commands are disabled. The external GPIO5 NeoPixel displays green wake acknowledgements, cyan action acknowledgements and red failures; offline SD recording remains purple. SD actions require a mounted, writable microSD card. The current tiny model has weak independent real-utterance validation and is not production-accurate yet. Odyssey C3 remains unchanged without a wake model.

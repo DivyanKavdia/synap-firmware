@@ -13,7 +13,7 @@ std::atomic<uint32_t> candidateAt{0},candidateCount{0};
 // External GPIO5 NeoPixel status is controlled by the Chakshu status task.
 std::atomic<uint32_t> wakeAcceptedAt{0},actionAcceptedAt{0},actionFailedAt{0};
 std::atomic<uint32_t> mediaCompletion{0};
-std::atomic<uint8_t> photoCompletionCommand{DESCRIBE};
+std::atomic<uint8_t> photoCompletionCommand{PHOTO};
 struct Block { uint16_t count;int16_t samples[800]; };
 struct PendingCommand { uint8_t command;uint32_t epoch,at; };
 struct Inference { uint8_t cls;float confidence,margin; };
@@ -32,7 +32,7 @@ BLECharacteristic* diagnostics=nullptr;
 portMUX_TYPE stateMux=portMUX_INITIALIZER_UNLOCKED;
 uint32_t serial=0,lastAt=0;uint8_t lastCommand=0,lastResult=0;uint16_t lastValue=0;
 Gate gate;
-// Only two Hey Snap actions: describe one saved photo, or record a bounded video.
+// Three visual actions only: ordinary photo, tagged photo for inference, bounded video.
 // Video length is adjustable in Chakshu settings and survives a physical power cycle.
 constexpr uint8_t DEFAULT_VIDEO_SECONDS=10;
 std::atomic<uint8_t> videoSeconds{DEFAULT_VIDEO_SECONDS},pendingVideoSeconds{0};
@@ -190,8 +190,8 @@ Inference infer(){
 }
 uint8_t classCommand(uint8_t cls){
   if(cls==ChakshuTinyModel::HEY_SNAP)return WAKE;
-  // Existing trained PHOTO and DESCRIBE phrases both request comprehension.
-  if(cls==ChakshuTinyModel::PHOTO || cls==ChakshuTinyModel::DESCRIBE)return DESCRIBE;
+  if(cls==ChakshuTinyModel::PHOTO)return PHOTO;
+  if(cls==ChakshuTinyModel::DESCRIBE)return DESCRIBE;
   if(cls==ChakshuTinyModel::VIDEO)return VIDEO_START;
   // The old STOP / AUDIO classes remain in the experimental model weights,
   // but are intentionally NOT actionable. Touch-based SD audio is independent.
@@ -363,7 +363,7 @@ bool touchAudioToggle(){
 }
 void mediaCompleted(uint8_t operation,uint8_t error){
   uint8_t command=0;
-  if(operation==11)command=photoCompletionCommand.exchange(DESCRIBE);
+  if(operation==11)command=photoCompletionCommand.exchange(PHOTO);
   else if(operation==5)command=VIDEO_START;
   else if(operation==10)command=AUDIO_ON;
   if(command)mediaCompletion.store(0x10000u|(uint32_t(command)<<8)|error);
@@ -390,14 +390,18 @@ void tick(){
     Serial.printf("[VOICE] TinyML Hey Snap confidence=%u online=%u\n",unsigned(candidateConfidence.load()),unsigned(online));return;
   }
   uint8_t result=0;using namespace ChakshuTransfer;
-  if(command==DESCRIBE) {
+  if(command==PHOTO || command==DESCRIBE) {
     if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;
-    else if(streamingEnabled.load()||offline.load())result=ChakshuMedia::BUSY;
+    else if(streamingEnabled.load()||offline.load()||mediaBusy())result=ChakshuMedia::BUSY;
     else {
-      photoCompletionCommand.store(DESCRIBE);
-      // Save the original JPG and explicit describe marker. PWA may offer
-      // comprehension after verified sync; no unsupported on-device vision.
-      if(!queueLocal(11,1u))result=ChakshuMedia::BUSY;
+      // PHOTO saves a plain JPG (no inference, no upload).
+      // DESCRIBE saves the same original JPG with a separate consent marker,
+      // which the PWA checks after verified import before vision processing.
+      photoCompletionCommand.store(command);
+      if(!queueLocal(11,command==DESCRIBE?1u:0u)){
+        photoCompletionCommand.store(PHOTO);
+        result=ChakshuMedia::BUSY;
+      }
     }
   } else if(command==VIDEO_START) {
     if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;
