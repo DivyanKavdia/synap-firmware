@@ -61,7 +61,7 @@ bool active(){
   // PWA audio is also the soundtrack owner for PWA video. While that stream is
   // active, firmware Hey Snap must not listen, infer or execute local actions.
   return status.load()==LISTENING&&ownershipAllowsVoice()&&!pwaCaptureSuppressed.load()&&
-    !streamingEnabled.load()&&ring&&workerHandle;
+    !streamingEnabled.load()&&!ChakshuTransfer::offline.load()&&ring&&workerHandle;
 }
 void pwaCaptureStarted(){
   // Set the ownership latch before the PWA microphone handoff. The epoch then
