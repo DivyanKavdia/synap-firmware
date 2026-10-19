@@ -131,6 +131,7 @@ test('Hey Snap stays available while connected idle but is hard-suspended by PWA
   assert.match(voice, /ownershipAllowsVoice\(\)\{return enabled\.load\(\)&&!sleepPending;\}/);
   assert.doesNotMatch(voice, /linkStandDown|!deviceConnected\.load\(\)/);
   assert.match(voice, /std::atomic<bool> enabled\{true\},pwaCaptureSuppressed\{false\}/);
+  assert.match(voice, /!ChakshuTransfer::offline\.load\(\)/, 'voice must pause during SD video so clip and microphone have one owner');
   assert.match(voice, /bool active\(\)\{[\s\S]*!pwaCaptureSuppressed\.load\(\)[\s\S]*!streamingEnabled\.load\(\)[\s\S]*ring&&workerHandle;/);
   assert.match(voice, /void pwaCaptureStarted\(\)\{[\s\S]*pwaCaptureSuppressed\.exchange\(true\)[\s\S]*\+\+discontinuities;[\s\S]*candidateId=0;candidateConfidence=0;candidateAt=0;/);
   assert.match(voice, /void pwaCaptureStopped\(\)\{[\s\S]*pwaCaptureSuppressed\.exchange\(false\)[\s\S]*\+\+discontinuities;/);
