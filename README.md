@@ -285,3 +285,7 @@ Production firmware is materialized only from the shared source graph plus the c
 Make release changes against current `main` and preserve the existing three target identities; do not revive superseded audit branches, abandoned voice implementations or older parallel architecture paths.
 
 Keep this README focused on current product truth. Detailed implementation history belongs in Git commits, merged pull requests and published releases.
+
+### Hey Snap — Chakshu-only voice
+
+The experimental on-device TinyML wake + action model runs only on Chakshu's XIAO ESP32S3 Sense. Say **Hey Snap**, followed by a *fresh* command within five seconds, e.g. **take a snap**, **record video**, **record audio**, **stop**, or **explain what you see**. The external GPIO5 NeoPixel displays green wake acknowledgements, cyan action acknowledgements and red failures; offline SD recording remains purple. SD actions require a mounted, writable microSD card. The current tiny model has weak independent real-utterance validation and is not production-accurate yet. Odyssey C3 remains unchanged without a wake model.

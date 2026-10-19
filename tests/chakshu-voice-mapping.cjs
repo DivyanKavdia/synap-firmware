@@ -13,6 +13,8 @@ test('wake recognition clears only classifier audio while keeping the action gat
   assert.match(classifierReset, /writeAt=0;samplesSeen=0;samplesSinceInference=0;speechHoldUntil=0;vadRun=0/);
   assert.doesNotMatch(classifierReset, /gate\.reset\(\)/, 'post-wake audio reset must keep Gate armed');
   assert.match(consider, /if\(accepted==WAKE\)resetClassifierWindow\(\)/);
+  assert.match(consider, /xQueueSend\(commandQueue,&pending,0\)!=pdTRUE/);
+  assert.match(consider, /\+\+discontinuities;resetWindow\(\)/);
   assert.match(voice.slice(resetEnd, voice.indexOf('inline int16_t sampleAt', resetEnd)), /resetClassifierWindow\(\);gate\.reset\(\)/);
 });
 

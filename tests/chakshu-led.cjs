@@ -15,6 +15,9 @@ test('Chakshu uses the external GPIO5 / D4 NeoPixel and never repurposes SD chip
  assert.match(led,/DeviceState::CONNECTED_IDLE[\s\S]*connectedLedAt\.load\(\)/);
  assert.match(led,/DeviceState::STREAMING[\s\S]*b=LED_DIM/);
  assert.match(led,/ChakshuTransfer::offline\.load\(\)/);
+ assert.match(led,/ChakshuVoice::wakeAcceptedAt\.load\(\)/);
+ assert.match(led,/ChakshuVoice::actionAcceptedAt\.load\(\)/);
+ assert.match(led,/ChakshuVoice::actionFailedAt\.load\(\)/);
  assert.match(led,/ChakshuStorage::sdQuarantined\.load\(\)/);
  assert.doesNotMatch(source,/Adafruit_NeoPixel statusLed\(1,\s*(?:21|LED_BUILTIN)/);
  assert.doesNotMatch(source,/pinMode\(LED_BUILTIN|digitalWrite\(LED_BUILTIN/);

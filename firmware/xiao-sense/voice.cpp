@@ -10,6 +10,8 @@ std::atomic<uint32_t> discontinuities{0};
 std::atomic<uint16_t> audioMeanAbs{0},audioPeak{0},candidateConfidence{0};
 std::atomic<uint8_t> candidateId{0};
 std::atomic<uint32_t> candidateAt{0},candidateCount{0};
+// External GPIO5 NeoPixel status is controlled by the Chakshu status task.
+std::atomic<uint32_t> wakeAcceptedAt{0},actionAcceptedAt{0},actionFailedAt{0};
 std::atomic<uint32_t> mediaCompletion{0};
 std::atomic<uint8_t> photoCompletionCommand{PHOTO};
 struct Block { uint16_t count;int16_t samples[800]; };
@@ -192,7 +194,10 @@ void consider(const Inference& result,uint32_t now,uint32_t epoch){
     // history. Keep Gate armed, but discard all wake audio so only fresh
     // speech can become PHOTO/VIDEO/AUDIO/DESCRIBE/STOP.
     if(accepted==WAKE)resetClassifierWindow();
-    PendingCommand pending{accepted,epoch,now};xQueueSend(commandQueue,&pending,0);
+    PendingCommand pending{accepted,epoch,now};
+    if(xQueueSend(commandQueue,&pending,0)!=pdTRUE){
+      ++discontinuities;resetWindow(); // Never present a lost command as accepted.
+    }
   }
 }
 void feed(const int16_t* samples,size_t count){
@@ -344,6 +349,7 @@ void tick(){
   if(completed){
     const uint8_t error=uint8_t(completed);
     portENTER_CRITICAL(&stateMux);++serial;lastCommand=uint8_t(completed>>8);lastResult=error?1:3;lastAt=millis();lastValue=error;portEXIT_CRITICAL(&stateMux);
+    if(error)actionFailedAt=millis();
     if(deviceConnected.load()&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
   }
   PendingCommand pending;if(!commandQueue||xQueueReceive(commandQueue,&pending,0)!=pdTRUE)return;
@@ -352,6 +358,7 @@ void tick(){
   const uint16_t value=command==VIDEO_START?10:command==AUDIO_ON?60:0;
   const bool online=deviceConnected.load();
   if(command==WAKE){
+    wakeAcceptedAt=millis();actionAcceptedAt=0;
     portENTER_CRITICAL(&stateMux);++serial;lastCommand=WAKE;lastResult=online?2:0;lastAt=millis();lastValue=0;portEXIT_CRITICAL(&stateMux);
     if(deviceConnected.load()&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
     Serial.printf("[VOICE] TinyML Hey Snap confidence=%u online=%u\n",unsigned(candidateConfidence.load()),unsigned(online));return;
@@ -383,6 +390,8 @@ void tick(){
     if(!ChakshuStorage::ready)result=ChakshuMedia::NO_SD;
     else if(streamingEnabled.load()||offline.load()||!queueLocal(10,60u))result=ChakshuMedia::BUSY;
   }
+  wakeAcceptedAt=0;
+  if(result)actionFailedAt=millis();else actionAcceptedAt=millis();
   portENTER_CRITICAL(&stateMux);++serial;lastCommand=command;lastResult=result?1:(online?2:0);lastAt=millis();lastValue=result?result:value;portEXIT_CRITICAL(&stateMux);
   if(online&&events){uint8_t bytes[22];encode(bytes,sizeof(bytes));events->setValue(bytes,sizeof(bytes));events->notify();}
 }
