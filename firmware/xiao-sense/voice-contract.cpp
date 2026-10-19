@@ -16,7 +16,7 @@ public:
       armed=true;armedAt=now;return WAKE;
     }
     if(confidence<0.74f)return 0;
-    const bool recognized=command>=PHOTO&&command<=STOP;
+    const bool recognized=command==DESCRIBE||command==VIDEO_START; // Only visual comprehension and bounded video
     const uint32_t age=uint32_t(now-armedAt);
     // Do not let the overlapping inference windows from the wake utterance
     // become a media action. A fresh command must follow the wake phrase.
