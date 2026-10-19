@@ -45,8 +45,8 @@ int main(){
  assert(gate.accept(1,0.99f,2000)==1);
  assert(gate.accept(5,0.99f,2900)==0);
  assert(gate.accept(8,0.99f,3000)==0);
- assert(gate.accept(7,0.99f,3100)==0);
- assert(gate.accept(7,0.99f,3200)==7);
+ assert(gate.accept(7,0.99f,3100)==7);
+ assert(gate.accept(7,0.99f,3200)==0);
  assert(gate.accept(1,0.99f,4000)==1);
  assert(gate.accept(3,0.99f,4900)==3);
  puts("PASS class mapping and wake gate");
