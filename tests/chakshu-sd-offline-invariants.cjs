@@ -50,12 +50,11 @@ test('Hey Snap photo and video commands remain routed to durable SD operations',
   const tick=voice.slice(voice.indexOf('void tick()'),voice.indexOf('class Callbacks'));
   const worker=transfer.slice(transfer.indexOf('void worker(void*)'),transfer.indexOf('class CommandCallbacks'));
 
-  // PHOTO must enqueue the saved full-resolution photo operation, not a BLE
-  // preview capture. VIDEO_START must enqueue the standalone SD recorder with
-  // the current 10-second default.
-  assert.match(tick,/command==PHOTO \|\| command==DESCRIBE[\s\S]*queueLocal\(11,command==DESCRIBE\?1u:0u\)/);
-  assert.match(tick,/command==VIDEO_START[\s\S]*queueLocal\(5,uint32_t\(10u\)<<8\)/);
-  assert.match(voice,/if\(operation==11\)command=photoCompletionCommand\.exchange\(PHOTO\)/);
+  // Voice comprehension must enqueue the full-resolution SD JPG + marker,
+  // never a plain photo. Video duration must follow the selected NVS setting.
+  assert.match(tick,/command==DESCRIBE[\s\S]*queueLocal\(11,1u\)/);
+  assert.match(tick,/command==VIDEO_START[\s\S]*queueLocal\(5,uint32_t\(videoSeconds\.load\(\)\)<<8\)/);
+  assert.match(voice,/if\(operation==11\)command=photoCompletionCommand\.exchange\(DESCRIBE\)/);
   assert.match(voice,/else if\(operation==5\)command=VIDEO_START/);
   assert.match(voice,/else if\(operation==10\)command=AUDIO_ON/);
 
