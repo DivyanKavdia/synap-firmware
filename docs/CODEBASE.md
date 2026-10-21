@@ -1,6 +1,6 @@
 # Synap firmware codebase guide
 
-**Reviewed: 7 October 2026**
+**Reviewed: 21 October 2026**
 
 ## Production source graph
 
@@ -31,10 +31,10 @@ Arduino compile → OTA/factory artifacts → ota-releases
 ## Target ownership
 
 - **Synap Odyssey S3** — target `esp32s3-fh4r2-qspi-4m`, module 1.
-- **Standard Synap Odyssey C3 and Odyssey C3 + SD** — one target `esp32c3-supermini-4m`, module 2, one binary; GPIO8 NeoPixel. The SD-equipped functional variant activates local WAV recording/sync only when the optional card mounts and is ready.
+- **Standard Odyssey C3 and C3+SD** — three OTA/partition tracks (`esp32c3-supermini-4m`, `esp32c3-supermini-4m-sd`, `esp32c3-supermini-4m-sd-ota`) with shared module 2 behavior and GPIO8 NeoPixel. Only a mounted healthy card enables local WAV recording and sync.
 - **Chakshu** — target `xiao-esp32s3-sense-8m`, module 3; camera, SD, media transfer, Wi-Fi download and local voice live under `firmware/xiao-sense/`; shared touch/battery/standby/status behavior is enabled on GPIO1/GPIO2/GPIO5.
 
-There are **four functional variants on three compile/OTA targets**: Odyssey S3, standard C3 (no SD), C3 + SD, and Chakshu. The presence/readiness of optional C3 SD is a runtime distinction, not a fourth device identity or OTA binary. See [Firmware variants](FIRMWARE_VARIANTS.md).
+There are **four functional device families across five compile/OTA tracks**: Odyssey S3, standard C3 (no SD), C3+SD (factory and existing large-slot partitions) and Chakshu. C3 module behavior and BLE media contracts are shared, but factory and preprovisioned SD variants must retain their distinct OTA identities. See [Firmware variants](FIRMWARE_VARIANTS.md).
 
 Display names are not compatibility IDs. Do not rename target IDs, product markers, manifest paths or BLE advertising identities as part of branding work.
 
@@ -72,11 +72,11 @@ node tools/assemble-source.cjs --check
 node --test tests/*.cjs
 ```
 
-Production CI additionally installs the pinned ESP32 toolchain/libraries, applies required compatibility patches, materializes all three targets, compiles them with one build number and verifies published OTA artifacts/provenance. For C3 specifically, `tools/patch-arduino-sd.cjs` is applied only after Odyssey S3 and Chakshu compile, so the CMD24 busy-completion fix affects the C3 binary alone.
+Production CI additionally installs the pinned ESP32 toolchain/libraries, applies required BLE compatibility patches, materializes all five targets, compiles them with one build number and verifies published OTA artifacts/provenance. Native ESP-IDF SDSPI is used for C3 SD; the historical Arduino SD CMD24 patch is retired.
 
 ## Release truth
 
-The authoritative installable version is the `ota-releases` feed. As checked on 7 October 2026, the Odyssey C3 manifest reports **build 1838**, source commit `978b44a8cc8b4c4b270fd15c396c1ab740d92008`. Read each target manifest before quoting current S3/Chakshu versions.
+The authoritative installable version is the `ota-releases` feed. Read the OTA manifest for each target before quoting a current release; a source commit on `main` is not evidence that a device has installed it.
 
 A later `main` commit is development source until a successful publish updates that feed.
 
@@ -115,11 +115,11 @@ The active C3 storage graph is deliberately the restored 1631-family implementat
 - `odyssey-sd-1631-recording.cpp`
 - `odyssey-sd-1631-transfer.cpp`
 
-It uses the Arduino-ESP32 3.3.5 SD/SPI mount path with a retained **1 MHz** runtime data clock, one-open-file policy, guarded VFS validation and bounded protocol re-arm. Do not replace these active modules with similarly named retired SD files without a deliberate architecture change.
+It uses native ESP-IDF SDSPI/FatFs in Arduino-ESP32 3.3.5 with a current **2 MHz** data clock, one-open-file policy, guarded VFS validation and bounded protocol re-arm. Do not replace these active modules with similarly named retired SD files without a deliberate architecture change.
 
 Mounted SD readiness gates offline local recording. Disconnected double tap toggles a 16 kHz PCM16 WAV and purple NeoPixel pulse. Capture uses aligned **4 KiB** writes to keep FatFs on its multi-sector path. STOP remains append-only: no preallocation, seek, truncate or in-place WAV-header rewrite. The transfer layer synthesizes the valid WAV header from file length.
 
-The production workflow applies `tools/patch-arduino-sd.cjs` **only before the C3 compile**. That patch fixes Arduino 3.3.5 single-sector CMD24 completion by keeping CS asserted while the card is program-busy and waiting up to 5 seconds before deselect. This is required for reliable FAT/directory metadata commit on `fclose()`.
+The active C3 storage implementation uses the native ESP-IDF SDSPI stack, not the retired Arduino SD CMD24 completion patch. The firmware quarantines uncertain program timeouts and must not issue unsafe FAT/fclose operations on the same powered rail.
 
 The media-v1 SD API supplies an explicit path on every operation-4 chunk read and `@catalogue` for catalogue bytes. Normal reads are non-remounting; operation 14 is explicit recovery. The PWA verifies durable import, persists a sync receipt, and treats SD deletion as a separate explicit user choice. A retained source must show as already synced rather than being imported twice.
 
