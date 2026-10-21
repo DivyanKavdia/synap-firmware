@@ -165,6 +165,7 @@ test('touch audio toggle starts and stops only standalone SD audio', () => {
   assert.match(toggle,/deviceConnected\.load\(\)\|\|sleepPending\|\|otaBusy\(\)/);
   assert.match(toggle,/if\(offline\.load\(\)\)[\s\S]*stopRequested\.store\(true\)/);
   assert.match(toggle,/queueLocal\(10,0u\)/);
+  assert.match(toggle,/if\(remoteStandby\)\{[\s\S]*remoteStandby=false/);
   assert.match(toggle,/ChakshuStorage::ready/);
   assert.match(toggle,/sdQuarantined\.load\(\)/);
   assert.match(toggle,/actionFailedAt=millis\(\)/);

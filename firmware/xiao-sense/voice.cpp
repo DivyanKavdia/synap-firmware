@@ -366,10 +366,16 @@ bool touchAudioToggle(){
       (unsigned long)SD.lastWireCommand(),(unsigned long)SD.lastWireError());
     return false;
   }
-  if(streamingEnabled.load()||remoteStandby){
+  if(streamingEnabled.load()){
     actionFailedAt=millis();
-    Serial.println("[TOUCH] offline SD audio refused: capture or standby active");
+    Serial.println("[TOUCH] offline SD audio refused: microphone capture active");
     return false;
+  }
+  // Match C3+SD: a disconnected physical capture gesture exits the previous
+  // PWA idle standby before the local media worker checks its resource gate.
+  if(remoteStandby){
+    remoteStandby=false;
+    Serial.println("[TOUCH] offline SD audio exits disconnected standby");
   }
   const bool queued=queueLocal(10,0u);
   if(queued){

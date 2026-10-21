@@ -19,9 +19,12 @@ void encodeModuleCapabilities(uint8_t* p) {
   if (batteryAvailable) ready|=SYNAP_CAP_BATTERY;
 #if SYNAP_CHAKSHU
   ChakshuMedia::Snapshot status;ChakshuMedia::copy(status);
-  ready|=status.ready;
-  if (status.ready&SYNAP_CAP_CAMERA) ready|=SYNAP_CAP_VIDEO|SYNAP_CAP_PHOTO;
-  if ((status.ready&(SYNAP_CAP_AUDIO|SYNAP_CAP_SD))==(SYNAP_CAP_AUDIO|SYNAP_CAP_SD)) ready|=SYNAP_CAP_SDAUDIO;
+  // Same live-readiness semantics as C3+SD: a cached healthy hardware check
+  // must not re-advertise SD, camera or audio following a real failure.
+  if(ChakshuCamera::ready)ready|=SYNAP_CAP_CAMERA|SYNAP_CAP_VIDEO|SYNAP_CAP_PHOTO;
+  if(ChakshuStorage::ready.load())ready|=SYNAP_CAP_SD;
+  if((ready&(SYNAP_CAP_AUDIO|SYNAP_CAP_SD))==(SYNAP_CAP_AUDIO|SYNAP_CAP_SD))
+    ready|=SYNAP_CAP_SDAUDIO;
   sensor=status.sensor;
   p[14]=ChakshuTransfer::requests?1:0;
   // Additive media-v1 features: paced notifications, saved photo preview,

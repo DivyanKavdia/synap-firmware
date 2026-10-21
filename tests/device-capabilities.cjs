@@ -24,6 +24,8 @@ std::atomic<bool> microphoneValidated{false};
 bool batteryAvailable=false;
 struct Esp { unsigned getFlashChipSize(){return ${target.flashBytes};} unsigned getPsramSize(){return ${target.psramBytes};} } ESP;
 namespace ChakshuMedia {struct Snapshot {uint16_t ready=0,sensor=0;};Snapshot current;void copy(Snapshot& s){s=current;}}
+namespace ChakshuCamera {bool ready=false;}
+namespace ChakshuStorage {std::atomic<bool> ready{false};}
 namespace ChakshuTransfer {bool requests=true;}
 namespace OdysseyTransfer {bool available(){return true;}}
 namespace OdysseyWifi {bool busy(){return false;}}
@@ -35,6 +37,7 @@ int main(){
  for(unsigned hardware=0;hardware<8;++hardware){
   microphoneValidated=hardware&1;batteryAvailable=hardware&4;
   ChakshuMedia::current.ready=hardware;ChakshuMedia::current.sensor=(hardware&2)?0x3660:0;
+  ChakshuCamera::ready=bool(hardware&2);ChakshuStorage::ready=bool(hardware&4);
   sdState=hardware%4;sdProbe=hardware%3;lastRecordStage=(hardware==7?51:0);lastRecordBytes=(hardware==7?65536u:0u);\n  encodeModuleCapabilities(p);
   assert(p[0]==0xC7 && p[1]==1 && p[2]==${target.moduleId} && p[3]==1);
   assert(word(p+4)==${capabilityMask(target)});
@@ -50,6 +53,7 @@ int main(){
   assert(word(p+6)&SYNAP_CAP_TOUCH);
   assert(word(p+6)&SYNAP_CAP_STANDBY);
   assert(bool(word(p+6)&SYNAP_CAP_BATTERY)==bool(hardware&4));
+  assert(bool(word(p+6)&SYNAP_CAP_SD)==bool(hardware&4));
   assert(p[14]==1 && p[15]==2 && p[16]==31);
   assert(p[17]==0 && p[18]==0 && p[19]==0);
 #else
@@ -68,6 +72,13 @@ int main(){
   assert(p[17]==1 && p[18]==sdState);\n#if CONFIG_IDF_TARGET_ESP32C3\n  assert(p[19]==(lastRecordStage?lastRecordStage:sdProbe));\n#else\n  assert(p[19]==0);\n#endif
 #endif
  }
+#if SYNAP_CHAKSHU
+ ChakshuMedia::current.ready=7; // cached success despite subsequent faults
+ ChakshuCamera::ready=false;ChakshuStorage::ready=false;
+ microphoneValidated=false;
+ encodeModuleCapabilities(p);
+ assert((word(p+6)&(SYNAP_CAP_SD|SYNAP_CAP_SDAUDIO|SYNAP_CAP_CAMERA|SYNAP_CAP_PHOTO|SYNAP_CAP_VIDEO|SYNAP_CAP_AUDIO))==0);
+#endif
  puts("PASS device capabilities");
 }`;
     assert.match(nativeTest(body),/PASS device capabilities/);
