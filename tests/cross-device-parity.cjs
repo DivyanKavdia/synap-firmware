@@ -20,6 +20,7 @@ test('all current production variants retain the canonical BLE, touch, battery, 
   assert(src.includes('void transmitterTask(void* parameter)'),id+' transport');
   assert(src.includes('void processCommand(uint8_t command, uint8_t version)'),id+' control');
   assert(src.includes('void pollTouchControl()'),id+' touch');
+  assert(src.includes('TOUCH_DEBOUNCE_MS = 35'),id+' touch debounce');
   assert(src.includes('TOUCH_DOUBLE_TAP_GAP_MS = 550'),id+' double tap');
   assert(src.includes('TOUCH_SLEEP_HOLD_MS = 4000'),id+' sleep hold');
   assert(src.includes('void enterDeepSleep(const char* reason)'),id+' deep sleep');
