@@ -12,6 +12,7 @@ function renderProfile(target) {
     '// Generated from devices/catalog.json; edit the catalog and reassemble.',
     define('SYNAP_CHAKSHU', Number(target.adapter === 'xiao-sense')),
     define('SYNAP_MODULE_ID', target.moduleId),
+    define('SYNAP_C3_SD_COMPRESSED_SYNC', Number(['esp32c3-supermini-4m-sd', 'esp32c3-supermini-4m-sd-ota'].includes(target.id))),
     define('DEVICE_NAME', JSON.stringify(target.advertisingName)),
     define('SYNAP_SUPPORTED_CAPABILITIES', capabilityMask(target)),
     ...Object.entries(FLAGS).map(([name, bit]) => define(`SYNAP_CAP_${name.toUpperCase()}`, bit)),

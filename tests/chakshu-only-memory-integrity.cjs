@@ -28,7 +28,7 @@ test('Chakshu-only publication never changes other target manifests or the globa
  const check=file('tools/check-feed.cjs');
  assert.match(wf,/contains\(github\.event\.head_commit\.message, '\[chakshu-only\]'\)/);
  assert.match(wf,/SYNAP_PUBLISH_TARGETS.*xiao-esp32s3-sense-8m/);
- assert.match(pub,/onlyTarget\?artifacts\.filter\(x=>x\.config\.id===onlyTarget\):artifacts/);
+ assert.match(pub,/onlyTarget\?artifacts\.filter\(x=>[\s\S]*?x\.config\.id===onlyTarget\)\):artifacts/);
  assert.match(pub,/for\(const \{config,manifest,binary\} of selected\)/);
  assert.match(pub,/if\(!onlyTarget\)treeEntries\.push\(\{path:'targets\.json'/);
  assert.match(check,/for\(const \{config,manifest\} of checked\)/);

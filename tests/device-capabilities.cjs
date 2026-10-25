@@ -63,7 +63,7 @@ int main(){
   assert(word(p+4)&SYNAP_CAP_SDAUDIO);
   assert(bool(word(p+6)&SYNAP_CAP_SD)==bool(sdState==1));
   assert(bool(word(p+6)&SYNAP_CAP_SDAUDIO)==bool((hardware&1) && sdState==1));
-  assert(p[14]==3 && p[15]==(lastRecordBytes/8192u) &&
+  assert(p[14]==(SYNAP_C3_SD_COMPRESSED_SYNC?4:3) && p[15]==(lastRecordBytes/8192u) &&
     p[16]==(0x80|1|4|0x40|((sdProbe<=6?sdProbe:7)<<3)));
 #else
   assert(!(word(p+4)&SYNAP_CAP_SD));

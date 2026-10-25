@@ -8,7 +8,7 @@ if(!['ota-test','ota-releases'].includes(branch))throw Error('Invalid release br
 // Target-only releases never alter the Odyssey S3, C3, or C3+SD feeds.
 // An unrecognized selector must fail closed rather than fall back to all.
 const onlyTarget=process.env.SYNAP_PUBLISH_TARGETS||'';
-if(onlyTarget && onlyTarget!=='xiao-esp32s3-sense-8m')
+if(onlyTarget && !['xiao-esp32s3-sense-8m','c3-sd-only'].includes(onlyTarget))
   throw Error('Unsupported isolated target selector');
 
 function api(endpoint,method='GET',body,query) {
@@ -27,8 +27,8 @@ const artifacts=Object.values(TARGETS).map(config=>{
   if(!isDeepStrictEqual(manifest,expected))throw Error(`Artifact manifest mismatch for ${config.id}`);
   return {config,dir,manifest,binary};
 });
-const selected=onlyTarget?artifacts.filter(x=>x.config.id===onlyTarget):artifacts;
-if(selected.length!==(onlyTarget?1:artifacts.length))throw Error('Missing selected release artifact');
+const selected=onlyTarget?artifacts.filter(x=>(onlyTarget==='c3-sd-only' ? ['esp32c3-supermini-4m-sd','esp32c3-supermini-4m-sd-ota'].includes(x.config.id) : x.config.id===onlyTarget)):artifacts;
+if(selected.length!==(onlyTarget?(onlyTarget==='c3-sd-only'?2:1):artifacts.length))throw Error('Missing selected release artifact');
 const primary=artifacts.find(x=>x.config.id===PRIMARY_TARGET);
 if(!primary)throw Error('Primary S3 release is missing');
 const build=primary.manifest.build,commit=primary.manifest.commit,version=primary.manifest.version;
@@ -77,7 +77,7 @@ if(production){
     execFileSync('gh',['release','create',tag,...assets,'--repo',repo,'--target',commit,...(onlyTarget?[]:['--latest']),
       '--title',version,
       '--notes',onlyTarget
-        ? 'Chakshu XIAO ESP32-S3 Sense only. Existing Odyssey S3, C3 and C3+SD release manifests/binaries are unchanged.'
+        ? (onlyTarget==='c3-sd-only' ? 'Odyssey C3+SD only: read-only ADPCM sync. Standard C3, S3 and Chakshu feeds unchanged.' : 'Chakshu XIAO ESP32-S3 Sense only. Existing Odyssey S3, C3 and C3+SD release manifests/binaries are unchanged.')
         : 'Production-qualified multi-target pendant firmware. Includes ESP32-S3 SuperMini, ESP32-C3 SuperMini and Chakshu XIAO Sense artifacts with exact prepared source, GitHub OIDC provenance, target-bound manifests, resumable BLE OTA and default dual OTA slots.'],{stdio:'inherit'});
   }
 }

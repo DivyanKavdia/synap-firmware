@@ -123,9 +123,8 @@ jobs:
     environment: production
     env:
       SYNAP_RELEASE_BRANCH: ota-releases
-      # Only the explicitly tagged Chakshu merge may publish a single target;
-      # every ordinary production build retains the existing five-target flow.
-      SYNAP_PUBLISH_TARGETS: ${{ contains(github.event.head_commit.message, '[chakshu-only]') && 'xiao-esp32s3-sense-8m' || '' }}
+      # Explicit target tags restrict publication; ordinary builds retain all targets.
+      SYNAP_PUBLISH_TARGETS: ${{ contains(github.event.head_commit.message, '[c3-sd-only]') && 'c3-sd-only' || contains(github.event.head_commit.message, '[chakshu-only]') && 'xiao-esp32s3-sense-8m' || '' }}
     permissions:
       contents: write
       id-token: write
@@ -166,18 +165,18 @@ jobs:
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: bundle/esp32c3-supermini-4m/firmware.bin
-      - name: Attest factory-only C3+SD Wi-Fi firmware with GitHub OIDC
-        if: steps.current.outputs.release == 'true' && env.SYNAP_PUBLISH_TARGETS == ''
+      - name: Attest factory-only C3+SD firmware with GitHub OIDC
+        if: steps.current.outputs.release == 'true' && (env.SYNAP_PUBLISH_TARGETS == '' || env.SYNAP_PUBLISH_TARGETS == 'c3-sd-only')
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: bundle/esp32c3-supermini-4m-sd/firmware.bin
-      - name: Attest opt-in existing large-slot C3+SD Wi-Fi firmware with GitHub OIDC
-        if: steps.current.outputs.release == 'true' && env.SYNAP_PUBLISH_TARGETS == ''
+      - name: Attest opt-in existing large-slot C3+SD firmware with GitHub OIDC
+        if: steps.current.outputs.release == 'true' && (env.SYNAP_PUBLISH_TARGETS == '' || env.SYNAP_PUBLISH_TARGETS == 'c3-sd-only')
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: bundle/esp32c3-supermini-4m-sd-ota/firmware.bin
       - name: Attest Chakshu firmware with GitHub OIDC
-        if: steps.current.outputs.release == 'true'
+        if: steps.current.outputs.release == 'true' && env.SYNAP_PUBLISH_TARGETS != 'c3-sd-only'
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: bundle/xiao-esp32s3-sense-8m/firmware.bin
