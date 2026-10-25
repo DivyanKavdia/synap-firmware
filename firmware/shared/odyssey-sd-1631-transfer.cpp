@@ -480,6 +480,80 @@ static void notifySdWindow(const Request& request,uint8_t kind,uint8_t error,
   streamCharacteristic->notify();
 }
 
+#if SYNAP_C3_SD_COMPRESSED_SYNC
+// Media-v4 uses source PCM offsets even though the wire payload is compressed.
+// Independent 800-sample frames can be retried without carrying codec state.
+static uint32_t sdSyncCrc32(const uint8_t* bytes,size_t size) {
+  uint32_t crc=0xffffffffu;
+  for (size_t i=0;i<size;++i) {
+    crc^=bytes[i];
+    for (uint8_t bit=0;bit<8;++bit) crc=(crc>>1)^((crc&1u)?0xedb88320u:0u);
+  }
+  return crc^0xffffffffu;
+}
+static void streamCompressedSdWindow(const Request& request) {
+  ++sdBleReadWindowRequests;
+  if (!request.compact || !request.sessionToken ||
+      request.sessionToken!=selectedSessionToken ||
+      request.connection!=selectedSessionConnection || !selectedPath[0]) {
+    notifySdWindow(request,2,FILE_UNAVAILABLE,0,request.offset);return;
+  }
+  // Keep legacy fallback and the field-proven six-credit / 20ms pacing.
+  if (attValueCapacity.load()<496u || !streamCharacteristic) {
+    notifySdWindow(request,2,OK,0,request.offset);return;
+  }
+  const uint32_t fullSize=selectedFileSize;
+  if (fullSize<=44u || ((fullSize-44u)&1u) ||
+      request.offset>=fullSize || (request.offset &&
+      (request.offset<44u || ((request.offset-44u)&1u)))) {
+    notifySdWindow(request,2,BAD_COMMAND,fullSize,request.offset);return;
+  }
+  int16_t pcm[SAMPLES_PER_FRAME]{};
+  uint8_t chunk[480]{};
+  uint32_t offset=request.offset;
+  for (uint8_t n=0;n<6 && offset<fullSize;++n) {
+    if (request.connection!=connectionGeneration.load() || !deviceConnected.load() ||
+        streamingEnabled.load() || odysseyRecording.load() || otaBusy() || sleepPending) return;
+    const size_t wanted=offset==0?44u:std::min(size_t(SAMPLES_PER_FRAME*2u),size_t(fullSize-offset));
+    size_t filled=0;
+    while (filled<wanted) {
+      uint32_t total=0;size_t length=0;
+      uint8_t error=readSelected(selectedPath,offset+uint32_t(filled),total,chunk,length);
+      if (error!=OK || total!=fullSize || !length) {
+        if (error==IO_ERROR) {
+          sdBleReadFailureOffset=sdBleReadLastRequestedOffset;
+          noteSdMediaFault(36,sdBleReadFailureStep,sdBleReadFailureErrno);
+          errno=sdBleReadFailureErrno?sdBleReadFailureErrno:EIO;
+          odysseySdMarkVfsFailure();invalidateBleReadCache();
+        }
+        notifySdWindow(request,2,error==OK?uint8_t(FILE_UNAVAILABLE):error,fullSize,offset);return;
+      }
+      const size_t take=std::min(length,wanted-filled);
+      memcpy(reinterpret_cast<uint8_t*>(pcm)+filled,chunk,take);filled+=take;
+    }
+    if (offset==0) {
+      notifySdWindow(request,1,OK,fullSize,0,reinterpret_cast<uint8_t*>(pcm),44);
+    } else {
+      // Pad the final frame only for the encoder; sample count trims it on phone.
+      memset(reinterpret_cast<uint8_t*>(pcm)+wanted,0,sizeof(pcm)-wanted);
+      uint8_t packet[426]{};
+      packet[0]=0xCC;packet[1]=1;packet[2]=3;
+      put32le(packet+4,request.id);put32le(packet+8,fullSize);put32le(packet+12,offset);
+      const uint16_t samples=uint16_t(wanted/2u);
+      packet[16]=uint8_t(samples);packet[17]=uint8_t(samples>>8);
+      encodeImaAdpcm(pcm,packet+18);
+      put32le(packet+422,sdSyncCrc32(packet,422));
+      if (request.connection!=connectionGeneration.load() || !deviceConnected.load()) return;
+      streamCharacteristic->setValue(packet,sizeof(packet));streamCharacteristic->notify();
+    }
+    offset+=uint32_t(wanted);
+    if (offset<fullSize && n+1u<6u) vTaskDelay(pdMS_TO_TICKS(20));
+  }
+  vTaskDelay(pdMS_TO_TICKS(20));
+  notifySdWindow(request,2,OK,fullSize,offset);
+}
+#endif
+
 static void streamSdWindow(const Request& request) {
   ++sdBleReadWindowRequests;
   // A short 16-byte media-v3 request carries the selection request ID,
@@ -622,6 +696,12 @@ static void worker(void*) {
         sdBleLastTransferAt=millis();
         sdBleTransferInFlight=false;
         continue;
+#if SYNAP_C3_SD_COMPRESSED_SYNC
+      case 36:
+        streamCompressedSdWindow(request);
+        sdBleLastTransferAt=millis();sdBleTransferInFlight=false;
+        continue;
+#endif
       case 16: error=OK; break;
       case 27: {
         // Purely read-only snapshot of the LAST recorder error after a
@@ -956,6 +1036,13 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
     if (request.compact) memcpy(&request.sessionToken,p+12,4);
     if (pathLength) memcpy(request.path,p+pathStart,pathLength);
     request.path[pathLength]=0;
+#if SYNAP_C3_SD_COMPRESSED_SYNC
+    if (request.operation==36u) {
+      if (length!=16u) {reply(request,BAD_COMMAND);return;}
+      request.compact=true;request.path[0]=0;
+      memcpy(&request.sessionToken,p+12,4);
+    }
+#endif
     if (!requests || xQueueSend(requests,&request,0)!=pdTRUE) reply(request,BUSY);
   }
 };

@@ -58,6 +58,9 @@ void encodeModuleCapabilities(uint8_t* p) {
     p[16]|=4;
     p[16]|=0x40;
     p[14]=3; // Media-v3: optional token-verified compact opcode31; v1/v2 retained.
+#if SYNAP_C3_SD_COMPRESSED_SYNC
+    p[14]=4; // Read-only independent ADPCM blocks (opcode36), C3+SD tracks only.
+#endif
     if (odysseySdDetectionState()==1) {
       ready|=SYNAP_CAP_SD;
       if (ready&SYNAP_CAP_AUDIO) ready|=SYNAP_CAP_SDAUDIO;

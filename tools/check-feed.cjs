@@ -6,11 +6,11 @@ const branch=process.env.SYNAP_RELEASE_BRANCH||'ota-test',origin='https://divyan
 const githubToken=process.env.GH_TOKEN||process.env.GITHUB_TOKEN||'';
 if(!['ota-test','ota-releases'].includes(branch))throw Error('Invalid release branch');
 const onlyTarget=process.env.SYNAP_PUBLISH_TARGETS||'';
-if(onlyTarget && onlyTarget!=='xiao-esp32s3-sense-8m')throw Error('Invalid isolated feed check');
+if(onlyTarget && !['xiao-esp32s3-sense-8m','c3-sd-only'].includes(onlyTarget))throw Error('Invalid isolated feed check');
 
 const local=Object.values(TARGETS).map(config=>({config,manifest:JSON.parse(fs.readFileSync(path.join('bundle',config.id,'latest.json'),'utf8'))}));
-const checked=onlyTarget?local.filter(x=>x.config.id===onlyTarget):local;
-if(checked.length!==(onlyTarget?1:local.length))throw Error('Missing selected feed');
+const checked=onlyTarget?local.filter(x=>(onlyTarget==='c3-sd-only' ? ['esp32c3-supermini-4m-sd','esp32c3-supermini-4m-sd-ota'].includes(x.config.id) : x.config.id===onlyTarget)):local;
+if(checked.length!==(onlyTarget?(onlyTarget==='c3-sd-only'?2:1):local.length))throw Error('Missing selected feed');
 const primary=local.find(x=>x.config.id===PRIMARY_TARGET);
 if(!primary)throw Error('Primary target bundle missing');
 
