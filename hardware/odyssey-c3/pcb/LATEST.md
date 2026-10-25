@@ -1,15 +1,9 @@
-# Odyssey C3 PCB — Current Final
+# Odyssey C3 PCB — Current Version
 
-**Current final release: Rev K**
+**PCB v2** is the current user-selected compact carrier (physical design **Rev L v3**, **40 × 45 mm**).
 
-Path:
-`hardware/odyssey-c3/pcb/final/`
+- Release path: `hardware/odyssey-c3/pcb/v2/`
+- See `v2/README.md` for reconstruction instructions, file integrity checks, and accepted engineering exceptions.
+- Legacy Rev K remains under `hardware/odyssey-c3/pcb/final/` unchanged.
 
-Gerber source of truth:
-- `gerber_archive_parts/part-00`
-- `gerber_archive_parts/part-01`
-- `gerber_archive_parts/part-02`
-- `gerber_archive_parts/part-03`
-- `REBUILD_GERBERS.sh`
-
-Rev K supersedes Rev J and all earlier carrier PCB revisions.
+**Status:** Gerber DFM geometry checked; power-path, antenna, physical SD/card fit, native CAD DRC, manufacturer CAM and first-article testing are not qualified.

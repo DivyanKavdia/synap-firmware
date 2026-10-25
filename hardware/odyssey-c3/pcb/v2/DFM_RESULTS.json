@@ -1,0 +1,350 @@
+{
+  "board_mm": [
+    40,
+    45
+  ],
+  "delta_from_42x60_pct": 28.57,
+  "origin_shift_mm": 2,
+  "plated_holes": 61,
+  "vias": 23,
+  "source_nets": 21,
+  "checks": [
+    {
+      "name": "CAM geometry parity GTL",
+      "measured": 0.0,
+      "criterion": "<= 0.00001 mm^2",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "CAM geometry parity GBL",
+      "measured": 0.0,
+      "criterion": "<= 0.00001 mm^2",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "CAM geometry parity GTS",
+      "measured": 0.0,
+      "criterion": "<= 0.00001 mm^2",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "CAM geometry parity GBS",
+      "measured": 0.0,
+      "criterion": "<= 0.00001 mm^2",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "CAM geometry parity GTO",
+      "measured": 0.0,
+      "criterion": "<= 0.00001 mm^2",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "CAM geometry parity GBO",
+      "measured": 0.0,
+      "criterion": "<= 0.00001 mm^2",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "CAM geometry parity GTP",
+      "measured": 0.0,
+      "criterion": "<= 0.00001 mm^2",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "CAM outline bounds",
+      "measured": [
+        0.0,
+        0.0,
+        40.0,
+        45.0
+      ],
+      "criterion": [
+        0.0,
+        0.0,
+        40.0,
+        45.0
+      ],
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "Eagle outline line segments",
+      "measured": 4,
+      "criterion": "4 sides 40x45",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "16 module/passive element placements",
+      "measured": 0,
+      "criterion": "0 deviations from X+2mm",
+      "status": "PASS",
+      "notes": "[]"
+    },
+    {
+      "name": "Eagle wires routing equivalence",
+      "measured": 0,
+      "criterion": "0 mismatches",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "Eagle vias routing equivalence",
+      "measured": 0,
+      "criterion": "0 mismatches",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "Eagle signal polygons routing equivalence",
+      "measured": 0,
+      "criterion": "0 mismatches",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "Source netlist invariance",
+      "measured": true,
+      "criterion": true,
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "Plated drill coordinates and count",
+      "measured": [
+        61,
+        61
+      ],
+      "criterion": "61, unchanged drills X+2",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "Two-layer electrical equivalence",
+      "measured": [
+        0,
+        0
+      ],
+      "criterion": "0 merged / 0 split",
+      "status": "PASS",
+      "notes": "Verified geometries and identical plated-via pad connectivity"
+    },
+    {
+      "name": "GTL copper to routed edge",
+      "measured": 0.575,
+      "criterion": ">=0.3mm",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GTL copper outside outline",
+      "measured": 0.0,
+      "criterion": "0mm\u00b2",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GTL minimum clearance between separate copper islands",
+      "measured": 0.325,
+      "criterion": ">=0.20mm",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GBL copper to routed edge",
+      "measured": 0.45,
+      "criterion": ">=0.3mm",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GBL copper outside outline",
+      "measured": 0.0,
+      "criterion": "0mm\u00b2",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GBL minimum clearance between separate copper islands",
+      "measured": 0.2783,
+      "criterion": ">=0.20mm",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GTO silk-mask expanded intersection",
+      "measured": 0.0,
+      "criterion": "0mm\u00b2 with 0.15mm clearance",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GTO artwork outside outline",
+      "measured": 0.0,
+      "criterion": "0mm\u00b2",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GBO silk-mask expanded intersection",
+      "measured": 0.0,
+      "criterion": "0mm\u00b2 with 0.15mm clearance",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GBO artwork outside outline",
+      "measured": 0.0,
+      "criterion": "0mm\u00b2",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GTS min mask web",
+      "measured": 0.19,
+      "criterion": ">=0.10 mm green soldermask",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GBS min mask web",
+      "measured": 0.19,
+      "criterion": ">=0.10 mm green soldermask",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "CAM ZIP file count & integrity",
+      "measured": [
+        9,
+        null
+      ],
+      "criterion": "9 files, no CRC error",
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GTL RS-274X CAM syntax",
+      "measured": true,
+      "criterion": true,
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GBL RS-274X CAM syntax",
+      "measured": true,
+      "criterion": true,
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GTS RS-274X CAM syntax",
+      "measured": true,
+      "criterion": true,
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GBS RS-274X CAM syntax",
+      "measured": true,
+      "criterion": true,
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GTO RS-274X CAM syntax",
+      "measured": true,
+      "criterion": true,
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GBO RS-274X CAM syntax",
+      "measured": true,
+      "criterion": true,
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GTP RS-274X CAM syntax",
+      "measured": true,
+      "criterion": true,
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "GKO RS-274X CAM syntax",
+      "measured": true,
+      "criterion": true,
+      "status": "PASS",
+      "notes": ""
+    },
+    {
+      "name": "LiPo regulator headroom",
+      "measured": "BAT+ => SPDT => SS14 => U1 5V pin",
+      "criterion": "Verified 5V boost/regulation",
+      "status": "HOLD",
+      "notes": "Direct cell is not a stable nominal 5V supply; SD write resets possible."
+    },
+    {
+      "name": "Integrated battery charger power path",
+      "measured": "charger B+/B- parallel cell",
+      "criterion": "Power-path and protection validated",
+      "status": "HOLD",
+      "notes": "Confirm charger module, protected cell, load during charging and reverse-current handling."
+    },
+    {
+      "name": "GTL indicative ceramic antenna region copper",
+      "measured": 5.45,
+      "criterion": "0 copper preferred",
+      "status": "HOLD",
+      "notes": "Approximate site, actual SuperMini vendor footprint/antenna keepout not supplied; X translated"
+    },
+    {
+      "name": "GBL indicative ceramic antenna region copper",
+      "measured": 7.837,
+      "criterion": "0 copper preferred",
+      "status": "HOLD",
+      "notes": "Approximate site, actual SuperMini vendor footprint/antenna keepout not supplied; X translated"
+    },
+    {
+      "name": "Fully seated SD-card extent",
+      "measured": "module setback 7.5mm; assumed projection 4mm => 3.5mm remaining",
+      "criterion": "Actual card projection <=6.5mm for >=1mm margin",
+      "status": "HOLD",
+      "notes": "Caliper measurement on exact module and card required; this is a modeled clearance."
+    },
+    {
+      "name": "Eagle native DRC",
+      "measured": "not run",
+      "criterion": "DRC zero unapproved violations",
+      "status": "HOLD",
+      "notes": "Autodesk Eagle not available; CAD source patches vs frozen CAM require native import and repour check."
+    },
+    {
+      "name": "Module fit / hand-solder assembly",
+      "measured": "not physically tested",
+      "criterion": "1:1 assembly fit + sample board",
+      "status": "HOLD",
+      "notes": "Module headers, pads, connector overhang, slider actuation, enclosure interference."
+    },
+    {
+      "name": "RF range + brownout endurance",
+      "measured": "not physically tested",
+      "criterion": "BLE range + SD writes at 4.2/3.7/3.4V",
+      "status": "HOLD",
+      "notes": "Must test with regulated power stage and production enclosure."
+    }
+  ],
+  "geometric_failures": [],
+  "hold_count": 8,
+  "release": "CAM GEOMETRY PASS; MANUFACTURING ELECTRICAL/RF/MECHANICAL HOLD"
+}

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="116mm" height="75mm" viewBox="0 0 116 75">
+<rect width="116" height="75" fill="white"/>
+<text x="58" y="6" text-anchor="middle" font-family="sans-serif" font-size="3.2" font-weight="bold">Odyssey C3 Rev L v3 1:1 module fit — print at actual size</text>
+<text x="30" y="12" text-anchor="middle" font-family="sans-serif" font-size="3">FRONT</text>
+<text x="85" y="12" text-anchor="middle" font-family="sans-serif" font-size="3">BACK MIRRORED</text>
+<rect x="10" y="16" width="40" height="45" fill="none" stroke="black" stroke-width="0.30"/>
+<rect x="65" y="16" width="40" height="45" fill="none" stroke="black" stroke-width="0.30"/>
+<rect x="12.70" y="16.80" width="14.70" height="11.00" fill="red" fill-opacity="0.18" stroke="black" stroke-width="0.19"/>
+<text x="20.05" y="22.30" font-family="sans-serif" font-size="1.9" text-anchor="middle">TOUCH</text>
+<circle cx="19.70" cy="36.30" r="7" stroke="black" stroke-width=".20" fill="cyan" fill-opacity=".20"/>
+<text x="19.7" y="36.3" font-size="1.9" text-anchor="middle">MIC Ø14</text>
+<rect x="37.50" y="28.50" width="5.00" height="5.00" fill="orange" fill-opacity="0.18" stroke="black" stroke-width="0.19"/>
+<text x="40.00" y="31.00" font-family="sans-serif" font-size="1.9" text-anchor="middle">RGB</text>
+<rect x="67.50" y="16.01" width="18.00" height="22.50" fill="blue" fill-opacity="0.18" stroke="black" stroke-width="0.19"/>
+<text x="76.50" y="27.26" font-family="sans-serif" font-size="1.9" text-anchor="middle">ESP C3</text>
+<rect x="79.60" y="42.40" width="17.90" height="17.90" fill="blue" fill-opacity="0.18" stroke="black" stroke-width="0.19"/>
+<text x="88.55" y="51.35" font-family="sans-serif" font-size="1.9" text-anchor="middle">SD MODULE</text>
+<rect x="65.50" y="51.00" width="10.00" height="10.00" fill="brown" fill-opacity="0.18" stroke="black" stroke-width="0.19"/>
+<text x="70.50" y="56.00" font-family="sans-serif" font-size="1.9" text-anchor="middle">CHARGER</text>
+<rect x="67.50" y="40.50" width="7.00" height="5.50" fill="purple" fill-opacity="0.18" stroke="black" stroke-width="0.19"/>
+<text x="71.00" y="43.25" font-family="sans-serif" font-size="1.9" text-anchor="middle">SW</text>
+<rect x="73.00" y="34.50" width="7.00" height="4.00" fill="orange" fill-opacity="0.18" stroke="black" stroke-width="0.19"/>
+<text x="76.50" y="36.50" font-family="sans-serif" font-size="1.9" text-anchor="middle">RF!</text>
+<line x1="101.5" y1="58" x2="105" y2="58" stroke="red" stroke-width="0.5"/>
+<text x="85" y="65.5" font-family="sans-serif" font-size="2">SD card assumed P=4mm: 3.5mm margin</text>
+<line x1="10" y1="69" x2="60" y2="69" stroke="black" stroke-width=".28"/><line x1="10" y1="68.2" x2="10" y2="69.8" stroke="black" stroke-width=".25"/><line x1="60" y1="68.2" x2="60" y2="69.8" stroke="black" stroke-width=".25"/>
+<text x="35" y="73" font-family="sans-serif" font-size="2.6" text-anchor="middle">50 mm calibration bar — measure after printing</text>
+</svg>

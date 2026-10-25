@@ -1,0 +1,119 @@
+{
+  "name": "Odyssey C3 PCB v2",
+  "physical_design": "Rev L v3",
+  "pcb": "40 x 45 mm, 2 layer, 1.6mm",
+  "release_archive_sha256": "977ab5b496b4d3516fac28ff9aabff564b22e8e0353db705f57c4b37c126fe01",
+  "release_archive_bytes": 66668,
+  "release_part_count": 12,
+  "original_gerber_zip_sha256": "b8fc366ee54241002a35ebd6de32d9a7a8339bb88a6e7f18dfb021508307cf93",
+  "original_eagle_sha256": "fe832b54828ac99e076cc6cd7b4176d5d019ee411e56bb86a0ab28b9ad451806",
+  "files": {
+    "gerbers/Synap_Odyssey_C3_Carrier_RevL_v3_40x45.GTL": "ca086c745e3b7b79918bf329c792cd7a7c4752daada2e2dfb34e71133cb54041",
+    "gerbers/Synap_Odyssey_C3_Carrier_RevL_v3_40x45.GBL": "a776b164d8f59123f8d46fd20c5add14a878ae189d8a3edc756c72a2686a3306",
+    "gerbers/Synap_Odyssey_C3_Carrier_RevL_v3_40x45.GTS": "da7a7f7bc21943289298a2f655c7a9238e80e337e4d9556d84a0abe51a3bb040",
+    "gerbers/Synap_Odyssey_C3_Carrier_RevL_v3_40x45.GBS": "c45f5409eb9145580acc8412527dc115e0ae5511acaef8569c42a6c424194589",
+    "gerbers/Synap_Odyssey_C3_Carrier_RevL_v3_40x45.GTO": "ab584691de3561ffed03c3229faceec6191cb9748cff5c56ed66c5a83ed49cbf",
+    "gerbers/Synap_Odyssey_C3_Carrier_RevL_v3_40x45.GBO": "7c9fc93a80b5d06a94e1f1e6503e368430fccf13f5fdf7e44b7c6739d1d4d92e",
+    "gerbers/Synap_Odyssey_C3_Carrier_RevL_v3_40x45.GTP": "7d87b8568666f91d0b01de6b2b3a47b26d609175609e9d69c9d73c890c004839",
+    "gerbers/Synap_Odyssey_C3_Carrier_RevL_v3_40x45.GKO": "7845f8a705cddbe54e0dea1cb1ffd0fc00ca34714a9cf67fa1bc4d385758413f",
+    "gerbers/Synap_Odyssey_C3_Carrier_RevL_v3_40x45_PTH.TXT": "5351e30a367f221b35006e5b80f85e8837056018c8f616bd0a3771ba6840fccc",
+    "RevL_v3_40x45_PRINT_1to1.svg": "0bd5f7191de718fa570b64a16c4d3d3fb9d56b370b7cb7323465ac49584e81d2",
+    "BASELINE_NETLIST.csv": "59eefd36a3f8468a16fcaca5eea6c743b49f848fcc0ffca7fa0843c69d57b123",
+    "02_ACCEPTED_EXCEPTIONS_AND_OPEN_CHECKS.md": "7c8903d19a1d6e9109ce3cdd61b155b5bef7dd8c8be1445c30de6e9d9de1c820",
+    "01_BOARD_ORDER_SPEC.md": "57591aaa527ad5f8e6e0e744be1b874e29455b9913c59c574529fa0d7fb0647e",
+    "BASELINE_PIN_CONTRACT.csv": "c584a48612475ad0bfa1a1271ba42471318f1cc77b8f3c6ea991a4e48a4c06ab",
+    "03_HAND_ASSEMBLY_TEST_CHECKLIST.md": "ebc38a65694a225a922a1b680c4a0ab7c623c63d36342bdfb22841b0ece9dc85",
+    "DFM_AUDIT_RECHECK_LOG.txt": "f3ff07ef7f31bc53e7a6399be0e06a3eb058d90c9cdd1f425e89a0b675c7dfa7",
+    "00_START_HERE.md": "af5f0eeca245d72200520e3525fedc9792056f9fd87cb349c9033d3c283015d5",
+    "Synap_Odyssey_C3_Carrier_RevL_v3_40x45.brd": "fe832b54828ac99e076cc6cd7b4176d5d019ee411e56bb86a0ab28b9ad451806",
+    "SHA256SUMS.txt": "eba1a1ca1b28ba590cd36453c6dc13baf724bd22c2f312bd32ef3fa449dae37d",
+    "REV_L_V3_INDEPENDENT_DFM.json": "5f0963652301591012a05875733cdff8cec1c604716f792a57bea0485ff07b8b",
+    "BASELINE_BOM.csv": "7a296519fa941b09e3bd07e0116d057df298d19d629b1d810c4746b919cd1ad8"
+  },
+  "parts": [
+    {
+      "file": "part-00.b64",
+      "byte_length": 6000,
+      "b64_length": 8000,
+      "sha256": "636013037d052bd941ccb8d948aa377184837d4a0729bff753a2afb01cc904d9",
+      "git_blob_sha": "7667a6a5a3cd6b11a024c6713c3d48f21effb631"
+    },
+    {
+      "file": "part-01.b64",
+      "byte_length": 6000,
+      "b64_length": 8000,
+      "sha256": "74f2cd4a2b508079cdc7828923cdc25d9c00301992c0fbf78a65bd67b53b6b59",
+      "git_blob_sha": "58934a61c81c8e28b26aae542c5c6cef14fc27d9"
+    },
+    {
+      "file": "part-02.b64",
+      "byte_length": 6000,
+      "b64_length": 8000,
+      "sha256": "c0a721f2d74ec5ac6ad130cda096209dbe746cf6d79fe08c12742953f75fbb14",
+      "git_blob_sha": "284ea0e20422d0d5fb3042d592190a64190ab958"
+    },
+    {
+      "file": "part-03.b64",
+      "byte_length": 6000,
+      "b64_length": 8000,
+      "sha256": "4b67bcad3fb079900df5332d9131079bc3cbbc48afaa1a186fe3538f5c97d526",
+      "git_blob_sha": "9ed3d9a71f5dcc772587865afa9e423dc4639879"
+    },
+    {
+      "file": "part-04.b64",
+      "byte_length": 6000,
+      "b64_length": 8000,
+      "sha256": "cf4f502af3cd271ab418c4e009a3714d811fdf98b0bee8a0be1d7cc77b3d83f9",
+      "git_blob_sha": "329830f3bd5e7f51c68df22644469267870b0b7a"
+    },
+    {
+      "file": "part-05.b64",
+      "byte_length": 6000,
+      "b64_length": 8000,
+      "sha256": "e3471ea9ea90ba0718474de768118cf5412637c415a0864c483c2a41fb98a342",
+      "git_blob_sha": "d4e96f4e4465f88b563fc98f1069d67b67505a4f"
+    },
+    {
+      "file": "part-06.b64",
+      "byte_length": 6000,
+      "b64_length": 8000,
+      "sha256": "c9564c2342f25c2545dd8c0e718c24c01de7e4e965696e165465eb32e3cd1550",
+      "git_blob_sha": "0d485ca64edfaa3ab4491643b6c300d7dffd29c3"
+    },
+    {
+      "file": "part-07.b64",
+      "byte_length": 6000,
+      "b64_length": 8000,
+      "sha256": "7201a2db178bf9d9a8df7f4d57da9867b36b28e8664298ae4f90fdfa7faca2a8",
+      "git_blob_sha": "9aac0dc0d62dbf636c9b8bfbe7305e833d8d9843"
+    },
+    {
+      "file": "part-08.b64",
+      "byte_length": 6000,
+      "b64_length": 8000,
+      "sha256": "9e564e2525b5174e4bfab559ccbb8c865e75eec4414fb454884d4e8e74acd115",
+      "git_blob_sha": "b19117108b2670d7996c08585eb0b4b2d06c24e5"
+    },
+    {
+      "file": "part-09.b64",
+      "byte_length": 6000,
+      "b64_length": 8000,
+      "sha256": "c22f7edead9ab9f4c75dbeb6076582cfefa40d7c7706ff7f495cddc75e799cf1",
+      "git_blob_sha": "091b0997418cd0414ff150bb770b2ce16107a9e5"
+    },
+    {
+      "file": "part-10.b64",
+      "byte_length": 6000,
+      "b64_length": 8000,
+      "sha256": "20481f0261b7313949371f8b0c7bb82e872006add6dc3362a6edc0b013d8f574",
+      "git_blob_sha": "7626921edd3f334a7291f7bdb7456435462be53a"
+    },
+    {
+      "file": "part-11.b64",
+      "byte_length": 668,
+      "b64_length": 892,
+      "sha256": "6aa83bf5495635c4a6816c0abc93b35bd144766fafc65fa6ed9db9be51a03062",
+      "git_blob_sha": "888dbd03148e1d7691a162098b0541aea7550630"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+GERBER GTL area 232.662
+GERBER GBL area 1395.479
+GERBER GTS area 177.645
+GERBER GBS area 141.569
+GERBER GTO area 20.14
+GERBER GBO area 44.959
+GERBER GTP area 24.7
+AUDIT: CAM GEOMETRY PASS; MANUFACTURING ELECTRICAL/RF/MECHANICAL HOLD machine failures 0 hold count 8
+HOLD LiPo regulator headroom BAT+ => SPDT => SS14 => U1 5V pin
+HOLD Integrated battery charger power path charger B+/B- parallel cell
+HOLD GTL indicative ceramic antenna region copper 5.45
+HOLD GBL indicative ceramic antenna region copper 7.837
+HOLD Fully seated SD-card extent module setback 7.5mm; assumed projection 4mm => 3.5mm remaining
+HOLD Eagle native DRC not run
+HOLD Module fit / hand-solder assembly not physically tested
+HOLD RF range + brownout endurance not physically tested
