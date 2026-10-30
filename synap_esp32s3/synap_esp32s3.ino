@@ -5479,7 +5479,10 @@ static void streamSdWindow(const Request& request) {
     // after contiguous delivery, but if one packet is lost the END lets it
     // retry immediately instead of waiting for a 3-second missing-END timer.
     if (offset>=fullSize) break;
-    vTaskDelay(pacing);
+    // SD-specific compact PCM windows already wait once before END below.
+    // Do not add a second idle interval after the last granted data packet.
+    if (!(SYNAP_C3_SD_COMPRESSED_SYNC && adaptive && n+1u==credits))
+      vTaskDelay(pacing);
   }
   // End packet closes the credit window. Never delete/modify the SD source.
   if (request.connection==connectionGeneration.load() && deviceConnected.load()) {
